@@ -87,21 +87,25 @@ dispatch_claims_file() {
 	printf '%s/dispatch-claims.tsv\n' "$dir"
 }
 
+# No REPO_DIR parameter, unlike dispatch_claims_file: every caller works in the repo it is
+# claiming for, and dispatch_state_dir already defaults to $PWD — a forwarded "${1:-$PWD}" was
+# byte-for-byte the same call with an argument nobody passed (SC2120).
 dispatch_pr_held_file() {
 	local dir
-	dir="$(dispatch_state_dir "${1:-$PWD}")" || return 1
+	dir="$(dispatch_state_dir)" || return 1
 	printf '%s/pr-held-paths.tsv\n' "$dir"
 }
 
-# dispatch_claims_lock [REPO_DIR]
+# dispatch_claims_lock
 # A lock file of its own, never the registry. Locking the registry itself looks right and is
 # broken: a writer replaces it by `mv` (the only way to rewrite it atomically), so the next
 # claimer opens and locks the NEW inode while the current holder still holds the old one — two
 # agents inside the critical section, which is exactly the race being prevented. This file is
 # only ever locked, never rewritten, so every racer locks the same inode.
+# Takes no REPO_DIR either, for the same reason as dispatch_pr_held_file above.
 dispatch_claims_lock() {
 	local dir
-	dir="$(dispatch_state_dir "${1:-$PWD}")" || return 1
+	dir="$(dispatch_state_dir)" || return 1
 	printf '%s/dispatch-claims.lock\n' "$dir"
 }
 
