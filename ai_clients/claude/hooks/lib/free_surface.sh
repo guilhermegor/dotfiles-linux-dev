@@ -247,9 +247,18 @@ live_agent_classify_files() {
 # instead of the GitHub compare API's.
 _live_agent_held_paths() {
 	local cwd="$1" default="$2"
-	local path="" branch="" line held="" out out_lc untracked
+	local path="" branch="" line held="" out out_lc untracked self
 
 	git -C "$cwd" worktree list --porcelain >/dev/null 2>&1 || return 1
+
+	# The caller's OWN worktree is the one to skip, identified by PATH, never by branch name.
+	# Skipping every worktree whose branch equals $default excluded the wrong set: invoked from a
+	# linked worktree, it dropped the main checkout's uncommitted files from LIVE_AGENT_PATHS
+	# entirely, so a file an agent was holding there classified `free` and could be dispatched
+	# concurrently (dotfiles-dev#523 review). The header already says "any OTHER worktree" — this
+	# is what that sentence claimed all along.
+	self="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || return 1
+	[ -n "$self" ] || return 1
 
 	while IFS= read -r line; do
 		case "$line" in
@@ -261,19 +270,33 @@ _live_agent_held_paths() {
 			branch="${line#branch refs/heads/}"
 			;;
 		"")
-			if [ -n "$path" ] && [ -d "$path" ] && [ -n "$branch" ] && [ "$branch" != "$default" ]; then
-				if out="$(git -C "$cwd" diff --name-only "$default...$branch" 2>&1)"; then
-					[ -n "$out" ] && held="$(printf '%s\n%s' "$held" "$out")"
-				else
-					out_lc="$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')"
-					case "$out_lc" in
-					*"no merge base"* | *"unrelated histories"* | *"unknown revision"* | *"bad revision"*) : ;;
-					*) return 1 ;;
-					esac
+			if [ -n "$path" ] && [ -d "$path" ] && [ -n "$branch" ] && [ "$path" != "$self" ]; then
+				# Committed divergence only means something against a DIFFERENT branch; for a
+				# second worktree sitting on $default the diff is empty by definition, so skip
+				# the call rather than spend it. Its dirty state below still counts.
+				if [ "$branch" != "$default" ]; then
+					if out="$(git -C "$cwd" diff --name-only "$default...$branch" 2>&1)"; then
+						[ -n "$out" ] && held="$(printf '%s\n%s' "$held" "$out")"
+					else
+						out_lc="$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')"
+						case "$out_lc" in
+						*"no merge base"* | *"unrelated histories"* | *"unknown revision"* | *"bad revision"*) : ;;
+						*) return 1 ;;
+						esac
+					fi
 				fi
-				out="$(git -C "$path" diff HEAD --name-only 2>/dev/null)"
+				# ⚠️ These two MUST fail closed, and used to fail open. Discarding their exit
+				# status made an unreadable worktree indistinguishable from a clean one: the
+				# empty result added nothing, the gate still returned `ok`, and a file another
+				# agent was holding classified `free` — a permission error or a transient read
+				# failure silently licensed a second agent onto it (dotfiles-dev#523 review).
+				# The header's "fails closed on anything but the no-shared-history case" was
+				# already the stated contract; these lines were the exception nobody declared.
+				# Status is checked WITHOUT folding stderr into the value: a git warning on a
+				# successful read would otherwise be parsed as a pathname.
+				out="$(git -C "$path" diff HEAD --name-only 2>/dev/null)" || return 1
 				[ -n "$out" ] && held="$(printf '%s\n%s' "$held" "$out")"
-				untracked="$(git -C "$path" ls-files --others --exclude-standard 2>/dev/null)"
+				untracked="$(git -C "$path" ls-files --others --exclude-standard 2>/dev/null)" || return 1
 				[ -n "$untracked" ] && held="$(printf '%s\n%s' "$held" "$untracked")"
 			fi
 			path=""
@@ -294,9 +317,27 @@ gate_live_agent_surface() {
 	[ -d "$cwd" ] || return 1
 	git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
 
-	local default_branch held
-	default_branch="$(git -C "$cwd" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"
+	local default_branch held cand
+	# `|| true` is load-bearing, not defensive noise: `symbolic-ref --quiet` EXITS NON-ZERO when
+	# the ref is absent, so under `set -e` this assignment aborted the whole function one line
+	# before the guard below ever ran. That is the actual mechanism behind the #523 review's
+	# "always returns unknown" — the fallback added below is unreachable without this.
+	default_branch="$(git -C "$cwd" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
 	default_branch="${default_branch#origin/}"
+	# A missing local refs/remotes/origin/HEAD is NOT a read failure — it is simply absent in any
+	# clone made with `git remote add`, and in clones whose remote never advertised a HEAD.
+	# Treating it as unreadable returned `unknown` and blocked dispatch forever in a perfectly
+	# healthy repository (dotfiles-dev#523 review). Fall back to whichever conventional remote
+	# branch actually exists; still fail closed when none does, because then the default genuinely
+	# cannot be determined and a wrong guess would mis-scope every diff below.
+	if [ -z "$default_branch" ]; then
+		for cand in main master; do
+			if git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$cand" >/dev/null 2>&1; then
+				default_branch="$cand"
+				break
+			fi
+		done
+	fi
 	[ -n "$default_branch" ] || return 1
 
 	held="$(_live_agent_held_paths "$cwd" "$default_branch")" || return 1

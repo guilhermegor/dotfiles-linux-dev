@@ -174,3 +174,59 @@ teardown() {
 	run grep -F "Collision is between LIVE AGENTS" "$SKILL"
 	[ "$status" -eq 0 ]
 }
+
+# --- dotfiles-dev#523 review (codex fallback rung): three fail-open / over-broad paths --------
+
+@test "called FROM a linked worktree, the main checkout's dirty files still hold" {
+	WT="$TEST_TMP/wt-caller"
+	git -C "$REPO" worktree add -q -b feature/caller "$WT" master
+	# the MAIN checkout is on master (== default) and is the one holding work
+	echo agentwork >"$REPO/main_checkout_work.txt"
+
+	# cwd is the LINKED worktree, so the main checkout is an "other" worktree here
+	gate_live_agent_surface "$WT"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"main_checkout_work.txt"* ]]
+
+	run live_agent_classify_files main_checkout_work.txt
+	[[ "$output" == "held:main_checkout_work.txt" ]]
+}
+
+@test "the caller's own worktree is excluded by path, not by being on the default branch" {
+	WT="$TEST_TMP/wt-self"
+	git -C "$REPO" worktree add -q -b feature/self "$WT" master
+	echo mine >"$WT/caller_own_file.txt"
+
+	# asking from inside WT: WT's own dirt is the CALLER's, not another agent's
+	gate_live_agent_surface "$WT"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" != *"caller_own_file.txt"* ]]
+}
+
+@test "an unreadable sibling worktree fails closed to unknown, never free" {
+	WT="$TEST_TMP/wt-unreadable"
+	git -C "$REPO" worktree add -q -b feature/unreadable "$WT" master
+	echo held >"$WT/would_be_held.txt"
+	# break only the worktree's own git pointer: it is still listed and still a directory,
+	# so the loop reaches it and its working-tree reads fail
+	echo "not a gitdir pointer" >"$WT/.git"
+
+	local rc=0
+	gate_live_agent_surface "$REPO" || rc=$?
+	[ "$rc" -eq 1 ]
+	[ "$LIVE_AGENT_STATUS" = "unknown" ]
+}
+
+@test "a clone with no refs/remotes/origin/HEAD still resolves the default branch" {
+	git -C "$REPO" symbolic-ref --delete refs/remotes/origin/HEAD
+	run git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD
+	[ "$status" -ne 0 ]
+
+	WT="$TEST_TMP/wt-nohead"
+	git -C "$REPO" worktree add -q -b feature/nohead "$WT" master
+	echo work >"$WT/nohead_work.txt"
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"nohead_work.txt"* ]]
+}
