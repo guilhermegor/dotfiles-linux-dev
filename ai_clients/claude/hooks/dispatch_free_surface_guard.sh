@@ -148,17 +148,37 @@ _task_notification_status() {
 	' "$transcript" 2>/dev/null | tail -1
 }
 
-# _agent_brief TRANSCRIPT ID
-# Every field of a dispatched Agent's own input that can name an issue — its name, its
-# description and its prompt. Read as one blob because the issue number is written in whichever
-# of them the dispatcher happened to use, and a guard that only looked at one would count a live
-# agent as absent, which is a duplicate dispatch.
-_agent_brief() {
-	jq -r --arg id "$2" 'select(.message.content != null)
+# DISPATCH_NAME_ISSUE_RE — a dispatch declares the ONE issue it covers in the Agent's `name`.
+# ⚠️ Read the NAME only, never the description or the prompt. The first cut joined name +
+# description + prompt and took every `#N` in the blob, which is wrong in two ways at once
+# (review finding on this file, measured on a real transcript 2026-09-26):
+#
+#   1. COVERAGE. A brief legitimately cites sibling issues, prior art and blockers. Two real
+#      dispatches this session yielded `#314 #404 #405 #479 #520` and `#405 #445 #479 #480
+#      #511 #520` — 5 and 6 issues from ONE agent each. Every cited number read as covered, so
+#      the guard would never demand a dispatch for any of them: presence masquerading as
+#      coverage, which is the exact defect #405 exists to remove.
+#   2. SLOTS. The old arithmetic subtracted the COUNT of extracted numbers from
+#      DISPATCH_MAX_CONCURRENT, so one agent could consume six slots and the guard would report
+#      real work as "queued by the cap" while the cap was not actually reached.
+#
+# The name is written by the DISPATCHER, so it is a declaration, not an inference. A prompt is
+# prose, and keying on prose is the same weak-proxy mistake as reading `priority` for model
+# capability or an author login for a comment's role. Same shape as review_fanout_guard.sh's
+# REVIEW_DISPATCH_NAME_RE, deliberately: two guards asking "what is this agent for?" must not
+# answer it two different ways.
+DISPATCH_NAME_ISSUE_RE='^issue-([0-9]+)(-|$)'
+
+# _agent_dispatch_issue TRANSCRIPT ID
+# Prints the ONE issue number this dispatch declares, or nothing. Never more than one line.
+_agent_dispatch_issue() {
+	local name
+	name="$(jq -r --arg id "$2" 'select(.message.content != null)
 		| .message.content[]?
 		| select(.type == "tool_use" and .name == "Agent" and .id == $id)
-		| [(.input.name // ""), (.input.description // ""), (.input.prompt // "")]
-		| join("\n")' "$1" 2>/dev/null
+		| .input.name // ""' "$1" 2>/dev/null | head -1)"
+	[[ "$name" =~ $DISPATCH_NAME_ISSUE_RE ]] || return 1
+	printf '%s\n' "${BASH_REMATCH[1]}"
 }
 
 # inflight_dispatch_issues TRANSCRIPT
@@ -190,9 +210,11 @@ inflight_dispatch_issues() {
 	local transcript="$1"
 	IN_FLIGHT_ISSUES=""
 	FAILED_BACKGROUND_AGENTS=""
+	UNDECLARED_IN_FLIGHT=""
+	IN_FLIGHT_AGENTS=0
 	[ -r "$transcript" ] || return 0
 
-	local dispatched id result status desc
+	local dispatched id result status desc issue undeclared_name
 	dispatched="$(jq -r 'select(.message.content != null) | .message.content[]? | select(.type=="tool_use" and .name=="Agent") | .id' "$transcript" 2>/dev/null)"
 	[ -n "$dispatched" ] || return 0
 
@@ -218,11 +240,27 @@ inflight_dispatch_issues() {
 			*) continue ;;
 			esac
 		fi
-		IN_FLIGHT_ISSUES="$(printf '%s\n%s' "$IN_FLIGHT_ISSUES" \
-			"$(_agent_brief "$transcript" "$id" | grep -oE '#[0-9]+' | tr -d '#')")"
+		# Every unresolved dispatch costs a SLOT whether or not it declares an issue — a
+		# running agent is running. Only a declared issue counts as COVERAGE. Keeping the two
+		# counts separate is the whole point: conflating them is what let one agent both
+		# excuse six issues and eat six slots.
+		IN_FLIGHT_AGENTS=$((IN_FLIGHT_AGENTS + 1))
+		if issue="$(_agent_dispatch_issue "$transcript" "$id")"; then
+			IN_FLIGHT_ISSUES="$(printf '%s\n%s' "$IN_FLIGHT_ISSUES" "$issue")"
+		else
+			# Reported, never silently dropped: a dispatch whose name does not declare its
+			# issue is invisible to coverage, and silence there is indistinguishable from
+			# "nothing was dispatched" — the failure mode this guard exists to end.
+			undeclared_name="$(jq -r --arg id "$id" 'select(.message.content != null)
+				| .message.content[]?
+				| select(.type == "tool_use" and .id == $id)
+				| (.input.name // .input.description // $id)' "$transcript" 2>/dev/null | head -1)"
+			UNDECLARED_IN_FLIGHT="$(printf '%s\n%s' "$UNDECLARED_IN_FLIGHT" "$undeclared_name")"
+		fi
 	done <<<"$dispatched"
 
 	IN_FLIGHT_ISSUES="$(printf '%s\n' "$IN_FLIGHT_ISSUES" | sed '/^$/d' | sort -un)"
+	UNDECLARED_IN_FLIGHT="$(printf '%s\n' "$UNDECLARED_IN_FLIGHT" | sed '/^$/d')"
 	FAILED_BACKGROUND_AGENTS="$(printf '%s\n' "$FAILED_BACKGROUND_AGENTS" | sed '/^$/d')"
 }
 
@@ -269,7 +307,7 @@ rescue_note() {
 
 main() {
 	local payload active cwd transcript plan dispatchable undeclared
-	local in_flight remaining missing queued slots
+	local in_flight claimed remaining missing queued slots
 
 	payload="$(cat)"
 
@@ -312,13 +350,18 @@ main() {
 
 	# Two independent in-flight sources, unioned: this session's own unresolved dispatches, and
 	# the cross-worktree claims registry (an agent of ANOTHER session holds those).
-	in_flight="$(printf '%s\n%s\n' "$IN_FLIGHT_ISSUES" \
-		"$(cd "$cwd" && dispatch_claimed_issues)" | sed '/^$/d' | sort -un)"
+	claimed="$(cd "$cwd" && dispatch_claimed_issues)"
+	in_flight="$(printf '%s\n%s\n' "$IN_FLIGHT_ISSUES" "$claimed" | sed '/^$/d' | sort -un)"
 
 	remaining="$(printf '%s\n' "$dispatchable" | sed '/^$/d' |
 		grep -vxF -f <(printf '%s\n' "$in_flight" | sed '/^$/d') || true)"
 
-	slots=$((DISPATCH_MAX_CONCURRENT - $(printf '%s\n' "$in_flight" | sed '/^$/d' | wc -l)))
+	# ⚠️ Slots are consumed by AGENTS, never by issue numbers. This session's own unresolved
+	# dispatches are counted one apiece (IN_FLIGHT_AGENTS); each cross-worktree claim stands for
+	# one agent of another session, which is why the claims are counted and not the union — the
+	# union would double-count an issue that is both claimed and dispatched here.
+	slots=$((DISPATCH_MAX_CONCURRENT - IN_FLIGHT_AGENTS \
+		- $(printf '%s\n' "$claimed" | sed '/^$/d' | wc -l)))
 	[ "$slots" -lt 0 ] && slots=0
 	missing="$(printf '%s\n' "$remaining" | sed '/^$/d' | head -n "$slots")"
 	queued="$(printf '%s\n' "$remaining" | sed '/^$/d' | tail -n +"$((slots + 1))")"
@@ -336,6 +379,12 @@ main() {
 				echo "Queued by the concurrency cap of $DISPATCH_MAX_CONCURRENT — throttled, NOT"
 				echo "dropped; they are demanded again as soon as a slot frees:"
 				printf '%s\n' "$queued" | sed 's/^/  #/'
+			fi
+			if [ -n "$UNDECLARED_IN_FLIGHT" ]; then
+				echo
+				echo "In flight but declaring NO issue in their Agent name — they hold a slot"
+				echo "and cover nothing; name them 'issue-<N>-<slug>' so coverage can see them:"
+				printf '%s\n' "$UNDECLARED_IN_FLIGHT" | sed 's/^/  /'
 			fi
 			if [ -n "$undeclared" ]; then
 				echo

@@ -235,8 +235,15 @@ separate rounds.
 | Term | Source |
 |---|---|
 | `dispatchable` | `hooks/lib/dispatch_plan.py`, read never re-derived (#433) |
-| `in_flight` | per ISSUE: a live claim in `hooks/lib/dispatch_claims.sh`'s registry, **or** an unresolved background dispatch whose own brief names `#N` (#404) |
-| `queued_by_cap` | the remainder over `DISPATCH_MAX_CONCURRENT` (default 8) |
+| `in_flight` | per ISSUE: a live claim in `hooks/lib/dispatch_claims.sh`'s registry, **or** an unresolved dispatch whose Agent **name** is `issue-<N>-<slug>` (#404) |
+| `queued_by_cap` | the remainder over `DISPATCH_MAX_CONCURRENT` (default 8), counted per AGENT |
+
+⚠️ **A dispatch declares its ONE issue in the Agent's `name`, never in its prompt.** A brief
+legitimately cites blockers, prior art and sibling surfaces; reading every `#N` in it made one
+agent cover six issues and eat six slots at once — measured on two real dispatches, which
+yielded 5 and 6 numbers each (#526 review). The name is written by the dispatcher, so it is a
+declaration; a prompt is prose. An in-flight dispatch whose name declares nothing holds a slot,
+covers no issue, and is **reported by name** rather than dropped.
 
 **The cap throttles; it never drops.** The overflow is printed as queued and
 demanded again as soon as a slot frees. There is deliberately **no queue file**:

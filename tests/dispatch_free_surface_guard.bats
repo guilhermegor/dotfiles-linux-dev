@@ -118,8 +118,8 @@ transcript_dev_loop_agent_on() {
     local f="$TEST_TMP/transcript.jsonl"
     {
         echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
-        jq -nc --arg p "Implement #$1 in a worktree" \
-            '{type:"assistant",message:{content:[{type:"tool_use",id:"agent1",name:"Agent",input:{name:("i"+($p|tostring)),prompt:$p}}]}}'
+        jq -nc --arg p "Implement #$1 in a worktree" --arg n "issue-$1-worktree" \
+            '{type:"assistant",message:{content:[{type:"tool_use",id:"agent1",name:"Agent",input:{name:$n,prompt:$p}}]}}'
     } >"$f"
     printf '%s\n' "$f"
 }
@@ -128,7 +128,7 @@ transcript_dev_loop_agent_resolved() {
     local f="$TEST_TMP/transcript.jsonl"
     {
         echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
-        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"prompt":"work #4"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"issue-4-agent","prompt":"work #4"}}]}}'
         echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":"done"}]}}'
     } >"$f"
     printf '%s\n' "$f"
@@ -141,7 +141,7 @@ transcript_slash_dev_loop_agent_resolved() {
     local f="$TEST_TMP/transcript.jsonl"
     {
         echo '{"type":"user","message":{"role":"user","content":"<command-message>dev-loop</command-message>\n<command-name>/dev-loop</command-name>"}}'
-        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"prompt":"work #4"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"issue-4-agent","prompt":"work #4"}}]}}'
         echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":"done"}]}}'
     } >"$f"
     printf '%s\n' "$f"
@@ -154,7 +154,7 @@ transcript_dev_loop_background_agent_working() {
     local f="$TEST_TMP/transcript.jsonl"
     {
         echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
-        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"bg-agent","prompt":"work #4"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"issue-4-bg-agent","prompt":"work #4"}}]}}'
         echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":[{"type":"text","text":"Async agent launched successfully. agentId: abc123"}]}]}}'
     } >"$f"
     printf '%s\n' "$f"
@@ -406,4 +406,66 @@ transcript_dev_loop_background_agent_status() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"RESCUE"* ]]
     [[ "$output" == *"bg-agent"* ]]
+}
+
+# --- #526 review: one Agent covers exactly ONE issue and holds exactly ONE slot ---------------
+# The first cut joined name+description+prompt and took every `#N`. Measured on two real
+# dispatches: 5 and 6 issues extracted from one agent each.
+
+# transcript_dev_loop_agent_citing MANY — a dispatch DECLARING issue $1 in its name while its
+# prompt cites the rest, exactly as a real brief does (blockers, prior art, sibling surfaces).
+transcript_dev_loop_agent_citing() {
+    local declared="$1"; shift
+    local cites="$*"
+    local f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        jq -nc --arg n "issue-$declared-work" \
+               --arg p "Implement #$declared. See also $cites — do not touch them." \
+            '{type:"assistant",message:{content:[{type:"tool_use",id:"agent1",name:"Agent",input:{name:$n,prompt:$p}}]}}'
+    } >"$f"
+    printf '%s\n' "$f"
+}
+
+@test "a brief citing other issues covers ONLY the one its name declares" {
+    plan_of "4 5"
+    run run_guard "$(transcript_dev_loop_agent_citing 4 '#5 #520 #433')"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#5"* ]]
+}
+
+@test "citing an issue in the prompt does not silence the demand for it" {
+    plan_of "5"
+    run run_guard "$(transcript_dev_loop_agent_citing 4 '#5')"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#5"* ]]
+}
+
+@test "one citing agent consumes ONE slot, not one per cited number" {
+    # cap 2, one agent in flight citing four issues: one slot is spent, one is free, so the
+    # next dispatchable issue must be DEMANDED, never reported as queued by the cap.
+    export DISPATCH_MAX_CONCURRENT=2
+    plan_of "4 5"
+    run run_guard "$(transcript_dev_loop_agent_citing 4 '#5 #6 #7 #8')"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#5"* ]]
+    [[ ! "$output" == *"Queued by the concurrency cap"* ]]
+}
+
+@test "an in-flight agent whose name declares no issue is reported, never silently dropped" {
+    plan_of "4"
+    run run_guard "$(transcript_dev_loop_background_agent_undeclared)"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"declaring NO issue"* ]]
+}
+
+# transcript_dev_loop_background_agent_undeclared — an unresolved dispatch with a name that
+# carries no issue number at all.
+transcript_dev_loop_background_agent_undeclared() {
+    local f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"explore-something","prompt":"look at #4"}}]}}'
+    } >"$f"
+    printf '%s\n' "$f"
 }
