@@ -91,6 +91,17 @@ ROSTER_FILE='.review-bots.yaml'
 : "${OPEN_THREADS_NUDGE_MAX_PRS:=50}"
 : "${OPEN_THREADS_NUDGE_CACHE_TTL:=300}"
 : "${OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER:=6}"
+# Both knobs above feed `$(( ))` arithmetic that decides whether a cache entry is fresh
+# (_repo_wide_scan) or prunable (_prune_stale_cache_entries), so a zero, negative, non-numeric or
+# absurdly large override does not merely tune the cache -- it makes max_age 0 and deletes the
+# entries the very same run is about to read, turning every repo-wide scan back into a full
+# PR-list + gate fan-out (dotfiles-dev#514 review). A value that is not a positive integer inside
+# bash's arithmetic range therefore falls back to its default rather than silently disabling the
+# cache. Validated here at the declaration, not at each use: the TTL has a second consumer in
+# _repo_wide_scan's freshness check, and the review named only the multiplier.
+[[ "$OPEN_THREADS_NUDGE_CACHE_TTL" =~ ^[1-9][0-9]{0,8}$ ]] || OPEN_THREADS_NUDGE_CACHE_TTL=300
+[[ "$OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER" =~ ^[1-9][0-9]{0,8}$ ]] ||
+	OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER=6
 
 # GraphQL query + classification live in one shared place (dotfiles-dev#167):
 # the SubagentStop board sweep (subagent_stop_sweep.sh) calls the identical
@@ -315,7 +326,15 @@ _prune_stale_cache_entries() {
 		ts="$(jq -r '.ts // 0' "$f" 2>/dev/null)"
 		[[ "$ts" =~ ^[0-9]+$ ]] || ts=0
 		age=$((now - ts))
-		[ "$age" -ge "$max_age" ] && rm -f "$f"
+		# A future-dated ts (a backward clock correction, a copied cache dir) yields a NEGATIVE
+		# age, which is not "very fresh" -- _repo_wide_scan already refuses such a file as a
+		# cache hit, so keeping it here leaves an entry nothing will ever use and nothing will
+		# ever delete while the clock stays behind it, defeating the growth bound this function
+		# exists to enforce (dotfiles-dev#514 review). Unusable and unprunable is the worst of
+		# both, so an age outside [0, max_age) is pruned in either direction.
+		if [ "$age" -lt 0 ] || [ "$age" -ge "$max_age" ]; then
+			rm -f "$f"
+		fi
 	done
 }
 
