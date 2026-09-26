@@ -1,0 +1,451 @@
+#!/usr/bin/env bats
+#
+# Unit tests for ai_clients/claude/hooks/lib/review_fanout_plan.py — the review fan-out
+# planner review_fanout_guard.sh reads for its verdict (dotfiles-dev#480).
+#
+# THE POINT OF THIS SUITE is the "needs a review?" predicate, which #480 leaves open and
+# which has a measured counter-example against BOTH obvious answers. Every one of the first
+# four tests below is a real PR shape measured on this repo on 2026-09-26:
+#
+#   #520 — 9 submitted reviews, every one against an OLDER head; `reviews | length == 0` is
+#          false, and the PR is still unreviewed at the head that would merge. The repo's own
+#          published check-run said so: "no reviewer has reported on this new head yet."
+#   #453 — 0 submitted reviews, and two REAL fallback reviews delivered as PR comments
+#          carrying reviewer_ladder.sh's attribution line, both predating the current head.
+#          A count says "never reviewed"; a head-AGNOSTIC attribution match (what
+#          ladder_already_covered does) says "already covered". Both are wrong.
+#
+# So the predicate is head coverage across BOTH channels, and the tests pin each channel
+# separately plus each channel's head-scoping — a suite that only checked "some review
+# exists" would pass against the bug this planner exists to remove.
+#
+# Strategy (same as dispatch_plan.bats): `gh` is stubbed on PATH with a real executable
+# script — the planner shells out to it directly, so a bash function defined in this bats
+# process would be invisible to the child. The reviewer rung is supplied through
+# REVIEW_FANOUT_RUNG rather than by probing: resolve_fallback_reviewer makes LIVE model calls
+# and a test must never reach a real runtime.
+#
+# The gate's two-halves contract (ai_clients/CLAUDE.md, dotfiles-dev#398) applies here too:
+#   1. success returns a USABLE answer — dispatchable/excluded are the documented shape and
+#      non-empty content actually reaches them, not merely an exit-0 with nothing set;
+#   2. the fail-closed path is exercised deliberately, with a stub that makes the underlying
+#      gh call fail, asserting nothing parseable reaches stdout (the whole-plan failure the
+#      guard reads as UNREADABLE) rather than a partial plan that reads as an answer.
+#
+# Run locally: bats tests/review_fanout_plan.bats
+
+setup() {
+    PLANNER="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib/review_fanout_plan.py"
+    TEST_TMP="$(mktemp -d)"
+    cd "$TEST_TMP" || return 1
+
+    BIN="$TEST_TMP/bin"
+    mkdir -p "$BIN"
+    PATH="$BIN:$PATH"
+    export PATH
+
+    GH_LOG="$TEST_TMP/gh.log"
+    : >"$GH_LOG"
+    export GH_LOG
+
+    # A rung resolved, so no predicate test is silently masked by the rung's own exclusion
+    # reason (which is checked on purpose by its own tests below).
+    export REVIEW_FANOUT_RUNG="qwen|qwen3-coder-plus|configured-default"
+    unset REVIEW_FANOUT_RECENT_PUSH_SECONDS
+}
+
+teardown() {
+    cd /
+    rm -rf "$TEST_TMP"
+    unset REVIEW_FANOUT_RUNG REVIEW_FANOUT_RECENT_PUSH_SECONDS
+}
+
+# ago SECONDS — an ISO-8601 UTC timestamp that many seconds in the past.
+ago() {
+    date -u -d "@$(($(date -u +%s) - $1))" +%Y-%m-%dT%H:%M:%SZ
+}
+
+# stub_gh_prs — reads a `gh pr list --json` fixture on stdin and puts a gh stub on PATH that
+# prints it. Every invocation is appended to $GH_LOG so a test can assert the planner issues
+# no mutation.
+stub_gh_prs() {
+    cat >"$TEST_TMP/prs.json"
+    cat >"$BIN/gh" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >>"$GH_LOG"
+cat "$FIXTURE"
+STUB
+    chmod +x "$BIN/gh"
+    FIXTURE="$TEST_TMP/prs.json"
+    export FIXTURE
+}
+
+stub_gh_failing() {
+    cat >"$BIN/gh" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >>"$GH_LOG"
+echo "gh: could not authenticate" >&2
+exit 1
+STUB
+    chmod +x "$BIN/gh"
+}
+
+# reason_for PR — the exclusion reason recorded for that PR, empty when it is not excluded.
+reason_for() {
+    jq -r --argjson n "$1" '.excluded[] | select(.pr == $n) | .reason' <<<"$output"
+}
+
+# --- the predicate: channel 1, a submitted review, head-scoped ---------------------
+
+@test "9 reviews all against older heads still needs a review (#520, measured)" {
+    stub_gh_prs <<EOF
+[{"number":520,"headRefOid":"e1319925","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"d2c181fe"}},
+             {"commit":{"oid":"55c5dca2"}},
+             {"commit":{"oid":"55c5dca2"}},
+             {"commit":{"oid":"3958727f"}}],
+  "comments":[],
+  "commits":[{"oid":"e1319925","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "520" ]
+    [ "$(jq -r '.excluded | length' <<<"$output")" -eq 0 ]
+}
+
+@test "a submitted review naming the current head is coverage" {
+    stub_gh_prs <<EOF
+[{"number":600,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"bbbb2222"}},{"commit":{"oid":"aaaa1111"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 600)" == *"already reviewed at the current head"* ]]
+}
+
+@test "zero reviews is not by itself a verdict — a covered head is still excluded" {
+    # The inverse of the count predicate: reviews is EMPTY and the PR is still excluded,
+    # because the fallback channel covered this head. A planner keyed on the count would
+    # dispatch a reviewer here forever (#453's own failure mode).
+    stub_gh_prs <<EOF
+[{"number":601,"headRefOid":"cccc3333","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],
+  "comments":[{"body":"Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)","createdAt":"$(ago 1800)"}],
+  "commits":[{"oid":"cccc3333","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 601)" == *"already covered at the current head by a fallback review"* ]]
+}
+
+# --- the predicate: channel 2, a ladder comment, head-scoped -----------------------
+
+@test "a ladder comment PREDATING the head is not coverage of it (#453, measured)" {
+    # #453 verbatim: 0 submitted reviews, two attribution comments, both older than the head
+    # commit. ladder_already_covered would call this covered forever; head-scoping is the
+    # whole difference.
+    stub_gh_prs <<EOF
+[{"number":453,"headRefOid":"bf46b291","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],
+  "comments":[{"body":"Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)","createdAt":"$(ago 7200)"},
+              {"body":"Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)","createdAt":"$(ago 5400)"}],
+  "commits":[{"oid":"bf46b291","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "453" ]
+}
+
+@test "a comment merely quoting the attribution line mid-body is not coverage" {
+    # Anchored per-line, the same shape ladder_already_covered's own regex uses: any
+    # commenter can type the marker, and a substring match anywhere in a body would let a
+    # passer-by cancel a review (CWE-345).
+    stub_gh_prs <<EOF
+[{"number":602,"headRefOid":"dddd4444","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],
+  "comments":[{"body":"I was expecting a Fallback review — runtime: line here but saw none","createdAt":"$(ago 60)"}],
+  "commits":[{"oid":"dddd4444","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+}
+
+# --- eligibility ------------------------------------------------------------------
+
+@test "a DIRTY pull request is excluded — a review cannot resolve a conflict" {
+    stub_gh_prs <<EOF
+[{"number":603,"headRefOid":"eeee5555","mergeStateStatus":"DIRTY","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"eeee5555","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 603)" == *"DIRTY"* ]]
+}
+
+@test "a draft pull request is excluded" {
+    stub_gh_prs <<EOF
+[{"number":604,"headRefOid":"ffff6666","mergeStateStatus":"BLOCKED","isDraft":true,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"ffff6666","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 604)" == *"draft"* ]]
+}
+
+@test "a head pushed inside the recent-push window is excluded" {
+    stub_gh_prs <<EOF
+[{"number":605,"headRefOid":"7777aaaa","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"7777aaaa","committedDate":"$(ago 60)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 605)" == *"already triggers a re-review"* ]]
+}
+
+@test "a head whose commit is not in the commit list is UNKNOWN, never dispatchable" {
+    # Fail closed on an undecidable head: without a head timestamp the ladder channel cannot
+    # be head-scoped at all, so "needs a review" is unanswerable and no reviewer is assigned.
+    stub_gh_prs <<'EOF'
+[{"number":606,"headRefOid":"8888bbbb","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"9999cccc","committedDate":"2026-09-01T00:00:00Z"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 606)" == *"head commit UNKNOWN"* ]]
+}
+
+# --- the rung: none and unknown are different claims -------------------------------
+
+@test "rung none excludes every PR with a named reason and an empty dispatchable list" {
+    export REVIEW_FANOUT_RUNG=none
+    stub_gh_prs <<EOF
+[{"number":607,"headRefOid":"aaaa0001","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa0001","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]},
+ {"number":608,"headRefOid":"aaaa0002","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa0002","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.rung.status' <<<"$output")" = "none" ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [ "$(jq -r '.excluded | length' <<<"$output")" -eq 2 ]
+    [[ "$(reason_for 607)" == *"no reviewer rung is assignable"* ]]
+}
+
+@test "rung unknown is reported as unknown, never as none" {
+    export REVIEW_FANOUT_RUNG=unknown
+    stub_gh_prs <<EOF
+[{"number":609,"headRefOid":"aaaa0003","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa0003","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.rung.status' <<<"$output")" = "unknown" ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 609)" == *"reviewer rung UNKNOWN"* ]]
+}
+
+@test "a resolved rung is reported with its runtime, model and selection signal" {
+    stub_gh_prs <<'EOF'
+[]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.rung.status' <<<"$output")" = "ok" ]
+    [ "$(jq -r '.rung.runtime' <<<"$output")" = "qwen" ]
+    [ "$(jq -r '.rung.model' <<<"$output")" = "qwen3-coder-plus" ]
+    [ "$(jq -r '.rung.signal' <<<"$output")" = "configured-default" ]
+}
+
+# --- statusCheckRollup: split running from failing, never resolve by name ----------
+
+@test "two check-runs with the same name and opposite conclusions read as ambiguous" {
+    # Measured on #520's head: `Review threads answered` appeared TWICE, SUCCESS and FAILURE
+    # — one from the workflow job, one POSTed by the workflow. Resolving by
+    # name-and-first-match returns a coin flip that reads as an authoritative verdict, which
+    # is why #480's third candidate predicate (the step-4 gate's check) was rejected.
+    stub_gh_prs <<EOF
+[{"number":610,"headRefOid":"aaaa0004","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa0004","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[
+    {"__typename":"CheckRun","name":"Review threads answered","status":"COMPLETED","conclusion":"SUCCESS"},
+    {"__typename":"CheckRun","name":"Review threads answered","status":"COMPLETED","conclusion":"FAILURE"}]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].checks.ambiguous | join(",")' <<<"$output")" = "Review threads answered" ]
+    [ "$(jq -r '.dispatchable[0].checks.failing | length' <<<"$output")" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].checks.running | length' <<<"$output")" -eq 0 ]
+}
+
+@test "an IN_PROGRESS check with an empty conclusion is running, not failing" {
+    # `conclusion != "SUCCESS"` would call this red: a check in flight has a populated
+    # `status` and an EMPTY `conclusion`.
+    stub_gh_prs <<EOF
+[{"number":611,"headRefOid":"aaaa0005","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa0005","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[
+    {"__typename":"CheckRun","name":"bats (unit tests)","status":"IN_PROGRESS","conclusion":""},
+    {"__typename":"CheckRun","name":"shellcheck","status":"QUEUED","conclusion":""},
+    {"__typename":"CheckRun","name":"yamllint","status":"COMPLETED","conclusion":"FAILURE"}]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].checks.running | join(",")' <<<"$output")" = "bats (unit tests),shellcheck" ]
+    [ "$(jq -r '.dispatchable[0].checks.failing | join(",")' <<<"$output")" = "yamllint" ]
+}
+
+@test "a StatusContext is read with its own state vocabulary, not a CheckRun's" {
+    # `.conclusion // .state` mixes the two vocabularies: a StatusContext has neither status
+    # nor conclusion, and a PENDING one is running. This repo's own CodeRabbit entry is this
+    # shape.
+    stub_gh_prs <<EOF
+[{"number":612,"headRefOid":"aaaa0006","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa0006","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[
+    {"__typename":"StatusContext","context":"CodeRabbit","state":"PENDING"},
+    {"__typename":"StatusContext","context":"GitGuardian","state":"SUCCESS"},
+    {"__typename":"StatusContext","context":"legacy-ci","state":"FAILURE"}]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].checks.running | join(",")' <<<"$output")" = "CodeRabbit" ]
+    [ "$(jq -r '.dispatchable[0].checks.failing | join(",")' <<<"$output")" = "legacy-ci" ]
+}
+
+@test "NEUTRAL and SKIPPED conclusions are not failures" {
+    stub_gh_prs <<EOF
+[{"number":613,"headRefOid":"aaaa0007","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa0007","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[
+    {"__typename":"CheckRun","name":"optional-job","status":"COMPLETED","conclusion":"SKIPPED"},
+    {"__typename":"CheckRun","name":"advisory","status":"COMPLETED","conclusion":"NEUTRAL"}]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].checks.failing | length' <<<"$output")" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].checks.running | length' <<<"$output")" -eq 0 ]
+}
+
+# --- contract: shape, reasons, no mutation, fail-closed ----------------------------
+
+@test "success returns a USABLE answer, not just exit 0" {
+    stub_gh_prs <<EOF
+[{"number":614,"headRefOid":"aaaa0008","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa0008","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]},
+ {"number":615,"headRefOid":"aaaa0009","mergeStateStatus":"DIRTY","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa0009","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    run jq -e '
+        (.rung.status | type == "string")
+        and (.dispatchable | type == "array") and (.excluded | type == "array")
+        and ((.dispatchable | length) > 0) and ((.excluded | length) > 0)
+        and all(.dispatchable[]; (.pr | type == "number") and ((.head // "") | length > 0))
+        and all(.excluded[]; (.pr | type == "number") and ((.reason // "") | length > 0))
+    ' <<<"$output"
+    [ "$status" -eq 0 ]
+}
+
+@test "every excluded pull request carries its own non-empty reason" {
+    stub_gh_prs <<EOF
+[{"number":616,"headRefOid":"bbbb0001","mergeStateStatus":"DIRTY","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"bbbb0001","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]},
+ {"number":617,"headRefOid":"bbbb0002","mergeStateStatus":"BLOCKED","isDraft":true,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"bbbb0002","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]},
+ {"number":618,"headRefOid":"bbbb0003","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"bbbb0003"}}],"comments":[],
+  "commits":[{"oid":"bbbb0003","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.excluded | length' <<<"$output")" -eq 3 ]
+    # Distinct reasons, not one blanket string: the per-PR reason IS the escape hatch, so a
+    # single reused sentence would hide which rule actually fired.
+    [ "$(jq -r '[.excluded[].reason] | unique | length' <<<"$output")" -eq 3 ]
+}
+
+@test "the planner only READS — it issues no gh mutation" {
+    stub_gh_prs <<EOF
+[{"number":619,"headRefOid":"cccc0001","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"cccc0001","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    # Scheduling is deterministic; accepting a finding is not. Nothing here may comment,
+    # review, resolve or merge (#480's boundary).
+    run grep -Eq 'pr (comment|review|merge|edit)|api .*-X|--method' "$GH_LOG"
+    [ "$status" -ne 0 ]
+    run grep -q 'pr list' "$GH_LOG"
+    [ "$status" -eq 0 ]
+}
+
+@test "a failing gh read produces NOTHING parseable on stdout (fail closed as one unit)" {
+    stub_gh_failing
+    run python3 "$PLANNER"
+    [ "$status" -ne 0 ]
+    # Not a partial plan, and not an empty-but-valid one: either would read downstream as
+    # "no PR needs a reviewer". The guard's own shape check is what turns this into a block.
+    run jq -e '.dispatchable' <<<"$output"
+    [ "$status" -ne 0 ]
+}
+
+@test "an empty open-PR list is a valid, complete, empty plan" {
+    stub_gh_prs <<'EOF'
+[]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [ "$(jq -r '.excluded | length' <<<"$output")" -eq 0 ]
+}
+
+@test "the recent-push window is configurable and actually applied" {
+    export REVIEW_FANOUT_RECENT_PUSH_SECONDS=30
+    stub_gh_prs <<EOF
+[{"number":620,"headRefOid":"dddd0001","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"dddd0001","committedDate":"$(ago 120)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    # 120s old, window 30s — outside it, so the push no longer excuses the missing review.
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+}
