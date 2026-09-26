@@ -75,10 +75,14 @@ loop_invoked_via_slash_command() {
         >>"$TRANSCRIPT"
 }
 
-# agent_dispatched ID — a dispatch with no tool_result yet, i.e. still in flight.
+# agent_dispatched ID [AGENT_NAME] — a dispatch with no tool_result yet, i.e. still in flight.
+# AGENT_NAME defaults to a REVIEW dispatch name (`review-pr-<something>`), because most cases
+# here are about resolution mechanics rather than classification; the classification cases pass
+# a non-review name explicitly.
 agent_dispatched() {
+    local id="$1" name="${2:-review-pr-520}"
     printf '%s\n' \
-        "{\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Agent\",\"id\":\"$1\",\"input\":{\"name\":\"$1\"}}]}}" \
+        "{\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Agent\",\"id\":\"$id\",\"input\":{\"name\":\"$name\"}}]}}" \
         >>"$TRANSCRIPT"
 }
 
@@ -173,15 +177,20 @@ EOF
 }
 
 @test "reports a failed background agent as the RESCUE case, not free capacity" {
+    # The agent is named explicitly so the label assertion below is unambiguous: the guard
+    # reports `.input.name`, and this fixture previously set that to the bare tool-use id
+    # (`a1`), which made the assertion pass for the wrong reason — it could not tell the label
+    # from the id. Asserting on a distinct name pins that the LABEL is what reaches the
+    # operator. Behaviour unchanged; the fixture was the weak part.
     loop_invoked
-    agent_dispatched a1
+    agent_dispatched a1 "review-pr-777"
     agent_result a1 "Async agent launched successfully, id=a1"
     task_notification a1 failed
     plan_with_work
     run_guard
     [ "$status" -eq 2 ]
     [[ "$output" == *"RESCUE case"* ]]
-    [[ "$output" == *"a1"* ]]
+    [[ "$output" == *"review-pr-777"* ]]
 }
 
 # --- it passes when the board is genuinely covered ---------------------------------
@@ -193,12 +202,75 @@ EOF
     [ "$status" -eq 0 ]
 }
 
-@test "passes while a dispatch of this session's own is still unresolved" {
+@test "passes while a REVIEW dispatch of this session's own is still unresolved" {
     loop_invoked
     agent_dispatched a1
     plan_with_work
     run_guard
     [ "$status" -eq 0 ]
+}
+
+# --- the selector: only a REVIEW dispatch suppresses (review finding on this file) ---
+
+@test "an unresolved NON-review agent does NOT suppress the guard" {
+    # 🔴 THE REPORTED DEFECT. The first cut selected every `Agent` tool_use, so an agent
+    # dispatched for something unrelated — in an orchestrating session, most of them — let a
+    # Stop pass with dispatchable non-empty and no review agent ever started. That is the
+    # inverse of this guard's contract, and it failed OPEN, where its sibling
+    # dispatch_free_surface_guard.sh fails closed. A guard suppressed by normal operation is
+    # not a guard.
+    loop_invoked
+    agent_dispatched a1 "implement-issue-405"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#520"* ]]
+}
+
+@test "the block names the in-flight non-review agents rather than ignoring them" {
+    # Naming them is what makes the block actionable instead of a shrug — the operator needs
+    # to know the agents they can see are not covering the fan-out.
+    loop_invoked
+    agent_dispatched a1 "implement-issue-405"
+    agent_dispatched a2 "greenfield-backlog"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"none of them a review dispatch"* ]]
+    [[ "$output" == *"implement-issue-405"* ]]
+    [[ "$output" == *"greenfield-backlog"* ]]
+}
+
+@test "a review dispatch in flight suppresses even alongside unrelated agents" {
+    # The converse: the presence of unrelated agents must not stop a genuine review dispatch
+    # from counting, or the guard nags through the whole fan-out it just asked for.
+    loop_invoked
+    agent_dispatched a1 "implement-issue-405"
+    agent_dispatched a2 "review-pr-520"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a resolved review dispatch does not suppress a later round" {
+    # Classification must not become a permanent excuse: once the review agent has finished,
+    # an outstanding dispatchable list blocks again.
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    agent_result a1 "done, posted the review"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+}
+
+@test "the block message states the review-pr name convention" {
+    # The guard keys on a name the dispatcher must write, so the message has to say what it is
+    # — a marker nothing emits would make the predicate always false.
+    loop_invoked
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"review-pr-520"* ]]
 }
 
 @test "a launch acknowledgement alone does not resolve a background dispatch" {

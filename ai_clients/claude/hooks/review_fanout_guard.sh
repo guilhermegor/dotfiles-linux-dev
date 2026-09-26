@@ -27,6 +27,11 @@
 # with rationale. A deterministic fan-out that auto-applied findings would industrialise the
 # false positives and be strictly worse than the prose it replaces (#480).
 #
+# ⚠️ A REVIEW DISPATCH IS IDENTIFIED BY ITS `name`, not by any Agent dispatch existing. The
+# first cut selected every `Agent` tool_use, so an unrelated agent in flight suppressed this
+# guard entirely — fails open, in an orchestrating session most of the time (review finding on
+# this file). Only `name: review-pr-<PR>` counts; see REVIEW_DISPATCH_NAME_RE.
+#
 # THE PLANNER CONTRACT (hooks/lib/review_fanout_plan.py). Invoked with no arguments, prints
 # one JSON object on stdout:
 #
@@ -120,41 +125,84 @@ dev_loop_invoked() {
 		"$transcript" >/dev/null 2>&1
 }
 
-# _agent_result_text TRANSCRIPT ID
-# The literal text of the tool_result matching a dispatched Agent's tool_use id, or empty when
-# none has landed yet. content is normalised for both shapes seen in real transcripts: a plain
-# string, or an array of blocks with a .text field.
-_agent_result_text() {
-	local transcript="$1" id="$2"
-	jq -r --arg id "$id" 'select(.message.content != null)
-		| .message.content[]?
-		| select(.type == "tool_result" and .tool_use_id == $id)
-		| .content
-		| if type == "string" then .
-		  else ([.[]? | .text // ""] | join("\n"))
-		  end' "$transcript" 2>/dev/null
-}
+# The `name` a review dispatch MUST pass to the Agent tool, as a pattern. `name` is a
+# structured, pattern-validated Agent-tool parameter the DISPATCHER sets — not prose inferred
+# from `description`, which is exactly the weak-proxy mistake `reviewer_ladder.sh` records for
+# reading `priority` as capability, and `review_thread_gate.sh` records for reading an author
+# login as a comment's role. The step-4b skill text ships this convention alongside this hook.
+#
+# ⚠️ NO SUCH MARKER EXISTED BEFORE THIS CHANGE. `.input.name` was read only as a display
+# label. So this convention is introduced here, and the transition matters: until the step-4b
+# text lands, no dispatch carries the name, the predicate below is always false, and the guard
+# therefore BLOCKS rather than suppressing. That direction is deliberate for a guard whose
+# whole purpose is "do not skip the fan-out" — and the block message names the in-flight agents
+# it can see, so it is actionable rather than a shrug. Fail-open was the reported defect; the
+# cost of fail-closed here is a nudge during the window between dispatching a review agent and
+# its finishing, which the name closes once the skill text is in place.
+REVIEW_DISPATCH_NAME_RE='^review-pr-[0-9]+$'
 
-# _task_notification_status TRANSCRIPT ID
-# The last completed|failed <status> of a <task-notification> naming this tool-use id, scanned
-# across every string leaf of every record rather than one assumed field: measured on real
-# transcripts the identical blob shows up under `.content` (a queue-operation record, on both
+# transcript_agent_facts TRANSCRIPT
+# Every Agent dispatch and every fact bearing on whether it resolved, as TSV, in ONE streaming
+# pass: `A<TAB>id<TAB>name<TAB>label`, `R<TAB>id<TAB>ack|done`, `N<TAB>id<TAB>completed|failed`.
+#
+# ⚠️ This is one pass on purpose. The previous shape ran `_agent_result_text` and
+# `_task_notification_status` per dispatched id — two fresh `jq` passes over the whole file
+# each, i.e. O(agents x transcript). Measured on a real orchestrating session's transcript (47
+# Agent dispatches, so ~90 full scans) ONE call exceeded a 120-second timeout. This is a `Stop`
+# hook: it runs at the end of every turn, so an unbounded scan is not a performance nicety, it
+# is the difference between a guard that runs and one that times out and silently does nothing.
+#
+# `.. | strings` for the task-notification is kept, and kept deliberately: measured on real
+# transcripts the identical blob appears under `.content` (a queue-operation record, on both
 # enqueue AND removal), under `.prompt` (an attachment record), and eventually inside an
-# ordinary delivered message. `.. | strings` walks them all, so a harness change to which
-# shape delivers it cannot silently blind this the way shape 3 above blinded dev_loop_invoked.
-_task_notification_status() {
-	local transcript="$1" id="$2"
-	jq -r --arg needle "<tool-use-id>${id}</tool-use-id>" '
-		.. | strings
-		| select(contains($needle))
-		| capture("<status>(?<s>completed|failed)</status>").s
-	' "$transcript" 2>/dev/null | tail -1
+# ordinary delivered message. Walking every string leaf means a harness change to which shape
+# delivers it cannot silently blind this — the way a `.message.content[]?` walk over a bare
+# string silently blinded shape 3 of dev_loop_invoked above.
+transcript_agent_facts() {
+	local transcript="$1"
+	jq -n -r --arg ack "Async agent launched successfully" '
+		def norm:
+			if type == "string" then .
+			else ([.[]? | .text // ""] | join("\n"))
+			end;
+		inputs
+		| . as $rec
+		| (
+			( $rec.message.content[]?
+			  | select(type == "object")
+			  | if (.type == "tool_use" and .name == "Agent") then
+					"A\t\(.id)\t\(.input.name // "")\t\(.input.name // .input.description // .id)"
+				elif (.type == "tool_result" and ((.content | norm) | length) > 0) then
+					"R\t\(.tool_use_id)\t\(if ((.content | norm) | contains($ack)) then "ack" else "done" end)"
+				else empty end ),
+			( $rec
+			  | .. | strings
+			  | select(test("<tool-use-id>[^<]+</tool-use-id>"))
+			  | select(test("<status>(completed|failed)</status>"))
+			  | "N\t\(capture("<tool-use-id>(?<i>[^<]+)</tool-use-id>").i)\t\(capture("<status>(?<s>completed|failed)</status>").s)" )
+		  )
+	' "$transcript" 2>/dev/null
 }
 
-# subagents_running TRANSCRIPT
-# True when a dispatch of this session's OWN is still unresolved. Mirrors
-# dispatch_free_surface_guard.sh's function of the same name (see dev_loop_invoked above for
-# why this is a mirror and not a shared helper).
+# review_dispatch_running TRANSCRIPT
+# Descended from dispatch_free_surface_guard.sh's `subagents_running` — a mirror, not a shared
+# helper (see dev_loop_invoked above for why). It has since DIVERGED in two ways that must not
+# be "reconciled" by copying either direction blindly: this one discriminates review dispatches
+# by `name`, and collects its facts in ONE streaming pass instead of two jq passes per id. The
+# sibling still carries both original shapes; #405 owns that file today, and a shared
+# hooks/lib/transcript_state.sh holding the fixed version is the named follow-up.
+#
+# True when a REVIEW dispatch of this session's own is still unresolved. Also always sets
+# FAILED_BACKGROUND_AGENTS (the RESCUE case) and OTHER_AGENTS_IN_FLIGHT (unresolved dispatches
+# that are NOT review dispatches), so main() never re-walks the transcript.
+#
+# 🔴 THE FIX THIS FUNCTION CARRIES (review finding on this file). It used to select EVERY
+# `Agent` tool_use and suppress the guard whenever any of them was unresolved. So an agent
+# dispatched for something entirely unrelated to reviewing — in an orchestrating session, most
+# of them — let a Stop pass with `dispatchable` non-empty and no review agent ever started:
+# the exact inverse of the contract this guard exists to enforce, and failing OPEN, where its
+# sibling dispatch_free_surface_guard.sh fails closed. A guard suppressed by normal operation
+# is not a guard. Only a dispatch whose `name` matches REVIEW_DISPATCH_NAME_RE suppresses now.
 #
 # A dispatched Agent tool_use with NO tool_result yet is still in flight — ponytail: this is a
 # proxy for "is a subagent running", since no live process list is readable from a bash hook,
@@ -170,46 +218,72 @@ _task_notification_status() {
 # notification yet means still working; failed means NEITHER — a quota kill is not "running",
 # it is the RESCUE case, so it does not count as still-running and the caller is told to
 # resume rather than dispatch a duplicate.
-subagents_running() {
+review_dispatch_running() {
 	local transcript="$1"
 	FAILED_BACKGROUND_AGENTS=""
+	OTHER_AGENTS_IN_FLIGHT=""
 	[ -r "$transcript" ] || return 1
 
-	local dispatched id result status desc still_running=1
-	dispatched="$(jq -r 'select(.message.content != null)
-		| .message.content[]?
-		| select(.type == "tool_use" and .name == "Agent")
-		| .id' "$transcript" 2>/dev/null)"
-	[ -n "$dispatched" ] || return 1
-
-	while read -r id; do
+	local -A agent_name=() agent_label=() agent_result=() agent_note=()
+	local -a order=()
+	local kind id field label
+	while IFS=$'\t' read -r kind id field label; do
 		[ -n "$id" ] || continue
-		result="$(_agent_result_text "$transcript" "$id")"
-		if [ -z "$result" ]; then
-			still_running=0
-			continue
+		case "$kind" in
+		A)
+			# A re-dispatched id cannot happen, but last-wins is harmless and keeps the
+			# ordering array free of duplicates.
+			[ -n "${agent_name[$id]+set}" ] || order+=("$id")
+			agent_name["$id"]="$field"
+			agent_label["$id"]="$label"
+			;;
+		R) agent_result["$id"]="$field" ;;
+		# Last wins, matching the previous `| tail -1`: a later notification supersedes an
+		# earlier one for the same id.
+		N) agent_note["$id"]="$field" ;;
+		esac
+	done < <(transcript_agent_facts "$transcript")
+
+	[ "${#order[@]}" -gt 0 ] || return 1
+
+	local review_running=1 is_review
+	for id in "${order[@]}"; do
+		if [[ "${agent_name[$id]}" =~ $REVIEW_DISPATCH_NAME_RE ]]; then
+			is_review=1
+		else
+			is_review=0
 		fi
-		case "$result" in
-		*"Async agent launched successfully"*)
-			status="$(_task_notification_status "$transcript" "$id")"
-			case "$status" in
-			completed) ;;
+
+		case "${agent_result[$id]-}" in
+		"")
+			# No result yet — in flight.
+			;;
+		ack)
+			case "${agent_note[$id]-}" in
+			completed) continue ;;
 			failed)
-				desc="$(jq -r --arg id "$id" 'select(.message.content != null)
-					| .message.content[]?
-					| select(.type == "tool_use" and .id == $id)
-					| (.input.name // .input.description // $id)' \
-					"$transcript" 2>/dev/null | head -1)"
-				FAILED_BACKGROUND_AGENTS="$(printf '%s\n%s' "$FAILED_BACKGROUND_AGENTS" "$desc")"
+				FAILED_BACKGROUND_AGENTS="$(printf '%s\n%s' \
+					"$FAILED_BACKGROUND_AGENTS" "${agent_label[$id]}")"
+				continue
 				;;
-			*) still_running=0 ;;
+			*) ;; # no notification yet — still working
 			esac
 			;;
+		*) continue ;; # a synchronous call's real result already landed
 		esac
-	done <<<"$dispatched"
+
+		# Still in flight. Which question it answers depends on what it was dispatched for.
+		if [ "$is_review" -eq 1 ]; then
+			review_running=0
+		else
+			OTHER_AGENTS_IN_FLIGHT="$(printf '%s\n%s' \
+				"$OTHER_AGENTS_IN_FLIGHT" "${agent_label[$id]}")"
+		fi
+	done
 
 	FAILED_BACKGROUND_AGENTS="$(printf '%s\n' "$FAILED_BACKGROUND_AGENTS" | sed '/^$/d')"
-	[ "$still_running" -eq 0 ] && return 0
+	OTHER_AGENTS_IN_FLIGHT="$(printf '%s\n' "$OTHER_AGENTS_IN_FLIGHT" | sed '/^$/d')"
+	[ "$review_running" -eq 0 ] && return 0
 	return 1
 }
 
@@ -298,7 +372,9 @@ main() {
 	$GIT -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
 	dev_loop_invoked "$transcript" || exit 0
-	subagents_running "$transcript" && exit 0
+	# Only an unresolved REVIEW dispatch suppresses. An unrelated agent in flight does not —
+	# see review_dispatch_running's own header for the fails-open defect that was.
+	review_dispatch_running "$transcript" && exit 0
 
 	[ -r "$PLANNER" ] || block_unreadable "no review fan-out planner at $PLANNER (run 'make ai_clients')."
 
@@ -358,10 +434,21 @@ main() {
 			printf '%s\n' "$FAILED_BACKGROUND_AGENTS" | sed 's/^/  /'
 			echo
 		fi
+		if [ -n "$OTHER_AGENTS_IN_FLIGHT" ]; then
+			# Named, not silently counted as review capacity: these agents in flight are
+			# exactly what used to suppress this guard entirely (fails open). Saying which
+			# they are is what makes the block actionable instead of a shrug.
+			echo "Agents in flight, none of them a review dispatch — they do not cover the"
+			echo "fan-out and no longer suppress this check:"
+			printf '%s\n' "$OTHER_AGENTS_IN_FLIGHT" | sed 's/^/  /'
+			echo
+		fi
 		echo "Reviewer rung: $(printf '%s' "$plan" | jq -r '.rung | "\(.status) \(.runtime) \(.model)"')"
 		echo
 		echo "Needs a reviewer now (one agent per PR — N single-PR ladder calls, which is what"
-		echo "reviewer_ladder.sh's one-PR-per-invocation cap permits, never a loop inside one):"
+		echo "reviewer_ladder.sh's one-PR-per-invocation cap permits, never a loop inside one."
+		echo "Dispatch each with the Agent tool's name set to review-pr-<PR>, e.g."
+		echo "name: review-pr-520 — that name is how this guard knows a review is under way):"
 		printf '%s\n' "$dispatchable"
 		if [ -n "$excluded" ]; then
 			echo
