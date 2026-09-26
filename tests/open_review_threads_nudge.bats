@@ -486,3 +486,145 @@ checks_fixture() {
     run grep -rl 'unreadable' "$CLAUDE_CONFIG_DIR"
     [ "$status" -ne 0 ]
 }
+
+# --- dotfiles-dev#504 (second half): bound the cache's growth on each run -----------------------
+
+@test "a cache entry older than the prune multiplier is deleted on the next run" {
+    unset PR_VIEW_NUMBER
+    export PR_LIST=""
+    export OPEN_THREADS_NUDGE_CACHE_TTL=300
+    export OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER=6
+
+    mkdir -p "$CLAUDE_CONFIG_DIR/open-threads-nudge"
+    stale="$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-stale-o_r"
+    old_ts=$(( $(date +%s) - 1801 ))   # just past 6 * 300s
+    jq -nc --argjson ts "$old_ts" '{ts: $ts, number: "9", status: "problems", detail: "old"}' \
+        >"$stale"
+
+    run bash -c "payload false sess-fresh | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ ! -f "$stale" ]
+}
+
+@test "a cache entry still within the prune window survives another run" {
+    unset PR_VIEW_NUMBER
+    export PR_LIST=""
+    export OPEN_THREADS_NUDGE_CACHE_TTL=300
+    export OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER=6
+
+    mkdir -p "$CLAUDE_CONFIG_DIR/open-threads-nudge"
+    recent="$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-recent-o_r"
+    recent_ts=$(( $(date +%s) - 1000 ))   # short of 6 * 300s
+    jq -nc --argjson ts "$recent_ts" '{ts: $ts, number: "9", status: "problems", detail: "old"}' \
+        >"$recent"
+
+    run bash -c "payload false sess-fresh | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ -f "$recent" ]
+}
+
+@test "a cache file with an unreadable ts is pruned rather than kept" {
+    unset PR_VIEW_NUMBER
+    export PR_LIST=""
+
+    mkdir -p "$CLAUDE_CONFIG_DIR/open-threads-nudge"
+    corrupt="$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-corrupt-o_r"
+    echo "not json" >"$corrupt"
+
+    run bash -c "payload false sess-fresh | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ ! -f "$corrupt" ]
+}
+
+@test "pruning runs across sessions: this session's own fresh entry is not swept" {
+    export PR_LIST=$'10\n20'
+    export OPEN_THREADS_NUDGE_CACHE_TTL=600
+    clean_fixture 10
+    problem_fixture 20
+
+    mkdir -p "$CLAUDE_CONFIG_DIR/open-threads-nudge"
+    stale="$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-other-o_r"
+    old_ts=$(( $(date +%s) - 100000 ))
+    jq -nc --argjson ts "$old_ts" '{ts: $ts, number: "1", status: "clean", detail: ""}' \
+        >"$stale"
+
+    run bash -c "payload false sess-mine | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [ ! -f "$stale" ]
+    [ -f "$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-mine-o_r" ]
+}
+
+# --- dotfiles-dev#514 review: a knob that is not a positive integer must not disable the cache ---
+
+@test "a prune multiplier of 0 falls back to the default instead of deleting fresh entries" {
+    unset PR_VIEW_NUMBER
+    export PR_LIST=""
+    export OPEN_THREADS_NUDGE_CACHE_TTL=300
+    export OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER=0
+
+    mkdir -p "$CLAUDE_CONFIG_DIR/open-threads-nudge"
+    fresh="$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-fresh-entry-o_r"
+    fresh_ts=$(( $(date +%s) - 10 ))
+    jq -nc --argjson ts "$fresh_ts" '{ts: $ts, number: "9", status: "problems", detail: "new"}' \
+        >"$fresh"
+
+    run bash -c "payload false sess-other | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ -f "$fresh" ]
+}
+
+@test "a non-numeric prune multiplier falls back to the default" {
+    unset PR_VIEW_NUMBER
+    export PR_LIST=""
+    export OPEN_THREADS_NUDGE_CACHE_TTL=300
+    export OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER=abc
+
+    mkdir -p "$CLAUDE_CONFIG_DIR/open-threads-nudge"
+    fresh="$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-fresh-entry-o_r"
+    fresh_ts=$(( $(date +%s) - 10 ))
+    jq -nc --argjson ts "$fresh_ts" '{ts: $ts, number: "9", status: "problems", detail: "new"}' \
+        >"$fresh"
+    stale="$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-stale-entry-o_r"
+    old_ts=$(( $(date +%s) - 1801 ))   # past the DEFAULT 6 * 300s, proving the fallback is in use
+    jq -nc --argjson ts "$old_ts" '{ts: $ts, number: "9", status: "problems", detail: "old"}' \
+        >"$stale"
+
+    run bash -c "payload false sess-other | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ -f "$fresh" ]
+    [ ! -f "$stale" ]
+}
+
+@test "a TTL of 0 falls back to the default rather than expiring every entry at once" {
+    unset PR_VIEW_NUMBER
+    export PR_LIST=""
+    export OPEN_THREADS_NUDGE_CACHE_TTL=0
+    export OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER=6
+
+    mkdir -p "$CLAUDE_CONFIG_DIR/open-threads-nudge"
+    fresh="$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-fresh-entry-o_r"
+    fresh_ts=$(( $(date +%s) - 10 ))
+    jq -nc --argjson ts "$fresh_ts" '{ts: $ts, number: "9", status: "problems", detail: "new"}' \
+        >"$fresh"
+
+    run bash -c "payload false sess-other | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ -f "$fresh" ]
+}
+
+@test "a future-dated cache entry is pruned, not kept forever as unusable" {
+    unset PR_VIEW_NUMBER
+    export PR_LIST=""
+    export OPEN_THREADS_NUDGE_CACHE_TTL=300
+    export OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER=6
+
+    mkdir -p "$CLAUDE_CONFIG_DIR/open-threads-nudge"
+    future="$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-future-o_r"
+    future_ts=$(( $(date +%s) + 99999 ))
+    jq -nc --argjson ts "$future_ts" '{ts: $ts, number: "9", status: "problems", detail: "ahead"}' \
+        >"$future"
+
+    run bash -c "payload false sess-other | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ ! -f "$future" ]
+}
