@@ -63,15 +63,11 @@ DISPATCH_MAX_CONCURRENT="${DISPATCH_MAX_CONCURRENT:-8}"
 # Upgrade path: drop the TTL the day the harness exposes a running-agent registry.
 DISPATCH_CLAIM_TTL="${DISPATCH_CLAIM_TTL:-7200}"
 
-# blueprintx#314's declared-surface convention (a scope LABEL on the issue) does not exist yet.
-# dispatch_plan.py reads the surface from a fenced ```surface block today; when #314 lands, the
-# label prefix goes here and nowhere else — one edit, not a hunt (dotfiles-dev#405 scope 2).
-# Empty means "the label convention has not shipped", never "the issue declared nothing".
-DISPATCH_SURFACE_LABEL_PREFIX="${DISPATCH_SURFACE_LABEL_PREFIX:-}"
-
-# The token every UNDECLARED report is matched on. An issue with no declared surface is
-# REPORTED, never assumed free — dispatch_plan.py emits this token in its exclusion reason and
-# the guard greps for it, so the two cannot drift.
+# The token every UNDECLARED report is matched on — the shell half of a one-word contract whose
+# other half is dispatch_plan.py's UNDECLARED_TOKEN (it emits, the guard greps). An issue with no
+# declared surface is REPORTED, never assumed free. The CONVENTION itself (a fenced ```surface
+# block today; a scope label once blueprintx#314 lands) is named in exactly one place, and it is
+# not here: dispatch_plan.py's SURFACE_LABEL_PREFIX, the file that actually reads the issue.
 # shellcheck disable=SC2034  # read by dispatch_free_surface_guard.sh, which sources this file
 DISPATCH_UNDECLARED_TOKEN="UNDECLARED"
 

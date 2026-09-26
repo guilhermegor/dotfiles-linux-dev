@@ -1,8 +1,8 @@
 #!/bin/bash
-# Stop hook: refuse to end the turn when the free dispatch surface has
-# unclaimed issues and nothing of this session's own is currently working
-# them — the deterministic half of s:dev-loop step 6 (DISPATCH), sibling of
-# uncommitted_worktree_guard.sh (dotfiles-dev#396).
+# Stop hook: refuse to end the turn while EVERY dispatchable issue is not
+# either in flight or throttled by the concurrency cap — the deterministic
+# half of s:dev-loop step 6 (DISPATCH), sibling of
+# uncommitted_worktree_guard.sh (dotfiles-dev#396, #405).
 #
 # The owner asked four times why subagents were not dispatched in parallel.
 # Two distinct causes, only one of them the model forgetting:
@@ -14,17 +14,41 @@
 #      proved that a correct, written-down "commit early" rule still gets
 #      skipped without a hook enforcing it — same defect, different step.
 #
+# ⚠️ COVERAGE, NOT PRESENCE (dotfiles-dev#405). Until #405 this hook exited 0
+# the moment ANY dispatch of this session was unresolved, so it could only
+# ever enforce "at least one agent is working" — the batch SIZE still
+# depended on the model remembering, which is what the owner has now asked
+# for in five separate rounds. The rule is a set difference instead:
+#
+#     block  ⟺  dispatchable − in_flight − queued_by_cap  ≠  ∅
+#
+#   dispatchable   — lib/dispatch_plan.py's answer, never re-derived here:
+#                    unclaimed by any PR, declared surface free against open
+#                    PRs, live agents and each other (#433).
+#   in_flight      — per ISSUE, from two independent sources: a live claim in
+#                    the shared registry (lib/dispatch_claims.sh) and an
+#                    unresolved background dispatch naming `#N` (#404's
+#                    notification-based detection). Either one counts.
+#   queued_by_cap  — the part of the remainder over DISPATCH_MAX_CONCURRENT.
+#                    The cap THROTTLES and never DROPS: the overflow is named
+#                    in the message as queued and is demanded again as soon
+#                    as a slot frees, which is also why no queue FILE exists
+#                    — the order is recomputed from the plan every Stop, so
+#                    there is nothing to pop and nothing to go stale.
+#
+# The message lists the missing issue NUMBERS, never a count.
+#
 # ⚠️ UNKNOWN is reported loudly, never as routine silence. A gate that fails
 # closed (#395) is the right behaviour for the gate; a caller that swallows
 # that failure and falls through quiet turns it back into a disabled feature
-# nobody can see — the exact shape of cause 1. So an unreadable gate blocks
-# too, with its own wording, distinct from "issues are free, dispatch them".
+# nobody can see — the exact shape of cause 1. Two shapes of that block here:
+# a plan that is not the documented object, and a plan whose exclusions say
+# UNKNOWN (the planner's own fail-closed answer, which would otherwise reach
+# this hook as an empty `dispatchable`, i.e. as "nothing to do").
 #
-# Fires only when the transcript shows this session actually ran s:dev-loop
-# AND has no Agent-tool dispatch of its own still unresolved — both read
-# from the transcript (data), never inferred from what the session "knows"
-# about itself, the same decidability test the skill's own Do Not section
-# applies to the (deliberately un-hooked) pre-dispatch budget judgement.
+# An issue with no declared surface is UNDECLARED: reported, never assumed
+# free and never dispatched on a guess. It blocks only while a slot is free,
+# because declaring the surface is refinement work the round can actually do.
 #
 # Fails OPEN on everything it cannot resolve (no repo, no transcript, no
 # dev-loop evidence) — a guard that blocks on its own blindness gets
@@ -34,10 +58,14 @@ set -u
 GIT=/usr/bin/git
 command -v jq >/dev/null 2>&1 || exit 0
 command -v gh >/dev/null 2>&1 || exit 0
+command -v python3 >/dev/null 2>&1 || exit 0
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/free_surface.sh
-source "$HOOK_DIR/lib/free_surface.sh"
+# shellcheck source=lib/dispatch_claims.sh
+source "$HOOK_DIR/lib/dispatch_claims.sh"
+
+PLANNER="${DISPATCH_GUARD_PLANNER:-$HOOK_DIR/lib/dispatch_plan.py}"
+PLANNER_TIMEOUT="${DISPATCH_GUARD_PLANNER_TIMEOUT:-30}"
 
 # dev_loop_invoked TRANSCRIPT
 # Pure data: did this session's transcript ever run s:dev-loop? Three shapes count, all
@@ -120,10 +148,27 @@ _task_notification_status() {
 	' "$transcript" 2>/dev/null | tail -1
 }
 
-# subagents_running TRANSCRIPT
-# Also sets FAILED_BACKGROUND_AGENTS (newline-separated names/descriptions, possibly empty) —
-# always, even when this returns "still running" for a different dispatch, so main() never has
-# to re-walk the transcript to find the RESCUE case.
+# _agent_brief TRANSCRIPT ID
+# Every field of a dispatched Agent's own input that can name an issue — its name, its
+# description and its prompt. Read as one blob because the issue number is written in whichever
+# of them the dispatcher happened to use, and a guard that only looked at one would count a live
+# agent as absent, which is a duplicate dispatch.
+_agent_brief() {
+	jq -r --arg id "$2" 'select(.message.content != null)
+		| .message.content[]?
+		| select(.type == "tool_use" and .name == "Agent" and .id == $id)
+		| [(.input.name // ""), (.input.description // ""), (.input.prompt // "")]
+		| join("\n")' "$1" 2>/dev/null
+}
+
+# inflight_dispatch_issues TRANSCRIPT
+# Sets IN_FLIGHT_ISSUES (newline-separated issue numbers, possibly empty) and
+# FAILED_BACKGROUND_AGENTS (newline-separated names, possibly empty).
+#
+# ⚠️ Per ISSUE, not per session (dotfiles-dev#405). The pre-#405 version of this function
+# answered the yes/no question "is any subagent running", which made the whole guard a presence
+# check: one live agent excused every other dispatchable issue in the same round. The set of
+# issue numbers is the answer coverage needs.
 #
 # A dispatched Agent tool_use with NO tool_result yet is still in flight — ponytail: this is a
 # proxy for "is a subagent running" (no live process list is readable from a bash hook), so
@@ -133,51 +178,52 @@ _task_notification_status() {
 # A tool_result IS present but is a background dispatch's own launch acknowledgement ("Async
 # agent launched successfully...", measured verbatim off a real transcript, dotfiles-dev#404) —
 # that text is delivered synchronously on launch, before the agent has done any work, so
-# treating its mere presence as "resolved" is exactly the defect this issue reports: every
+# treating its mere presence as "resolved" is exactly the defect that issue reports: every
 # background dispatch reads as finished the instant it starts. Only a LATER <task-notification>
 # for the same tool_use id settles it: status=completed means done; no notification yet means
 # still working, same as no tool_result at all; status=failed means neither — a quota kill is
 # not "running", it is the RESCUE case (resume it, don't dispatch a duplicate), so it is
-# recorded in FAILED_BACKGROUND_AGENTS and does NOT count as still-running.
+# recorded in FAILED_BACKGROUND_AGENTS and does NOT count as in flight.
 #
 # Anything else (a synchronous call's real result already landed) is resolved, plainly.
-subagents_running() {
+inflight_dispatch_issues() {
 	local transcript="$1"
+	IN_FLIGHT_ISSUES=""
 	FAILED_BACKGROUND_AGENTS=""
-	[ -r "$transcript" ] || return 1
+	[ -r "$transcript" ] || return 0
 
-	local dispatched id result status desc still_running=1
+	local dispatched id result status desc
 	dispatched="$(jq -r 'select(.message.content != null) | .message.content[]? | select(.type=="tool_use" and .name=="Agent") | .id' "$transcript" 2>/dev/null)"
-	[ -n "$dispatched" ] || return 1
+	[ -n "$dispatched" ] || return 0
 
 	while read -r id; do
 		[ -n "$id" ] || continue
 		result="$(_agent_result_text "$transcript" "$id")"
-		if [ -z "$result" ]; then
-			still_running=0
-			continue
-		fi
-		case "$result" in
-		*"Async agent launched successfully"*)
-			status="$(_task_notification_status "$transcript" "$id")"
-			case "$status" in
-			completed) ;;
-			failed)
-				desc="$(jq -r --arg id "$id" 'select(.message.content != null)
-					| .message.content[]?
-					| select(.type == "tool_use" and .id == $id)
-					| (.input.name // .input.description // $id)' "$transcript" 2>/dev/null | head -1)"
-				FAILED_BACKGROUND_AGENTS="$(printf '%s\n%s' "$FAILED_BACKGROUND_AGENTS" "$desc")"
+		if [ -n "$result" ]; then
+			case "$result" in
+			*"Async agent launched successfully"*)
+				status="$(_task_notification_status "$transcript" "$id")"
+				case "$status" in
+				completed) continue ;;
+				failed)
+					desc="$(jq -r --arg id "$id" 'select(.message.content != null)
+						| .message.content[]?
+						| select(.type == "tool_use" and .id == $id)
+						| (.input.name // .input.description // $id)' "$transcript" 2>/dev/null | head -1)"
+					FAILED_BACKGROUND_AGENTS="$(printf '%s\n%s' "$FAILED_BACKGROUND_AGENTS" "$desc")"
+					continue
+					;;
+				esac
 				;;
-			*) still_running=0 ;;
+			*) continue ;;
 			esac
-			;;
-		esac
+		fi
+		IN_FLIGHT_ISSUES="$(printf '%s\n%s' "$IN_FLIGHT_ISSUES" \
+			"$(_agent_brief "$transcript" "$id" | grep -oE '#[0-9]+' | tr -d '#')")"
 	done <<<"$dispatched"
 
+	IN_FLIGHT_ISSUES="$(printf '%s\n' "$IN_FLIGHT_ISSUES" | sed '/^$/d' | sort -un)"
 	FAILED_BACKGROUND_AGENTS="$(printf '%s\n' "$FAILED_BACKGROUND_AGENTS" | sed '/^$/d')"
-	[ "$still_running" -eq 0 ] && return 0
-	return 1
 }
 
 # Every `gh` call this hook makes — its own, and every one inside
@@ -194,8 +240,36 @@ gh() {
 	timeout "${DISPATCH_GUARD_GH_TIMEOUT:-20}" gh "$@"
 }
 
+# report_unreadable DETAIL
+# The fail-closed exit. Named separately because there are two distinct ways the plan can be
+# unusable and both must block with the SAME loudness — a planner that fails and is then read as
+# routine silence is the defect this hook exists to catch (dotfiles-dev#396).
+report_unreadable() {
+	{
+		echo "free dispatch surface UNREADABLE ($1) — not the same as empty."
+		echo
+		echo "s:dev-loop step 6 (DISPATCH) cannot tell right now which issues are"
+		echo "dispatchable. Re-run the planner (hooks/lib/dispatch_plan.py) before reporting"
+		echo "the board clear."
+	} >&2
+	exit 2
+}
+
+# rescue_note
+# Printed above every block message while a background dispatch of this session failed: a quota
+# kill is not free capacity, and dispatching a duplicate over it loses the work twice.
+rescue_note() {
+	[ -n "$FAILED_BACKGROUND_AGENTS" ] || return 0
+	echo "A background agent dispatched earlier this session FAILED (quota kill or"
+	echo "crash) instead of finishing — that is the RESCUE case, not free capacity."
+	echo "Resume it, don't dispatch a duplicate:"
+	printf '%s\n' "$FAILED_BACKGROUND_AGENTS" | sed 's/^/  /'
+	echo
+}
+
 main() {
-	local payload active cwd transcript repo owner name
+	local payload active cwd transcript plan dispatchable undeclared
+	local in_flight remaining missing queued slots
 
 	payload="$(cat)"
 
@@ -211,53 +285,88 @@ main() {
 	$GIT -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
 	dev_loop_invoked "$transcript" || exit 0
-	subagents_running "$transcript" && exit 0
+	inflight_dispatch_issues "$transcript"
 
-	repo="$(cd "$cwd" && gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)"
-	[ -n "$repo" ] || exit 0
-	owner="${repo%%/*}"
-	name="${repo##*/}"
+	plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)"
+	# Shape, not just keys: `{"dispatchable":null,"excluded":{}}` has both keys, formats to
+	# nothing, and would read as a false "nothing to dispatch". Same check
+	# round_dispatch_guard.sh applies to the same planner.
+	printf '%s' "$plan" | jq -e '
+		(.dispatchable | type == "array") and (.excluded | type == "array")
+		and all(.dispatchable[]; (.issue | type == "number"))
+		and all(.excluded[]; (.issue | type == "number") and ((.reason // "") | length > 0))
+	' >/dev/null 2>&1 ||
+		report_unreadable "planner failed, timed out, or printed something else"
 
-	if ! gate_free_surface "$owner" "$name"; then
+	# The planner's own fail-closed answer is an UNKNOWN reason on every issue, which arrives
+	# here as an EMPTY dispatchable list — indistinguishable from a genuinely clear board by any
+	# check that only counts candidates. It is read explicitly instead.
+	if printf '%s' "$plan" | jq -e '.excluded[]? | select(.reason | test("UNKNOWN"))' >/dev/null 2>&1; then
+		report_unreadable "the planner's gate or liveness read failed (UNKNOWN exclusions)"
+	fi
+
+	dispatchable="$(printf '%s' "$plan" | jq -r '.dispatchable[]? | .issue')"
+	undeclared="$(printf '%s' "$plan" |
+		jq -r --arg t "$DISPATCH_UNDECLARED_TOKEN" \
+			'.excluded[]? | select(.reason | startswith($t)) | .issue')"
+
+	# Two independent in-flight sources, unioned: this session's own unresolved dispatches, and
+	# the cross-worktree claims registry (an agent of ANOTHER session holds those).
+	in_flight="$(printf '%s\n%s\n' "$IN_FLIGHT_ISSUES" \
+		"$(cd "$cwd" && dispatch_claimed_issues)" | sed '/^$/d' | sort -un)"
+
+	remaining="$(printf '%s\n' "$dispatchable" | sed '/^$/d' |
+		grep -vxF -f <(printf '%s\n' "$in_flight" | sed '/^$/d') || true)"
+
+	slots=$((DISPATCH_MAX_CONCURRENT - $(printf '%s\n' "$in_flight" | sed '/^$/d' | wc -l)))
+	[ "$slots" -lt 0 ] && slots=0
+	missing="$(printf '%s\n' "$remaining" | sed '/^$/d' | head -n "$slots")"
+	queued="$(printf '%s\n' "$remaining" | sed '/^$/d' | tail -n +"$((slots + 1))")"
+
+	if [ -n "$missing" ]; then
 		{
-			# Name the actual cause. "gh API failure" for every failure is how a
-			# missing lib/ file read as a network problem for four rounds
-			# (dotfiles-dev, PR #400 review) — the gate was never even loaded.
-			if ! declare -F gate_free_surface >/dev/null 2>&1; then
-				echo "free surface UNREADABLE (gate not loaded — lib/free_surface.sh missing;" \
-					"run 'make ai_clients') — not the same as empty."
-			else
-				echo "free surface UNREADABLE (gh call failed or timed out) — not the same as empty."
+			rescue_note
+			echo "Dispatchable issues are not covered by anything in flight — do not stop here"
+			echo "without dispatching one agent per issue below."
+			echo
+			echo "Missing (dispatchable, nothing working it, a slot is free):"
+			printf '%s\n' "$missing" | sed 's/^/  #/'
+			if [ -n "$queued" ]; then
+				echo
+				echo "Queued by the concurrency cap of $DISPATCH_MAX_CONCURRENT — throttled, NOT"
+				echo "dropped; they are demanded again as soon as a slot frees:"
+				printf '%s\n' "$queued" | sed 's/^/  #/'
+			fi
+			if [ -n "$undeclared" ]; then
+				echo
+				echo "UNDECLARED file surface — reported, never assumed free. Declare a"
+				echo "\`\`\`surface block on each, then they become dispatchable:"
+				printf '%s\n' "$undeclared" | sed 's/^/  #/'
 			fi
 			echo
-			echo "s:dev-loop step 6 (DISPATCH) cannot tell right now whether there is unclaimed"
-			echo "work. Re-run the gate once the API answers, before reporting the board clear —"
-			echo "a gate that fails closed and is then read as routine silence is exactly the"
-			echo "defect this hook exists to catch (dotfiles-dev#396)."
+			echo "Each agent's brief starts with the claim step (hooks/lib/dispatch_claims.sh):"
+			echo "  claim_files <issue> <paths…>   # CLAIMED, or HELD:<holder> — do not proceed"
 		} >&2
 		exit 2
 	fi
 
-	[ -n "$FREE_UNCLAIMED_ISSUES" ] || exit 0
-
-	{
-		if [ -n "$FAILED_BACKGROUND_AGENTS" ]; then
-			echo "A background agent dispatched earlier this session FAILED (quota kill or"
-			echo "crash) instead of finishing — that is the RESCUE case, not free capacity."
-			echo "Resume it, don't dispatch a duplicate:"
-			printf '%s\n' "$FAILED_BACKGROUND_AGENTS" | sed 's/^/  /'
+	# Nothing to dispatch, but an issue nobody can plan and a free slot to plan it in. Silence
+	# here is how 7 of 10 unclaimed issues read as "nothing to dispatch" (s:dev-loop step 6).
+	if [ -n "$undeclared" ] && [ "$slots" -gt 0 ]; then
+		{
+			rescue_note
+			echo "Nothing is dispatchable, but these issues have no declared file surface —"
+			echo "UNDECLARED is reported, never assumed free, and never dispatched on a guess."
 			echo
-		fi
-		echo "Free dispatch surface is non-empty and nothing of this session's own is"
-		echo "currently working it — do not stop here without dispatching."
-		echo
-		echo "Unclaimed open issues (no PR, open or merged, closes them):"
-		printf '%s\n' "$FREE_UNCLAIMED_ISSUES" | sed 's/^/  #/'
-		echo
-		echo "Run s:dev-loop step 6 (DISPATCH): classify each issue's files with"
-		echo "free_classify_files, confirm it is not already done, then dispatch what is free."
-	} >&2
-	exit 2
+			printf '%s\n' "$undeclared" | sed 's/^/  #/'
+			echo
+			echo "Declaring the surface is refinement work this round can do: add a"
+			echo "\`\`\`surface block listing the exact paths, then re-run the round."
+		} >&2
+		exit 2
+	fi
+
+	exit 0
 }
 
 main "$@"

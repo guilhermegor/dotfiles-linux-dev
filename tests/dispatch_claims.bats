@@ -230,8 +230,11 @@ refute() {
     [ "$output" = "3" ]
 }
 
-@test "the blueprintx#314 surface-label prefix is one empty constant, not an invented format" {
-    # Empty means "the label convention has not shipped", never "the issue declared nothing".
-    [ -z "$DISPATCH_SURFACE_LABEL_PREFIX" ]
+@test "the UNDECLARED token matches the one dispatch_plan.py emits" {
+    # One word, two languages: the planner emits it in its exclusion reason and the guard greps
+    # for it. Pinning both sides to the same literal here is what keeps them from drifting.
     [ "$DISPATCH_UNDECLARED_TOKEN" = "UNDECLARED" ]
+    run grep -c "^UNDECLARED_TOKEN = \"$DISPATCH_UNDECLARED_TOKEN\"$" \
+        "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib/dispatch_plan.py"
+    [ "$output" = "1" ]
 }
