@@ -72,6 +72,7 @@ DISPATCH_SURFACE_LABEL_PREFIX="${DISPATCH_SURFACE_LABEL_PREFIX:-}"
 # The token every UNDECLARED report is matched on. An issue with no declared surface is
 # REPORTED, never assumed free — dispatch_plan.py emits this token in its exclusion reason and
 # the guard greps for it, so the two cannot drift.
+# shellcheck disable=SC2034  # read by dispatch_free_surface_guard.sh, which sources this file
 DISPATCH_UNDECLARED_TOKEN="UNDECLARED"
 
 # dispatch_state_dir [REPO_DIR]
