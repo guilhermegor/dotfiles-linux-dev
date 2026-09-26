@@ -217,6 +217,64 @@ installed, inert, and indistinguishable from a working one by any check that onl
 looks for the file. `tests/hooks_install_parity.bats` is what made it visible
 (dotfiles-dev#467) — it asserts the two lists agree, in both directions.
 
+## Dispatch coverage: the claims registry and the cap (dotfiles-dev#405)
+
+`hooks/dispatch_free_surface_guard.sh` (a `Stop` hook) enforces **coverage**, not
+presence. It blocks while
+
+```
+dispatchable − in_flight − queued_by_cap  ≠  ∅
+```
+
+and names the missing issue NUMBERS, never a count. Before #405 it exited 0 the
+moment *any* dispatch of the session was unresolved, so the strongest thing it
+could enforce was "at least one agent is working" — the batch *size* still
+depended on the model remembering, which is what the owner asked for in five
+separate rounds.
+
+| Term | Source |
+|---|---|
+| `dispatchable` | `hooks/lib/dispatch_plan.py`, read never re-derived (#433) |
+| `in_flight` | per ISSUE: a live claim in `hooks/lib/dispatch_claims.sh`'s registry, **or** an unresolved background dispatch whose own brief names `#N` (#404) |
+| `queued_by_cap` | the remainder over `DISPATCH_MAX_CONCURRENT` (default 8) |
+
+**The cap throttles; it never drops.** The overflow is printed as queued and
+demanded again as soon as a slot frees. There is deliberately **no queue file**:
+the order is recomputed from the plan on every `Stop`, so there is nothing to pop
+and nothing to go stale.
+
+`hooks/lib/dispatch_claims.sh` is the agent-vs-agent half that neither the gate
+nor the planner can see — two agents dispatched in the same batch are invisible
+to each other until one opens a PR. `claim_files <issue> <paths…>` does an atomic
+check-and-append under `flock` to `$(git rev-parse --git-common-dir)/dispatch-claims.tsv`
+(shared by every worktree, never tracked) and prints `CLAIMED` / `HELD:<holder>:<path>` /
+`UNKNOWN`. Three points that are **not** obvious from the file:
+
+1. **Zero API calls, by contract.** Measured 2026-09-17: 8 agents in one batch
+   each ran `gate_free_surface` inside their own claim step (33 branches, one
+   compare call each) and the shared 5000/h quota hit 0 within seconds, twice —
+   every claim then failed closed, correctly, and the wave stalled. So the
+   orchestrator calls `refresh_pr_held_paths <owner> <repo>` **once per round**,
+   writing `pr-held-paths.tsv` beside the registry, and `claim_files` reads only
+   that file plus the registry.
+2. **The lock is a separate `.lock` file, never the registry.** A writer replaces
+   the registry by `mv` (the only atomic rewrite), so locking the registry itself
+   lets the next claimer lock the *new* inode while the holder still holds the old
+   one — two agents inside the critical section, i.e. the exact race being
+   prevented.
+3. **Claims expire (`DISPATCH_CLAIM_TTL`, default 2h).** `release_claims <issue>`
+   is the intended path (a PR opened, or the agent stopped without one), but a
+   killed agent never calls it, and a registry that reads "everything is in
+   flight" forever is dotfiles-dev#404 — a guard that never fires — with a
+   different cause.
+
+An issue with no declared file surface is `UNDECLARED`: reported, never assumed
+free, never dispatched on a guess. The convention itself is named in exactly one
+place — `dispatch_plan.py`'s `SURFACE_LABEL_PREFIX` (a fenced ` ```surface ` block
+today; a scope label once blueprintx#314 lands) — and the one-word token is pinned
+on both sides (`UNDECLARED_TOKEN` in Python, `DISPATCH_UNDECLARED_TOKEN` in bash)
+by `tests/dispatch_claims.bats` so they cannot drift.
+
 ## Worktree rescue fan-out: two callers, one implementation
 
 `hooks/lib/worktree_fanout.sh` (`fanout_worktrees()` + `classify_worktree_diff()`,
