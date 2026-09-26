@@ -47,6 +47,8 @@ source "$HOOK_DIR/lib/review_thread_gate.sh"
 source "$HOOK_DIR/lib/free_surface.sh"
 # shellcheck source=lib/kanban_reconcile.sh
 source "$HOOK_DIR/lib/kanban_reconcile.sh"
+# shellcheck source=lib/gh_budget.sh
+source "$HOOK_DIR/lib/gh_budget.sh"
 
 emit() {
 	# $1 = plain-text report body. Wraps it as SubagentStop additionalContext.
@@ -284,18 +286,34 @@ sweep_orphan_branches() {
 	[ "$any" = "0" ] && echo "    none"
 }
 
+# ⚠️ Both functions below capture the listing call into a variable and check ITS OWN exit status
+# before iterating — never `done < <(gh api ... 2>/dev/null)` directly. Piping straight into the
+# loop via process substitution discards the command's exit status, so a 403 prints its RAW
+# response body as fake PR numbers instead of failing: `gh api --jq` exits non-zero on an HTTP
+# error WITHOUT ever running the filter, but still writes the unfiltered JSON body to stdout —
+# `{`, `  "message": "API rate limit exceeded...",`, `}` — and each of those lines becomes a
+# bogus "- #{" / "- #\"message\": ..." finding (dotfiles-dev#512, found via the exact #445 latch
+# work above). Same fix shape sweep_review_gate() and sweep_orphan_branches() already use.
 sweep_no_automerge() {
-	local repo="$1" n any=0
+	local repo="$1" prs n any=0
+	if ! prs="$(gh api "repos/$repo/pulls?state=open" --jq '.[] | select(.auto_merge == null) | .number' 2>/dev/null)"; then
+		echo "    UNKNOWN — could not list open PRs (gh API failure), not 'none'"
+		return
+	fi
 	while read -r n; do
 		[ -n "$n" ] || continue
 		echo "    - #$n"
 		any=1
-	done < <(gh api "repos/$repo/pulls?state=open" --jq '.[] | select(.auto_merge == null) | .number' 2>/dev/null)
+	done <<<"$prs"
 	[ "$any" = "0" ] && echo "    none"
 }
 
 sweep_behind_base() {
-	local cwd="$1" repo="$2" db="$3" n headref behind any=0
+	local cwd="$1" repo="$2" db="$3" prs n headref behind any=0
+	if ! prs="$(gh api "repos/$repo/pulls?state=open" --jq '.[].number' 2>/dev/null)"; then
+		echo "    UNKNOWN — could not list open PRs (gh API failure), not 'none'"
+		return
+	fi
 	while read -r n; do
 		[ -n "$n" ] || continue
 		headref="$(gh api "repos/$repo/pulls/$n" --jq .head.ref 2>/dev/null)"
@@ -305,7 +323,7 @@ sweep_behind_base() {
 			echo "    - #$n: $behind commit(s) behind $db"
 			any=1
 		fi
-	done < <(gh api "repos/$repo/pulls?state=open" --jq '.[].number' 2>/dev/null)
+	done <<<"$prs"
 	[ "$any" = "0" ] && echo "    none"
 }
 
@@ -329,6 +347,64 @@ free_dispatch_surface() {
 	[ "${#free_list[@]}" -gt 0 ] && printf '%s\n' "${free_list[*]}"
 }
 
+# gh_budget_gate REPO
+# ONE cheap REST call standing in for "can the sweep reach the API at all right now" — never a
+# re-run of the whole fan-out just to find out. Returns 0 to proceed. Returns 1 with
+# BUDGET_GATE_REASON set (shellcheck disable=SC2034 — read by main() after this returns) when
+# any of: an earlier 403 latch is still fresh, THIS probe just came back 403/429, or the sweep's
+# OTHER budget (GraphQL) is already exhausted per gh_budget_quota_exhausted even though the REST
+# probe itself succeeded — dotfiles-dev#511 review finding: `sweep_review_gate()`'s fan-out is
+# GraphQL (via review_thread_gate.sh), a REST-only probe cannot see that budget going to zero, so
+# a purely-GraphQL exhaustion used to sail through this gate and fail one PR at a time with no
+# latch ever written — exactly the repeated fan-out #445 exists to stop.
+# dotfiles-dev#445: 6 agents x a sweep per SubagentStop x ~6 gh calls each burned the whole
+# hourly budget on sweeps that read UNKNOWN either way — these cheap calls replace finding that
+# out the expensive way every time.
+# A non-budget failure (bad repo, network blip) still returns 0: this gate only ever stops the
+# sweep for a BUDGET reason, it is not a general health check.
+# _gh_budget_latch_reason WHY
+# Writes the latch with the measured TTL and builds BUDGET_GATE_REASON around WHY — appending an
+# explicit "latch write FAILED" note when gh_budget_latch_write itself couldn't write the marker
+# (dotfiles-dev#511 review: a swallowed write failure left the sweep silently unable to ever
+# latch, indistinguishable from a healthy latch by anything reading BUDGET_GATE_REASON alone).
+# Always returns 1 — every caller latches (or tries to) only on a path that already means "stop".
+_gh_budget_latch_reason() {
+	local why="$1"
+	if gh_budget_latch_write "$(gh_budget_reset_ttl)"; then
+		BUDGET_GATE_REASON="$why — latched until reset"
+	else
+		BUDGET_GATE_REASON="$why — latch write FAILED, next sweep will re-probe"
+	fi
+	return 1
+}
+
+gh_budget_gate() {
+	local repo="$1" err rc
+	BUDGET_GATE_REASON=""
+	if gh_budget_latch_active; then
+		BUDGET_GATE_REASON="403 latch active — GitHub API budget still exhausted"
+		return 1
+	fi
+	if gh_budget_quota_exhausted; then
+		_gh_budget_latch_reason "GitHub API quota (core or graphql) already exhausted per rate_limit"
+		return 1
+	fi
+	err="$(mktemp)"
+	gh api "repos/$repo" --jq '.id' >/dev/null 2>"$err"
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		gh_budget_classify "$(cat "$err" 2>/dev/null)"
+		rm -f "$err"
+		if gh_budget_is_terminal; then
+			_gh_budget_latch_reason "GitHub API budget just returned 403/429"
+			return 1
+		fi
+		return 0
+	fi
+	rm -f "$err"
+	return 0
+}
+
 main() {
 	local payload cwd repo owner name db roster_file report
 	if [ ! -t 0 ]; then payload="$(cat)"; else payload=""; fi
@@ -346,6 +422,13 @@ dispatch: free surface empty"
 	roster_file="$cwd/.review-bots.yaml"
 	db="$(default_branch "$cwd")"
 	$GIT -C "$cwd" fetch origin --quiet 2>/dev/null || true
+
+	if ! gh_budget_gate "$repo"; then
+		emit "── sweep $(date -u '+%H:%M UTC') — $repo ──
+$BUDGET_GATE_REASON (dotfiles-dev#445) — skipping this sweep, no further gh calls.
+dispatch: UNKNOWN — $BUDGET_GATE_REASON"
+		exit 1
+	fi
 
 	report="$(
 		echo "── sweep $(date -u '+%H:%M UTC') — $repo ──"

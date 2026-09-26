@@ -22,15 +22,20 @@ setup() {
 
     # Functions only — main() is never invoked by sourcing this. HOOK_DIR resolves relative to
     # wherever this gets sourced from, so its `source "$HOOK_DIR/lib/review_thread_gate.sh"`,
-    # `source "$HOOK_DIR/lib/free_surface.sh"`, and `source "$HOOK_DIR/lib/kanban_reconcile.sh"`
-    # lines each need a real copy sitting next to it.
+    # `source "$HOOK_DIR/lib/free_surface.sh"`, `source "$HOOK_DIR/lib/kanban_reconcile.sh"`, and
+    # `source "$HOOK_DIR/lib/gh_budget.sh"` lines each need a real copy sitting next to it.
     FUNCS="$REPO/sweep_funcs.sh"
     head -n -1 "$SWEEP_SRC" > "$FUNCS"
     mkdir -p "$REPO/lib"
     cp "$(dirname "$SWEEP_SRC")/lib/review_thread_gate.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/free_surface.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile.sh" "$REPO/lib/"
+    cp "$(dirname "$SWEEP_SRC")/lib/gh_budget.sh" "$REPO/lib/"
     source "$FUNCS"
+
+    # Every gh_budget_gate test below sets its own GH_BUDGET_LATCH_FILE to stay isolated from
+    # any real latch on this machine and from each other.
+    unset GH_BUDGET_LATCH_FILE
 
     cd "$REPO" || return 1
     git init -q .
@@ -332,6 +337,165 @@ STUB
     run sweep_orphan_branches "$REPO" "o/r" "o" "main"
     [[ "$output" == *"UNKNOWN — could not list open/merged PRs"* ]]
     [[ "$output" != *"no open or merged PR touches these files"* ]]
+}
+
+# --- gh_budget_gate: latch on a real 403, no further gh call while fresh (dotfiles-dev#445) ------
+
+stub_gh_budget_probe() {
+    # $1 = "403" to make the `repos/o/r --jq .id` probe return the exact measured 2026-09-20 403
+    # body on stderr; anything else = a healthy probe. Every invocation touches $BIN/CALLED so a
+    # test can assert the stub was never reached at all (the whole point of the latch).
+    cat > "$BIN/gh" <<STUB
+#!/bin/bash
+touch "$BIN/CALLED"
+case "\$*" in
+"api repos/o/r --jq .id")
+    if [ "$1" = "403" ]; then
+        echo "API rate limit exceeded for user ID 55053188" >&2
+        exit 1
+    fi
+    echo 12345
+    ;;
+*) exit 1 ;;
+esac
+STUB
+    chmod +x "$BIN/gh"
+}
+
+@test "gh_budget_gate proceeds and never latches on a healthy probe" {
+    export GH_BUDGET_LATCH_FILE="$REPO/latch"
+    stub_gh_budget_probe ok
+    run gh_budget_gate "o/r"
+    [ "$status" -eq 0 ]
+    [ ! -f "$GH_BUDGET_LATCH_FILE" ]
+}
+
+@test "a real 403 on the probe writes the latch and gh_budget_gate returns non-zero" {
+    export GH_BUDGET_LATCH_FILE="$REPO/latch"
+    stub_gh_budget_probe 403
+    run gh_budget_gate "o/r"
+    [ "$status" -eq 1 ]
+    [ -f "$GH_BUDGET_LATCH_FILE" ]
+}
+
+@test "once latched, gh_budget_gate returns non-zero without calling gh at all" {
+    export GH_BUDGET_LATCH_FILE="$REPO/latch"
+    stub_gh_budget_probe 403
+    gh_budget_gate "o/r" || true   # first call writes the latch
+    rm -f "$BIN/CALLED"
+
+    run gh_budget_gate "o/r"
+    [ "$status" -eq 1 ]
+    [ ! -f "$BIN/CALLED" ]
+}
+
+@test "a non-budget gh failure on the probe does not latch" {
+    export GH_BUDGET_LATCH_FILE="$REPO/latch"
+    cat > "$BIN/gh" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+    chmod +x "$BIN/gh"
+    run gh_budget_gate "o/r"
+    [ "$status" -eq 0 ]
+    [ ! -f "$GH_BUDGET_LATCH_FILE" ]
+}
+
+# PR #511 review finding (P1, codex/codex-auto-review): the probe above is REST-only. When
+# GraphQL alone is exhausted, that REST call still succeeds, the gate passes, and
+# sweep_review_gate()'s per-PR GraphQL calls (via review_thread_gate.sh) then fail one at a time
+# with no latch ever written — the exact repeated fan-out #445 exists to stop. This must latch
+# via gh_budget_quota_exhausted() BEFORE the REST probe even runs.
+@test "GraphQL quota exhausted while REST core is healthy still latches (dotfiles-dev#511 P1)" {
+    export GH_BUDGET_LATCH_FILE="$REPO/latch"
+    cat > "$BIN/gh" <<'STUB'
+#!/bin/bash
+touch "$BIN/CALLED"
+case "$*" in
+"api rate_limit")
+    cat <<'JSON'
+{"resources":{"core":{"remaining":5000,"reset":9999999999},"graphql":{"remaining":0,"reset":9999999999}}}
+JSON
+    ;;
+"api repos/o/r --jq .id") echo 12345 ;;
+*) exit 1 ;;
+esac
+STUB
+    chmod +x "$BIN/gh"
+    run gh_budget_gate "o/r"
+    [ "$status" -eq 1 ]
+    [ -f "$GH_BUDGET_LATCH_FILE" ]
+}
+
+# dotfiles-dev#511 review (Minor): the latch write can fail (marker path owned by another user,
+# read-only filesystem, ...) and the old gh_budget_gate never checked it, so BUDGET_GATE_REASON
+# claimed "latched until reset" even though nothing was written. Called directly (not via `run`,
+# which forks a subshell) so BUDGET_GATE_REASON is readable afterward in this test's own shell.
+@test "gh_budget_gate reports a failed latch write instead of hiding it" {
+    # A read-only PARENT dir: the write goes to a temp file first (atomic rename, dotfiles-dev#511
+    # CodeRabbit follow-up), and `mv` onto an existing directory moves INTO it rather than failing
+    # -- the write must be blocked at its source (no permission to create anything in the
+    # directory) to still reproduce a failure.
+    mkdir -p "$REPO/readonly"
+    chmod 500 "$REPO/readonly"
+    export GH_BUDGET_LATCH_FILE="$REPO/readonly/marker"
+    stub_gh_budget_probe 403
+
+    # Not `run` (a subshell — BUDGET_GATE_REASON would not survive it) and not a bare call either
+    # (bats runs test bodies under errexit, so an unguarded non-zero return would abort the test
+    # before `status=$?` ever ran) -- the `if` form is the exemption from errexit that still lets
+    # this run in the current shell.
+    if gh_budget_gate "o/r"; then
+        status=0
+    else
+        status=$?
+    fi
+
+    [ "$status" -eq 1 ]
+    [[ "$BUDGET_GATE_REASON" == *"latch write FAILED"* ]]
+}
+
+# --- sweep_no_automerge / sweep_behind_base: a raw 403 body must never read as PR numbers -------
+# dotfiles-dev#512: `gh api ... --jq` exits non-zero on an HTTP error WITHOUT ever running the
+# filter, but still writes the unfiltered JSON body to stdout. Piping that straight into
+# `while read` via `done < <(...)` (no exit-status check) turned each raw body line into a bogus
+# "- #{" / "- #\"message\": ..." finding instead of failing.
+
+stub_gh_raw_403_body() {
+    # Prints an UNFILTERED 403 error body to stdout (never running --jq) and exits 1 — the exact
+    # shape `gh api --jq` produces on an HTTP error.
+    cat > "$BIN/gh" <<'STUB'
+#!/bin/bash
+case "$*" in
+"api "*"pulls?state=open"*)
+    cat <<'BODY'
+{
+  "message": "API rate limit exceeded for user ID 55053188",
+  "documentation_url": "https://docs.github.com/rest"
+}
+BODY
+    exit 1
+    ;;
+*) exit 1 ;;
+esac
+STUB
+    chmod +x "$BIN/gh"
+}
+
+@test "sweep_no_automerge reports UNKNOWN on a raw 403 body, never fake PR numbers" {
+    stub_gh_raw_403_body
+    run sweep_no_automerge "o/r"
+    [[ "$output" == *"UNKNOWN"* ]]
+    [[ "$output" != *"- #{"* ]]
+    [[ "$output" != *'- #"message"'* ]]
+}
+
+@test "sweep_behind_base reports UNKNOWN on a raw 403 body, never fake PR numbers" {
+    stub_gh_raw_403_body
+    run sweep_behind_base "$REPO" "o/r" "main"
+    [[ "$output" == *"UNKNOWN"* ]]
+    [[ "$output" != *"- #{"* ]]
+    [[ "$output" != *'- #"message"'* ]]
 }
 
 @test "a gh API failure listing one PR's files reports UNKNOWN, never a clean overlap" {
