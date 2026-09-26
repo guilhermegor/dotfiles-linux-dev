@@ -217,6 +217,63 @@ installed, inert, and indistinguishable from a working one by any check that onl
 looks for the file. `tests/hooks_install_parity.bats` is what made it visible
 (dotfiles-dev#467) — it asserts the two lists agree, in both directions.
 
+## Review fan-out: "needs a review?" is about the HEAD, not a count (dotfiles-dev#480)
+
+`hooks/lib/review_fanout_plan.py` computes which open PRs need a reviewer and
+`hooks/review_fanout_guard.sh` (`Stop`) refuses to end a dev-loop round that had
+assignable PRs and started no review agent — the same planner+guard pair
+`dispatch_plan.py` + `round_dispatch_guard.sh` already are for issues, applied to
+step 4b. Both files carry their full reasoning in their own headers; the two
+points a future audit must not relitigate are here.
+
+**1. The predicate.** `reviews | length == 0` is wrong in BOTH directions, and
+each direction has a measured counter-example from 2026-09-26:
+
+| PR | `reviews` | Truth | What the naive answer does |
+|---|---|---|---|
+| #520 | 9, all against older heads | unreviewed at the head that would merge | calls it reviewed |
+| #453 | 0, plus 2 real fallback reviews posted as comments | those comments predate the head | calls it never reviewed; a head-agnostic attribution match calls it covered |
+
+A push moves the head and invalidates every earlier review — GitHub's own check-run
+said so in words ("no reviewer has reported on this new head yet"). So coverage is
+per-head, across **both** publication channels, because the two rungs write to
+different places and neither sees the other:
+
+1. a submitted review whose `commit.oid` equals `headRefOid` (the primary rung);
+2. a comment carrying `ladder_attribution_line`'s text, posted strictly after the
+   head commit's `committedDate` (the fallback rung, which creates no review object).
+
+⚠️ Channel 2 is time-scoped because `ladder_attribution_line` (`lib/reviewer_ladder.sh`)
+carries runtime/model/signal but **no head SHA**. Exact in the direction that matters — a
+comment written before the head existed provably did not review it — and loose by the
+seconds between a push and a comment already in flight. Adding the head SHA to that line
+would make it as exact as channel 1.
+
+**2. `statusCheckRollup` has no single answer keyed by name.** A head can carry two
+`CheckRun`s with the SAME name and opposite conclusions (measured on #520: `Review
+threads answered` as both `SUCCESS` and `FAILURE` — one from the workflow job, one
+POSTed by the workflow). `check_states()` groups by name and reports a disagreeing
+name as `ambiguous`, never as pass or fail. This is why #480's third candidate
+predicate — "use the step-4 review-thread gate's verdict" — was **evaluated and
+rejected**: it is not resolvable by name-and-first-match. Separately, `status` and
+`conclusion` are different fields and an in-flight `CheckRun` has an EMPTY
+`conclusion`, so `conclusion != "SUCCESS"` reports a running suite as red; running is
+decided first, from `status` (`CheckRun`) or `state` (`StatusContext`). `.conclusion
+// .state` is not a safe fallback — it mixes the two vocabularies.
+
+🔴 **Determinism belongs to the SCHEDULING, never to accepting a finding.** The plan
+decides which PRs get a reviewer; the agent still judges every finding against the
+current code, refutes what does not hold with measurement, replies with rationale, and
+resolves. A fan-out that auto-applied findings would industrialise the false positives
+and be strictly worse than the prose it replaces. Nothing in either file writes to a PR
+— `tests/review_fanout_plan.bats` asserts the planner issues no `gh` mutation.
+
+`rung.status` is `ok | none | unknown` and the last two are **different claims**:
+`none` is a measured answer (the #479 probe ran, neither qwen nor codex is assignable)
+and becomes every PR's named exclusion reason, so the guard passes; `unknown` is
+blindness and the guard blocks. Collapsing them is the #396 defect verbatim. N is capped
+by API budget, not reviewer quota (#445) — neither file implements a latch of its own.
+
 ## Worktree rescue fan-out: two callers, one implementation
 
 `hooks/lib/worktree_fanout.sh` (`fanout_worktrees()` + `classify_worktree_diff()`,
