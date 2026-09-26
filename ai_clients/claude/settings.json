@@ -2,7 +2,8 @@
   "env": {
     "DISABLE_PROMPT_CACHING": "false",
     "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "70"
   },
   "model": "opus",
   "smallFastModel": "haiku",
@@ -183,7 +184,7 @@
       "Bash(kill:*)",
       "Bash(pkill:*)",
       "Bash(fuser:*)",
-      "Bash(env)",
+      "Bash(env:*)",
       "Bash(printenv:*)",
       "Bash(sudo:*)",
       "Bash(pip install:*)",
@@ -224,9 +225,19 @@
       "Read(**/id_rsa)",
       "Read(**/id_ed25519)",
       "Read(**/.aws/credentials)",
+      "Read(**/secrets/**)",
+      "Read(**/credentials/**)",
+      "Read(**/config/credentials.*)",
+      "Read(**/*.key)",
+      "Read(**/*.p12)",
+      "Read(**/*.pfx)",
       "Bash(rm -rf /:*)",
       "Bash(rm -rf ~:*)",
-      "Bash(chmod -R 777:*)"
+      "Bash(chmod -R 777:*)",
+      "Bash(cat ~/.ssh/*)",
+      "Bash(printenv:*)",
+      "Bash(env:*)",
+      "Bash(cat /proc/*/environ)"
     ]
   },
   "enabledPlugins": {

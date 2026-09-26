@@ -111,9 +111,15 @@ payload() {
         '{stop_hook_active: $active, session_id: $sid}'
 }
 
+# dotfiles-dev#490: gate_pr_thread_state retries until the body carries a non-null `comments` key
+# (the COMMENT-channel read #490 added), fail-closed on an incomplete page -- every gate-query
+# fixture below must include `comments`, even empty, or the gate exhausts its retries and reports
+# GATE_STATUS=unreadable instead of clean/problems/running.
 clean_fixture() {
-    jq -nc '{data: {repository: {pullRequest: {reviewThreads: {totalCount: 0, nodes: []}}}}}' \
-        >"$FIXTURE_DIR/$1.json"
+    jq -nc '{data: {repository: {pullRequest: {
+        reviewThreads: {totalCount: 0, nodes: []},
+        comments: {totalCount: 0, nodes: []}
+    }}}}' >"$FIXTURE_DIR/$1.json"
 }
 
 # A single bot-only thread — no roster file in the test repo, so the __NO_ROSTER__ fallback
@@ -121,13 +127,16 @@ clean_fixture() {
 problem_fixture() {
     local body
     body="$(printf 'x%.0s' {1..150})"
-    jq -nc --arg body "$body" '{data: {repository: {pullRequest: {reviewThreads: {
-        totalCount: 1,
-        nodes: [{isResolved: false, path: "a.sh", comments: {
+    jq -nc --arg body "$body" '{data: {repository: {pullRequest: {
+        reviewThreads: {
             totalCount: 1,
-            nodes: [{author: {login: "coderabbitai", __typename: "Bot"}, body: $body}]
-        }}]
-    }}}}}' >"$FIXTURE_DIR/$1.json"
+            nodes: [{isResolved: false, path: "a.sh", comments: {
+                totalCount: 1,
+                nodes: [{author: {login: "coderabbitai", __typename: "Bot"}, body: $body}]
+            }}]
+        },
+        comments: {totalCount: 0, nodes: []}
+    }}}}' >"$FIXTURE_DIR/$1.json"
 }
 
 # running_fixture NUM STATE
@@ -138,6 +147,7 @@ problem_fixture() {
 running_fixture() {
     jq -nc --arg state "$2" '{data: {repository: {pullRequest: {
         reviewThreads: {totalCount: 0, nodes: []},
+        comments: {totalCount: 0, nodes: []},
         commits: {nodes: [{commit: {statusCheckRollup: {contexts: {totalCount: 1, nodes: [
             {__typename: "StatusContext", context: "CodeRabbit", state: $state,
              creator: {login: "coderabbitai"}}

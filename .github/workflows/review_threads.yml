@@ -26,6 +26,24 @@ name: review_threads
 # door. Every trigger — including issue_comment — instead falls through to
 # the SAME live re-check of reviews/threads; the completion marker only ever
 # ADDS a positive "a reviewer has reported" signal, it never skips the check.
+#
+# ⚠️ dotfiles-dev#492: a push moves the PR head and NONE of the three
+# triggers above observe that — the required check stays stranded on the old
+# commit and the new head carries no check-run at all, which branch
+# protection reads as BLOCKED exactly like a red one, with nothing to
+# explain why. The fix for THAT is deliberately not `pull_request:
+# [synchronize]` on this file: adding it here would recompute this script's
+# full live verdict at push time, and the honest verdict at push time is
+# almost always "no reviewer has reported on this head yet" mixed with
+# whatever review state carried over from the OLD head — reopening
+# blueprintx#180 in the opposite direction (a stale pass surviving the push
+# that invalidated it). The push-triggered half lives in the sibling
+# workflow `review_threads_republish.yml`, which only ever publishes
+# `failure` (or the non-review "not required" scope skip) on a push, never a
+# review-based `success`. `workflow_dispatch` below is the manual escape
+# hatch instead: it re-runs this file's own live verdict computation
+# on-demand, the same computation a review/comment event would trigger,
+# so it can still legitimately publish `success`.
 on:
   pull_request_review:
     types: [submitted, edited, dismissed]
@@ -33,6 +51,11 @@ on:
     types: [created, edited]
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to recompute and republish the live verdict for
+        required: true
 
 permissions:
   contents: read
@@ -69,7 +92,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.event.repository.name }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
           EVENT_NAME: ${{ github.event_name }}
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
           COMMENT_BODY: ${{ github.event.comment.body }}
@@ -152,12 +175,21 @@ jobs:
           # decision is re-checked here at runtime instead. OWNER and REPO
           # come from the env: block above, which actionlint cannot see when
           # it lints this run: script standalone — hence SC2153.
+          # ⚠️ dotfiles-dev#502: this pattern MUST select exactly the same
+          # paths as coderabbit_trigger.yml's `paths:` filter
+          # (ai_clients/claude/hooks/** and ai_clients/claude/settings.json
+          # only) — a bare `(^|/)settings\.json$` matched ANY settings.json
+          # in the repo (e.g. .vscode/settings.json), so a PR could be
+          # REQUIRED to pass this gate while the trigger that would produce
+          # the review it demands never fires (measured on #493: asks=0 for
+          # 8h05m). tests/review_threads_trigger.bats asserts the two stay
+          # in lockstep.
           # shellcheck disable=SC2153
           changed=$(gh pr view "$PR_NUMBER" --repo "$OWNER/$REPO" \
             --json files --jq '.files[].path')
-          if ! printf '%s\n' "$changed" | grep -qE '^ai_clients/claude/hooks/|(^|/)settings\.json$'; then
+          if ! printf '%s\n' "$changed" | grep -qE '^ai_clients/claude/hooks/|^ai_clients/claude/settings\.json$'; then
             report success "gate not required (selective policy)" \
-              "No ai_clients/claude/hooks/ or settings.json changes in this PR."
+              "No ai_clients/claude/hooks/ or ai_clients/claude/settings.json changes in this PR."
           fi
 
           # No review at all is a distinct failure from "thread left open" —
@@ -224,7 +256,15 @@ jobs:
 
           gate_pr_thread_state "$OWNER" "$REPO" "$PR_NUMBER" ".review-bots.yaml"
           echo "$GATE_DETAIL"
-          if [ "$GATE_STATUS" != "clean" ]; then
+          # `unreviewed` is the ONE gate status this step must not act on. Reaching this line
+          # means reviewer_reported=1 -- the check above exits otherwise -- and this step
+          # established that from signals the gate cannot see: the triggering event payload,
+          # this PR's own published check-run history, and `pr view --json reviews`. The gate
+          # sees only the GraphQL page, so its `unreviewed` here is the poorer of two verdicts
+          # about the identical question, and letting it win republishes `failure` over a PR a
+          # reviewer demonstrably reported on. Every other non-clean status (problems, running,
+          # unreadable) answers a DIFFERENT question and still blocks.
+          if [ "$GATE_STATUS" != "clean" ] && [ "$GATE_STATUS" != "unreviewed" ]; then
             report failure "review gate status=$GATE_STATUS" "$GATE_DETAIL"
           fi
           report success "review threads answered" "$GATE_DETAIL"

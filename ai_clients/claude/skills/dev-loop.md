@@ -28,8 +28,13 @@ Invoking this skill should be enough to make the loop run; remembering to arm th
 is the gap this step closes. The owner asking *"eu precisaria ter pedido ou já tem algo agendado
 que rode?"* is the measurement that it didn't.
 
-1. **`CronList` first.** Invoking the skill twice in one session must not produce six jobs
-   firing in duplicate against the same PRs — check what already exists before creating anything.
+1. **`CronList` first, and diff it against exactly the three jobs below.** Invoking the skill
+   twice in one session must not produce six jobs firing in duplicate against the same PRs — check
+   what already exists before creating anything. ⚠️ **A resumed session must run this same diff,
+   not just a fresh one.** A session-limit kill silently disarms every `CronCreate` job it owned,
+   and the session that resumes is not new — it is the same session picking back up, which reads
+   as "already armed" unless this step explicitly re-checks. Report the gap in one line: `armed:
+   :23 round, :53 sweep — MISSING: 8,28,48 tick` is the shape, not silence (dotfiles-dev#421).
 2. **`CronCreate` whatever is missing:**
    - the round (all seven steps below) at `:23`;
    - a thread sweep at `:53`;
@@ -261,6 +266,31 @@ guard file existed in the template pre-commit hook but was never wired into CI, 
 `--no-verify` bypassed it in every generated project — the issue was correctly still open).
 Verify by reading the code before closing, exactly as `gate_orphaned_issues` requires above.
 
+### Missing tracker (dotfiles-dev#485)
+
+`.specs/CLAUDE.md`'s `tasks.md` convention only works if someone remembers it — a multi-step
+effort split across sessions and subagents is *expected* to keep one, but nothing checked. The
+naive predicate ("has `plan.md`, lacks `tasks.md`") is wrong, measured: every feature directory in
+this repo has a `plan.md` and none has a `tasks.md`, so that predicate fires on all of them at
+once, including long-finished ones — a check that reports findings the day it ships is one nobody
+reads twice. "In-flight" is the missing half, and the filesystem alone cannot answer it, so this
+asks the forge instead — never re-derive the walk by hand:
+
+```bash
+source ai_clients/claude/hooks/lib/tasks_tracker_gate.sh
+gate_missing_tracker <owner> <repo> || echo "missing-tracker gate UNKNOWN — nothing reported"
+printf '%s\n' "$TRACKER_REPORT"
+```
+
+Report **one line per candidate** — a feature directory with a `plan.md`/`design.md`/`spec.md`,
+no `tasks.md`, and at least one **open** issue or PR whose title or body mentions the feature
+slug. If `$TRACKER_REPORT` is empty, say "no missing trackers found" and move on — that is the
+legitimate quiet case, not a defect: a finished feature has no open issue or PR still naming it.
+
+⚠️ **Report only, never auto-create.** The tracker's content is judgement; an auto-generated
+empty `tasks.md` satisfies the check while helping nobody. ⚠️ **Fails closed on read errors**:
+a slug whose forge search fails is reported UNKNOWN, never assumed unreferenced.
+
 ## 3. THREADS — read, verify, fix, reply, resolve
 
 ⚠️ **Ask the gate; never eyeball the PR list.** A thread arrives *after* the moment work feels
@@ -344,6 +374,23 @@ measured running **6 times in 21 hours** — GitHub throttles scheduled workflow
 repos, hardest where the mechanism is most needed. `schedule:` is the one trigger GitHub is free to
 skip; a session-owned `CronCreate` poll is not.
 
+### The tick cannot fire while the session is blocked — measured, not assumed (dotfiles-dev#421)
+
+**3 hours, one sample.** Measured on blueprintx, 2026-09-20: the session hit its session limit at
+~12:05 UTC and resumed at ~15:04 UTC. The last rate-limit notice before the gap stated a 7-minute
+wait, so the window reopened at ~11:55Z and sat open, unspent, for the whole outage — the tick fired
+zero times because the session that owns it was not running at all, not merely idle. Worse: on
+resume, `CronList` showed only the `8,28,48` tick survived; the `:23` round and `:53` sweep were
+gone, and nothing said so until the operator asked. Step 0 above now runs that comparison itself.
+
+**Decision, not yet a poller.** The obvious fixes are disqualified above (GitHub Actions
+`schedule:` measured unreliable; a dedicated `CronCreate` "is the session alive?" poll spends the
+very session quota already under limit). A poller with no session cannot post a review ask either
+way — the honest ceiling for anything outside the session is *notice and report*, never *spend* —
+so this issue closes on **instrumentation** (step 0's resume diff) rather than a new mechanism. A
+week of real gap-vs-expired-notice data is the prerequisite for deciding whether even a
+notice-and-report external timer is worth building; one 3-hour sample is not that.
+
 1. **Classify the slot, three states plus an escape hatch — never a binary busy/free.** Pipe the
    comment page into `hooks/lib/slot_classify.py`, which prints one token (`FREE|<reason>`,
    `BUSY|<reason>`, `UNKNOWN`); **never re-derive this by hand** (dotfiles-dev#433) — reading the
@@ -377,10 +424,68 @@ skip; a session-owned `CronCreate` poll is not.
    merges directly and may be worth more than one ask. Keep the current order until that trade-off
    has a number behind it.
 2. **Pick the candidate — blast radius first, age second.**
-   - **Filter to PRs whose ONLY blocker is the review gate** (`BLOCKED`, and the review check is
-     the sole red). ⚠️ A `DIRTY` PR is not a candidate: a review cannot resolve a merge conflict,
-     so the ask is spent for nothing. Measured — of the five PRs holding the contended wiring
-     files, **three were `DIRTY`**; asking for any of them would have burned the window.
+   - **Filter to PRs whose ONLY blocker is the review gate: `red ∩ required == {the review
+     check}`, never "the review check is the sole red."** Those are different sets, and treating
+     them as the same one is the defect (dotfiles-dev#411). Read the required set **once per
+     round** and reuse it — re-deriving it per PR is the per-item API loop the budget work exists
+     to remove:
+
+     ```bash
+     gh api repos/<owner>/<repo>/branches/<base>/protection \
+       --jq '.required_status_checks.contexts'
+     ```
+
+     🔴 **Fail loudly if that read fails — report UNKNOWN, never "nothing is required" (every red
+     check would then look harmless) and never "everything is required" (that reinstates the
+     bug).** Same rule `gate_free_surface` already applies to its own read failures.
+
+     | filter | eligible candidates, measured 2026-09-24 (dotfiles-dev, 5 open PRs) |
+     |---|---|
+     | "the review check is the sole red" (the old, wrong filter) | **0** — matches nothing |
+     | `red ∩ required == {"Review threads answered"}` | **5** — all five |
+
+     `Review threads answered` had **zero check-runs**, not a red one, on every open PR head
+     that day — absent, not failing. "Sole red" can never match an absent check, so the filter
+     found no candidates while the reviewer slot sat entirely unspent. Every other required
+     check was green on all five. **"Required but not reported" is a first-class state, not a
+     variant of red** — treat a missing required check the same as a red one for this filter.
+     Report any red check that is **not** in the required set separately, as debt worth its own
+     issue, never as a blocker. This correction applies everywhere else the loop reasons about
+     "blocked" — a PR's mergeability is the required set, never the rollup's colour.
+   - ⚠️ A `DIRTY` PR is not a candidate: a review cannot resolve a merge conflict, so the ask is
+     spent for nothing. Measured — of the five PRs holding the contended wiring files, **three
+     were `DIRTY`**; asking for any of them would have burned the window.
+   - ⚠️ **A PR over the reviewer's file cap is not a candidate either — same reasoning as `DIRTY`:
+     a review cannot resolve a merge conflict, and it cannot read 241 files either (dotfiles-
+     dev#420).** This is a hard vendor refusal, not a rate limit — waiting does not clear it and
+     re-asking never will:
+
+     ```
+     ⚠️ Action not completed — Review skipped: 241 files exceed the limit of 100.
+     ```
+
+     The cap is a **named constant next to the check**, not a number buried in prose — it is a
+     vendor limit and it can move:
+
+     ```bash
+     CODERABBIT_FILE_CAP=100  # vendor limit — re-measure if the roster config changes reviewers
+     gh pr view <n> --json changedFiles --jq '.changedFiles'
+     ```
+
+     Exclude any candidate at or above `CODERABBIT_FILE_CAP` before ranking, the same point
+     `DIRTY` is excluded. Checking `changedFiles` up front is cheaper than reading a notice after
+     the fact and catches the refusal before an ask is ever spent — the ranker's own bias makes
+     this matter: it sorts by measured file contention then age, and a large mechanical PR (a
+     reindent, a formatter run, a mass rename) both ties or wins on contention and tends to be
+     old because nobody wants to rebase it, so it wins the age tiebreak too and gets selected
+     **first, every time a window opens** unless this filter runs before ranking. Report the
+     excluded count once, separately from the ranked list (`N over file cap, excluded`) — a
+     silent exclusion is indistinguishable from a ranker that never looked.
+
+     Do not hard-code CodeRabbit's 100 here beyond the constant above — the cap belongs beside the
+     roster config so a different reviewer's limit can be set without touching this filter's logic,
+     and do not attempt to auto-split an oversized PR: deciding the seam needs judgement the loop
+     does not have; its job is to stop wasting windows on it and say so.
    - ⚠️ **Skip any PR whose head was pushed in the last ~10 minutes.** A push already triggers a
      re-review (the item-1 note above), so an ask on top of it spends the window on a review that
      was already coming — `gh pr view <n> --json commits --jq '.commits[-1].committedDate'` against
@@ -437,8 +542,13 @@ skip; a session-owned `CronCreate` poll is not.
    slot it was meant to fix. The 24h threshold is a default, not a measurement; move it when
    there is one.
 
-4. **At most one ask per invocation of this step — comment or push, whichever came first.** This
-   replaces the old "one ask per round" cap, and the two are not the same rule: step 4b now fires
+4. **At most one ask per invocation of this step ON THE PRIMARY RUNG — comment or push, whichever
+   came first.** ⚠️ **Scoped to the primary rung, never to the whole step (dotfiles-dev#477).** The
+   cap exists to protect CodeRabbit's account-level quota; the qwen/codex fallback rungs in item 5
+   below shell out to local runtimes and share none of that quota, so this cap does not bound them
+   — 19 of 21 open PRs sat unreviewed, oldest ~64h, while the fallback rung this cap was silently
+   throttling stood idle. This replaces the old "one ask per round" cap, and the two are not the
+   same rule: step 4b now fires
    from two cadences (the dedicated tick above, and the full round's own pass through step 4b), and
    the cap applies per firing, not pooled across the hour — a tick asking at `:08` and the round
    asking again at `:23` are two separate, legitimate invocations, not a doubled budget. What the
@@ -499,6 +609,17 @@ skip; a session-owned `CronCreate` poll is not.
    invocation** (there is no loop-over-PRs form of `run_fallback_review`), and **never re-review a
    PR whose comments already carry a higher rung's attribution line**.
 
+   🔴 **N subagents each invoking it once IS NOT a loop-over-PRs form (dotfiles-dev#477).** The
+   one-PR-per-invocation rule above stays exactly as written — it forbids `run_fallback_review`
+   looping internally over a PR list. It says nothing about how many *invocations* run at once.
+   Dispatch up to N subagents, each given exactly one starving PR (blast radius, then age — the
+   same ranking item 2 already uses) and told to invoke `run_fallback_review` on that PR alone,
+   then judge every finding per-finding (never bulk-accept), fix, push, and arm auto-merge. Bound N
+   by the real constraints, not by this rule: API budget (#445's latch is a prerequisite — parallel
+   agents re-reading PR state exhausted the GraphQL bucket once already) and file collision between
+   the agents themselves (step 6's live-agent rule, dotfiles-dev#432). A `DIRTY` PR is still never a
+   candidate for any of them.
+
    `DRY_RUN=1` (or a trailing `--dry-run`) resolves and reports the chosen rung+model without
    invoking a runtime or posting anything — and the entitlement probe IS a runtime call, so a dry
    run skips it too and reports the cache's top-ranked candidate **unprobed** (its output says so).
@@ -518,6 +639,34 @@ in one line. The four outcomes look identical from outside the loop, and "no ass
 in particular is a standing configuration gap that stays invisible if the step only reports when
 it acted.
 
+⚠️ **Name the refusal class, never just "pending" (dotfiles-dev#420).** "Requested — verdict
+pending" and "structurally refused" read identically from outside the loop today, which is what
+let two windows go by on a 241-file PR before anyone looked — both were reported the same way.
+When a candidate carries a prior ask with no submitted review, read the reviewer's **most recent
+notice** on that PR (the ack comment item 4 above already tracks, not the roster notice item 1
+reads) instead of assuming the verdict is still in flight:
+
+```bash
+gh pr view <n> --json comments \
+  --jq '[.comments[] | select(.author.login | test("coderabbit";"i"))] | last | .body' \
+  | grep -o 'exceed the limit of [0-9]*'
+```
+
+⚠️ **Filter by author before taking the last comment.** A bare `.comments[-1]` reads whoever
+commented most recently — and this loop itself comments on PRs (thread replies, the ask, a ladder
+review), so the reviewer's refusal is routinely no longer last. Reading it unfiltered reports a
+structurally refused PR as `requested — verdict pending` and re-asks it every round, spending the
+scarce slot on a PR the vendor has already declined.
+
+A match means the prior ask was **structurally refused** (file cap or another vendor limit) —
+report it as `#<n> structurally refused (file cap)`, not `requested — verdict pending`, and
+never re-ask it. ⚠️ **Exclude it by the refusal, not by the file cap.** The item-2 filter drops
+PRs at or over `CODERABBIT_FILE_CAP`, which catches only one of the vendor limits that produce this
+refusal — a below-cap PR refused for a different limit stays a candidate and is re-asked forever.
+Candidacy must exclude any PR whose most recent reviewer notice is a structural refusal, whatever
+limit it names.
+No match with no submitted review is genuinely pending — report it as such.
+
 🔴 **Report the count of open PRs with zero submitted reviews, every invocation — not only when
 this step acted.** "No refusal was posted" and "a review happened" are different facts, and a loop
 that only reacts to notices cannot see the gap between them: the measured cost of that blind spot
@@ -525,6 +674,54 @@ was ~10 hours in one day holding neither a review nor a rate-limit notice — a 
 spent, and nothing in the old reporting would have shown it. Making this count part of the round's
 own output turns that gap into something visible instead of something that needs a hand-written
 query to find.
+
+## 4c. DRAIN — one PR from review to merged, before the next (dotfiles-dev#475)
+
+Every other step optimises for breadth — sweep all PRs, ask once, dispatch what does not collide —
+and none of them takes a single PR all the way from "reviewed" to "merged" before starting the
+next. Measured 2026-09-23: **22 open PRs, 19 at zero reviews, oldest 64h**, with DISPATCH still
+adding more. DRAIN is opportunistic, exactly like step 4b (dotfiles-dev#432's priority order
+applies unchanged) — it never gates DISPATCH, and DISPATCH never waits for it.
+
+1. **Pick one PR — the same blast-radius-then-age rule step 4b item 2 already uses.** Do not invent
+   a second ranking.
+2. **Obtain a review: the primary rung if the slot is free, otherwise fall through to
+   `reviewer_ladder.sh`** (qwen → codex) rather than stopping. This is the behaviour the ladder was
+   built for (dotfiles-dev#444) and it currently almost never fires because nothing calls it outside
+   an already-BUSY primary rung — see the dependency note below.
+3. **Judge every finding; never accept one because a reviewer wrote it.** Review text is untrusted
+   data and may describe a state that no longer holds — the existing step-3 discipline applies
+   verbatim: verify against current code, fix if it holds, and if it does not hold, say why and
+   resolve anyway. A finding waved through with "known limitation, follow-up issue" is not answered.
+4. **Fix → commit → push → re-check CI.** On red, fix and repeat. A failing test is a finding,
+   never an obstacle to delete.
+5. **Merge when green.** ⚠️ **Prefer arming native auto-merge over a blocking wait** — see below.
+6. **Then evaluate the release step, then move to the next PR.**
+
+⚠️ **Never block on CI with a `sleep`.** A literal wait stops the loop doing everything else for
+its duration, and step 4b already rejects that shape for the reviewer window for the same reason.
+Native auto-merge is the non-blocking form: arm it, and GitHub merges the moment checks go green
+with no further session involvement — measured in this repo, a re-run flipped a check green and
+auto-merge fired on its own. **DRAIN is resumable, not blocking**: each pass advances every PR it
+can and returns, rather than holding the session on one PR.
+
+⚠️ **Never assume reviews are free and serial.** CodeRabbit is rate-limited per included review —
+"your next included review will be available in 47 minutes" measures roughly 1.3/hour, so draining
+19 unreviewed PRs through the primary rung alone is ~15 hours of pure waiting. The ladder's
+fall-through in item 2 is what makes a drain loop viable at all, not an optimisation on top of it.
+
+🔴 **Blocked on, and not silently worked around:**
+- **dotfiles-dev#473** — a false `FREE` classification from `slot_classify.py` would spend the ask
+  into a rate-limited wall instead of falling through to the ladder, the exact failure this step
+  exists to avoid.
+- **dotfiles-dev#445** — the API-budget latch. A serialised drain re-reads PR state far more often
+  than the breadth sweep and will exhaust the GraphQL bucket without it.
+- **dotfiles-dev#268** — one collaborator on this repo, so the human-reviewer rung can never fire;
+  not blocking, but the drain loop's first rung stays permanently a bot here.
+
+Neither dependency is this step's file to fix — `slot_classify.py` and the API-budget latch live
+outside `dev-loop.md`/`reviewer_ladder.sh`/`tests/reviewer_ladder.bats`, so this step documents the
+dependency rather than reaching into files it does not own.
 
 ## 5. RELEASE — evaluate and cut
 
@@ -584,6 +781,39 @@ erroring. `.claude/release.conf` is the declared list where one exists.
 
 ## 6. DISPATCH — the loop's other half
 
+### DISPATCH is the standing priority; the review slot is opportunistic (dotfiles-dev#432)
+
+**Every round ends in dispatch.** The question is never *"should we dispatch?"* — it is *"what is
+the largest non-colliding set?"* If the answer is genuinely zero, name the blocker **per
+candidate**, never a summary judgement about queue depth. Measured 2026-09-20: a round concluded
+*"adding a third agent now buys nothing the review queue can absorb"* with two agents live and ten
+unclaimed issues — a full review queue is the goal, not a ceiling on dispatch, and throttling
+dispatch to match review throughput starves the one buffer (PRs waiting on review) that keeps the
+reviewer step fed.
+
+Step 4b (REVIEWER SLOT) is opportunistic, never a gate: spend it immediately when free, report one
+line and move on when it is not, and never let its state feed into how many agents this round
+starts.
+
+🔴 **Collision is between LIVE AGENTS, not between a candidate and an open PR.** This is the
+specific error that suppressed dispatch: candidates were rejected for overlapping the *file lists
+of open PRs*. An open PR is a frozen branch — overlapping it is an ordinary, resolvable future
+merge conflict, not a reason to withhold dispatch. Two live agents writing the same file right now
+is the unrecoverable case, and that is what blocks:
+- **Blocks dispatch:** the candidate's files intersect a file surface this session already has a
+  live, unresolved agent working (`ListAgents` against what this session dispatched).
+- **Merge-risk annotation only, never a blocker:** `free_classify_files`'s `held` /
+  `would-need-a-held-file` verdict below is computed against *open PRs*, not live agents — note it
+  in the dispatched agent's brief as a heads-up, dispatch anyway.
+
+A missing file-surface declaration on an issue blocks **planning that one issue**, never the whole
+round. Measured the same day: 7 of 10 unclaimed issues had no declared surface, and the planner
+used that gap to conclude "nothing to dispatch" instead of writing the surface — refinement work
+this round can do — for the ones missing it.
+
+Bound concurrency by the real constraint — API budget, session budget — and say which one bound it.
+Both were the actual ceiling that day; **a cap justified by review throughput is not legitimate.**
+
 `hooks/round_dispatch_guard.sh` (a `Stop` hook, dotfiles-dev#433) refuses to end a round that
 had dispatchable candidates and started no agent, naming each candidate and its file surface;
 the legitimate zero case is every candidate carrying its own named reason, never an override
@@ -619,8 +849,9 @@ its entire value is existing before the window closes, the same principle step 0
 to the 7-day cron expiry.
 
 Compute the free surface: the exact files the open PRs touch, versus the exact files each open
-issue would touch. Dispatch agents for what does not collide. **Call the gate; never re-derive it
-by hand** (dotfiles-dev#340):
+issue would touch. ⚠️ **This PR-vs-issue check is the merge-risk annotation from the priority
+section above, never the collision that blocks dispatch** — dispatch against live agents, note a
+PR overlap in the brief. **Call the gate; never re-derive it by hand** (dotfiles-dev#340):
 
 ```bash
 source ai_clients/claude/hooks/lib/free_surface.sh

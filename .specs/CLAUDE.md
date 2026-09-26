@@ -90,17 +90,21 @@ mechanically.
   multi-issue feature (#306) — a different shape than `plan.md` — writes it
   up front whenever the feature was split into parallel-dispatchable issues.
   A multi-step effort carried across sessions and subagents is **expected**
-  to keep one, updated in the same round that ships each slice. ⚠️ This is a
-  convention, not an enforced check: `s:dev-loop` does **not** verify it
-  today (`grep -c 'tasks\.md'` in the skill returns 0), and saying otherwise
-  here would be worse than saying nothing — a session would read as
-  compliant with nothing enforcing it. Enforcement is tracked separately in
-  dotfiles-dev#485, which has to settle what counts as an in-flight effort
-  first: every feature directory in this repo currently has a `plan.md` and
-  none has a `tasks.md`, so the naive predicate fires on all of them at once
-  and gets ignored. Not in `docs/`, and not only in a session-local task
-  tool: an account switch or session limit erases either of those, but not a
-  file in the repo.
+  to keep one, updated in the same round that ships each slice. ⚠️ This is
+  an enforced check, not only a convention: `s:dev-loop` step 2 (SWEEP)
+  runs `gate_missing_tracker` (`ai_clients/claude/hooks/lib/tasks_tracker_gate.sh`,
+  dotfiles-dev#485) every round, reporting one line per feature directory
+  that has a `plan.md`/`design.md`/`spec.md`, no `tasks.md`, and at least
+  one **open** issue or PR mentioning the feature slug — "in-flight by the
+  forge, not by the filesystem," since every feature directory in this repo
+  has a `plan.md` and the naive "has plan.md, lacks tasks.md" predicate
+  fires on all of them at once, including long-finished ones. A finished
+  feature with no open issue or PR still naming it is the legitimate quiet
+  case: it reports nothing. Report only — the gate never auto-creates a
+  `tasks.md`, since its content is judgement an empty file cannot satisfy.
+  Not in `docs/`, and not only in a session-local task tool: an account
+  switch or session limit erases either of those, but not a file in the
+  repo.
 
   **Status markers** — the same three states as `progress.md` below, plus one
   addition: `[~]` **must name its owner**, as `[~] <branch-or-agent>`. The

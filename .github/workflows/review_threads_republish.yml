@@ -1,0 +1,82 @@
+name: review_threads_republish
+
+# Companion to review_threads.yml (dotfiles-dev#492). That workflow
+# deliberately never triggers on `pull_request` — its own header explains
+# why (blueprintx#180): a verdict computed at push time goes stale the
+# instant a review lands. This file does not compute that verdict. A push
+# moves the PR to a head with NO check-run at all for the "Review threads
+# answered" required context, which branch protection reads as BLOCKED
+# exactly like a red one, but with nothing to explain why. Measured on #467,
+# 2026-09-23: 12/12 checks SUCCESS, mergeable, automerge=true, still
+# BLOCKED — the context was simply absent from the head, not failing on it.
+#
+# ⚠️ This job must NEVER publish `success` as a review verdict. At push time
+# the only honest state is "no reviewer has reported on THIS head yet" — a
+# red. Publishing green here would let an approval from an OLDER head carry
+# over onto unreviewed code, reopening blueprintx#180 in the opposite
+# direction (a stale PASS surviving the very push that invalidated it). The
+# one `success` this file may publish is the same non-review "gate not
+# required" scope skip review_threads.yml already publishes for PRs outside
+# the selective policy (dotfiles-dev#157) — duplicated here in miniature
+# rather than shared, because sharing it would mean checking out and
+# sourcing review_thread_gate.sh here too, reopening the untrusted-PR-ref
+# problem review_threads.yml's own header warns about (dotfiles-dev#481).
+# This job never checks out the repo at all, so that problem cannot recur.
+#
+# The red this job publishes is recovered the normal way: a real review or
+# comment event re-triggers review_threads.yml, which republishes the real
+# verdict on the same head — or review_threads.yml's own `workflow_dispatch`
+# input recomputes it on demand.
+#
+# ⚠️ Known, accepted gap: for a pull_request event from a FORKED repo,
+# GitHub always issues a read-only GITHUB_TOKEN regardless of the
+# `permissions:` block below, so `checks: write` has no effect and this job
+# fails to publish. This repo has no external fork contributors today; a
+# same-repo branch PR (the only kind this project uses) keeps the elevated
+# token, so this is a documented, unaddressed edge rather than a fixed one.
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: write
+
+jobs:
+  republish:
+    name: Review threads answered
+    runs-on: ubuntu-latest
+    steps:
+      - name: Republish onto the new head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(gh api "repos/$OWNER/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+
+          report() {
+            local conclusion="$1" title="$2" summary="$3"
+            jq -n --arg s "$HEAD_SHA" --arg c "$conclusion" \
+                  --arg t "$title" --arg b "$summary" \
+              '{name:"Review threads answered", head_sha:$s,
+                status:"completed", conclusion:$c,
+                output:{title:$t, summary:$b}}' \
+              | gh api -X POST "repos/$OWNER/$REPO/check-runs" --input - >/dev/null
+            echo "$conclusion: $title"
+          }
+
+          # Same selective-policy scope as review_threads.yml (dotfiles-dev#157) —
+          # see the file header for why it is duplicated rather than shared.
+          changed=$(gh pr view "$PR_NUMBER" --repo "$OWNER/$REPO" --json files --jq '.files[].path')
+          if ! printf '%s\n' "$changed" | grep -qE '^ai_clients/claude/hooks/|(^|/)settings\.json$'; then
+            report success "gate not required (selective policy)" \
+              "No ai_clients/claude/hooks/ or settings.json changes in this PR."
+            exit 0
+          fi
+
+          report failure "no reviewer has reported on this new head yet" \
+            "Push-triggered republish, not a review report — any earlier verdict was for an older head. A review or comment event will republish the real verdict on $HEAD_SHA."

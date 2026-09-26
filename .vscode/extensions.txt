@@ -19,6 +19,7 @@ vscode:github.copilot
 vscode:github.copilot-chat
 vscode:github.vscode-github-actions
 vscode:humao.rest-client
+vscode:jetmartin.bats
 vscode:marp-team.marp-vscode
 vscode:mechatroner.rainbow-csv
 vscode:ms-azuretools.vscode-containers

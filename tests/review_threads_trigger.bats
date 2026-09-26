@@ -17,11 +17,18 @@
 # a reformat of the surrounding YAML can't silently desync the test from the
 # step it's meant to cover.
 #
+# dotfiles-dev#490: gate_pr_thread_state now retries until the GraphQL body carries a non-null
+# `comments` key (the COMMENT-channel read added for #490), fail-closed on an incomplete page.
+# Every THREADS_JSON fixture below must include `"comments":{"totalCount":0,"nodes":[]}` (or a
+# populated one) or the gate exhausts its 3 retries and reports GATE_STATUS=unreadable instead of
+# clean/problems -- the exact fixture-format break this file hit when #490 landed.
+#
 # Run locally: bats tests/          (install with: sudo apt-get install -y bats)
 
 setup() {
     REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
     WORKFLOW="$REPO_ROOT/.github/workflows/review_threads.yml"
+    TRIGGER_WORKFLOW="$REPO_ROOT/.github/workflows/coderabbit_trigger.yml"
     SCRIPT="$(mktemp)"
     python3 -c "
 import yaml
@@ -90,7 +97,7 @@ run_step() {
 # an absent one — the gate step must itself exit non-zero with a diagnostic.
 
 @test "zero reviews, zero comments, non-marker trigger: fails decided, not absent" {
-    run_step "pull_request_review" "" "" 0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
+    run_step "pull_request_review" "" "" 0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
     [ "$status" -eq 0 ]
     [ "$(published_conclusion)" = "failure" ]
     [[ "$output" == *"no reviewer has reported"* ]]
@@ -101,7 +108,7 @@ run_step() {
 @test "issue_comment rate-limit refusal: still fails, never a false pass" {
     run_step "issue_comment" "coderabbitai[bot]" \
         "your next included review will be available in 34 minutes" \
-        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
+        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
     [ "$status" -eq 0 ]
     [ "$(published_conclusion)" = "failure" ]
     [[ "$output" == *"no reviewer has reported"* ]]
@@ -111,7 +118,7 @@ run_step() {
 
 @test "issue_comment from a human, unrelated text: still fails" {
     run_step "issue_comment" "guilhermegor" "LGTM, nice work" \
-        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
+        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
     [ "$status" -eq 0 ]
     [ "$(published_conclusion)" = "failure" ]
     [[ "$output" == *"no reviewer has reported"* ]]
@@ -125,7 +132,7 @@ run_step() {
 @test "issue_comment with CodeRabbit's completion marker: clean review passes" {
     run_step "issue_comment" "coderabbitai[bot]" \
         "✅ Action performed — Full review finished." \
-        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
+        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
     [ "$status" -eq 0 ]
     [ "$(published_conclusion)" = "success" ]
     [[ "$output" != *"no reviewer has reported"* ]]
@@ -138,7 +145,7 @@ run_step() {
 @test "completion marker present but a thread is still unanswered: fails" {
     run_step "issue_comment" "coderabbitai[bot]" \
         "✅ Action performed — Full review finished." \
-        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":1,"nodes":[{"isResolved":false,"path":"a.sh","comments":{"totalCount":0,"nodes":[]}}]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
+        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":1,"nodes":[{"isResolved":false,"path":"a.sh","comments":{"totalCount":0,"nodes":[]}}]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
     [ "$status" -eq 0 ]
     [ "$(published_conclusion)" = "failure" ]
     [[ "$output" == *"review gate status=problems"* ]]
@@ -147,7 +154,7 @@ run_step() {
 # --- an ordinary review still works unchanged --------------------------------
 
 @test "a real submitted review (review_count > 0): proceeds past the reported check" {
-    run_step "pull_request_review" "" "" 1 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
+    run_step "pull_request_review" "" "" 1 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
     [ "$status" -eq 0 ]
     [ "$(published_conclusion)" = "success" ]
     [[ "$output" != *"no reviewer has reported"* ]]
@@ -158,7 +165,7 @@ run_step() {
 @test "the published check-run targets the PR head commit" {
     run_step "issue_comment" "coderabbitai[bot]" \
         "✅ Action performed — Full review finished." \
-        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
+        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
     [ "$status" -eq 0 ]
     [ "$(jq -r '.head_sha' < "$CHECK_RUN_OUT")" = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" ]
     [ "$(jq -r '.name' < "$CHECK_RUN_OUT")" = "Review threads answered" ]
@@ -198,8 +205,8 @@ run_step() {
 LADDER_BODY="Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)
 
 No findings."
-ZERO_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
-ONE_OPEN_THREAD='{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":1,"nodes":[{"isResolved":false,"path":"a.sh","comments":{"totalCount":0,"nodes":[]}}]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
+ZERO_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
+ONE_OPEN_THREAD='{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":1,"nodes":[{"isResolved":false,"path":"a.sh","comments":{"totalCount":0,"nodes":[]}}]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
 
 # --- #482 review: a clean verdict must survive a later unrelated comment -------------------
 # A clean CodeRabbit review submits no review object, so review_count stays 0 and the only
@@ -210,7 +217,7 @@ ONE_OPEN_THREAD='{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCo
 @test "a later human comment does not overwrite an earlier clean review" {
     export HISTORY_COMMENTS='[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2026-06-01T00:00:00Z","body":"✅ Action performed\n\nFull review finished."}]'
     run_step "issue_comment" "guilhermegor" "thanks, merging tomorrow" \
-        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
+        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
     [ "$status" -eq 0 ]
     [ "$(published_conclusion)" = "success" ]
 }
@@ -220,7 +227,7 @@ ONE_OPEN_THREAD='{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCo
     # it records was of different code. A push must invalidate a clean verdict.
     export HISTORY_COMMENTS='[{"user":{"login":"coderabbitai[bot]","type":"Bot"},"created_at":"2025-12-01T00:00:00Z","body":"Full review finished."}]'
     run_step "issue_comment" "guilhermegor" "ping" \
-        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
+        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
     [ "$status" -eq 0 ]
     [ "$(published_conclusion)" = "failure" ]
     [[ "$output" == *"no reviewer has reported"* ]]
@@ -274,7 +281,7 @@ $LADDER_BODY"
 @test "ladder marker is honoured in a 60 KB body (no broken-pipe kill)" {
     long_body="Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)"$'\n'"$(printf '%*s' 60000 '')"
     run_step "issue_comment" "guilhermegor" "$long_body" \
-        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}' \
+        0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}' \
         "OWNER"
     [ "$status" -eq 0 ]
     [ "$(published_conclusion)" = "success" ]
@@ -303,6 +310,89 @@ $LADDER_BODY"
         0 "$ZERO_THREADS"
     [ "$status" -eq 0 ]
     [ "$(published_conclusion)" = "failure" ]
+}
+
+# --- dotfiles-dev#502: the gate's scope filter must never diverge from the ---
+# --- trigger's, or a PR becomes REQUIRED to pass a check the trigger never --
+# --- asks a reviewer to produce (measured on #493: asks=0 for 8h05m). ------
+#
+# Rather than duplicate the two hand-kept path lists a third time here (a
+# third copy that could itself drift), both sides are read from their own
+# workflow file: the trigger's real `on.pull_request.paths` glob list, and
+# the gate's real runtime regex, pulled out of the extracted step script
+# with a plain grep (no re-parsing of the shell). A shared set of candidate
+# paths is then run through both, and any path where they disagree fails
+# the test.
+
+trigger_would_fire() {
+    local path="$1"
+    python3 -c "
+import fnmatch, sys, yaml
+with open('$TRIGGER_WORKFLOW') as f:
+    doc = yaml.safe_load(f)
+# PyYAML 1.1 parses the bare 'on:' key as the boolean True, not the string
+# 'on' — a well-known GitHub Actions/PyYAML gotcha, not a fixture bug.
+trigger_block = doc.get('on', doc.get(True))
+patterns = trigger_block['pull_request']['paths']
+path = '$path'
+hit = any(fnmatch.fnmatchcase(path, p.replace('**', '*')) for p in patterns)
+sys.exit(0 if hit else 1)
+"
+}
+
+gate_requires() {
+    local path="$1"
+    local gate_regex
+    gate_regex="$(grep -oE "grep -qE '[^']+'" "$SCRIPT" | head -n1 | sed -E "s/^grep -qE '//; s/'\$//")"
+    printf '%s\n' "$path" | grep -qE "$gate_regex"
+}
+
+@test "the gate's scope regex agrees with the trigger's paths: filter on every candidate path" {
+    # One entry per interesting case: inside/outside each declared pattern,
+    # plus the exact shape of the bug (a same-named file OUTSIDE the scoped
+    # directory, which must select neither filter after the #502 fix).
+    candidates=(
+        "ai_clients/claude/hooks/foo.sh"
+        "ai_clients/claude/hooks/lib/bar.sh"
+        "ai_clients/claude/settings.json"
+        ".vscode/settings.json"
+        "some/nested/dir/settings.json"
+        "settings.json"
+        "README.md"
+        "ai_clients/claude/hooks_lookalike/settings.json"
+    )
+    for path in "${candidates[@]}"; do
+        if trigger_would_fire "$path"; then trig=1; else trig=0; fi
+        if gate_requires "$path"; then gate=1; else gate=0; fi
+        [ "$trig" -eq "$gate" ] || {
+            echo "divergence on '$path': trigger=$trig gate=$gate"
+            return 1
+        }
+    done
+}
+
+@test "a PR touching only .vscode/settings.json is no longer required (the #502 bug)" {
+    CHECK_RUN_OUT="$BATS_TEST_TMPDIR/check-run.json"
+    : > "$CHECK_RUN_OUT"
+    run env GH_TOKEN=x OWNER=o REPO=r PR_NUMBER=5 EVENT_NAME=issue_comment \
+        COMMENT_AUTHOR=x COMMENT_BODY=x REPO_ROOT="$REPO_ROOT" SCRIPT="$SCRIPT" \
+        CHECK_RUN_OUT="$CHECK_RUN_OUT" \
+        bash -c '
+            cd "$REPO_ROOT" || exit 1
+            gh() {
+                case "$*" in
+                    *check-runs*)     cat > "$CHECK_RUN_OUT" ;;
+                    *"/pulls/"*)      echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" ;;
+                    *"--json files"*) printf ".vscode/extensions.txt\n.vscode/settings.json\ntests/x.bats\n" ;;
+                    *) return 1 ;;
+                esac
+            }
+            export -f gh
+            bash "$SCRIPT"
+        '
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.conclusion' < "$CHECK_RUN_OUT")" = "success" ]
+    [[ "$output" == *"gate not required"* ]]
 }
 
 @test "no check suite on the head means no trusted clock, so no marker credit" {

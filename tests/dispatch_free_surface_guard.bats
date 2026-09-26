@@ -92,6 +92,58 @@ transcript_dev_loop_agent_resolved() {
     printf '%s\n' "$f"
 }
 
+# transcript_slash_dev_loop_agent_resolved — real shape (dotfiles-dev#404), not a Skill
+# tool_use: a `/dev-loop` slash command lands as a plain-string user message. Verified against
+# an actual ~/.claude/projects/*.jsonl record.
+transcript_slash_dev_loop_agent_resolved() {
+    local f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"user","message":{"role":"user","content":"<command-message>dev-loop</command-message>\n<command-name>/dev-loop</command-name>"}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":"done"}]}}'
+    } >"$f"
+    printf '%s\n' "$f"
+}
+
+# transcript_dev_loop_background_agent_working — a background Agent dispatch whose immediate
+# tool_result is only the launch acknowledgement (verified verbatim off a real transcript),
+# with no later <task-notification> for its tool_use id: still working, not resolved.
+transcript_dev_loop_background_agent_working() {
+    local f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"bg-agent"}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":[{"type":"text","text":"Async agent launched successfully. agentId: abc123"}]}]}}'
+    } >"$f"
+    printf '%s\n' "$f"
+}
+
+# transcript_dev_loop_background_agent_completed — same launch, but a later <task-notification>
+# for the same tool_use id reports status=completed: genuinely resolved.
+transcript_dev_loop_background_agent_completed() {
+    local f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"bg-agent"}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":[{"type":"text","text":"Async agent launched successfully. agentId: abc123"}]}]}}'
+        echo '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>t1</task-id>\n<tool-use-id>agent1</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>"}'
+    } >"$f"
+    printf '%s\n' "$f"
+}
+
+# transcript_dev_loop_background_agent_failed — the RESCUE case: the notification says
+# status=failed (a quota kill). Not "running", but also not a plain resolved dispatch.
+transcript_dev_loop_background_agent_failed() {
+    local f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"bg-agent"}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":[{"type":"text","text":"Async agent launched successfully. agentId: abc123"}]}]}}'
+        echo '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>t1</task-id>\n<tool-use-id>agent1</tool-use-id>\n<status>failed</status>\n<summary>quota</summary>\n</task-notification>"}'
+    } >"$f"
+    printf '%s\n' "$f"
+}
+
 # --- fail-open prerequisites ---------------------------------------------------------------
 
 @test "exits 0 when stop_hook_active is true (one nudge per turn)" {
@@ -166,6 +218,65 @@ transcript_dev_loop_agent_resolved() {
 
     run run_guard "$t"
     [ "$status" -eq 2 ]
+    [[ "$output" == *"#42"* ]]
+}
+
+# --- dotfiles-dev#404: the guard was blind to /dev-loop and to background agents ------------
+
+# THE DEFECT (half 1): dev_loop_invoked only ever matched a Skill tool_use. A real /dev-loop
+# slash-command invocation (or a CronCreate replay of one) carries no Skill tool_use at all —
+# it is a plain-string user message — so the pre-fix guard read this session as "never ran
+# dev-loop" and exited 0 without ever checking the free surface. Reverting the dev_loop_invoked
+# fix (dropping the second jq check) turns this test red — that IS the mutation check.
+@test "blocks (exit 2) on a /dev-loop slash-command invocation, not just a Skill tool_use" {
+    stub_gh '42'
+    t="$(transcript_slash_dev_loop_agent_resolved)"
+    run run_guard "$t"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#42"* ]]
+    [[ "$output" == *"do not stop here without dispatching"* ]]
+}
+
+@test "recognises the fully-qualified s:dev-loop Skill form too" {
+    stub_gh '42'
+    local t="$TEST_TMP/fq.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"s:dev-loop"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":"done"}]}}'
+    } >"$t"
+    run run_guard "$t"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#42"* ]]
+}
+
+# THE DEFECT (half 2): a background Agent's own tool_result is only the launch acknowledgement
+# ("Async agent launched successfully..."), delivered the instant it starts, not when it
+# finishes. The pre-fix subagents_running treated ANY tool_result as "resolved", so a genuinely
+# still-working background agent read as idle and the guard blocked on top of live work.
+@test "does not block while a background agent's own launch ack is its only tool_result" {
+    stub_gh '42'
+    t="$(transcript_dev_loop_background_agent_working)"
+    run run_guard "$t"
+    [ "$status" -eq 0 ]
+}
+
+@test "a completed <task-notification> resolves a background agent — guard blocks on free surface" {
+    stub_gh '42'
+    t="$(transcript_dev_loop_background_agent_completed)"
+    run run_guard "$t"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#42"* ]]
+}
+
+@test "a failed <task-notification> is the RESCUE case: not running, message says resume it" {
+    stub_gh '42'
+    t="$(transcript_dev_loop_background_agent_failed)"
+    run run_guard "$t"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE case"* ]]
+    [[ "$output" == *"Resume it"* ]]
+    [[ "$output" == *"bg-agent"* ]]
     [[ "$output" == *"#42"* ]]
 }
 

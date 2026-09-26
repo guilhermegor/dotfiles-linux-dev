@@ -87,7 +87,7 @@ issue_json() {
     printf '{"number": %s, "body": "%s"}' "$number" "$body"
 }
 
-# stub_gh ISSUES_JSON [HELD_FILE] [CLAIMED_ISSUE] [FAIL_BRANCH] [FROZEN_PR_FILE]
+# stub_gh ISSUES_JSON [HELD_FILE] [CLAIMED_ISSUE] [FAIL_BRANCH] [FROZEN_PR_FILE] [MENTION_PRS_JSON]
 # ISSUES_JSON is the full `gh issue list --json number,body` array. HELD_FILE, if given, is the
 # one file the "feature" branch's compare reports as held (gate_free_surface's OWN held-paths
 # computation — unused by the planner's classification since #433 finding 1, still exercised
@@ -95,9 +95,13 @@ issue_json() {
 # supplies). CLAIMED_ISSUE, if given, is the one issue number closingIssuesReferences reports as
 # already claimed. FAIL_BRANCH=1 makes the default-branch lookup fail, exercising
 # gate_free_surface's own fail-closed path. FROZEN_PR_FILE, if given, is a file an OPEN PR (no
-# live agent behind it — no matching worktree) touches, for finding 1's own test.
+# live agent behind it — no matching worktree) touches, for finding 1's own test. MENTION_PRS_JSON,
+# if given, is the full `gh pr list --json number,title,body,closingIssuesReferences` array the
+# planner's OWN mention-without-closing read (dotfiles-dev#413) returns — default `[]` (no PRs
+# mention anything).
 stub_gh() {
     local issues_json="$1" held="${2:-}" claimed="${3:-}" fail="${4:-0}" frozen="${5:-}"
+    local mention_prs="${6:-[]}"
     local claimed_nodes="[]"
     [ -n "$claimed" ] && claimed_nodes="[{\"closingIssuesReferences\":{\"nodes\":[{\"number\":$claimed}]}}]"
     local pr_list='[]'
@@ -126,6 +130,11 @@ JSON
     echo main
     ;;
 "pr list --repo acme/widgets --state open --json number,headRefName --limit 200") echo '$pr_list' ;;
+"pr list --repo acme/widgets --state open --json number,title,body,closingIssuesReferences --limit 200")
+    cat <<'JSON'
+$mention_prs
+JSON
+    ;;
 "pr view 99 --repo acme/widgets --json files --jq .files[].path") echo "$frozen" ;;
 "api repos/acme/widgets/branches --paginate --jq .[].name") printf 'main\nfeature\n' ;;
 "api repos/acme/widgets/compare/main...feature --jq .files[]?.filename") echo "$held" ;;
@@ -291,6 +300,89 @@ field() {
     [ "$(field '.dispatchable | length')" -eq 2 ]
     [ "$(field '[.dispatchable[].issue] | sort | join(",")')" = "30,31" ]
     [ "$(field '.excluded[0].issue')" = "32" ]
+}
+
+# --- mentioned-without-closing: a PR naming an issue but not closing it (dotfiles-dev#413) ----
+
+@test "an issue named by an open PR without a closing keyword is excluded, not offered" {
+    stub_gh "[$(issue_json 361 free/a.sh)]" "" "" 0 "" \
+        '[{"number":514,"title":"stacked follow-up","body":"relates to #361 five times, see #361","closingIssuesReferences":[]}]'
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [ "$(field '.excluded[0].issue')" = "361" ]
+    [[ "$(field '.excluded[0].reason')" == *"PR #514"* ]]
+    [[ "$(field '.excluded[0].reason')" == *"closing keyword"* ]]
+}
+
+@test "an issue an open PR actually closes is unaffected by the mention check" {
+    stub_gh "[$(issue_json 40 free/a.sh)]" "" "" 0 "" \
+        '[{"number":41,"title":"fix","body":"Closes #40","closingIssuesReferences":[{"number":40}]}]'
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable[0].issue')" = "40" ]
+    [ "$(field '.excluded | length')" -eq 0 ]
+}
+
+@test "a PR mentioning a DIFFERENT issue number never excludes this one (#12 vs #123)" {
+    stub_gh "[$(issue_json 12 free/a.sh)]" "" "" 0 "" \
+        '[{"number":50,"title":"unrelated","body":"see #123 for context","closingIssuesReferences":[]}]'
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable[0].issue')" = "12" ]
+    [ "$(field '.excluded | length')" -eq 0 ]
+}
+
+# --- PR #506 review: same-repo qualified references, and a truncated PR read fails loud -------
+
+@test "a same-repository qualified reference (owner/repo#N) excludes the same as bare #N" {
+    stub_gh "[$(issue_json 361 free/a.sh)]" "" "" 0 "" \
+        '[{"number":514,"title":"stacked follow-up","body":"see acme/widgets#361 for context","closingIssuesReferences":[]}]'
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [ "$(field '.excluded[0].issue')" = "361" ]
+    [[ "$(field '.excluded[0].reason')" == *"PR #514"* ]]
+}
+
+@test "a DIFFERENT repository's qualified reference never excludes this issue" {
+    stub_gh "[$(issue_json 361 free/a.sh)]" "" "" 0 "" \
+        '[{"number":514,"title":"unrelated","body":"see other/repo#361 for context","closingIssuesReferences":[]}]'
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable[0].issue')" = "361" ]
+    [ "$(field '.excluded | length')" -eq 0 ]
+}
+
+@test "a same-repository qualified reference matches case-insensitively" {
+    stub_gh "[$(issue_json 361 free/a.sh)]" "" "" 0 "" \
+        '[{"number":514,"title":"stacked follow-up","body":"see ACME/Widgets#361 for context","closingIssuesReferences":[]}]'
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [ "$(field '.excluded[0].issue')" = "361" ]
+}
+
+@test "a repo slug that is merely a suffix of a longer word does not match (near-miss)" {
+    stub_gh "[$(issue_json 361 free/a.sh)]" "" "" 0 "" \
+        '[{"number":514,"title":"noise","body":"notacme/widgets#361 should not count","closingIssuesReferences":[]}]'
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable[0].issue')" = "361" ]
+    [ "$(field '.excluded | length')" -eq 0 ]
+}
+
+@test "an open PR list at the 200-PR cap refuses to print a plan, never a partial one" {
+    local prs="[" i
+    for ((i = 1; i <= 200; i++)); do
+        [ "$i" -gt 1 ] && prs+=","
+        prs+="{\"number\":$i,\"title\":\"\",\"body\":\"\",\"closingIssuesReferences\":[]}"
+    done
+    prs+="]"
+    stub_gh "[$(issue_json 1)]" "" "" 0 "" "$prs"
+    run_planner
+    [ "$status" -ne 0 ]
+    [[ "$output" != *'"dispatchable"'* ]]
 }
 
 # --- fail-closed half of the gate contract (dotfiles-dev#398) --------------------------------

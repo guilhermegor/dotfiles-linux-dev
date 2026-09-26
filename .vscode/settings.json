@@ -172,7 +172,8 @@
   // FILE HANDLING
   // =============================================
   "files.associations": {
-    "*.ipynb": "jupyter"
+    "*.ipynb": "jupyter",
+    ".gitlint": "ini"
   },
   "files.exclude": {
     "**/.git": false,

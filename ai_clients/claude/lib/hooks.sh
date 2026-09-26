@@ -12,6 +12,28 @@
 
 HOOKS_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" && pwd)"
 
+# A verdict cached by a hook is only valid for the logic that computed it. Deploying a new
+# version of that hook without clearing its cache lets the OLD verdict keep being replayed
+# until its TTL expires (dotfiles-dev#504) — measured: PR #498 fixed open_review_threads_nudge.sh
+# at 15:28:34Z, but a verdict cached 40s earlier by the pre-fix logic was still replayable
+# afterwards. Keying each cache entry by a hash of its producing script would make this
+# automatic, but that key has to live inside the hook that WRITES the cache
+# (open_review_threads_nudge.sh) — out of scope here (held by PR #497). Until a second hook
+# grows a cache, a short "cache dir -> producing hook" list is simpler than a hashing layer.
+HOOK_CACHE_DIRS=(
+    "open-threads-nudge"  # written by open_review_threads_nudge.sh
+)
+
+invalidate_hook_caches() {
+    local name
+    for name in "${HOOK_CACHE_DIRS[@]}"; do
+        if [[ -d "$CLAUDE_DIR/$name" ]]; then
+            rm -rf "${CLAUDE_DIR:?}/${name:?}"
+            print_status "info" "Cleared stale cache: $CLAUDE_DIR/$name"
+        fi
+    done
+}
+
 copy_hook_file() {
     local src="$HOOKS_SRC_DIR/$1"
     local dest="$2/$1"
@@ -71,4 +93,6 @@ install_hooks() {
     copy_hook_file "pr_self_assign.sh" "$hooks_dir"
     copy_hook_file "rtk_worktree_passthrough.sh" "$hooks_dir"
     copy_hook_file "stale_local_ref_guard.sh" "$hooks_dir"
+
+    invalidate_hook_caches
 }

@@ -3,7 +3,7 @@
 [![Project Status: Active – The project has reached a stable, usable state and is being actively developed.](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
 ![Shell Version](https://img.shields.io/badge/shell-Bash%20%7C%20Zsh-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Open Issues](https://img.shields.io/github/issues/guilhermegor/dotfiles-dev)
+![Open Issues](https://img.shields.io/github/issues/guilhermegor/dotfiles-linux-dev)
 ![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-darkgreen.svg)
 
 **dotfiles-dev** is a comprehensive initialization and configuration toolkit for Linux distributions. It provides automated setup scripts for system configuration, driver installation, storage management, and development environment setup.
@@ -73,7 +73,7 @@ sudo apt install dkms git -y
 
 mkdir ~/github
 cd ~/github
-git clone https://github.com/guilhermegor/dotfiles-dev.git
+git clone https://github.com/guilhermegor/dotfiles-linux-dev.git
 cd dotfiles-dev
 
 make run
@@ -160,7 +160,7 @@ not restored — a backed-up value may already be expired):
 
 **Option 1: Step-by-Step with Makefile**
 ```bash
-git clone https://github.com/guilhermegor/dotfiles-dev.git
+git clone https://github.com/guilhermegor/dotfiles-linux-dev.git
 cd dotfiles-dev
 
 # Make all scripts executable
@@ -295,7 +295,7 @@ dotfiles-dev/
 
 1. **Clone and Initialize (One Command)**
 ```bash
-   git clone https://github.com/guilhermegor/dotfiles-dev.git
+   git clone https://github.com/guilhermegor/dotfiles-linux-dev.git
    cd dotfiles-dev
    make run
 ```
@@ -439,5 +439,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🔗 Useful Links
 
-- [GitHub Repository](https://github.com/guilhermegor/dotfiles-dev)
-- [Issue Tracker](https://github.com/guilhermegor/dotfiles-dev/issues)
+- [GitHub Repository](https://github.com/guilhermegor/dotfiles-linux-dev)
+- [Issue Tracker](https://github.com/guilhermegor/dotfiles-linux-dev/issues)

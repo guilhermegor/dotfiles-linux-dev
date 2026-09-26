@@ -40,42 +40,143 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HOOK_DIR/lib/free_surface.sh"
 
 # dev_loop_invoked TRANSCRIPT
-# Pure data: did this session's transcript ever call the Skill tool with
-# skill "dev-loop"? A session that never ran the loop is not this hook's
-# concern — never fire on an unrelated session.
-# Parsed with jq, never grepped: key-value spacing is not part of the JSONL
-# contract, so a literal '"skill":"dev-loop"' match silently misses a record
-# serialized as '"skill": "dev-loop"' and the hook never fires.
+# Pure data: did this session's transcript ever run s:dev-loop? Three shapes count, all
+# measured off real transcripts (dotfiles-dev#404) — a session that never ran the loop in
+# ANY of them is not this hook's concern, and must never fire:
+#   1. a Skill tool_use, bare ("dev-loop") — the original, and still correct for a direct
+#      Skill-tool invocation.
+#   2. a Skill tool_use, fully-qualified ("s:dev-loop") — some invocation paths serialise the
+#      namespaced form; nothing here is measured to prefer one over the other, so both count.
+#   3. a `/dev-loop` slash-command invocation — typed directly, or replayed from a CronCreate
+#      schedule (the step-0 cron this guard exists to make routine). Both land as a plain
+#      user-role message carrying the literal `<command-name>/dev-loop</command-name>`
+#      marker; message.content is ordinarily a bare string for this shape (never an array of
+#      tool_use blocks), which is exactly why shape 1's `.message.content[]?` walk sees zero
+#      of these — `[]?` over a string yields nothing, not an error, so the miss was silent.
+# Parsed with jq, never grepped for the whole object: key-value spacing is not part of the
+# JSONL contract, so a literal '"skill":"dev-loop"' match silently misses a record serialized
+# as '"skill": "dev-loop"'.
 dev_loop_invoked() {
 	local transcript="$1"
 	[ -r "$transcript" ] || return 1
-	jq -e 'select(.message.content != null)
+
+	if jq -e 'select(.message.content != null)
 		| .message.content[]?
 		| select(.type == "tool_use"
 			and .name == "Skill"
-			and .input.skill == "dev-loop")' \
+			and (.input.skill == "dev-loop" or .input.skill == "s:dev-loop"))' \
+		"$transcript" >/dev/null 2>&1
+	then
+		return 0
+	fi
+
+	# `select(contains(...))` at the tail, never a bare `contains(...)`: `jq -e`'s exit status
+	# reflects only the LAST value this program emits across the whole JSONL stream, and every
+	# other user-role message in a real transcript (e.g. an Agent's tool_result, which is also
+	# `.type == "user"`) reaches this same pipeline and would emit an explicit `false` — which,
+	# landing after a real match, would flip -e's verdict back to failure. `select` instead
+	# emits NOTHING for a non-matching line, the same "backtrack, don't emit false" contract
+	# shape 1's chain of `select`s already relies on — so only a real match can be the last
+	# (or only) value on the stream (dotfiles-dev#404, caught by this fix's own repro).
+	jq -e 'select(.type == "user" and .message.content != null)
+		| .message.content
+		| if type == "string" then .
+		  else ([.[]? | select(.type == "text") | .text // ""] | join("\n"))
+		  end
+		| select(contains("<command-name>/dev-loop</command-name>"))' \
 		"$transcript" >/dev/null 2>&1
 }
 
+# _agent_result_text TRANSCRIPT ID
+# The literal text of the tool_result matching a dispatched Agent's tool_use id, or empty if
+# none has landed yet. content is normalised the same way for both shapes seen in real
+# transcripts: a plain string, or an array of blocks with a .text field.
+_agent_result_text() {
+	local transcript="$1" id="$2"
+	jq -r --arg id "$id" 'select(.message.content != null)
+		| .message.content[]?
+		| select(.type == "tool_result" and .tool_use_id == $id)
+		| .content
+		| if type == "string" then .
+		  else ([.[]? | .text // ""] | join("\n"))
+		  end' "$transcript" 2>/dev/null
+}
+
+# _task_notification_status TRANSCRIPT ID
+# The last completed|failed <status> of a <task-notification> naming this tool-use-id,
+# scanned across every JSON record in the transcript regardless of which field carries the
+# text — measured on real transcripts, the identical <task-notification> blob shows up under
+# `.content` (a `queue-operation` record, both on enqueue AND on removal), under `.prompt`
+# (an `attachment` record), and eventually inside an ordinary delivered message. `.. | strings`
+# walks every string leaf of the record instead of assuming any one of those field names, so a
+# harness change to which shape delivers it can't silently blind this the way shape 3 above
+# blinded dev_loop_invoked.
+_task_notification_status() {
+	local transcript="$1" id="$2"
+	jq -r --arg needle "<tool-use-id>${id}</tool-use-id>" '
+		.. | strings
+		| select(contains($needle))
+		| capture("<status>(?<s>completed|failed)</status>").s
+	' "$transcript" 2>/dev/null | tail -1
+}
+
 # subagents_running TRANSCRIPT
-# An Agent tool_use with no matching tool_result anywhere later in the
-# transcript is still in flight. ponytail: this is a proxy for "is a
-# subagent running" (no live process list is readable from a bash hook),
-# so it reads "dispatched, no result recorded yet" as running — including
-# the one turn between dispatch and the harness appending its result.
-# Upgrade path: a real running-agent registry, if the harness ever exposes
-# one to hooks.
+# Also sets FAILED_BACKGROUND_AGENTS (newline-separated names/descriptions, possibly empty) —
+# always, even when this returns "still running" for a different dispatch, so main() never has
+# to re-walk the transcript to find the RESCUE case.
+#
+# A dispatched Agent tool_use with NO tool_result yet is still in flight — ponytail: this is a
+# proxy for "is a subagent running" (no live process list is readable from a bash hook), so
+# silence reads as running, including the one turn between dispatch and the harness appending
+# a result. Upgrade path: a real running-agent registry, if the harness ever exposes one.
+#
+# A tool_result IS present but is a background dispatch's own launch acknowledgement ("Async
+# agent launched successfully...", measured verbatim off a real transcript, dotfiles-dev#404) —
+# that text is delivered synchronously on launch, before the agent has done any work, so
+# treating its mere presence as "resolved" is exactly the defect this issue reports: every
+# background dispatch reads as finished the instant it starts. Only a LATER <task-notification>
+# for the same tool_use id settles it: status=completed means done; no notification yet means
+# still working, same as no tool_result at all; status=failed means neither — a quota kill is
+# not "running", it is the RESCUE case (resume it, don't dispatch a duplicate), so it is
+# recorded in FAILED_BACKGROUND_AGENTS and does NOT count as still-running.
+#
+# Anything else (a synchronous call's real result already landed) is resolved, plainly.
 subagents_running() {
 	local transcript="$1"
+	FAILED_BACKGROUND_AGENTS=""
 	[ -r "$transcript" ] || return 1
-	local dispatched resolved id
+
+	local dispatched id result status desc still_running=1
 	dispatched="$(jq -r 'select(.message.content != null) | .message.content[]? | select(.type=="tool_use" and .name=="Agent") | .id' "$transcript" 2>/dev/null)"
 	[ -n "$dispatched" ] || return 1
-	resolved="$(jq -r 'select(.message.content != null) | .message.content[]? | select(.type=="tool_result") | .tool_use_id' "$transcript" 2>/dev/null)"
+
 	while read -r id; do
 		[ -n "$id" ] || continue
-		printf '%s\n' "$resolved" | grep -qxF "$id" || return 0
+		result="$(_agent_result_text "$transcript" "$id")"
+		if [ -z "$result" ]; then
+			still_running=0
+			continue
+		fi
+		case "$result" in
+		*"Async agent launched successfully"*)
+			status="$(_task_notification_status "$transcript" "$id")"
+			case "$status" in
+			completed) ;;
+			failed)
+				desc="$(jq -r --arg id "$id" 'select(.message.content != null)
+					| .message.content[]?
+					| select(.type == "tool_use" and .id == $id)
+					| (.input.name // .input.description // $id)' "$transcript" 2>/dev/null | head -1)"
+				FAILED_BACKGROUND_AGENTS="$(printf '%s\n%s' "$FAILED_BACKGROUND_AGENTS" "$desc")"
+				;;
+			*) still_running=0 ;;
+			esac
+			;;
+		esac
 	done <<<"$dispatched"
+
+	FAILED_BACKGROUND_AGENTS="$(printf '%s\n' "$FAILED_BACKGROUND_AGENTS" | sed '/^$/d')"
+	[ "$still_running" -eq 0 ] && return 0
 	return 1
 }
 
@@ -140,6 +241,13 @@ main() {
 	[ -n "$FREE_UNCLAIMED_ISSUES" ] || exit 0
 
 	{
+		if [ -n "$FAILED_BACKGROUND_AGENTS" ]; then
+			echo "A background agent dispatched earlier this session FAILED (quota kill or"
+			echo "crash) instead of finishing — that is the RESCUE case, not free capacity."
+			echo "Resume it, don't dispatch a duplicate:"
+			printf '%s\n' "$FAILED_BACKGROUND_AGENTS" | sed 's/^/  /'
+			echo
+		fi
 		echo "Free dispatch surface is non-empty and nothing of this session's own is"
 		echo "currently working it — do not stop here without dispatching."
 		echo

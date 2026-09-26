@@ -68,6 +68,15 @@ def classify(list_comments: list) -> str:
 	if not list_bot:
 		return "FREE|no-notice-on-this-page"
 
+	# ⚠️ GitHub's REST comment listing is OLDEST-first, but the two `next()` calls below
+	# pick "the" limit/done notice by taking the FIRST match in list order — that is only
+	# "the newest one" if the caller already reversed the page. Sort defensively here
+	# instead of trusting every call site to remember that: a silently wrong "newest" reads
+	# as a right answer (dotfiles-dev#473). Measured impact: mixing up an older CHAT-quota
+	# notice for a newer REVIEW-limit notice inverts the verdict, since the two mean
+	# opposite things for the slot (CHAT = a different quota, untouched review slot).
+	list_bot = sorted(list_bot, key=lambda c: c.get("created_at") or "", reverse=True)
+
 	# ⚠️ Only two notice kinds carry slot state. Everything else the reviewer posts —
 	# "this repository does not receive automatic reviews because it has fewer than 10
 	# stars", trigger acknowledgements, summaries — is noise, and taking the newest

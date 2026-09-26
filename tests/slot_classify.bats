@@ -7,13 +7,16 @@
 # frozen into a fixture file: three of the six cases turn on "is the stated wait still running",
 # which a fixed timestamp answers correctly only on the day it was written.
 #
-# The six cases are the ones that found real defects (dotfiles-dev#433):
+# The cases below are the ones that found real defects (dotfiles-dev#433, #473):
 #   1. a live-shaped page where an unrelated notice is NEWEST and masks a running limit;
 #   2. the wrapper/sibling pair, where the newer of the two carries no stated wait;
 #   3. a stated wait that has already expired;
 #   4. a completed review posted after the last limit;
 #   5. a forge 403 body — parses as JSON, is not a comment page;
-#   6. garbage that is not JSON at all.
+#   6. garbage that is not JSON at all;
+#   7. the SAME two-notice shape as case 1's chat/review split, fed in GitHub's real,
+#      oldest-first REST order — pins dotfiles-dev#473 (an older CHAT-quota notice read as
+#      "newest" masks a newer, still-running REVIEW limit).
 # ⚠️ Cases 5 and 6 must print UNKNOWN. UNKNOWN must never read as free.
 #
 # Run locally: bats tests/slot_classify.bats
@@ -87,6 +90,20 @@ JSON"
 JSON"
     [ "$status" -eq 0 ]
     [ "$output" = "FREE|a-review-completed-after-the-last-limit" ]
+}
+
+@test "oldest-first REST order does not let an older CHAT notice mask a newer REVIEW limit" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY'
+[
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 10)\",
+   \"body\": \"You have exceeded the rate limit for chat messages. Please wait 5 minutes before sending another message.\"},
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 1)\",
+   \"body\": \"Rate limit exceeded. Reviews will be available in 30 minutes.\"}
+]
+JSON"
+    [ "$status" -eq 0 ]
+    [ "$output" = "BUSY|until-$(reset_hhmm 1 30)Z" ]
+    [[ "$output" != "FREE|chat-quota-only" ]]
 }
 
 @test "a forge 403 body is UNKNOWN, never free" {

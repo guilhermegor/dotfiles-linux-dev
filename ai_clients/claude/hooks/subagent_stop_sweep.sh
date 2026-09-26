@@ -162,11 +162,18 @@ sweep_review_gate() {
 	while read -r n; do
 		[ -n "$n" ] || continue
 		gate_pr_thread_state "$owner" "$name" "$n" "$roster_file"
+		# ⚠️ The `*)` arm is load-bearing, not defensive padding. This `case` had no catch-all,
+		# so a status the shared gate gained later printed NOTHING and the PR disappeared from
+		# the board report entirely — a silent drop, indistinguishable from "no open PRs".
+		# open_review_threads_nudge.sh predicted this failure in prose before it happened; the
+		# arm below is what makes the next added status loud instead of invisible.
 		case "$GATE_STATUS" in
 		clean) echo "    #$n clean" ;;
 		problems) echo "    #$n NEEDS REPLY/RESOLVE: $(printf '%s' "$GATE_DETAIL" | tr '\n' ';')" ;;
 		running) echo "    #$n reviewer checks running — snapshot, not a verdict" ;;
+		unreviewed) echo "    #$n NO REVIEWER HAS REPORTED on this head" ;;
 		unreadable) echo "    #$n unreadable: $GATE_DETAIL" ;;
+		*) echo "    #$n UNKNOWN gate status '$GATE_STATUS' — treat as unverified: $GATE_DETAIL" ;;
 		esac
 	done <<<"$prs"
 }
