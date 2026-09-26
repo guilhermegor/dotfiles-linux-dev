@@ -1,0 +1,312 @@
+#!/usr/bin/env bats
+#
+# Unit tests for ai_clients/claude/hooks/review_fanout_guard.sh — the Stop hook that refuses
+# to end a dev-loop round which had open PRs needing a reviewer and started no review agent
+# (dotfiles-dev#480).
+#
+# Two properties are asserted, and the second is the one that keeps a guard alive:
+#
+#   1. it BLOCKS when there is work — dispatchable non-empty and no dispatch of this
+#      session's own unresolved;
+#   2. it FAILS OPEN on everything it cannot resolve — no transcript, a session that never
+#      ran the loop, a cwd that is not a repo. A guard that blocks unrelated sessions gets
+#      switched off, and a switched-off guard is worth less than the prose it replaced.
+#
+# The one deliberate exception to (2) is BLINDNESS ABOUT ITS OWN INPUT: an unreadable plan, a
+# missing planner, or a reviewer rung whose status is `unknown` all block with their own
+# distinct wording. That asymmetry is the #396/#433 lesson — a gate that fails closed and is
+# then read as routine silence is a disabled feature nobody can see.
+#
+# The planner is stubbed through REVIEW_FANOUT_PLANNER: this suite tests the hook's reading of
+# the contract, not the planner's own answers (tests/review_fanout_plan.bats owns those).
+#
+# Run locally: bats tests/review_fanout_guard.bats
+
+setup() {
+    GUARD="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/review_fanout_guard.sh"
+    TEST_TMP="$(mktemp -d)"
+    cd "$TEST_TMP" || return 1
+    /usr/bin/git init -q -b main .
+    /usr/bin/git config user.email t@t
+    /usr/bin/git config user.name t
+    /usr/bin/git commit -q --allow-empty -m init
+
+    TRANSCRIPT="$TEST_TMP/transcript.jsonl"
+    : >"$TRANSCRIPT"
+    PLAN="$TEST_TMP/plan.json"
+
+    # A planner stub that prints whatever $PLAN holds. Real file, real python3 — the guard
+    # shells out, so a bats function would be invisible to the child.
+    REVIEW_FANOUT_PLANNER="$TEST_TMP/stub_planner.py"
+    cat >"$REVIEW_FANOUT_PLANNER" <<'STUB'
+import os
+import sys
+
+with open(os.environ["PLAN"], encoding="utf-8") as handle:
+    sys.stdout.write(handle.read())
+STUB
+    export REVIEW_FANOUT_PLANNER PLAN
+}
+
+teardown() {
+    cd /
+    rm -rf "$TEST_TMP"
+    unset REVIEW_FANOUT_PLANNER PLAN
+}
+
+# --- transcript fixtures -----------------------------------------------------------
+
+loop_invoked() {
+    printf '%s\n' \
+        '{"message":{"content":[{"type":"tool_use","name":"Skill","id":"s1","input":{"skill":"dev-loop"}}]}}' \
+        >>"$TRANSCRIPT"
+}
+
+loop_invoked_via_slash_command() {
+    printf '%s\n' \
+        '{"type":"user","message":{"content":"<command-name>/dev-loop</command-name>"}}' \
+        >>"$TRANSCRIPT"
+}
+
+# agent_dispatched ID — a dispatch with no tool_result yet, i.e. still in flight.
+agent_dispatched() {
+    printf '%s\n' \
+        "{\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Agent\",\"id\":\"$1\",\"input\":{\"name\":\"$1\"}}]}}" \
+        >>"$TRANSCRIPT"
+}
+
+agent_result() {
+    printf '%s\n' \
+        "{\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"$1\",\"content\":\"$2\"}]}}" \
+        >>"$TRANSCRIPT"
+}
+
+task_notification() {
+    printf '%s\n' \
+        "{\"content\":\"<task-notification><tool-use-id>$1</tool-use-id><status>$2</status></task-notification>\"}" \
+        >>"$TRANSCRIPT"
+}
+
+plan_with_work() {
+    cat >"$PLAN" <<'EOF'
+{"rung":{"status":"ok","runtime":"qwen","model":"qwen3-coder-plus","signal":"configured-default"},
+ "dispatchable":[{"pr":520,"head":"e1319925c49d","checks":{"failing":["yamllint"],"running":["bats (unit tests)"],"ambiguous":["Review threads answered"]}}],
+ "excluded":[{"pr":453,"reason":"already reviewed at the current head"}]}
+EOF
+}
+
+plan_all_excluded() {
+    cat >"$PLAN" <<'EOF'
+{"rung":{"status":"ok","runtime":"qwen","model":"qwen3-coder-plus","signal":"configured-default"},
+ "dispatchable":[],
+ "excluded":[{"pr":453,"reason":"already reviewed at the current head"},
+             {"pr":520,"reason":"merge conflict (mergeStateStatus DIRTY)"}]}
+EOF
+}
+
+# run_guard [STOP_HOOK_ACTIVE] — feeds the hook a Stop payload naming this repo.
+run_guard() {
+    local active="${1:-false}"
+    run bash "$GUARD" <<EOF
+{"cwd":"$TEST_TMP","transcript_path":"$TRANSCRIPT","stop_hook_active":$active,"session_id":"s"}
+EOF
+}
+
+# --- it blocks when there is work --------------------------------------------------
+
+@test "blocks a round with dispatchable PRs and no review agent" {
+    loop_invoked
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#520"* ]]
+    [[ "$output" == *"do not stop here without dispatching"* ]]
+}
+
+@test "the block message names the reason each excluded PR was excluded" {
+    loop_invoked
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#453  already reviewed at the current head"* ]]
+}
+
+@test "the block message keeps failing checks apart from still-running ones" {
+    # A running check reported as failed is the `conclusion != "SUCCESS"` bug leaking into
+    # the operator's view; the planner splits them and the message must preserve the split.
+    loop_invoked
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"failing: yamllint"* ]]
+    [[ "$output" == *"still running: bats (unit tests)"* ]]
+    [[ "$output" == *"ambiguous check name: Review threads answered"* ]]
+}
+
+@test "the block message states the scheduling/judgement boundary" {
+    # #480's hard boundary: determinism schedules the review, it never accepts a finding.
+    # The message an operator actually reads is where that has to be said.
+    loop_invoked
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"never accepts a finding for you"* ]]
+}
+
+@test "a /dev-loop slash command counts as running the loop" {
+    # Shape 3: content is a bare STRING, so the tool_use walk sees nothing and the miss is
+    # silent unless it is tested for.
+    loop_invoked_via_slash_command
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+}
+
+@test "reports a failed background agent as the RESCUE case, not free capacity" {
+    loop_invoked
+    agent_dispatched a1
+    agent_result a1 "Async agent launched successfully, id=a1"
+    task_notification a1 failed
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE case"* ]]
+    [[ "$output" == *"a1"* ]]
+}
+
+# --- it passes when the board is genuinely covered ---------------------------------
+
+@test "passes when every PR is excluded with its own named reason" {
+    loop_invoked
+    plan_all_excluded
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "passes while a dispatch of this session's own is still unresolved" {
+    loop_invoked
+    agent_dispatched a1
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a launch acknowledgement alone does not resolve a background dispatch" {
+    # The ack is delivered synchronously ON LAUNCH. Treating its presence as "resolved" makes
+    # every background dispatch read as finished the instant it starts (#404) — so with only
+    # an ack and no task-notification the dispatch is still in flight and the hook passes.
+    loop_invoked
+    agent_dispatched a1
+    agent_result a1 "Async agent launched successfully, id=a1"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a completed background dispatch no longer counts as running" {
+    loop_invoked
+    agent_dispatched a1
+    agent_result a1 "Async agent launched successfully, id=a1"
+    task_notification a1 completed
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+}
+
+# --- it fails open on what it cannot resolve ---------------------------------------
+
+@test "fails open when the session never ran the loop" {
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "fails open when a hook already caused this stop" {
+    loop_invoked
+    plan_with_work
+    run_guard true
+    [ "$status" -eq 0 ]
+}
+
+@test "fails open with no transcript path in the payload" {
+    plan_with_work
+    run bash "$GUARD" <<EOF
+{"cwd":"$TEST_TMP","stop_hook_active":false}
+EOF
+    [ "$status" -eq 0 ]
+}
+
+@test "fails open when the cwd is not a git work tree" {
+    loop_invoked
+    plan_with_work
+    local outside="$TEST_TMP/../not-a-repo-$$"
+    mkdir -p "$outside"
+    run bash "$GUARD" <<EOF
+{"cwd":"$outside","transcript_path":"$TRANSCRIPT","stop_hook_active":false}
+EOF
+    rm -rf "$outside"
+    [ "$status" -eq 0 ]
+}
+
+# --- but NEVER open about its own blindness ----------------------------------------
+
+@test "blocks on an unreadable plan rather than reading it as nothing to do" {
+    loop_invoked
+    printf 'not json at all\n' >"$PLAN"
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNREADABLE"* ]]
+}
+
+@test "blocks on a plan whose keys are present but malformed" {
+    # Both keys exist, the object formats to nothing, and a key-only check would exit 0 here
+    # as a false "no PR needs a reviewer".
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":null,"excluded":{}}' >"$PLAN"
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNREADABLE"* ]]
+}
+
+@test "blocks on an exclusion carrying no reason" {
+    # An exclusion with an empty reason IS the silent skip this hook exists to refuse.
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[{"pr":453,"reason":""}]}' >"$PLAN"
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNREADABLE"* ]]
+}
+
+@test "blocks when the reviewer rung status is unknown" {
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"unknown"},"dispatchable":[],"excluded":[{"pr":453,"reason":"reviewer rung UNKNOWN"}]}' >"$PLAN"
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"rung UNKNOWN"* ]]
+}
+
+@test "rung none passes — it is a measured answer, not blindness" {
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"none"},"dispatchable":[],"excluded":[{"pr":453,"reason":"no reviewer rung is assignable"}]}' >"$PLAN"
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "blocks on a rung status the hook has not been taught, naming the value" {
+    # The planner's contract could grow a value (gate_pr_thread_state grew `unreviewed` in
+    # #520). An unrecognised value must be loud, never fall through a missing else arm.
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"degraded"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"degraded"* ]]
+}
+
+@test "blocks when the planner is missing rather than passing quietly" {
+    loop_invoked
+    REVIEW_FANOUT_PLANNER="$TEST_TMP/absent.py"
+    export REVIEW_FANOUT_PLANNER
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"no review fan-out planner"* ]]
+}
