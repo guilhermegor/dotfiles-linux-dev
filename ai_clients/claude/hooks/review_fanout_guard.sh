@@ -40,12 +40,19 @@
 # override becomes a gate that cries wolf and gets switched off, which is this toolchain's own
 # recorded failure mode.
 #
-# ⚠️ `rung.status` = "unknown" BLOCKS, with its own wording. "none" does not. The two are
-# different claims and collapsing them is the #396 defect verbatim: "none" is a measured
-# answer (the #479 probe ran and neither qwen nor codex is assignable) and becomes every PR's
-# named exclusion reason, so nothing is hidden; "unknown" is blindness (the probe could not be
-# run, or timed out), and a guard that reports its own blindness as routine silence is exactly
-# what a fail-closed gate must not do.
+# ⚠️ `rung.status` has THREE outcomes, not two, because "no rung" and "the legitimate zero
+# case" are different claims:
+#   ok      — dispatch; block if anything is assignable and nothing was started.
+#   none    — the #479 probe ran and resolved neither qwen nor codex. ANNOUNCED ONCE per
+#             session, then quiet, and never blocking (see announce_no_rung). It is not the
+#             zero case: "every PR carries a reason" means the planner judged each PR, while
+#             "no rung" means the mechanism that produces those reasons was never available
+#             and nothing was judged at all. Passing silently would assert "nothing needed
+#             asking" when the honest statement is "I could not tell"; blocking would make it
+#             impossible to end a turn without signing into a reviewer runtime.
+#   unknown — blindness (the probe could not be run, or timed out). BLOCKS.
+# Collapsing any two of these is the #396 defect verbatim, and the same family as an empty
+# `conclusion` read as "failing" or a `case` with no `*)` arm dropping a status silently.
 #
 # ⚠️ N is capped by API BUDGET, not by reviewer quota: five concurrent agents drained both the
 # GitHub REST and GraphQL buckets (#445), and again at 09:49Z on 2026-09-23, blinding a thread
@@ -222,8 +229,59 @@ block_unreadable() {
 	exit 2
 }
 
+# announce_no_rung SESSION_ID
+# `rung.status: none` — the #479 probe RAN and resolved neither qwen nor codex.
+#
+# ⚠️ This is NOT the legitimate zero case, and reading it as one conflates two
+# different facts:
+#   "every PR carries its own named reason"  — the planner ran and JUDGED each PR.
+#                                              That legitimately passes.
+#   "no rung resolved"                       — the mechanism that would produce
+#                                              those reasons was never available.
+#                                              NOTHING was judged at all.
+# Collapsing the second into the first is the error this repo keeps paying for: a
+# filtered listing's `(empty)` read as "absent", an empty `conclusion` read as
+# "failing", a `case` with no `*)` arm dropping a status silently. An absent verdict
+# is UNKNOWN, never a value — a guard that passes here is asserting "nothing needed
+# asking" when the honest statement is "I could not tell".
+#
+# But it must not BLOCK either: nobody should be unable to end a turn because they
+# have not signed into qwen or codex. That is a gate crying wolf, and a re-ping every
+# cycle trains the operator to ignore the notification — worse than the idle slot it
+# was meant to fix.
+#
+# So: say it ONCE per session, do not block. Same shape, same reason, and
+# deliberately the same mechanism as round_dispatch_guard.sh's announce_no_planner —
+# a reader who found two near-identical "mechanism unavailable" conditions handled
+# two different ways would reasonably assume one of them is a bug.
+#
+# ⚠️ `exit 1`, NOT `exit 0`: a Stop hook blocks on 2 and surfaces stderr on any other
+# non-zero, while exit 0 discards it. Exit 0 would make this announcement invisible,
+# which is the silent pass this function exists to replace — the distinction that
+# makes "announce, don't block" expressible at all.
+announce_no_rung() {
+	local session_id="$1" marker
+	marker="${TMPDIR:-/tmp}/review_fanout_guard.${session_id:-nosession}.norung"
+	# Once per session: said out loud the first time, then quiet. A notice repeated
+	# every turn is noise, and noise is how a gate gets disabled.
+	[ -e "$marker" ] && exit 0
+	: >"$marker"
+	{
+		echo "review_fanout_guard: no fallback reviewer rung resolved (qwen/codex both"
+		echo "unavailable) — the reviewer slot was NOT evaluated this round; not blocking."
+		echo
+		echo "This is not the same as 'no PR needed a reviewer'. The #479 probe found no"
+		echo "assignable runtime, so no PR was judged at all — said out loud rather than"
+		echo "passed in silence, because an absent verdict is UNKNOWN, never a value."
+		echo
+		echo "Sign in to qwen or codex to restore step 4b's fan-out, or accept that this"
+		echo "round reviews nothing. Not repeated again this session."
+	} >&2
+	exit 1
+}
+
 main() {
-	local payload active cwd transcript plan rung_status dispatchable excluded
+	local payload active cwd transcript session_id plan rung_status dispatchable excluded
 
 	payload="$(cat)"
 
@@ -235,6 +293,7 @@ main() {
 	[ -n "$cwd" ] || cwd="${CLAUDE_PROJECT_DIR:-$PWD}"
 	transcript="$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)"
 	[ -n "$transcript" ] && [ -r "$transcript" ] || exit 0
+	session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null)"
 
 	$GIT -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
@@ -264,7 +323,10 @@ main() {
 
 	rung_status="$(printf '%s' "$plan" | jq -r '.rung.status')"
 	case "$rung_status" in
-	ok | none) ;;
+	ok) ;;
+	none)
+		announce_no_rung "$session_id"
+		;;
 	unknown)
 		block_unreadable "reviewer rung UNKNOWN (the #479 probe could not be run or timed out) — not the same as no rung being available."
 		;;

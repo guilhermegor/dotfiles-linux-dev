@@ -31,6 +31,13 @@ setup() {
     /usr/bin/git config user.name t
     /usr/bin/git commit -q --allow-empty -m init
 
+    # announce_no_rung writes its once-per-session marker under $TMPDIR. Scope it to this
+    # test's tmpdir so teardown removes it — a marker surviving into the next test would
+    # silently convert a real announcement into a pass, which is the one failure this
+    # suite's announce cases exist to catch.
+    TMPDIR="$TEST_TMP"
+    export TMPDIR
+
     TRANSCRIPT="$TEST_TMP/transcript.jsonl"
     : >"$TRANSCRIPT"
     PLAN="$TEST_TMP/plan.json"
@@ -104,11 +111,14 @@ plan_all_excluded() {
 EOF
 }
 
-# run_guard [STOP_HOOK_ACTIVE] — feeds the hook a Stop payload naming this repo.
+# run_guard [STOP_HOOK_ACTIVE] [SESSION_ID] — feeds the hook a Stop payload naming this repo.
+# SESSION_ID is explicit because announce_no_rung's once-per-session marker is keyed on it;
+# the default is per-test (setup points TMPDIR at $TEST_TMP too), so no marker can leak from
+# one test into the next and turn a real announcement into a silent pass.
 run_guard() {
-    local active="${1:-false}"
+    local active="${1:-false}" session="${2:-$BATS_TEST_NAME}"
     run bash "$GUARD" <<EOF
-{"cwd":"$TEST_TMP","transcript_path":"$TRANSCRIPT","stop_hook_active":$active,"session_id":"s"}
+{"cwd":"$TEST_TMP","transcript_path":"$TRANSCRIPT","stop_hook_active":$active,"session_id":"$session"}
 EOF
 }
 
@@ -285,11 +295,59 @@ EOF
     [[ "$output" == *"rung UNKNOWN"* ]]
 }
 
-@test "rung none passes — it is a measured answer, not blindness" {
+@test "rung none ANNOUNCES and does not block, naming what was not evaluated" {
+    # ⚠️ EXPECTATION CORRECTED (was: asserts exit 0, silent pass). The original
+    # expectation was provably wrong, not merely different: it conflated "every PR carries
+    # its own named reason" (the planner ran and judged each PR — legitimately passes) with
+    # "no rung resolved" (the mechanism that produces those reasons was never available, so
+    # nothing was judged at all). A silent pass there asserts "nothing needed asking" when
+    # the honest statement is "I could not tell" — the same shape as an empty `conclusion`
+    # read as "failing". Blocking is equally wrong: nobody should be unable to end a turn
+    # for not having signed into qwen or codex. Announce once, exit non-zero-but-not-2.
     loop_invoked
     printf '%s\n' '{"rung":{"status":"none"},"dispatchable":[],"excluded":[{"pr":453,"reason":"no reviewer rung is assignable"}]}' >"$PLAN"
     run_guard
+    # 1, never 2: surfaced to the operator, but the stop is NOT blocked.
+    [ "$status" -eq 1 ]
+    # "not evaluated" is the load-bearing half — "no rung resolved" alone reads like a shrug.
+    [[ "$output" == *"NOT evaluated"* ]]
+    [[ "$output" == *"qwen/codex"* ]]
+}
+
+@test "rung none is announced ONCE per session, then quiet" {
+    # A notice repeated every turn is noise, and noise is how a gate gets disabled — the
+    # same once-per-session contract announce_no_planner already set.
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"none"},"dispatchable":[],"excluded":[{"pr":453,"reason":"no reviewer rung is assignable"}]}' >"$PLAN"
+    run_guard
+    [ "$status" -eq 1 ]
+    run_guard
     [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "rung none announces again for a DIFFERENT session" {
+    # Keyed on session_id, so a fresh session is told once too rather than inheriting
+    # another session's marker and never hearing it at all.
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"none"},"dispatchable":[],"excluded":[{"pr":453,"reason":"no reviewer rung is assignable"}]}' >"$PLAN"
+    run_guard false session-one
+    [ "$status" -eq 1 ]
+    run_guard false session-two
+    [ "$status" -eq 1 ]
+}
+
+@test "rung none never blocks even when PRs would otherwise be dispatchable" {
+    # A planner that reports `none` should not produce a dispatchable list, but if a future
+    # change ever let it, the rung verdict must still win: dispatching a reviewer with no
+    # runtime to review with is worse than announcing.
+    loop_invoked
+    cat >"$PLAN" <<'EOF'
+{"rung":{"status":"none"},"dispatchable":[{"pr":520,"head":"e1319925","checks":{"failing":[],"running":[],"ambiguous":[]}}],"excluded":[]}
+EOF
+    run_guard
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"NOT evaluated"* ]]
 }
 
 @test "blocks on a rung status the hook has not been taught, naming the value" {

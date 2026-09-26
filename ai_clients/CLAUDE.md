@@ -268,11 +268,36 @@ resolves. A fan-out that auto-applied findings would industrialise the false pos
 and be strictly worse than the prose it replaces. Nothing in either file writes to a PR
 — `tests/review_fanout_plan.bats` asserts the planner issues no `gh` mutation.
 
-`rung.status` is `ok | none | unknown` and the last two are **different claims**:
-`none` is a measured answer (the #479 probe ran, neither qwen nor codex is assignable)
-and becomes every PR's named exclusion reason, so the guard passes; `unknown` is
-blindness and the guard blocks. Collapsing them is the #396 defect verbatim. N is capped
-by API budget, not reviewer quota (#445) — neither file implements a latch of its own.
+**`rung.status` has THREE outcomes, and each gets a different exit — do not collapse any
+two of them:**
+
+| status | Meaning | Guard |
+|---|---|---|
+| `ok` | a rung resolved | blocks if anything is assignable and nothing was started |
+| `none` | the #479 probe RAN; neither qwen nor codex is assignable | **announces once per session, never blocks** (`exit 1`) |
+| `unknown` | the probe could not be run, or timed out | **blocks** (`exit 2`) |
+
+⚠️ **`none` is NOT the legitimate zero case**, and reading it as one conflates two facts:
+*"every PR carries its own named reason"* means the planner ran and **judged** each PR —
+that legitimately passes; *"no rung resolved"* means the mechanism that produces those
+reasons was never available and **nothing was judged at all**. A guard that passes
+silently there asserts "nothing needed asking" when the honest statement is "I could not
+tell" — the same family as a filtered listing's `(empty)` read as "absent", an empty
+`conclusion` read as "failing", and a `case` with no `*)` arm dropping a status. But
+blocking is equally wrong: nobody should be unable to end a turn for not having signed
+into a reviewer runtime, and a re-ping every cycle trains the operator to ignore the
+notification — worse than the idle slot it was meant to fix. Announcing once per session
+is the only option that keeps both properties, and it is deliberately the same mechanism
+`round_dispatch_guard.sh`'s `announce_no_planner` already uses: two near-identical
+"mechanism unavailable" conditions handled two different ways would read as a bug.
+
+⚠️ **`exit 1`, not `exit 0`.** A Stop hook blocks on 2 and surfaces stderr on any other
+non-zero; **exit 0 discards the message entirely**, which would make the announcement
+invisible and turn it back into the silent pass it exists to replace. The non-blocking
+announcement is only expressible because 1 and 0 differ this way.
+
+N is capped by API budget, not reviewer quota (#445) — neither file implements a latch of
+its own.
 
 ## Worktree rescue fan-out: two callers, one implementation
 
