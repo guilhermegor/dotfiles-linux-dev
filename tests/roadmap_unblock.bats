@@ -443,3 +443,62 @@ run_reconcile() {
     [[ "$output" == *"STATUS=unknown"* ]]
     [[ "$output" == *"could not parse project owner/17"* ]]
 }
+
+# --- blocker-kind reporting (dotfiles-dev#528) ----------------------------------------------------
+
+@test "same-repo native blocker: reported internal" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"unblocked owner/repo#3"* ]]
+    [[ "$output" == *"[blocker-kind: internal]"* ]]
+    [[ "$output" != *"[blocker-kind: external]"* ]]
+}
+
+@test "cross-repo native blocker: reported external, still unblocks" {
+    write_items "$(item "owner/greenfield" 12 "Blocked" "" "**Blocked by:** owner/blueprintx#482")"
+    write_blockers 12 "$(blocker 482 closed "owner/blueprintx")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"unblocked owner/greenfield#12"* ]]
+    [[ "$output" == *"[blocker-kind: external]"* ]]
+}
+
+@test "cross-repo prose blocker, still open: reported external and still blocked" {
+    write_items "$(item "owner/repo" 405 "Blocked" "" "**Blocked by:** owner/blueprintx#314")"
+    write_blockers 405
+    write_ref_state "owner/blueprintx" 314 "OPEN"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"still blocked owner/repo#405"* ]]
+    [[ "$output" == *"[blocker-kind: external]"* ]]
+}
+
+@test "same-repo prose blocker, still open: reported internal" {
+    write_items "$(item "owner/repo" 405 "Blocked" "" "**Blocked by:** owner/repo#9")"
+    write_blockers 405
+    write_ref_state "owner/repo" 9 "OPEN"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"still blocked owner/repo#405"* ]]
+    [[ "$output" == *"[blocker-kind: internal]"* ]]
+}
+
+@test "decision blocker: reported with the decision kind tag" {
+    write_items "$(item "owner/repo" 7 "Blocked" "decision: find and read the terms of use" "")"
+    write_blockers 7
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"decision blocker owner/repo#7"* ]]
+    [[ "$output" == *"[blocker-kind: decision]"* ]]
+}
+
+@test "blocked by nothing: no blocker-kind tag, since there is nothing to classify" {
+    write_items "$(item "owner/repo" 13 "Blocked" "" "no blocker line here")"
+    write_blockers 13
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"blocked by nothing owner/repo#13"* ]]
+    [[ "$output" != *"blocker-kind"* ]]
+}

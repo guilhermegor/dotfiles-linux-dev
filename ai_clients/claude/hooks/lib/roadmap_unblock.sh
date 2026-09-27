@@ -47,6 +47,24 @@
 # path and never a weakening of the two rules above: a `decision:` blocker is checked first and
 # always wins (this file never reaches the prose-ref resolution for one), and a failed state read
 # is UNKNOWN, left untouched, same fail-closed contract as the native read.
+#
+# dotfiles-dev#528: every report line for a determinate blocker now carries a `[blocker-kind: …]`
+# tag — `internal` (same repo as the item), `external` (a different repo), or `decision` — so the
+# board can colour-mark WHY an item is unpickable, not just THAT it is. Kind is decided purely by
+# comparing the blocker's own repo to the item's repo, never by which code path (native API vs.
+# prose parse) found it — see `_ru_refs_kind`.
+#
+# ⚠️ The asymmetry that makes this issue worth doing: an INTERNAL blocker is recorded in TWO
+# independent places — GitHub's own `blocked_by` relationship graph (which this file reads via
+# `_ru_native_blockers`) AND, usually, the issue body's prose line — so a wrong or missing prose
+# line still self-heals from the native read. An EXTERNAL blocker has no such redundancy: GitHub's
+# native dependency graph is scoped to the repo whose endpoint you query, so a cross-repo block
+# can, in practice, only ever be recorded as PROSE (`_ru_prose_refs` + `_ru_ref_state`). The prose
+# text is not one of two sources for an external blocker, it is the ONLY source — a typo or a
+# deleted line loses the relationship entirely, with nothing else to fall back on. (The
+# "cross-repo native blocker" bats case below is a defensive path — this file tolerates whatever
+# repo a native entry happens to name — not a claim that GitHub's own UI offers cross-repo native
+# linking.)
 set -u
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
@@ -112,6 +130,32 @@ _ru_ref_state() {
 	printf '%s\n' "${state,,}"
 }
 
+# _ru_refs_kind ITEM_REPO REFS
+# REFS is a newline list of "owner/repo#number". Prints "internal" when every ref names
+# ITEM_REPO, "external" the moment one names a different repo — kind is a property of the
+# reference, not of which code path (native API or prose parse) found it. Prints nothing for
+# an empty REFS (nothing to classify).
+_ru_refs_kind() {
+	local item_repo="$1" refs="$2" ref
+	[[ -n "$refs" ]] || return 0
+	while IFS= read -r ref; do
+		[[ -n "$ref" ]] || continue
+		if [[ "${ref%#*}" != "$item_repo" ]]; then
+			printf 'external\n'
+			return 0
+		fi
+	done <<<"$refs"
+	printf 'internal\n'
+}
+
+# _ru_kind_tag KIND
+# The report-line suffix for a determinate KIND, or nothing for an empty KIND (the
+# "blocked by nothing" / UNKNOWN cases, where no blocker exists to classify).
+_ru_kind_tag() {
+	[[ -n "$1" ]] || return 0
+	printf ' [blocker-kind: %s]' "$1"
+}
+
 # _ru_has_comment REPO NUMBER TEXT
 # True when TEXT is already the body of a comment on the issue. A read failure counts as "absent":
 # a duplicate audit comment is visible and harmless, a suppressed one is silent.
@@ -171,26 +215,28 @@ _ru_process_item() {
 	fi
 
 	if _ru_is_decision "$field_text" || _ru_is_decision "$body_line"; then
-		printf 'decision blocker %s: %s — left untouched (only a person clears this)\n' \
-			"$ident" "${field_text:-$body_line}"
+		printf 'decision blocker %s: %s — left untouched (only a person clears this)%s\n' \
+			"$ident" "${field_text:-$body_line}" "$(_ru_kind_tag decision)"
 		return 0
 	fi
 
 	if [[ -n "$native" ]]; then
-		local open_list closed_list
+		local open_list closed_list kind
 		open_list="$(printf '%s\n' "$native" | awk -F'\t' '$1 != "closed" {print $2}')"
 		closed_list="$(printf '%s\n' "$native" | awk -F'\t' '$1 == "closed" {print $2}')"
+		kind="$(_ru_refs_kind "$repo" "$(printf '%s\n' "$native" | cut -f2)")"
 		if [[ -z "$open_list" ]]; then
 			local detail
 			detail="$(printf '%s' "$closed_list" | paste -sd, -)"
 			if _ru_unblock "$owner" "$project" "$repo" "$number" "$url" "$detail"; then
-				printf 'unblocked %s: all native blockers closed (%s) -> Ready\n' "$ident" "$detail"
+				printf 'unblocked %s: all native blockers closed (%s) -> Ready%s\n' \
+					"$ident" "$detail" "$(_ru_kind_tag "$kind")"
 			else
 				printf 'FAILED to unblock %s: a gh write failed partway — verify by hand\n' "$ident"
 			fi
 		else
-			printf 'still blocked %s: open native blocker(s) %s\n' \
-				"$ident" "$(printf '%s' "$open_list" | paste -sd, -)"
+			printf 'still blocked %s: open native blocker(s) %s%s\n' \
+				"$ident" "$(printf '%s' "$open_list" | paste -sd, -)" "$(_ru_kind_tag "$kind")"
 		fi
 		return 0
 	fi
@@ -222,17 +268,20 @@ _ru_process_item() {
 		open_refs="$(printf '%s\n' "$open_refs" | sed '/^$/d')"
 		closed_refs="$(printf '%s\n' "$closed_refs" | sed '/^$/d')"
 
+		local kind
+		kind="$(_ru_refs_kind "$repo" "$refs")"
 		if [[ -z "$open_refs" ]]; then
 			local detail
 			detail="$(printf '%s' "$closed_refs" | paste -sd, -)"
 			if _ru_unblock "$owner" "$project" "$repo" "$number" "$url" "$detail"; then
-				printf 'unblocked %s: prose blocker(s) closed (%s) -> Ready\n' "$ident" "$detail"
+				printf 'unblocked %s: prose blocker(s) closed (%s) -> Ready%s\n' \
+					"$ident" "$detail" "$(_ru_kind_tag "$kind")"
 			else
 				printf 'FAILED to unblock %s: a gh write failed partway — verify by hand\n' "$ident"
 			fi
 		else
-			printf 'still blocked %s: open prose blocker(s) %s\n' \
-				"$ident" "$(printf '%s' "$open_refs" | paste -sd, -)"
+			printf 'still blocked %s: open prose blocker(s) %s%s\n' \
+				"$ident" "$(printf '%s' "$open_refs" | paste -sd, -)" "$(_ru_kind_tag "$kind")"
 		fi
 		return 0
 	fi
