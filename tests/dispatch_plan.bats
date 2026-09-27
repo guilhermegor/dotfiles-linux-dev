@@ -468,3 +468,59 @@ for url in ("git@github.com:o/r.git", "https://github.com/o/r.git",
 	[ "$status" -eq 0 ]
 	[ "$(printf '%s\n' "$output" | sort -u)" = "o/r" ]
 }
+
+# --- dotfiles-dev#534: REST for what REST can answer, fail-closed-but-readable for what it cannot
+
+@test "open_issues drops pull requests, which REST returns alongside issues" {
+	# GitHub models a PR as an issue, so /issues returns both. `gh issue list` filtered for us;
+	# `gh api` does not — without the filter the planner treats its own PRs as candidates.
+	cd "$BATS_TEST_TMPDIR"
+	mkdir -p bin3
+	cat >bin3/gh <<'STUB'
+#!/bin/sh
+printf '[{"number":11,"body":"a real issue"},{"number":12,"body":"a PR","pull_request":{"url":"x"}}]\n'
+STUB
+	chmod +x bin3/gh
+
+	run env PATH="$BATS_TEST_TMPDIR/bin3:$PATH" python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+print([i["number"] for i in dispatch_plan.open_issues("o/r")])
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+	[ "$status" -eq 0 ]
+	[ "$output" = "[11]" ]
+}
+
+@test "a refused closingIssuesReferences read excludes every issue BY NAME, never kills the plan" {
+	# That read has no REST equivalent, so it alone can be refused while everything else is
+	# healthy. Dying printed nothing and both Stop guards reported UNREADABLE; the plan must stay
+	# readable and fail closed instead.
+	cd "$BATS_TEST_TMPDIR"
+	git init -q planrepo
+	git -C planrepo remote add origin git@github.com:o/r.git
+	mkdir -p bin4
+	cat >bin4/gh <<'STUB'
+#!/bin/sh
+case "$*" in
+  *"pr list"*) exit 1 ;;                                   # the GraphQL-only read, refused
+  *"issues?state=open"*) printf '[{"number":77,"body":"no surface"}]\n' ;;
+  *) printf 'master\n' ;;                                   # default_branch et al
+esac
+STUB
+	chmod +x bin4/gh
+	cd planrepo
+
+	run env PATH="$BATS_TEST_TMPDIR/bin4:$PATH" python3 -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+plan = dispatch_plan.build_plan()
+print(json.dumps({"d": plan["dispatchable"], "x": [e["issue"] for e in plan["excluded"]],
+                  "unreadable": all("UNREADABLE" in e["reason"] for e in plan["excluded"])}))
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'"d": []'* ]]
+	[[ "$output" == *'"x": [77]'* ]]
+	[[ "$output" == *'"unreadable": true'* ]]
+}

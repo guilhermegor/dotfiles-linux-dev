@@ -268,23 +268,36 @@ def open_issues(slug: str) -> list[dict]:
 
 	Capped at ``FREE_SURFACE_ISSUE_CAP`` — ``build_plan`` refuses to print a plan when the
 	result hits that cap (dotfiles-dev#433 finding 2).
+
+	Read over REST, never ``gh issue list --json``: that form routes through GraphQL, and it was the
+	SECOND place this planner died during the GraphQL outage measured 2026-09-27 — immediately after
+	``repo_slug()`` and for the same reason (dotfiles-dev#534). REST answered normally throughout, so
+	the whole planner now survives an outage that only affects GraphQL.
+
+	⚠️ REST's ``/issues`` returns PULL REQUESTS too — GitHub models a PR as an issue — so every
+	record carrying ``pull_request`` is dropped. Measured on this repo the same day, one page held 22
+	issues and 5 PRs: without the filter the planner would treat its own open PRs as dispatch
+	candidates. ``gh issue list`` did that filtering for us; ``gh api`` does not.
+
+	``--paginate`` merges pages into a single array (verified with ``per_page=5``, which returned all
+	27 records), and the result is truncated to the cap so the refuse-at-the-cap behaviour keeps its
+	original meaning: a full slice still means "there may be more than we read".
 	"""
 	raw = _run(
 		[
 			"gh",
-			"issue",
-			"list",
-			"--repo",
-			slug,
-			"--state",
-			"open",
-			"--limit",
-			str(FREE_SURFACE_ISSUE_CAP),
-			"--json",
-			"number,body",
+			"api",
+			"--paginate",
+			f"repos/{slug}/issues?state=open&per_page=100",
 		]
 	)
-	return json.loads(raw) if raw else []
+	records = json.loads(raw) if raw else []
+	issues = [
+		{"number": r.get("number"), "body": r.get("body") or ""}
+		for r in records
+		if "pull_request" not in r
+	]
+	return issues[:FREE_SURFACE_ISSUE_CAP]
 
 
 def open_prs(slug: str) -> list[dict]:
@@ -471,7 +484,27 @@ def build_plan() -> dict:
 		)
 
 	issue_numbers = {issue["number"] for issue in issues}
-	prs = open_prs(slug) if issue_numbers else []
+	# `closingIssuesReferences` has no REST equivalent, so this one read stays on GraphQL and can be
+	# refused while the rest of the planner is healthy (dotfiles-dev#534). Dying here printed nothing
+	# at all, and both Stop guards then reported the plan UNREADABLE — true, but it hid a plan that
+	# was otherwise fully computable. Excluding every candidate BY NAME with this reason is the
+	# documented legitimate-zero shape: fail closed, stay readable, say which read failed.
+	try:
+		prs = open_prs(slug) if issue_numbers else []
+	except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+		return {
+			"dispatchable": [],
+			"excluded": [
+				{
+					"issue": number,
+					"reason": (
+						"claimed-by-PR check UNREADABLE (gh pr list --json "
+						"closingIssuesReferences refused — GraphQL) — never assumed free"
+					),
+				}
+				for number in sorted(issue_numbers, reverse=True)
+			],
+		}
 	if len(prs) >= OPEN_PR_LIST_CAP:
 		raise RuntimeError(
 			f"open PR count ({len(prs)}) is at or past the {OPEN_PR_LIST_CAP}-PR cap this "
