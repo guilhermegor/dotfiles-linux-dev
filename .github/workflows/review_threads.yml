@@ -271,7 +271,7 @@ jobs:
                 ladder_marker_count="$(printf '%s' "$comments_json" | jq --arg since "$head_seen_at" '[
                     .[]
                     | select(.created_at > $since)
-                    | select(.author_association | test("^(OWNER|MEMBER|COLLABORATOR)$"))
+                    | select((.author_association // "") | test("^(OWNER|MEMBER|COLLABORATOR)$"))
                     | select(((.body // "") | split("\n")[0])
                         | test("^Fallback review — runtime: (qwen|codex), model: .+ \\(selected by: .+\\)$"))
                   ] | length')"
