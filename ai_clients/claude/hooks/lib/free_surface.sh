@@ -281,7 +281,8 @@ _origin_owner_repo() {
 # of its base (dotfiles-dev#551), so only the forge can answer this. Returns 1 on any read
 # failure; a caller must treat that as "unexamined", never as NONE.
 _worktree_pr_state() {
-	local owner="$1" repo="$2" branch="$3" slug="$owner/$repo" json
+	local owner="$1" repo="$2" branch="$3" json
+	local slug="$owner/$repo"
 	json="$(gh pr list --repo "$slug" --head "$branch" --state all --json state --limit 1 2>/dev/null)" || return 1
 	printf '%s' "$json" | jq -r 'if length == 0 then "NONE" else .[0].state end' 2>/dev/null
 }
@@ -359,6 +360,17 @@ _live_agent_held_paths() {
 			# never reached $held. The branch is required only for the committed-divergence diff
 			# below, which is the one read that genuinely needs a branch name (#523 review).
 			if [ -n "$path" ] && [ -d "$path" ] && [ "$path" != "$self" ]; then
+				# dotfiles-dev#551: a forge-confirmed dead-and-clean worktree contributes nothing
+				# — skip it entirely rather than walk its (empty, by definition) diffs below. Only
+				# armed when the caller resolved an owner/repo (see the file header); with neither,
+				# this is always false and every existing caller's behaviour is unchanged byte for
+				# byte.
+				if [ -n "$owner" ] && [ -n "$repo" ] && [ -n "$branch" ] && [ "$branch" != "$default" ] \
+					&& _worktree_dead_and_clean "$owner" "$repo" "$branch" "$path"; then
+					path=""
+					branch=""
+					continue
+				fi
 				# Committed divergence only means something against a DIFFERENT branch; for a
 				# second worktree sitting on $default the diff is empty by definition, so skip
 				# the call rather than spend it. Its dirty state below still counts.
@@ -412,7 +424,9 @@ _live_agent_held_paths() {
 	printf '%s\n' "$held" | sed '/^$/d' | sort -u
 }
 
-# gate_live_agent_surface CWD — see the file header contract. No `gh` call: local git only.
+# gate_live_agent_surface CWD — see the file header contract. Purely local unless CWD's
+# `origin` resolves to a GitHub owner/repo (dotfiles-dev#551), in which case it also excludes any
+# worktree whose branch is forge-confirmed dead-and-clean; see _origin_owner_repo.
 gate_live_agent_surface() {
 	local cwd="$1"
 	LIVE_AGENT_STATUS="unknown"
@@ -444,7 +458,14 @@ gate_live_agent_surface() {
 	fi
 	[ -n "$default_branch" ] || return 1
 
-	held="$(_live_agent_held_paths "$cwd" "$default_branch")" || return 1
+	# Best-effort only (dotfiles-dev#551): a local-path or non-GitHub origin (every fixture in
+	# tests/live_agent_surface.bats included) leaves owner/repo empty, which disables the
+	# forge-exclusion enhancement in _live_agent_held_paths without affecting this gate's own
+	# fail-closed contract — parse failure here is never a reason to return unknown.
+	local owner="" repo="" owner_repo
+	owner_repo="$(_origin_owner_repo "$cwd")" && read -r owner repo <<<"$owner_repo"
+
+	held="$(_live_agent_held_paths "$cwd" "$default_branch" "$owner" "$repo")" || return 1
 
 	LIVE_AGENT_PATHS="$held"
 	# shellcheck disable=SC2034 # read by callers after this returns, not within this file
