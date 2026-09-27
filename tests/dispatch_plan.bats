@@ -110,6 +110,18 @@ stub_gh() {
 #!/bin/bash
 case "\$*" in
 "repo view --json nameWithOwner -q .nameWithOwner") echo "acme/widgets" ;;
+"api --paginate repos/acme/widgets/issues"*)
+    # open_issues() reads REST, not \`gh issue list\` -- GraphQL refuses under the secondary
+    # limiter while REST keeps answering. A prefix pattern, because the query string carries
+    # \`?\` and \`&\`, both of which are glob metacharacters inside \`case\`.
+    #
+    # \`gh api --paginate\` MERGES array pages into one array (measured: per_page=5 over 6
+    # pages -> a single 28-element array \`json.loads\` parses), so the stub emits one array
+    # exactly as the real command does -- never one array per page.
+    cat <<'JSON'
+$issues_json
+JSON
+    ;;
 "issue list --repo acme/widgets --state open --limit 500 --json number,body")
     cat <<'JSON'
 $issues_json
@@ -404,4 +416,123 @@ field() {
     run_planner
     [ "$status" -ne 0 ]
     [[ "$output" != *'"dispatchable"'* ]]
+}
+
+# --- dotfiles-dev#534: the repo slug is a LOCAL fact -----------------------------------------
+
+@test "repo_slug reads the local origin remote, so a dead gh cannot break the plan" {
+	# The planner's FIRST call used to be `gh repo view --json nameWithOwner` (GraphQL). During a
+	# GraphQL outage it died there, before reading a single issue, and both Stop guards reported
+	# the plan UNREADABLE. `gh` is made to FAIL rather than removed from PATH: the fallback branch
+	# must still be reachable, and a hard-missing binary would not distinguish the two.
+	cd "$BATS_TEST_TMPDIR"
+	git init -q slugrepo
+	git -C slugrepo remote add origin git@github.com:someowner/somerepo.git
+	mkdir -p bin
+	printf '#!/bin/sh\nexit 1\n' >bin/gh
+	chmod +x bin/gh
+	# cwd must be INSIDE the repo: repo_slug reads `git remote get-url origin` from it
+	cd slugrepo
+
+	run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+print(dispatch_plan.repo_slug())
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib" 
+	[ "$status" -eq 0 ]
+	[ "$output" = "someowner/somerepo" ]
+}
+
+@test "a non-GitHub origin falls through to gh, never a slug guessed from the URL shape" {
+	# PR #545 review, Major: a bare [:/]owner/name tail also matched
+	# git@gitlab.com:team/project.git, so repo_slug skipped the fallback and build_plan queried
+	# GITHUB for that slug — a plausible answer about a repository that is not this checkout.
+	cd "$BATS_TEST_TMPDIR"
+	git init -q elsewhere
+	git -C elsewhere remote add origin git@gitlab.com:team/project.git
+	mkdir -p bin2
+	printf '#!/bin/sh\nprintf "fellback/viagh\\n"\n' >bin2/gh
+	chmod +x bin2/gh
+	cd elsewhere
+
+	run env PATH="$BATS_TEST_TMPDIR/bin2:$PATH" python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+print(dispatch_plan.repo_slug())
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+	[ "$status" -eq 0 ]
+	# the FALLBACK answered, not the regex: a gitlab URL must never yield team/project here
+	[ "$output" = "fellback/viagh" ]
+}
+
+@test "repo_slug parses every remote URL shape this account actually uses" {
+	run python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from dispatch_plan import SLUG_RE
+for url in ("git@github.com:o/r.git", "https://github.com/o/r.git",
+            "https://github.com/o/r", "ssh://git@github.com/o/r.git"):
+    m = SLUG_RE.search(url)
+    print(f"{m.group(1)}/{m.group(2)}" if m else "NO-MATCH")
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+	[ "$status" -eq 0 ]
+	[ "$(printf '%s\n' "$output" | sort -u)" = "o/r" ]
+}
+
+# --- dotfiles-dev#534: REST for what REST can answer, fail-closed-but-readable for what it cannot
+
+@test "open_issues drops pull requests, which REST returns alongside issues" {
+	# GitHub models a PR as an issue, so /issues returns both. `gh issue list` filtered for us;
+	# `gh api` does not — without the filter the planner treats its own PRs as candidates.
+	cd "$BATS_TEST_TMPDIR"
+	mkdir -p bin3
+	cat >bin3/gh <<'STUB'
+#!/bin/sh
+printf '[{"number":11,"body":"a real issue"},{"number":12,"body":"a PR","pull_request":{"url":"x"}}]\n'
+STUB
+	chmod +x bin3/gh
+
+	run env PATH="$BATS_TEST_TMPDIR/bin3:$PATH" python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+print([i["number"] for i in dispatch_plan.open_issues("o/r")])
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+	[ "$status" -eq 0 ]
+	[ "$output" = "[11]" ]
+}
+
+@test "a refused closingIssuesReferences read excludes every issue BY NAME, never kills the plan" {
+	# That read has no REST equivalent, so it alone can be refused while everything else is
+	# healthy. Dying printed nothing and both Stop guards reported UNREADABLE; the plan must stay
+	# readable and fail closed instead.
+	cd "$BATS_TEST_TMPDIR"
+	git init -q planrepo
+	git -C planrepo remote add origin git@github.com:o/r.git
+	mkdir -p bin4
+	cat >bin4/gh <<'STUB'
+#!/bin/sh
+case "$*" in
+  *"pr list"*) exit 1 ;;                                   # the GraphQL-only read, refused
+  *"issues?state=open"*) printf '[{"number":77,"body":"no surface"}]\n' ;;
+  *) printf 'master\n' ;;                                   # default_branch et al
+esac
+STUB
+	chmod +x bin4/gh
+	cd planrepo
+
+	run env PATH="$BATS_TEST_TMPDIR/bin4:$PATH" python3 -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+plan = dispatch_plan.build_plan()
+print(json.dumps({"d": plan["dispatchable"], "x": [e["issue"] for e in plan["excluded"]],
+                  "unreadable": all("UNREADABLE" in e["reason"] for e in plan["excluded"])}))
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'"d": []'* ]]
+	[[ "$output" == *'"x": [77]'* ]]
+	[[ "$output" == *'"unreadable": true'* ]]
 }

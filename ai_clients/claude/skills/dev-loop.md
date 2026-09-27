@@ -212,6 +212,12 @@ Report **one line per item that changed or needs a look** — `$RECONCILE_REPORT
 exactly that shape (unblocked, still blocked, decision blocker, blocked by nothing, UNKNOWN). If it
 is empty, say "no roadmap items changed" and move on.
 
+Every determinate line also carries a `[blocker-kind: internal|external|decision]` tag
+(dotfiles-dev#528) — `internal` (same repo as the item), `external` (a different repo, which can
+only ever be recorded as prose, never GitHub's native relationship), or `decision` (never
+auto-cleared). Surface it verbatim; it is what lets the board mark *why* an item can't move, not
+just *that* it can't.
+
 ⚠️ **A `decision:` blocker is never auto-cleared** — only a person removes one. ⚠️ **Fails closed
 on read errors**: an item whose native-blocker read fails is reported UNKNOWN and left untouched,
 never assumed clear.
