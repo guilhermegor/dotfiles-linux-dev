@@ -28,7 +28,7 @@
 # multiple sessions at once (measured — three sessions inside one 40-minute window,
 # dotfiles-dev#356). Two sessions appending a new index line to the same store
 # README.md at once COULD interleave and lose one line — investigated: neither
-# `~/.claude/memory/lessons/` nor `lessons-dotfiles/` is version-controlled, so there
+# `~/.claude/memory/lessons/` nor `lessons-claude-toolchain/` is version-controlled, so there
 # is no history to confirm it has ever actually happened, and no clobbered README has
 # been observed. Per the issue's own instruction, NOT adding a lock speculatively —
 # add one if a lost/interleaved README line is ever actually observed.

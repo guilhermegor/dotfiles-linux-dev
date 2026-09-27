@@ -78,7 +78,7 @@ issues  → lessons: <I> open, <S> sourced by a lesson, <O> orphan
 - **Lessons routing** — did any work yield a *generalizable* toolchain/scaffold improvement not yet
   captured? Load `s:capturing-lessons` and route it by **where the fix lands**: a scaffolding
   template → BlueprintX store (`~/.claude/memory/lessons/`); the Claude/dotfiles toolchain →
-  dotfiles-dev store (`~/.claude/memory/lessons-dotfiles/`). Every lesson needs the file + the
+  Claude-toolchain store (`~/.claude/memory/lessons-claude-toolchain/`). Every lesson needs the file + the
   README index by hand, then the repo mirror **generated** (`make lessons_mirror` or the
   deployed `generate_lesson_mirrors.sh`) — never hand-appended to `.specs/_lessons/`.
 
