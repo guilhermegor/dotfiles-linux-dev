@@ -18,7 +18,7 @@ fi
 
 # Classifies a dirty worktree's diff against HEAD as "interrupted" (net new work worth
 # resuming) or "stale" (a revert of content already shipped on the default branch) — the
-# SIGN of the diff is the signal, not the file count (dotfiles-dev#318; lessons-dotfiles:
+# SIGN of the diff is the signal, not the file count (dotfiles-dev#318; lessons-claude-toolchain:
 # a-staged-deletion-set-is-a-stale-revert-not-lost-work.md — four worktrees reporting 42/39/
 # 90/42 dirty files were stale reverts, the one holding real work reported 5). Prints
 # "<verdict>\t<insertions>\t<deletions>". Fails open to "interrupted" on any ambiguity or

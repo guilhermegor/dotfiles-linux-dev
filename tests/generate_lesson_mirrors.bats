@@ -19,10 +19,16 @@ setup() {
 
 	export CLAUDE_CONFIG_DIR="$TEST_TMP/claude"
 	BX_STORE="$CLAUDE_CONFIG_DIR/memory/lessons"
-	DF_STORE="$CLAUDE_CONFIG_DIR/memory/lessons-dotfiles"
+	DF_STORE="$CLAUDE_CONFIG_DIR/memory/lessons-claude-toolchain"
+	DF_LEGACY="$CLAUDE_CONFIG_DIR/memory/lessons-dotfiles"
 	OTHER_STORE="$CLAUDE_CONFIG_DIR/memory/lessons-other"
 	mkdir -p "$BX_STORE" "$DF_STORE" "$OTHER_STORE"
+	# DF_LEGACY is deliberately NOT created here — the declared legacy directory
+	# (dotfiles-dev#536 review, PR #546) only matters to the tests that exercise it.
 
+	# No git remote by default — identity falls back to basename, same as before
+	# the dotfiles-dev#536 rename (the store's declared alias set includes
+	# "dotfiles-dev", so this directory name still self-mirror-skips).
 	REPO="$TEST_TMP/dotfiles-dev"
 	mkdir -p "$REPO"
 }
@@ -59,7 +65,55 @@ lesson() {
 	lesson "$DF_STORE" "toolchain-fix" "dotfiles-dev"
 	run bash "$GEN" "$REPO"
 	[ "$status" -eq 0 ]
-	[ ! -e "$REPO/.specs/_lessons/dotfiles-dev-lessons.md" ]
+	[ ! -e "$REPO/.specs/_lessons/claude-toolchain-lessons.md" ]
+}
+
+# --- dotfiles-dev#536: a declared repo SET, resolved from the remote first ---------------
+
+@test "a declared alias of the store's own repo also self-mirror-skips (the renamed repo)" {
+	# The exact inverse bug from the issue: a checkout literally named after the NEW
+	# repo name must still be recognised as the store's own repo, not just the old one.
+	RENAMED="$TEST_TMP/dotfiles-linux-dev"
+	mkdir -p "$RENAMED"
+	lesson "$DF_STORE" "toolchain-fix" "dotfiles-dev"
+	run bash "$GEN" "$RENAMED"
+	[ "$status" -eq 0 ]
+	[ ! -e "$RENAMED/.specs/_lessons/claude-toolchain-lessons.md" ]
+	[[ "$output" == *"no self-mirror"* ]]
+}
+
+@test "an unrelated repo directory named after a declared alias still resolves via the remote" {
+	# git remote wins over basename: a checkout named "dotfiles-macos-dev" but pointing
+	# at an unrelated remote must NOT be treated as this store's own repo — it is a
+	# legitimate (if empty) backport target, not a self-mirror skip.
+	MISNAMED="$TEST_TMP/dotfiles-macos-dev"
+	mkdir -p "$MISNAMED"
+	git -C "$MISNAMED" init -q
+	git -C "$MISNAMED" remote add origin https://github.com/guilhermegor/filings-cvm.git
+	lesson "$DF_STORE" "toolchain-fix" "dotfiles-dev"
+	run bash "$GEN" "$MISNAMED"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Resolved repo identity: filings-cvm (via remote)"* ]]
+	[[ "$output" != *"no self-mirror"* ]]
+	[ -f "$MISNAMED/.specs/_lessons/claude-toolchain-lessons.md" ]
+	run grep -qF "toolchain-fix.md" "$MISNAMED/.specs/_lessons/claude-toolchain-lessons.md"
+	[ "$status" -ne 0 ]
+}
+
+@test "the reproduction: a fresh dotfiles-macos-dev checkout writes no empty mirror" {
+	# dotfiles-dev#536's own repro: git init + nothing else, directory named after a
+	# declared alias with no remote at all (basename fallback). Before the fix this
+	# produced a mirror with the RIGHT title and ZERO entries; after the fix it must
+	# produce no file at all, with a stated reason.
+	MACOS="$TEST_TMP/dotfiles-macos-dev"
+	mkdir -p "$MACOS"
+	git -C "$MACOS" init -q
+	lesson "$DF_STORE" "toolchain-fix" "dotfiles-dev"
+	run bash "$GEN" "$MACOS"
+	[ "$status" -eq 0 ]
+	[ ! -e "$MACOS/.specs/_lessons/claude-toolchain-lessons.md" ]
+	[[ "$output" == *"Resolved repo identity: dotfiles-macos-dev (via basename)"* ]]
+	[[ "$output" == *"declared as one of this store's own repos"* ]]
 }
 
 @test "lessons-other is never mirrored, even when Origin matches the repo" {
@@ -118,7 +172,7 @@ lesson() {
 }
 
 # The two real Origin shapes a literal whole-field compare would drop (8 of 43 real
-# lessons in lessons-dotfiles were written this way, measured 2026-09-14).
+# lessons in lessons-claude-toolchain were written this way, measured 2026-09-14).
 @test "a two-repo Origin (blueprintx / dotfiles-dev) is included for either repo" {
 	lesson "$BX_STORE" "shared-finding" "blueprintx / dotfiles-dev (2026-08-17), after x"
 	run bash "$GEN" "$REPO"
@@ -214,4 +268,94 @@ lesson() {
 	run bash "$GEN" "$REPO"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"RETIRED mirror"* ]]
+}
+
+# --- dotfiles-dev#536 follow-up: a registered store that isn't on disk ---------
+# A store missing entirely (renamed, moved, never installed) must fail loudly when
+# this repo IS one of its declared targets — never silently report success having
+# written nothing, which is indistinguishable from "zero lessons yet" on disk.
+
+@test "a registered store missing from disk fails loudly instead of silently doing nothing" {
+	rm -rf "$BX_STORE"
+	run bash "$GEN" "$REPO"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"registered store"* ]]
+	[[ "$output" == *"does not exist"* ]]
+	[ ! -e "$REPO/.specs/_lessons/blueprintx-lessons.md" ]
+}
+
+@test "a missing store is still a silent no-op for a repo that is one of ITS OWN targets" {
+	# The self-mirror-skip case takes precedence over the missing-store check: a
+	# store that legitimately never mirrors into its own repo shouldn't fail just
+	# because the directory also happens to be absent in this fixture.
+	rm -rf "$DF_STORE"
+	run bash "$GEN" "$REPO"
+	[ "$status" -eq 0 ]
+	[ ! -e "$REPO/.specs/_lessons/claude-toolchain-lessons.md" ]
+}
+
+# --- PR #546 review: a rename with no upgrade path for USER DATA -------------
+# LESSON_STORES ships via `make ai_clients`; `~/.claude/memory/` does not ship
+# anywhere. A machine still holding the pre-rename `lessons-dotfiles/` directory
+# must not have `make lessons_mirror` hard-fail on every repo forever.
+
+@test "falls back to the declared legacy directory when the renamed store is absent" {
+	OTHER="$TEST_TMP/wwdates"
+	mkdir -p "$OTHER"
+	rm -rf "$DF_STORE"
+	mkdir -p "$DF_LEGACY"
+	lesson "$DF_LEGACY" "toolchain-fix" "wwdates"
+
+	run bash "$GEN" "$OTHER"
+	[ "$status" -eq 0 ]
+	[ -f "$OTHER/.specs/_lessons/claude-toolchain-lessons.md" ]
+	grep -qF "toolchain-fix.md" "$OTHER/.specs/_lessons/claude-toolchain-lessons.md"
+	[[ "$output" == *"not found — reading the legacy path"* ]]
+	[[ "$output" == *"migrate with: mv"* ]]
+}
+
+@test "the legacy fallback never writes to or deletes the legacy directory" {
+	OTHER="$TEST_TMP/wwdates"
+	mkdir -p "$OTHER"
+	rm -rf "$DF_STORE"
+	mkdir -p "$DF_LEGACY"
+	lesson "$DF_LEGACY" "toolchain-fix" "wwdates"
+
+	run bash "$GEN" "$OTHER"
+	[ "$status" -eq 0 ]
+	[ -f "$DF_LEGACY/toolchain-fix.md" ]
+	[ ! -e "$DF_STORE" ]
+}
+
+@test "the current directory is preferred over the legacy one when both exist" {
+	OTHER="$TEST_TMP/wwdates"
+	mkdir -p "$OTHER" "$DF_LEGACY"
+	lesson "$DF_STORE" "current-fix" "wwdates"
+	lesson "$DF_LEGACY" "legacy-fix" "wwdates"
+
+	run bash "$GEN" "$OTHER"
+	[ "$status" -eq 0 ]
+	grep -qF "current-fix.md" "$OTHER/.specs/_lessons/claude-toolchain-lessons.md"
+	run grep -qF "legacy-fix.md" "$OTHER/.specs/_lessons/claude-toolchain-lessons.md"
+	[ "$status" -ne 0 ]
+	[[ "$output" != *"reading the legacy path"* ]]
+}
+
+@test "still fails loudly when NEITHER the current nor the legacy directory exists" {
+	OTHER="$TEST_TMP/wwdates"
+	mkdir -p "$OTHER"
+	rm -rf "$DF_STORE"
+	# DF_LEGACY was never created in this test.
+
+	run bash "$GEN" "$OTHER"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"registered store"* ]]
+	[[ "$output" == *"does not exist"* ]]
+}
+
+@test "a store with no declared legacy directory (blueprintx) gets no fallback" {
+	rm -rf "$BX_STORE"
+	run bash "$GEN" "$REPO"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"blueprintx-lessons"* ]]
 }

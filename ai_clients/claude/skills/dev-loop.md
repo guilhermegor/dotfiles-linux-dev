@@ -1014,13 +1014,13 @@ and move on — re-asking an already-answered checkpoint is noise, not thoroughn
 
 **Attributing a lesson to this round — the stores are global and concurrently written, so a plain
 diff since round start over-attributes.** Other sessions write into the same
-`~/.claude/memory/lessons/`, `lessons-dotfiles/`, and `lessons-other/` stores at the same time —
+`~/.claude/memory/lessons/`, `lessons-claude-toolchain/`, and `lessons-other/` stores at the same time —
 measured 2026-09-13, three different sessions wrote into the stores inside one 40-minute window.
 Detect a candidate by **modification time**, then attribute by **content**, never by recency alone:
 
 ```bash
 since='2026-09-13T10:00:00'   # this round's start, not "just now"
-find ~/.claude/memory/lessons ~/.claude/memory/lessons-dotfiles ~/.claude/memory/lessons-other \
+find ~/.claude/memory/lessons ~/.claude/memory/lessons-claude-toolchain ~/.claude/memory/lessons-other \
   -maxdepth 1 -name '*.md' -newermt "$since" -print
 ```
 

@@ -41,7 +41,7 @@ business rule)?
     * fix edits a scaffolding template (~/github/blueprintx/templates/) →
       BlueprintX store ~/.claude/memory/lessons/
     * fix edits the Claude/dotfiles toolchain (~/github/dotfiles-dev/ai_clients/claude/)
-      → dotfiles-dev store ~/.claude/memory/lessons-dotfiles/
+      → Claude-toolchain store ~/.claude/memory/lessons-claude-toolchain/
   Save one file per lesson + update that store's README index. Then regenerate
   this repo's git-ignored mirror(s) under .specs/_lessons/ — run
   `make lessons_mirror` (inside dotfiles-dev) or the deployed generator

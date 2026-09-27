@@ -1,6 +1,6 @@
 ---
 name: s:capturing-lessons
-description: Use when capturing or writing a lesson — logging a user correction to the project lessons log, or saving a generalizable scaffold/toolchain improvement to a lessons store and deciding which store (BlueprintX, dotfiles-dev, or any other repo) it belongs in. Load it the moment you decide "this is worth capturing", before writing the lesson.
+description: Use when capturing or writing a lesson — logging a user correction to the project lessons log, or saving a generalizable scaffold/toolchain improvement to a lessons store and deciding which store (BlueprintX, Claude-toolchain, or any other repo) it belongs in. Load it the moment you decide "this is worth capturing", before writing the lesson.
 effort: medium
 argument-hint: [none]
 allowed-tools: Read Glob Grep Write Edit
@@ -69,7 +69,12 @@ fix ultimately lands, never by what the lesson is about.**
 - Fix edits the **Claude/dotfiles toolchain** under `~/github/dotfiles-dev/ai_clients/claude/`
   (a slash command, skill, agent, rule, hook, global `CLAUDE.md` rule, `settings*.json`, or
   installer — changes how *Claude itself* behaves across every project)
-  → **dotfiles-dev store** `~/.claude/memory/lessons-dotfiles/`.
+  → **Claude-toolchain store** `~/.claude/memory/lessons-claude-toolchain/`. Named for the
+  CONCERN, not a repo (dotfiles-dev#536) — `LESSON_STORES` in
+  `ai_clients/claude/hooks/lib/lesson_mirrors.sh` declares its full repo set
+  (`dotfiles-dev`, `dotfiles-linux-dev`, `dotfiles-macos-dev`, `dotfiles-linux-prod`)
+  explicitly, since the toolchain repo has already been renamed once and the local
+  checkout directory may not match the current remote name.
   Format: `# Title` then `Area / Lesson / Why / Apply to (dotfiles-dev) / PR / Origin`.
   Backport target: `~/github/dotfiles-dev/ai_clients/claude/`, each landing via its own PR.
 
@@ -108,7 +113,7 @@ lessons to work that never touched them.
 1. Save it as **one file per lesson** (kebab-case) in the store, using that store's format.
 2. Add it to the store's `README.md` index.
 3. **Regenerate this repo's mirror — do not hand-write it (dotfiles-dev#386).** The mirror
-   (`.specs/_lessons/blueprintx-lessons.md` or `.specs/_lessons/dotfiles-dev-lessons.md`) is a
+   (`.specs/_lessons/blueprintx-lessons.md` or `.specs/_lessons/claude-toolchain-lessons.md`) is a
    git-ignored, **generated** index of the lessons whose `**Origin:**` line names this repo —
    run `make lessons_mirror` (inside dotfiles-dev) or
    `bash ~/.claude/hooks/lib/generate_lesson_mirrors.sh` (any other repo) after step 2. It is
@@ -122,6 +127,6 @@ lessons to work that never touched them.
    fixing it once already applied the lesson.
 
 Full conventions: `~/.claude/memory/lessons/README.md` and
-`~/.claude/memory/lessons-dotfiles/README.md`. `lessons-other/` has no README yet (nothing has
+`~/.claude/memory/lessons-claude-toolchain/README.md`. `lessons-other/` has no README yet (nothing has
 been written there) — its format is fully specified inline above; create the README index the
 first time a lesson lands there.

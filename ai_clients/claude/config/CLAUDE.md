@@ -170,7 +170,7 @@ Two lesson systems, both with detailed how-to in the `s:capturing-lessons` skill
   guardrail (not a project-specific rule), **capture it before moving on** into the right
   backport store, routed by *where the fix lands*: a scaffolding template →
   BlueprintX store `~/.claude/memory/lessons/`; the Claude/dotfiles toolchain →
-  dotfiles-dev store `~/.claude/memory/lessons-dotfiles/`.
+  Claude-toolchain store `~/.claude/memory/lessons-claude-toolchain/`.
 
 Before ending a session, run **`/session-closeout`** (skill `s:session-closeout`). It runs the deterministic
 capture audit (`session_capture_audit.sh`) and **fixes** what it finds — the missing lesson,

@@ -15,8 +15,10 @@
 # in this repo (mirror_expected_for_repo() — same predicate session_capture_audit.sh's
 # check_mirrors() uses, so the two can never independently drift), collect every
 # lesson whose **Origin:** line names this repo (lesson_originates_in_repo(), also
-# shared) and write them, sorted by filename, to that store's mirror file. Skipped
-# entirely and left untouched if the store isn't on disk (nothing to generate from).
+# shared) and write them, sorted by filename, to that store's mirror file. A store
+# whose registered directory is absent falls back to its declared legacy directory
+# (resolve_store_dir(), lib/lesson_mirrors.sh) before being treated as truly missing
+# (dotfiles-dev#536 review, PR #546) — see generate_store_mirror() for why.
 #
 # Owner-approved (2026-09-14): this MAY create `.specs/` from scratch in a repo
 # that has none — most active repos don't (dotfiles-dev#386). It creates only the
@@ -56,9 +58,50 @@ render_entry() {
 
 # Regenerates one store's mirror for $repo, if this store expects one here.
 generate_store_mirror() {
-	local cwd="$1" repo="$2" store="$3" mirror_base="$4" target_repo="$5"
-	[ -d "$store" ] || return 0
-	mirror_expected_for_repo "$target_repo" "$repo" || return 0
+	local cwd="$1" repo="$2" store="$3" mirror_base="$4" target_repo="$5" identity_source="$6" legacy_dir="$7"
+	if ! mirror_expected_for_repo "$target_repo" "$repo"; then
+		# The "-" sentinel (lessons-other) has no repo to name — nothing to explain.
+		# A repo that IS one of the store's declared aliases DOES need explaining: this
+		# is the exact case that used to write an empty, authoritative-looking mirror
+		# (dotfiles-dev#536) — say why nothing was written instead of writing nothing
+		# silently.
+		if [ "$target_repo" != "-" ]; then
+			printf 'ℹ %s: no mirror for %s (repo identity resolved via %s; declared as one of this store'"'"'s own repos) — no self-mirror\n' \
+				"$mirror_base" "$repo" "$identity_source" >&2
+		fi
+		return 0
+	fi
+
+	# A mirror IS expected here, so a missing store directory is a CONFIGURATION
+	# ERROR — a registry entry naming a path that isn't there — never "nothing to
+	# generate from" (dotfiles-dev#536): `[ -d "$store" ] || return 0` used to sit
+	# ahead of the check above and swallow exactly this case silently, indistinguishable
+	# from the legitimate "zero lessons yet" mirror it would otherwise write.
+	#
+	# But "registered path absent" and "renamed-but-not-yet-migrated" are also two
+	# different facts a hard failure conflates (PR #546 review): `LESSON_STORES`
+	# ships the moment `make ai_clients` runs, while `~/.claude/memory/` is user
+	# data with no deploy step at all, so a machine that renamed the registry entry
+	# without also moving its directory hits this branch on EVERY repo, every run
+	# — `make lessons_mirror` never gets to write anything again until a human
+	# notices. resolve_store_dir() tries the declared legacy directory first;
+	# only when NEITHER exists is this a real configuration error.
+	local resolved effective_store dir_source
+	if resolved="$(resolve_store_dir "$store" "$legacy_dir")"; then
+		effective_store="${resolved%%$'\t'*}"
+		dir_source="${resolved##*$'\t'}"
+	else
+		printf '✗ %s: registered store %s does not exist — cannot generate a mirror for %s\n' \
+			"$mirror_base" "$store" "$repo" >&2
+		return 1
+	fi
+	if [ "$dir_source" = "legacy" ]; then
+		# Advisory only — this never auto-`mv`s user data from inside a mirror
+		# generator (PR #546 review: "a bigger promise than this seam should make").
+		printf 'ℹ %s: %s not found — reading the legacy path %s instead (migrate with: mv %s %s)\n' \
+			"$mirror_base" "$store" "$effective_store" "$effective_store" "$store" >&2
+	fi
+	store="$effective_store"
 
 	local -a matches=()
 	local file
@@ -117,7 +160,7 @@ generate_store_mirror() {
 }
 
 main() {
-	local cwd repo entry store mirror_base _kind target_repo
+	local cwd repo identity identity_source entry store mirror_base _kind target_repo legacy_dir
 	# This file runs under `set -uo pipefail`, NOT `-e`, so a failed `cd` would
 	# leave $cwd empty and every mirror path would be built under `/.specs/`
 	# — writing outside the repo, or failing confusingly. Reject it here.
@@ -125,14 +168,28 @@ main() {
 		printf 'Invalid repository root: %s\n' "${1:-$PWD}" >&2
 		return 1
 	}
-	repo="$(basename "$cwd")"
+
+	# repo="$(basename "$cwd")" alone made a DIRECTORY NAME production configuration
+	# (dotfiles-dev#536) — prefer the `origin` remote, basename only as a fallback,
+	# and say which one was used so a mismatch is visible rather than silent.
+	identity="$(resolve_repo_identity "$cwd")" || {
+		printf 'Could not resolve repo identity for %s (no origin remote, no usable basename) — writing no mirrors, never an empty one.\n' "$cwd" >&2
+		return 1
+	}
+	repo="${identity%%$'\t'*}"
+	identity_source="${identity##*$'\t'}"
+	if [ -z "$repo" ]; then
+		printf 'Repo identity unresolved for %s — writing no mirrors, never an empty one.\n' "$cwd" >&2
+		return 1
+	fi
+	printf 'Resolved repo identity: %s (via %s)\n' "$repo" "$identity_source" >&2
 
 	for entry in "${LESSON_STORES[@]}"; do
-		IFS='|' read -r store mirror_base _kind target_repo <<<"$entry"
+		IFS='|' read -r store mirror_base _kind target_repo legacy_dir <<<"$entry"
 		# Propagate: without this the loop swallows a failed mkdir/redirect and
 		# the LAST store's status becomes the exit code, so `make lessons_mirror`
 		# reports success having written no mirror (PR #388 review).
-		generate_store_mirror "$cwd" "$repo" "$store" "$mirror_base" "$target_repo" || return 1
+		generate_store_mirror "$cwd" "$repo" "$store" "$mirror_base" "$target_repo" "$identity_source" "$legacy_dir" || return 1
 	done
 }
 
