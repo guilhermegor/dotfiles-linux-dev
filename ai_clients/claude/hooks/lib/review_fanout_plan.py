@@ -77,6 +77,27 @@ plan that reads as "only these three qualify".
 
 The rung itself comes from #479's shipped probe (``resolve_fallback_reviewer``,
 reviewer_ladder.sh), called once per plan and never re-implemented here.
+
+``commits`` IS NOT A ``PR_FIELDS`` ENTRY (dotfiles-dev#537)
+------------------------------------------------------------
+It was, until this planner's very first live run: ``gh pr list --json …,commits,…`` at
+``--limit 200`` is rejected UNCONDITIONALLY by GitHub — "requesting up to 1,000,000 possible
+nodes which exceeds the maximum limit of 500,000" — because ``commits`` multiplies 200 PRs by
+up to 100 commits each by that commit's own ``authors`` connection. No ``--limit`` this
+planner could use rescues it (bisected down to the field on 2026-09-27: the full ``PR_FIELDS``
+list only clears the cap at ``--limit 20``, one tenth of ``OPEN_PR_LIST_CAP``). The guard read
+every resulting traceback as ``UNREADABLE`` and blocked every round since #527 merged — the
+plan had never once succeeded, on an empty repo or a busy one, because the cap is computed
+from the REQUESTED limits, not the actual data volume.
+
+``commits`` fed exactly one value: ``head_commit_time()`` now fetches that one datum from
+REST instead — ``repos/{owner}/{repo}/commits/{oid}`` → ``.commit.committer.date`` — a
+different surface from the GraphQL query this planner otherwise uses, which is also what kept
+working through the 2026-09-26 secondary limit. This is not the ``gh pr view`` fan-out #445
+warns about: one small REST read per open PR, not a full PR object, and memoised by oid so a
+rerun against the same head never re-fetches it. Still None on an unreadable read — every
+caller already treats None as UNKNOWN and excludes the PR by name, and that must not regress
+into a guess just because the read moved to a different endpoint.
 """
 
 from __future__ import annotations
@@ -100,9 +121,7 @@ GH_TIMEOUT = 30
 # that needed no reviewer.
 OPEN_PR_LIST_CAP = 200
 
-PR_FIELDS = (
-	"number,headRefOid,mergeStateStatus,isDraft,reviews,comments,commits,statusCheckRollup"
-)
+PR_FIELDS = "number,headRefOid,mergeStateStatus,isDraft,reviews,comments,statusCheckRollup"
 
 # The literal ladder_attribution_line() prefix (reviewer_ladder.sh). Matched per-line and
 # anchored, the same shape ladder_already_covered's own `test("^Fallback review — runtime:";
@@ -171,10 +190,12 @@ def parse_ts(value: str | None) -> datetime.datetime | None:
 def open_prs() -> list[dict]:
 	"""Return every open PR with the fields the predicate and the eligibility rules need.
 
-	One ``gh pr list`` call for the whole plan — ``reviews``, ``comments``, ``commits`` and
+	One ``gh pr list`` call for the whole plan — ``reviews``, ``comments`` and
 	``statusCheckRollup`` are all available on the list endpoint, so a per-PR ``gh pr view``
 	fan-out (N calls, the shape that drained both REST and GraphQL buckets in #445) is not
-	needed to build this plan.
+	needed to build this plan. ``commits`` is deliberately NOT requested here — see the module
+	docstring's dotfiles-dev#537 section; ``head_commit_time()`` fetches that one datum from
+	REST instead.
 	"""
 	raw = _run(
 		[
@@ -290,18 +311,50 @@ def check_states(rollup: list | None) -> dict:
 	}
 
 
+# oid -> resolved committedDate (or None), across every PR in one process's plan. A rerun
+# against the same head never re-fetches it; the cost of the extra REST round trip this
+# dotfiles-dev#537 fix introduces is paid at most once per distinct oid, not once per PR.
+_HEAD_COMMIT_TIME_CACHE: dict[str, datetime.datetime | None] = {}
+
+
 def head_commit_time(pr: dict) -> datetime.datetime | None:
 	"""Return the ``committedDate`` of the commit ``headRefOid`` names, or None.
 
-	Matched by OID rather than taken as ``commits[-1]``: the list's order is not part of the
-	contract, and "the last one listed" being the head is the kind of assumption that is true
-	until it silently is not.
+	Fetched from REST (``repos/{owner}/{repo}/commits/{oid}``) rather than read off the
+	``gh pr list`` response — see the module docstring's dotfiles-dev#537 section for why
+	``commits`` cannot be a ``PR_FIELDS`` entry at all. ``{owner}``/``{repo}`` are resolved by
+	``gh`` itself from the working directory, the same way ``gh pr list`` resolves its repo.
+
+	None on an unreadable read (no ``gh``, no auth, an unknown oid, a timeout) — never guessed.
+	Every caller already treats None as UNKNOWN and excludes the PR by name; that contract must
+	survive the read moving to a different endpoint.
 	"""
-	head = pr.get("headRefOid") or ""
-	for commit in pr.get("commits") or []:
-		if (commit.get("oid") or "") == head:
-			return parse_ts(commit.get("committedDate"))
-	return None
+	oid = pr.get("headRefOid") or ""
+	if not oid:
+		return None
+	if oid in _HEAD_COMMIT_TIME_CACHE:
+		return _HEAD_COMMIT_TIME_CACHE[oid]
+
+	try:
+		raw = subprocess.run(  # noqa: S603 - fixed argv, oid comes from gh's own PR list
+			[
+				"gh",
+				"api",
+				f"repos/{{owner}}/{{repo}}/commits/{oid}",
+				"--jq",
+				".commit.committer.date",
+			],
+			capture_output=True,
+			text=True,
+			timeout=GH_TIMEOUT,
+			check=True,
+		).stdout.strip()
+	except (OSError, subprocess.SubprocessError):
+		raw = ""
+
+	result = parse_ts(raw) if raw else None
+	_HEAD_COMMIT_TIME_CACHE[oid] = result
+	return result
 
 
 def reviewed_at_head(pr: dict) -> bool:
