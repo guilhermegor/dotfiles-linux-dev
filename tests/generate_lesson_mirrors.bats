@@ -266,3 +266,27 @@ lesson() {
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"RETIRED mirror"* ]]
 }
+
+# --- dotfiles-dev#536 follow-up: a registered store that isn't on disk ---------
+# A store missing entirely (renamed, moved, never installed) must fail loudly when
+# this repo IS one of its declared targets — never silently report success having
+# written nothing, which is indistinguishable from "zero lessons yet" on disk.
+
+@test "a registered store missing from disk fails loudly instead of silently doing nothing" {
+	rm -rf "$BX_STORE"
+	run bash "$GEN" "$REPO"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"registered store"* ]]
+	[[ "$output" == *"does not exist"* ]]
+	[ ! -e "$REPO/.specs/_lessons/blueprintx-lessons.md" ]
+}
+
+@test "a missing store is still a silent no-op for a repo that is one of ITS OWN targets" {
+	# The self-mirror-skip case takes precedence over the missing-store check: a
+	# store that legitimately never mirrors into its own repo shouldn't fail just
+	# because the directory also happens to be absent in this fixture.
+	rm -rf "$DF_STORE"
+	run bash "$GEN" "$REPO"
+	[ "$status" -eq 0 ]
+	[ ! -e "$REPO/.specs/_lessons/claude-toolchain-lessons.md" ]
+}

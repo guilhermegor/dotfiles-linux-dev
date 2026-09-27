@@ -57,7 +57,6 @@ render_entry() {
 # Regenerates one store's mirror for $repo, if this store expects one here.
 generate_store_mirror() {
 	local cwd="$1" repo="$2" store="$3" mirror_base="$4" target_repo="$5" identity_source="$6"
-	[ -d "$store" ] || return 0
 	if ! mirror_expected_for_repo "$target_repo" "$repo"; then
 		# The "-" sentinel (lessons-other) has no repo to name — nothing to explain.
 		# A repo that IS one of the store's declared aliases DOES need explaining: this
@@ -69,6 +68,17 @@ generate_store_mirror() {
 				"$mirror_base" "$repo" "$identity_source" >&2
 		fi
 		return 0
+	fi
+
+	# A mirror IS expected here, so a missing store directory is a CONFIGURATION
+	# ERROR — a registry entry naming a path that isn't there — never "nothing to
+	# generate from" (dotfiles-dev#536): `[ -d "$store" ] || return 0` used to sit
+	# ahead of the check above and swallow exactly this case silently, indistinguishable
+	# from the legitimate "zero lessons yet" mirror it would otherwise write.
+	if [ ! -d "$store" ]; then
+		printf '✗ %s: registered store %s does not exist — cannot generate a mirror for %s\n' \
+			"$mirror_base" "$store" "$repo" >&2
+		return 1
 	fi
 
 	local -a matches=()
