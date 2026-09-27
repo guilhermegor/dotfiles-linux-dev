@@ -66,14 +66,27 @@ ago() {
 }
 
 # stub_gh_prs — reads a `gh pr list --json` fixture on stdin and puts a gh stub on PATH that
-# prints it. Every invocation is appended to $GH_LOG so a test can assert the planner issues
-# no mutation.
+# serves TWO calls the planner now makes (dotfiles-dev#537): `pr list` returns the fixture
+# verbatim, and `api repos/{owner}/{repo}/commits/<oid>` looks the oid up in the SAME fixture's
+# per-PR `commits` array and prints its `committedDate` — simulating the REST read
+# head_commit_time() makes now that `commits` is no longer a PR_FIELDS entry, without changing
+# any existing fixture. Every invocation is appended to $GH_LOG so a test can assert the
+# planner issues no mutation.
 stub_gh_prs() {
     cat >"$TEST_TMP/prs.json"
     cat >"$BIN/gh" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >>"$GH_LOG"
-cat "$FIXTURE"
+if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+    cat "$FIXTURE"
+elif [ "$1" = "api" ]; then
+    oid="${2##*/}"
+    jq -r --arg oid "$oid" \
+        '[.[].commits[]? | select(.oid == $oid) | .committedDate] | first // empty' \
+        "$FIXTURE"
+else
+    exit 1
+fi
 STUB
     chmod +x "$BIN/gh"
     FIXTURE="$TEST_TMP/prs.json"
@@ -435,6 +448,44 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
     [ "$(jq -r '.excluded | length' <<<"$output")" -eq 0 ]
+}
+
+# --- dotfiles-dev#537: the request shape itself, not just the parse -----------------
+
+@test "PR_FIELDS never requests commits — GitHub rejects it unconditionally at any usable limit" {
+    # THE test that would have caught #537: every test above stubs `gh`, so it passes
+    # regardless of what the real query asks for — this is the one assertion pinned against
+    # the REQUEST, not the response. Measured against the live repo 2026-09-27: `--json
+    # …,commits,…` is rejected at --limit 200, 100, 60 and even the full PR_FIELDS list at 50
+    # ("requesting up to 1,000,000 possible nodes which exceeds the maximum limit of
+    # 500,000") — commits multiplies PRs x commits x each commit's own authors connection.
+    run python3 -c "
+import sys
+sys.path.insert(0, '$(dirname "$PLANNER")')
+from review_fanout_plan import PR_FIELDS
+print(PR_FIELDS)
+assert 'commits' not in PR_FIELDS.split(','), PR_FIELDS
+"
+    [ "$status" -eq 0 ]
+}
+
+@test "the stub path still yields a head time after commits left PR_FIELDS" {
+    # head_commit_time() now fetches the date via `gh api repos/{owner}/{repo}/commits/<oid>`
+    # instead of reading it off the list response — this pins that the fallback rung's
+    # recent-push exclusion (which needs a real head time to compare against `now`) still
+    # fires, proving the REST read actually lands rather than silently returning None on
+    # every PR (which would misread as "head commit UNKNOWN" everywhere, not just here).
+    stub_gh_prs <<EOF
+[{"number":621,"headRefOid":"eeee0001","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"eeee0001","committedDate":"$(ago 60)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 621)" == *"already triggers a re-review"* ]]
+    run grep -q 'api repos/{owner}/{repo}/commits/eeee0001' "$GH_LOG"
+    [ "$status" -eq 0 ]
 }
 
 @test "the recent-push window is configurable and actually applied" {
