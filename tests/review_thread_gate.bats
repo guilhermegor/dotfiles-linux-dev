@@ -74,6 +74,36 @@ run_comment_filter() {
         | jq -r --argjson min 100 --arg marker '$MARKER' \"\$(_gate_comment_findings_filter)\""
 }
 
+# run_reported_filter <fixture-json> <roster>
+run_reported_filter() {
+    run bash -c "source '$GATE'; printf '%s' '$1' \
+        | jq -r --arg roster '$2' --arg marker '$MARKER' \"\$(_gate_reported_filter)\""
+}
+
+# reviewed_fixture <reviews-json-array> <comments-json-array>
+# The two channels _gate_reported_filter reads: submitted review objects and PR-level comments.
+# Empty reviewThreads/commits on purpose -- this fixture is only ever fed to the reported filter.
+# A report counts only if it is about the CURRENT head, so every fixture needs one. Reviews and
+# comments that do not pin their own head default to matching it -- a test about ROSTER matching
+# should not have to restate head identity, and a test about head staleness states it explicitly.
+HEAD_OID="headoid0"
+HEAD_DATE="2026-01-01T00:00:00Z"
+
+reviewed_fixture() {
+    jq -nc --argjson revs "$1" --argjson cmts "$2" \
+           --arg oid "$HEAD_OID" --arg date "$HEAD_DATE" '
+      { data: { repository: { pullRequest: {
+          reviews: { totalCount: ($revs | length),
+                     nodes: ($revs | map(
+                       (if has("state") then . else . + {state:"COMMENTED"} end)
+                       | (if has("commit") then . else . + {commit:{oid:$oid}} end))) },
+          comments: { totalCount: ($cmts | length),
+                      nodes: ($cmts | map(
+                        if has("createdAt") then . else . + {createdAt:$date} end)) },
+          commits: { nodes: [ { commit: { oid: $oid, committedDate: $date } } ] } } } } }
+    '
+}
+
 # --- the regression: a roster + a thread used to abort the whole program ------------------------
 
 @test "roster present, thread answered and resolved: silent, exit 0 (was jq exit 5)" {
@@ -350,5 +380,216 @@ JSON
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"status=problems"* ]]
+    [[ "$output" == *"unanswered ladder finding (comment channel)"* ]]
+}
+
+# --- dotfiles-dev#505: a fourth state for "nobody has reviewed this at all" ----------------------
+#
+# Measured 2026-09-25 across the live open-PR board: #513, #514 and #517 carried zero threads and
+# zero reviews (CI's own "Review threads answered" check-run: `No submitted review, and no
+# verified reviewer completion marker.`) and gate_pr_thread_state reported `clean` for all three --
+# indistinguishable from a PR a reviewer actually looked at and found nothing wrong with. `clean`
+# must mean "reviewed, nothing to answer", never "nobody has spoken".
+
+@test "_gate_reported_filter: no reviews, no comments -- not reported" {
+    run_reported_filter "$(reviewed_fixture '[]' '[]')" "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ "$output" = "false" ]
+}
+
+@test "_gate_reported_filter: a roster bot's submitted review counts as reported" {
+    run_reported_filter "$(reviewed_fixture '[{"author":{"login":"coderabbitai","__typename":"Bot"}}]' '[]')" \
+        "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ "$output" = "true" ]
+}
+
+@test "_gate_reported_filter: derived from the ROSTER, not review count -- the PR author's own review does not count" {
+    # Same shape as a submitted review, but the account is not on the roster -- #505's own warning.
+    run_reported_filter "$(reviewed_fixture '[{"author":{"login":"guilhermegor","__typename":"User"}}]' '[]')" \
+        "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ "$output" = "false" ]
+}
+
+@test "_gate_reported_filter: a roster bot's completion comment counts as reported" {
+    run_reported_filter "$(reviewed_fixture '[]' \
+        '[{"author":{"login":"coderabbitai","__typename":"Bot"},"body":"CodeRabbit full review finished"}]')" \
+        "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ "$output" = "true" ]
+}
+
+@test "_gate_reported_filter: a verified ladder comment counts as reported even with no findings" {
+    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\n\nNo issues found.'
+    fixture="$(jq -nc --arg body "$body" '
+      { data: { repository: { pullRequest: {
+          reviews: { totalCount: 0, nodes: [] },
+          comments: { totalCount: 1, nodes: [
+            { author: { login: "guilhermegor" }, authorAssociation: "MEMBER", body: $body }
+          ] } } } } }
+    ')"
+    run_reported_filter "$fixture" "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ "$output" = "true" ]
+}
+
+@test "_gate_reported_filter: __NO_ROSTER__ falls back to any Bot account" {
+    run_reported_filter "$(reviewed_fixture '[{"author":{"login":"somebot","__typename":"Bot"}}]' '[]')" \
+        "__NO_ROSTER__"
+    [ "$status" -eq 0 ]
+    [ "$output" = "true" ]
+}
+
+@test "gate_pr_thread_state: zero threads, zero reviews, zero comments -- unreviewed, never clean" {
+    local fixture
+    fixture="$(mktemp)"
+    cat > "$fixture" <<'JSON'
+{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}
+JSON
+
+    run env GH_FIXTURE="$fixture" GATE_LIB="$GATE" bash -c '
+        gh() {
+            case "$*" in
+                *"-F owner=o -F repo=r -F number=513") cat "$GH_FIXTURE" ;;
+                *) return 1 ;;
+            esac
+        }
+        source "$GATE_LIB"
+        gate_pr_thread_state o r 513 ".review-bots.yaml"
+        echo "status=$GATE_STATUS"
+    '
+    rm -f "$fixture"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"status=unreviewed"* ]]
+    [[ "$output" != *"status=clean"* ]]
+}
+
+@test "gate_pr_thread_state: zero threads, a roster review submitted -- clean" {
+    local fixture
+    fixture="$(mktemp)"
+    cat > "$fixture" <<'JSON'
+{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"author":{"login":"coderabbitai","__typename":"Bot"},"state":"COMMENTED","commit":{"oid":"deadbee"}}]},"commits":{"nodes":[{"commit":{"oid":"deadbee","committedDate":"2026-01-01T00:00:00Z","statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}
+JSON
+
+    run env GH_FIXTURE="$fixture" GATE_LIB="$GATE" bash -c '
+        gh() {
+            case "$*" in
+                *"-F owner=o -F repo=r -F number=378") cat "$GH_FIXTURE" ;;
+                *) return 1 ;;
+            esac
+        }
+        source "$GATE_LIB"
+        gate_pr_thread_state o r 378 ".review-bots.yaml"
+        echo "status=$GATE_STATUS"
+    '
+    rm -f "$fixture"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"status=clean"* ]]
+}
+
+# --- dotfiles-dev#511: the comment-channel answer check used author INEQUALITY, which makes a
+# ladder finding posted under the operator's own token structurally unanswerable -- the operator is
+# also the only account that can reply to it. Measured, PR #511's own comment ids/timestamps:
+# ladder finding 5830451560 (guilhermegor, 09:55:56Z), substantive answer 5830636642
+# (guilhermegor, 10:09:02Z) -- CI still reported `unanswered ladder finding (comment channel)`
+# with both CodeRabbit threads already resolved. The fix: comment IDENTITY (id) plus ordering
+# (createdAt), never author identity, decide whether a later comment is a real answer.
+
+@test "comment channel: a substantive later reply from the SAME author clears it (#511)" {
+    fixture="$(jq -nc '
+      { data: { repository: { pullRequest: { comments: { totalCount: 2, nodes: [
+          { id: "IC_1", author: { login: "guilhermegor" }, authorAssociation: "OWNER",
+            body: "Fallback review — runtime: codex, model: codex-auto-review (selected by: review-ladder)\n\n## Findings\n\n- [P2] unhandled error path",
+            createdAt: "2026-09-25T09:55:56Z" },
+          { id: "IC_2", author: { login: "guilhermegor" }, authorAssociation: "OWNER",
+            body: "Fixed in 73672c0 (pushed to this branch). Verified independently — the finding holds and is resolved by this commit, re-checked the surrounding call sites for the same pattern.",
+            createdAt: "2026-09-25T10:09:02Z" }
+        ] } } } } }
+    ')"
+    run_comment_filter "$fixture"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "comment channel: the ladder comment never counts as its own answer (id equality, not author)" {
+    # Same id twice would be nonsensical for a real API response, but this is what makes the
+    # discriminator explicit: a comment can never answer itself, identity-first, ordering second.
+    fixture="$(jq -nc '
+      { data: { repository: { pullRequest: { comments: { totalCount: 1, nodes: [
+          { id: "IC_1", author: { login: "guilhermegor" }, authorAssociation: "OWNER",
+            body: "Fallback review — runtime: codex, model: codex-auto-review (selected by: review-ladder)\n\n## Findings\n\n- [P2] unhandled error path",
+            createdAt: "2026-09-25T09:55:56Z" }
+        ] } } } } }
+    ')"
+    run_comment_filter "$fixture"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"unanswered ladder finding (comment channel)"* ]]
+}
+
+# --- The three PR #520 findings: a report must be SUBMITTED, about the CURRENT head, and read
+# --- from a complete page. Each asserts the fail-closed direction, which is the one that matters:
+# --- reporting `clean` for a head nobody reviewed is the defect #505 exists to remove.
+
+@test "_gate_reported_filter: a PENDING roster review is not a report" {
+    run_reported_filter \
+        "$(reviewed_fixture '[{"author":{"login":"coderabbitai","__typename":"Bot"},"state":"PENDING"}]' '[]')" \
+        "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ "$output" = "false" ]
+}
+
+@test "_gate_reported_filter: a roster review of an OLDER commit is not a report" {
+    run_reported_filter \
+        "$(reviewed_fixture '[{"author":{"login":"coderabbitai","__typename":"Bot"},"state":"COMMENTED","commit":{"oid":"stale123"}}]' '[]')" \
+        "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ "$output" = "false" ]
+}
+
+@test "_gate_reported_filter: a completion comment PREDATING the head is not a report" {
+    run_reported_filter \
+        "$(reviewed_fixture '[]' '[{"author":{"login":"coderabbitai","__typename":"Bot"},"body":"Full review finished","createdAt":"2025-01-01T00:00:00Z"}]')" \
+        "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ "$output" = "false" ]
+}
+
+@test "truncated: reviews that do not fit one page report UNREADABLE, never 'no reviewer'" {
+    local fixture
+    fixture="$(mktemp)"
+    cat > "$fixture" <<'JSON'
+{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":250,"nodes":[{"author":{"login":"someone","__typename":"User"},"state":"COMMENTED","commit":{"oid":"x"}}]},"commits":{"nodes":[{"commit":{"oid":"x","committedDate":"2026-01-01T00:00:00Z","statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}
+JSON
+
+    run env GH_FIXTURE="$fixture" GATE_LIB="$GATE" bash -c '
+        gh() {
+            case "$*" in
+                *"-F owner=o -F repo=r -F number=378") cat "$GH_FIXTURE" ;;
+                *) return 1 ;;
+            esac
+        }
+        source "$GATE_LIB"
+        gate_pr_thread_state o r 378 ".review-bots.yaml"
+        echo "status=$GATE_STATUS"
+        echo "detail=$GATE_DETAIL"
+    '
+    rm -f "$fixture"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"status=problems"* ]]
+    [[ "$output" == *"250 reviews exist"* ]]
+}
+
+@test "comment channel: a LATER ladder review never answers an earlier ladder finding" {
+    # Excluding only the finding's own id let the next fallback review clear it: distinct id,
+    # later timestamp, easily over the length floor. A review is a report, not an answer.
+    local first second
+    first=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\n\n## Findings\n\n- [P2] unhandled error path'
+    second=$'Fallback review — runtime: qwen, model: qwen3 (selected by: probe)\n\n## Findings\n\nNo issues found in this pass, everything below the threshold was ignored deliberately.'
+    run_comment_filter "$(ladder_comment_fixture MEMBER "$first" guilhermegor "$second")"
+    [ "$status" -eq 0 ]
     [[ "$output" == *"unanswered ladder finding (comment channel)"* ]]
 }

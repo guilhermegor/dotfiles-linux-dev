@@ -43,6 +43,14 @@ mirror_rel_path() {
 	printf '.specs/_lessons/%s.md\n' "$mirror_base"
 }
 
+# The PRE-#386 mirror location. Nothing WRITES here -- this exists so the generator can warn that
+# a stale copy is still sitting in a repo, because the path moved and nothing cleaned up behind
+# it. Defined next to mirror_rel_path so the live path and the retired one cannot drift apart.
+retired_mirror_rel_path() {
+	local mirror_base="$1"
+	printf 'docs/%s.md\n' "$mirror_base"
+}
+
 # Absolute mirror path for repo checkout $cwd.
 mirror_path() {
 	local cwd="$1" mirror_base="$2"

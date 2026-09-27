@@ -90,6 +90,18 @@ command -v gh >/dev/null 2>&1 || exit 0
 ROSTER_FILE='.review-bots.yaml'
 : "${OPEN_THREADS_NUDGE_MAX_PRS:=50}"
 : "${OPEN_THREADS_NUDGE_CACHE_TTL:=300}"
+: "${OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER:=6}"
+# Both knobs above feed `$(( ))` arithmetic that decides whether a cache entry is fresh
+# (_repo_wide_scan) or prunable (_prune_stale_cache_entries), so a zero, negative, non-numeric or
+# absurdly large override does not merely tune the cache -- it makes max_age 0 and deletes the
+# entries the very same run is about to read, turning every repo-wide scan back into a full
+# PR-list + gate fan-out (dotfiles-dev#514 review). A value that is not a positive integer inside
+# bash's arithmetic range therefore falls back to its default rather than silently disabling the
+# cache. Validated here at the declaration, not at each use: the TTL has a second consumer in
+# _repo_wide_scan's freshness check, and the review named only the multiplier.
+[[ "$OPEN_THREADS_NUDGE_CACHE_TTL" =~ ^[1-9][0-9]{0,8}$ ]] || OPEN_THREADS_NUDGE_CACHE_TTL=300
+[[ "$OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER" =~ ^[1-9][0-9]{0,8}$ ]] ||
+	OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER=6
 
 # GraphQL query + classification live in one shared place (dotfiles-dev#167):
 # the SubagentStop board sweep (subagent_stop_sweep.sh) calls the identical
@@ -272,6 +284,18 @@ _emit_verdict() {
 		} >&2
 		return 0
 		;;
+	unreviewed)
+		# Not a thread finding, and this hook only ever blocked on thread findings. The gate
+		# gained this status with #505; the catch-all below would have reported "still has
+		# unfinished review threads" for a PR with none, which is simply untrue. Reported so
+		# the gap stays visible, never blocking -- an unreviewed PR is the reviewer-slot step's
+		# problem, not a reason to refuse to end a turn.
+		{
+			echo "${prefix}PR #${number}: no reviewer has reported on this head yet — so its"
+			echo "threads being empty is not yet a verdict. Not blocking."
+		} >&2
+		return 0
+		;;
 	clean)
 		return 0
 		;;
@@ -292,6 +316,40 @@ _emit_verdict() {
 	esac
 }
 
+# _prune_stale_cache_entries DIR
+# Deletes every cache file older than OPEN_THREADS_NUDGE_CACHE_TTL *
+# OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER seconds (dotfiles-dev#504). Entries are keyed by
+# session id and a session never returns, so the deploy-time clear (install_hooks() ->
+# invalidate_hook_caches(), #507) only handles the "logic changed" half -- a long-lived install
+# still accumulates one file per session forever otherwise (measured: 11 entries, 3 repos, 5
+# sessions, oldest several days stale). The multiplier (default 6, i.e. 30 min at the default
+# 300s TTL) is deliberately looser than the TTL itself: an active session's entry is rewritten
+# on every scan that finds its cache expired, so only a session that has genuinely gone quiet for
+# several TTL windows is a prune candidate -- pruning at exactly 1x TTL would race a session whose
+# Stop hook simply fires less often than the TTL. A file with an unreadable/missing `ts` is
+# treated as maximally stale and pruned the same way, never kept on the strength of a parse error.
+_prune_stale_cache_entries() {
+	local dir="$1" max_age now f ts age
+	[ -d "$dir" ] || return 0
+	max_age=$((OPEN_THREADS_NUDGE_CACHE_TTL * OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER))
+	now="$(date +%s)"
+	for f in "$dir"/*; do
+		[ -f "$f" ] || continue
+		ts="$(jq -r '.ts // 0' "$f" 2>/dev/null)"
+		[[ "$ts" =~ ^[0-9]+$ ]] || ts=0
+		age=$((now - ts))
+		# A future-dated ts (a backward clock correction, a copied cache dir) yields a NEGATIVE
+		# age, which is not "very fresh" -- _repo_wide_scan already refuses such a file as a
+		# cache hit, so keeping it here leaves an entry nothing will ever use and nothing will
+		# ever delete while the clock stays behind it, defeating the growth bound this function
+		# exists to enforce (dotfiles-dev#514 review). Unusable and unprunable is the worst of
+		# both, so an age outside [0, max_age) is pruned in either direction.
+		if [ "$age" -lt 0 ] || [ "$age" -ge "$max_age" ]; then
+			rm -f "$f"
+		fi
+	done
+}
+
 # _scan_cache_path SESSION_ID OWNER NAME
 # Prints the cache file path, or fails (empty stdout, non-zero return) when there is no session
 # id to key it by, or the cache directory cannot be created — either way the caller treats that
@@ -301,6 +359,7 @@ _scan_cache_path() {
 	[ -n "$session_id" ] || return 1
 	dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/open-threads-nudge"
 	mkdir -p "$dir" 2>/dev/null || return 1
+	_prune_stale_cache_entries "$dir"
 	printf '%s/%s-%s_%s\n' "$dir" "$session_id" "$owner" "$name"
 }
 
@@ -363,6 +422,12 @@ _repo_wide_scan() {
 		# it never blocks, so it must not be mistaken for the one finding this scan is looking
 		# for (dotfiles-dev#491). Keep looking at the rest of the open PRs.
 		if [ "$GATE_STATUS" = "pending_indefinite" ]; then
+			continue
+		fi
+		# Same reasoning one status along: "nobody has reviewed PR #N yet" is not the open-thread
+		# finding this scan looks for, and stopping the scan on it would hide a real finding on a
+		# later PR behind an unreviewed earlier one.
+		if [ "$GATE_STATUS" = "unreviewed" ]; then
 			continue
 		fi
 		if [ "$GATE_STATUS" != "clean" ]; then

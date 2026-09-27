@@ -22,9 +22,10 @@ delivered") that this script leaves untouched. Collapsing ``would-need-a-held-fi
 
 An issue's file surface is declared as a fenced ```surface block in its body — the
 convention dotfiles-dev#426 formalises with an issue-template requirement; here it is
-read, not enforced. An issue with no such block, or an empty one, is UNKNOWN, never
-"collides with nothing": it is excluded with its own named reason, same as one whose
-surface is held.
+read, not enforced. An issue with no such block, or an empty one, is reported UNDECLARED,
+never "collides with nothing": it is excluded with its own named reason (``UNDECLARED_REASON``,
+which leads with the token so a consumer can tell it apart by prefix, not by prose), same as one
+whose surface is held.
 
 A glob token in a declared surface is matched against the local checkout tree AND the
 live-agent held-paths set (dotfiles-dev#433 finding 3): a live agent's own branch can hold a
@@ -85,6 +86,24 @@ OPEN_PR_LIST_CAP = 200
 
 SURFACE_BLOCK_RE = re.compile(r"```surface\s*\n(.*?)```", re.DOTALL)
 GLOB_CHARS = ("*", "?", "[")
+
+# The one place an issue's declared-surface convention is named (dotfiles-dev#405 scope 2).
+# Today it is the fenced ```surface block above (dotfiles-dev#426). blueprintx#314 will move it
+# to a scope LABEL; that format does NOT exist yet and is deliberately not invented here.
+# When #314 lands, the label prefix is set below and ``declared_surface`` learns to read it —
+# one edit, in one file, because nothing else re-states the convention.
+SURFACE_LABEL_PREFIX = ""
+
+# An issue with no declared surface is REPORTED, never assumed free — it is neither dispatchable
+# nor quietly dropped. The token leads the reason so a consumer can tell this exclusion apart
+# from a real collision by prefix rather than by prose: dispatch_free_surface_guard.sh greps for
+# it (and keeps its own copy in lib/dispatch_claims.sh's DISPATCH_UNDECLARED_TOKEN, the shell
+# side of this same one-word contract).
+UNDECLARED_TOKEN = "UNDECLARED"
+UNDECLARED_REASON = (
+	f"{UNDECLARED_TOKEN}: no declared file surface (no ```surface block in the issue body) — "
+	"declare the surface and this issue becomes dispatchable; it is never assumed free"
+)
 
 # Classifies every request against a caller-supplied held-paths set (the live-agent set,
 # finding 1) rather than gate_free_surface's own FREE_HELD_PATHS. gate_free_surface still runs,
@@ -479,12 +498,7 @@ def build_plan() -> dict:
 		elif number in mention_reasons:
 			excluded.append({"issue": number, "reason": mention_reasons[number]})
 		elif number not in surfaces:
-			excluded.append(
-				{
-					"issue": number,
-					"reason": "no declared file surface (no ```surface block in the issue body)",
-				}
-			)
+			excluded.append({"issue": number, "reason": UNDECLARED_REASON})
 		else:
 			verdict = verdicts.get(number, "")
 			if verdict == "free" or verdict.startswith("would-need-a-held-file"):

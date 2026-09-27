@@ -217,6 +217,153 @@ installed, inert, and indistinguishable from a working one by any check that onl
 looks for the file. `tests/hooks_install_parity.bats` is what made it visible
 (dotfiles-dev#467) — it asserts the two lists agree, in both directions.
 
+## Dispatch coverage: the claims registry and the cap (dotfiles-dev#405)
+
+`hooks/dispatch_free_surface_guard.sh` (a `Stop` hook) enforces **coverage**, not
+presence. It blocks while
+
+```
+dispatchable − in_flight − queued_by_cap  ≠  ∅
+```
+
+and names the missing issue NUMBERS, never a count. Before #405 it exited 0 the
+moment *any* dispatch of the session was unresolved, so the strongest thing it
+could enforce was "at least one agent is working" — the batch *size* still
+depended on the model remembering, which is what the owner asked for in five
+separate rounds.
+
+| Term | Source |
+|---|---|
+| `dispatchable` | `hooks/lib/dispatch_plan.py`, read never re-derived (#433) |
+| `in_flight` | per ISSUE: a live claim in `hooks/lib/dispatch_claims.sh`'s registry, **or** an unresolved dispatch whose Agent **name** is `issue-<N>-<slug>` (#404) |
+| `queued_by_cap` | the remainder over `DISPATCH_MAX_CONCURRENT` (default 8), counted per AGENT |
+
+⚠️ **A dispatch declares its ONE issue in the Agent's `name`, never in its prompt.** A brief
+legitimately cites blockers, prior art and sibling surfaces; reading every `#N` in it made one
+agent cover six issues and eat six slots at once — measured on two real dispatches, which
+yielded 5 and 6 numbers each (#526 review). The name is written by the dispatcher, so it is a
+declaration; a prompt is prose. An in-flight dispatch whose name declares nothing holds a slot,
+covers no issue, and is **reported by name** rather than dropped.
+
+**The cap throttles; it never drops.** The overflow is printed as queued and
+demanded again as soon as a slot frees. There is deliberately **no queue file**:
+the order is recomputed from the plan on every `Stop`, so there is nothing to pop
+and nothing to go stale.
+
+`hooks/lib/dispatch_claims.sh` is the agent-vs-agent half that neither the gate
+nor the planner can see — two agents dispatched in the same batch are invisible
+to each other until one opens a PR. `claim_files <issue> <paths…>` does an atomic
+check-and-append under `flock` to `$(git rev-parse --git-common-dir)/dispatch-claims.tsv`
+(shared by every worktree, never tracked) and prints `CLAIMED` / `HELD:<holder>:<path>` /
+`UNKNOWN`. Three points that are **not** obvious from the file:
+
+1. **Zero API calls, by contract.** Measured 2026-09-17: 8 agents in one batch
+   each ran `gate_free_surface` inside their own claim step (33 branches, one
+   compare call each) and the shared 5000/h quota hit 0 within seconds, twice —
+   every claim then failed closed, correctly, and the wave stalled. So the
+   orchestrator calls `refresh_pr_held_paths <owner> <repo>` **once per round**,
+   writing `pr-held-paths.tsv` beside the registry, and `claim_files` reads only
+   that file plus the registry.
+2. **The lock is a separate `.lock` file, never the registry.** A writer replaces
+   the registry by `mv` (the only atomic rewrite), so locking the registry itself
+   lets the next claimer lock the *new* inode while the holder still holds the old
+   one — two agents inside the critical section, i.e. the exact race being
+   prevented.
+3. **Claims expire (`DISPATCH_CLAIM_TTL`, default 2h).** `release_claims <issue>`
+   is the intended path (a PR opened, or the agent stopped without one), but a
+   killed agent never calls it, and a registry that reads "everything is in
+   flight" forever is dotfiles-dev#404 — a guard that never fires — with a
+   different cause.
+
+An issue with no declared file surface is `UNDECLARED`: reported, never assumed
+free, never dispatched on a guess. The convention itself is named in exactly one
+place — `dispatch_plan.py`'s `SURFACE_LABEL_PREFIX` (a fenced ` ```surface ` block
+today; a scope label once blueprintx#314 lands) — and the one-word token is pinned
+on both sides (`UNDECLARED_TOKEN` in Python, `DISPATCH_UNDECLARED_TOKEN` in bash)
+by `tests/dispatch_claims.bats` so they cannot drift.
+
+## Review fan-out: "needs a review?" is about the HEAD, not a count (dotfiles-dev#480)
+
+`hooks/lib/review_fanout_plan.py` computes which open PRs need a reviewer and
+`hooks/review_fanout_guard.sh` (`Stop`) refuses to end a dev-loop round that had
+assignable PRs and started no review agent — the same planner+guard pair
+`dispatch_plan.py` + `round_dispatch_guard.sh` already are for issues, applied to
+step 4b. Both files carry their full reasoning in their own headers; the two
+points a future audit must not relitigate are here.
+
+**1. The predicate.** `reviews | length == 0` is wrong in BOTH directions, and
+each direction has a measured counter-example from 2026-09-26:
+
+| PR | `reviews` | Truth | What the naive answer does |
+|---|---|---|---|
+| #520 | 9, all against older heads | unreviewed at the head that would merge | calls it reviewed |
+| #453 | 0, plus 2 real fallback reviews posted as comments | those comments predate the head | calls it never reviewed; a head-agnostic attribution match calls it covered |
+
+A push moves the head and invalidates every earlier review — GitHub's own check-run
+said so in words ("no reviewer has reported on this new head yet"). So coverage is
+per-head, across **both** publication channels, because the two rungs write to
+different places and neither sees the other:
+
+1. a submitted review whose `commit.oid` equals `headRefOid` (the primary rung);
+2. a comment carrying `ladder_attribution_line`'s text, posted strictly after the
+   head commit's `committedDate` (the fallback rung, which creates no review object).
+
+⚠️ Channel 2 is time-scoped because `ladder_attribution_line` (`lib/reviewer_ladder.sh`)
+carries runtime/model/signal but **no head SHA**. Exact in the direction that matters — a
+comment written before the head existed provably did not review it — and loose by the
+seconds between a push and a comment already in flight. Adding the head SHA to that line
+would make it as exact as channel 1.
+
+**2. `statusCheckRollup` has no single answer keyed by name.** A head can carry two
+`CheckRun`s with the SAME name and opposite conclusions (measured on #520: `Review
+threads answered` as both `SUCCESS` and `FAILURE` — one from the workflow job, one
+POSTed by the workflow). `check_states()` groups by name and reports a disagreeing
+name as `ambiguous`, never as pass or fail. This is why #480's third candidate
+predicate — "use the step-4 review-thread gate's verdict" — was **evaluated and
+rejected**: it is not resolvable by name-and-first-match. Separately, `status` and
+`conclusion` are different fields and an in-flight `CheckRun` has an EMPTY
+`conclusion`, so `conclusion != "SUCCESS"` reports a running suite as red; running is
+decided first, from `status` (`CheckRun`) or `state` (`StatusContext`). `.conclusion
+// .state` is not a safe fallback — it mixes the two vocabularies.
+
+🔴 **Determinism belongs to the SCHEDULING, never to accepting a finding.** The plan
+decides which PRs get a reviewer; the agent still judges every finding against the
+current code, refutes what does not hold with measurement, replies with rationale, and
+resolves. A fan-out that auto-applied findings would industrialise the false positives
+and be strictly worse than the prose it replaces. Nothing in either file writes to a PR
+— `tests/review_fanout_plan.bats` asserts the planner issues no `gh` mutation.
+
+**`rung.status` has THREE outcomes, and each gets a different exit — do not collapse any
+two of them:**
+
+| status | Meaning | Guard |
+|---|---|---|
+| `ok` | a rung resolved | blocks if anything is assignable and nothing was started |
+| `none` | the #479 probe RAN; neither qwen nor codex is assignable | **announces once per session, never blocks** (`exit 1`) |
+| `unknown` | the probe could not be run, or timed out | **blocks** (`exit 2`) |
+
+⚠️ **`none` is NOT the legitimate zero case**, and reading it as one conflates two facts:
+*"every PR carries its own named reason"* means the planner ran and **judged** each PR —
+that legitimately passes; *"no rung resolved"* means the mechanism that produces those
+reasons was never available and **nothing was judged at all**. A guard that passes
+silently there asserts "nothing needed asking" when the honest statement is "I could not
+tell" — the same family as a filtered listing's `(empty)` read as "absent", an empty
+`conclusion` read as "failing", and a `case` with no `*)` arm dropping a status. But
+blocking is equally wrong: nobody should be unable to end a turn for not having signed
+into a reviewer runtime, and a re-ping every cycle trains the operator to ignore the
+notification — worse than the idle slot it was meant to fix. Announcing once per session
+is the only option that keeps both properties, and it is deliberately the same mechanism
+`round_dispatch_guard.sh`'s `announce_no_planner` already uses: two near-identical
+"mechanism unavailable" conditions handled two different ways would read as a bug.
+
+⚠️ **`exit 1`, not `exit 0`.** A Stop hook blocks on 2 and surfaces stderr on any other
+non-zero; **exit 0 discards the message entirely**, which would make the announcement
+invisible and turn it back into the silent pass it exists to replace. The non-blocking
+announcement is only expressible because 1 and 0 differ this way.
+
+N is capped by API budget, not reviewer quota (#445) — neither file implements a latch of
+its own.
+
 ## Worktree rescue fan-out: two callers, one implementation
 
 `hooks/lib/worktree_fanout.sh` (`fanout_worktrees()` + `classify_worktree_diff()`,

@@ -256,7 +256,15 @@ jobs:
 
           gate_pr_thread_state "$OWNER" "$REPO" "$PR_NUMBER" ".review-bots.yaml"
           echo "$GATE_DETAIL"
-          if [ "$GATE_STATUS" != "clean" ]; then
+          # `unreviewed` is the ONE gate status this step must not act on. Reaching this line
+          # means reviewer_reported=1 -- the check above exits otherwise -- and this step
+          # established that from signals the gate cannot see: the triggering event payload,
+          # this PR's own published check-run history, and `pr view --json reviews`. The gate
+          # sees only the GraphQL page, so its `unreviewed` here is the poorer of two verdicts
+          # about the identical question, and letting it win republishes `failure` over a PR a
+          # reviewer demonstrably reported on. Every other non-clean status (problems, running,
+          # unreadable) answers a DIFFERENT question and still blocks.
+          if [ "$GATE_STATUS" != "clean" ] && [ "$GATE_STATUS" != "unreviewed" ]; then
             report failure "review gate status=$GATE_STATUS" "$GATE_DETAIL"
           fi
           report success "review threads answered" "$GATE_DETAIL"
