@@ -405,3 +405,43 @@ field() {
     [ "$status" -ne 0 ]
     [[ "$output" != *'"dispatchable"'* ]]
 }
+
+# --- dotfiles-dev#534: the repo slug is a LOCAL fact -----------------------------------------
+
+@test "repo_slug reads the local origin remote, so a dead gh cannot break the plan" {
+	# The planner's FIRST call used to be `gh repo view --json nameWithOwner` (GraphQL). During a
+	# GraphQL outage it died there, before reading a single issue, and both Stop guards reported
+	# the plan UNREADABLE. `gh` is made to FAIL rather than removed from PATH: the fallback branch
+	# must still be reachable, and a hard-missing binary would not distinguish the two.
+	cd "$BATS_TEST_TMPDIR"
+	git init -q slugrepo
+	git -C slugrepo remote add origin git@github.com:someowner/somerepo.git
+	mkdir -p bin
+	printf '#!/bin/sh\nexit 1\n' >bin/gh
+	chmod +x bin/gh
+	# cwd must be INSIDE the repo: repo_slug reads `git remote get-url origin` from it
+	cd slugrepo
+
+	run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+print(dispatch_plan.repo_slug())
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib" 
+	[ "$status" -eq 0 ]
+	[ "$output" = "someowner/somerepo" ]
+}
+
+@test "repo_slug parses every remote URL shape this account actually uses" {
+	run python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from dispatch_plan import SLUG_RE
+for url in ("git@github.com:o/r.git", "https://github.com/o/r.git",
+            "https://github.com/o/r", "ssh://git@github.com/o/r.git"):
+    m = SLUG_RE.search(url)
+    print(f"{m.group(1)}/{m.group(2)}" if m else "NO-MATCH")
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+	[ "$status" -eq 0 ]
+	[ "$(printf '%s\n' "$output" | sort -u)" = "o/r" ]
+}

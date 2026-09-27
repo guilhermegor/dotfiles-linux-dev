@@ -165,8 +165,29 @@ def _run(cmd: list[str]) -> str:
 	return result.stdout.strip()
 
 
+SLUG_RE = re.compile(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$")
+
+
 def repo_slug() -> str:
-	"""Return ``owner/name`` for the repo rooted at the current working directory."""
+	"""Return ``owner/name`` for the repo rooted at the current working directory.
+
+	Read from the local ``origin`` remote, not from the forge. The slug is a LOCAL fact and this
+	was the first call ``build_plan()`` made, so asking GitHub for it made the whole planner
+	unreadable during a GraphQL outage: ``gh repo view --json`` routes through GraphQL, and when
+	that surface is refused the planner died here with an uncaught CalledProcessError, before it
+	had read a single issue (dotfiles-dev#534). Measured 2026-09-27: GraphQL refused every call
+	for over half an hour while ``git remote get-url`` answered instantly and REST was healthy.
+
+	``gh repo view`` stays as the fallback for the one case the remote cannot answer — a checkout
+	with no ``origin``, or a URL shape this does not match — so a working setup never regresses.
+	"""
+	try:
+		url = _run(["git", "remote", "get-url", "origin"])
+	except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+		url = ""
+	match = SLUG_RE.search(url)
+	if match:
+		return f"{match.group(1)}/{match.group(2)}"
 	return _run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"])
 
 
