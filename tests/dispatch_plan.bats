@@ -248,6 +248,44 @@ field() {
     [[ "$(field '.dispatchable[0].surface | join(",")')" == *"hooks/lib/foo_handler.py"* ]]
 }
 
+# --- dotfiles-dev#549: local-tree expansion and the held-path check must agree on `*` -------
+#
+# Both tests below expand against the REAL on-disk tree (a real subprocess python3 run against
+# a real git repo, same as every other test in this file) -- not the stubbed `gh` responses --
+# so they exercise the actual reachability of `root.glob`/`fnmatch`, not just the JSON parse.
+# Pre-fix, `*` meant "stops at /" on the local side (pathlib) and "crosses /" on the held side
+# (fnmatch): both tests below fail against that mismatch, for the two failure directions the
+# issue measured.
+
+@test "the template's docs/** placeholder expands to every nested file, never zero (#549)" {
+    mkdir -p "$TEST_TMP/docs/sub/deep"
+    : >"$TEST_TMP/docs/a.md"
+    : >"$TEST_TMP/docs/sub/b.md"
+    : >"$TEST_TMP/docs/sub/deep/c.md"
+    stub_gh "[$(issue_json 30 'docs/**')]"
+    run_planner
+    [ "$status" -eq 0 ]
+    # pre-fix: pathlib's `**` yields directories, `root.glob("docs/**")` matches 0 FILES, and
+    # expand_tokens's `matches or [token]` fallback then reports the literal "docs/**" as the
+    # whole surface (length 1) instead of the 3 real files it should have found.
+    [ "$(field '.dispatchable[0].surface | length')" -eq 3 ]
+    [[ "$(field '.dispatchable[0].surface | join(",")')" == *"docs/sub/deep/c.md"* ]]
+}
+
+@test "a single-star token crosses subdirectories, per the issue template's stated semantics" {
+    mkdir -p "$TEST_TMP/docs/sub"
+    : >"$TEST_TMP/docs/a.md"
+    : >"$TEST_TMP/docs/sub/b.md"
+    stub_gh "[$(issue_json 31 'docs/*')]"
+    run_planner
+    [ "$status" -eq 0 ]
+    # pre-fix: pathlib's `*` stops at `/`, so `root.glob("docs/*")` only matches the top-level
+    # docs/a.md -- the nested docs/sub/b.md is invisible to the local side, a false "free" for a
+    # collision the held-side `fnmatch` would have caught.
+    [ "$(field '.dispatchable[0].surface | length')" -eq 2 ]
+    [[ "$(field '.dispatchable[0].surface | join(",")')" == *"docs/sub/b.md"* ]]
+}
+
 # --- finding 1: collision is agent-vs-agent, never agent-vs-open-PR (PR #476 review) ---------
 
 @test "a candidate colliding only with a frozen open PR (no live agent) is dispatchable" {
