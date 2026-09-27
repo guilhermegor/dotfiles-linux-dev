@@ -165,7 +165,14 @@ def _run(cmd: list[str]) -> str:
 	return result.stdout.strip()
 
 
-SLUG_RE = re.compile(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$")
+# Anchored on the HOST, not just the shape: a bare `[:/]owner/name` tail also matches
+# git@gitlab.com:team/project.git and would hand build_plan() a slug it then queries GitHub for —
+# a plausible answer about a repository that is not this checkout (PR #545 review, Major). Any
+# other origin falls through to `gh repo view`, which is the documented fallback and answers
+# correctly for a GitHub Enterprise host this pattern deliberately does not try to guess.
+SLUG_RE = re.compile(
+	r"^(?:(?:https?|ssh|git)://)?(?:[^@/]+@)?github\.com[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$"
+)
 
 
 def repo_slug() -> str:

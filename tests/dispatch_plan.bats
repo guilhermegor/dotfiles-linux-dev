@@ -432,6 +432,29 @@ print(dispatch_plan.repo_slug())
 	[ "$output" = "someowner/somerepo" ]
 }
 
+@test "a non-GitHub origin falls through to gh, never a slug guessed from the URL shape" {
+	# PR #545 review, Major: a bare [:/]owner/name tail also matched
+	# git@gitlab.com:team/project.git, so repo_slug skipped the fallback and build_plan queried
+	# GITHUB for that slug — a plausible answer about a repository that is not this checkout.
+	cd "$BATS_TEST_TMPDIR"
+	git init -q elsewhere
+	git -C elsewhere remote add origin git@gitlab.com:team/project.git
+	mkdir -p bin2
+	printf '#!/bin/sh\nprintf "fellback/viagh\\n"\n' >bin2/gh
+	chmod +x bin2/gh
+	cd elsewhere
+
+	run env PATH="$BATS_TEST_TMPDIR/bin2:$PATH" python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+print(dispatch_plan.repo_slug())
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+	[ "$status" -eq 0 ]
+	# the FALLBACK answered, not the regex: a gitlab URL must never yield team/project here
+	[ "$output" = "fellback/viagh" ]
+}
+
 @test "repo_slug parses every remote URL shape this account actually uses" {
 	run python3 -c '
 import sys
