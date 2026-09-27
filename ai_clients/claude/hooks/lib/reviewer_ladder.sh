@@ -306,13 +306,19 @@ _review_base_ref() {
 # The forge's own answer for the PR's head commit — the ground truth a
 # resolved checkout is asserted against (issue #487). Override via
 # REVIEWER_LADDER_HEAD_SHA_CMD for tests. Empty on any `gh` error.
+#
+# REST, never GraphQL (issue #543): `gh pr view --json` is a GraphQL call,
+# and this rung exists for when the forge is degraded — measured live
+# 2026-09-27, GraphQL refused this exact call ("API rate limit already
+# exceeded") while `gh api .../pulls/{n} --jq .head.sha` answered the same
+# instant. A single scalar never needed GraphQL in the first place.
 _pr_head_sha() {
 	local owner="$1" repo="$2" pr_number="$3"
 	if [ -n "${REVIEWER_LADDER_HEAD_SHA_CMD:-}" ]; then
 		"$REVIEWER_LADDER_HEAD_SHA_CMD" "$owner" "$repo" "$pr_number"
 		return $?
 	fi
-	gh pr view "$pr_number" --repo "$owner/$repo" --json headRefOid --jq '.headRefOid' 2>/dev/null
+	gh api "repos/$owner/$repo/pulls/$pr_number" --jq '.head.sha' 2>/dev/null
 }
 
 # _pr_remote_url OWNER REPO
@@ -343,13 +349,27 @@ _pr_remote_url() {
 # what the forge itself reports for that PR, checked live, every call.
 # Fails closed (no match, no forge answer, no readable HEAD) rather than
 # reviewing whatever happens to be at DIR.
+#
+# Sets ASSERT_WORKTREE_STATUS (issue #543) so the caller can tell an ABSENT
+# forge answer from a CONTRADICTED one — those are different facts and only
+# one of them means the checkout is wrong:
+#   unanswerable — _pr_head_sha returned nothing (forge unreachable/refused)
+#   mismatched   — a real answer came back, but HEAD differs (or unreadable)
+#   matched      — HEAD equals the forge's answer
 assert_worktree_matches_pr() {
 	local dir="$1" owner="$2" repo="$3" pr_number="$4"
 	local wanted got
+	ASSERT_WORKTREE_STATUS="unanswerable"
 	wanted="$(_pr_head_sha "$owner" "$repo" "$pr_number")"
 	[ -n "$wanted" ] || return 1
+	ASSERT_WORKTREE_STATUS="mismatched"
 	got="$(git -C "$dir" rev-parse HEAD 2>/dev/null)" || return 1
-	[ -n "$got" ] && [ "$got" = "$wanted" ]
+	[ -n "$got" ] || return 1
+	if [ "$got" = "$wanted" ]; then
+		ASSERT_WORKTREE_STATUS="matched"
+		return 0
+	fi
+	return 1
 }
 
 # _checkout_pr_worktree OWNER REPO PR_NUMBER
@@ -376,7 +396,14 @@ _checkout_pr_worktree() {
 		return 1
 	fi
 	if ! assert_worktree_matches_pr "$dir" "$owner" "$repo" "$pr_number"; then
-		print_status "error" "PR #$pr_number: checked-out HEAD does not match the forge's head — refusing"
+		if [ "$ASSERT_WORKTREE_STATUS" = "unanswerable" ]; then
+			# issue #543: an ABSENT forge answer is not a CONTRADICTED one —
+			# say which. This is the shape a GraphQL outage produces; the
+			# checkout itself was never inspected.
+			print_status "error" "PR #$pr_number: cannot reach the forge to verify the head — refusing"
+		else
+			print_status "error" "PR #$pr_number: checked-out HEAD does not match the forge's head — refusing"
+		fi
 		git worktree remove --force "$dir" 2>/dev/null
 		return 1
 	fi
@@ -463,13 +490,20 @@ _run_runtime_review() {
 
 # _post_pr_comment OWNER REPO PR_NUMBER BODY
 # Override via REVIEWER_LADDER_POST_CMD for tests/dry-run.
+#
+# REST, never GraphQL (issue #543), same reasoning as _pr_head_sha: `gh pr
+# comment` is GraphQL, and posting is the last step of the one rung meant to
+# survive a degraded forge — measured live 2026-09-21, a correct review was
+# produced then thrown away here with "GraphQL: API rate limit already
+# exceeded" while REST stayed healthy throughout the same outage.
 _post_pr_comment() {
 	local owner="$1" repo="$2" pr_number="$3" body="$4"
 	if [ -n "${REVIEWER_LADDER_POST_CMD:-}" ]; then
 		"$REVIEWER_LADDER_POST_CMD" "$owner" "$repo" "$pr_number" "$body"
 		return $?
 	fi
-	gh pr comment "$pr_number" --repo "$owner/$repo" --body "$body"
+	jq -n --arg b "$body" '{body: $b}' |
+		gh api --method POST "repos/$owner/$repo/issues/$pr_number/comments" --input -
 }
 
 # run_fallback_review OWNER REPO PR_NUMBER MERGE_STATE PUSHED_EPOCH NOW_EPOCH COMMENTS_JSON [--dry-run]

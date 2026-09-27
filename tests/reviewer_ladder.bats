@@ -413,6 +413,53 @@ _make_two_commit_repo() {
     [ "$status" -eq 1 ]
 }
 
+# --- ABSENT vs CONTRADICTED forge answer (dotfiles-dev#543) -----------------
+#
+# assert_worktree_matches_pr is called directly (not via `run`) in these
+# three so ASSERT_WORKTREE_STATUS — a plain global, same pattern as
+# CODEX_MODEL/QWEN_MODEL above — survives past the call; `run` forks a
+# subshell and would discard it.
+
+@test "assert_worktree_matches_pr: status is unanswerable when the forge gives no head" {
+    local repo="$BATS_TEST_TMPDIR/repo-status-unanswerable"
+    _make_two_commit_repo "$repo"
+    fake_head_sha() { :; }
+    export -f fake_head_sha
+    export REVIEWER_LADDER_HEAD_SHA_CMD=fake_head_sha
+
+    local rc=0
+    assert_worktree_matches_pr "$repo" o r 487 || rc=$?
+    [ "$rc" -eq 1 ]
+    [ "$ASSERT_WORKTREE_STATUS" = "unanswerable" ]
+}
+
+@test "assert_worktree_matches_pr: status is mismatched when the forge answers but differs" {
+    local repo="$BATS_TEST_TMPDIR/repo-status-mismatched"
+    _make_two_commit_repo "$repo"
+    git -C "$repo" checkout --quiet "$BASE_SHA"
+    fake_head_sha() { printf '%s\n' "$HEAD_SHA"; }
+    export -f fake_head_sha
+    export REVIEWER_LADDER_HEAD_SHA_CMD=fake_head_sha
+
+    local rc=0
+    assert_worktree_matches_pr "$repo" o r 487 || rc=$?
+    [ "$rc" -eq 1 ]
+    [ "$ASSERT_WORKTREE_STATUS" = "mismatched" ]
+}
+
+@test "assert_worktree_matches_pr: status is matched when HEAD equals the forge's answer" {
+    local repo="$BATS_TEST_TMPDIR/repo-status-matched"
+    _make_two_commit_repo "$repo"
+    fake_head_sha() { printf '%s\n' "$HEAD_SHA"; }
+    export -f fake_head_sha
+    export REVIEWER_LADDER_HEAD_SHA_CMD=fake_head_sha
+
+    local rc=0
+    assert_worktree_matches_pr "$repo" o r 487 || rc=$?
+    [ "$rc" -eq 0 ]
+    [ "$ASSERT_WORKTREE_STATUS" = "matched" ]
+}
+
 @test "assert_worktree_matches_pr: fails closed on an unreadable dir" {
     fake_head_sha() { echo deadbeef; }
     export -f fake_head_sha
@@ -428,6 +475,50 @@ _make_two_commit_repo() {
     export REVIEWER_LADDER_HEAD_SHA_CMD=fake
     run _pr_head_sha o r 487
     [ "$output" = "o/r#487" ]
+}
+
+# --- REST over GraphQL for both injectable seams (dotfiles-dev#543) ---------
+#
+# Both defaults used to shell out to GraphQL (`gh pr view --json`, `gh pr
+# comment`), which is the surface that stays refused during exactly the
+# outage the fallback rung exists for. A dry run never invokes either
+# default (see the "dry-run never reaches a live probe" test above), so it
+# is not evidence here — these stub `gh` itself and assert on its argv.
+
+@test "_pr_head_sha: default command is REST (pulls/{n}.head.sha), never gh pr view --json" {
+    unset REVIEWER_LADDER_HEAD_SHA_CMD
+    GH_LOG="$BATS_TEST_TMPDIR/gh-head-sha.log"
+    : >"$GH_LOG"
+    gh() { printf '%s\n' "$*" >>"$GH_LOG"; echo deadbeef; }
+    export -f gh
+    export GH_LOG
+
+    run _pr_head_sha o r 487
+    [ "$status" -eq 0 ]
+    [ "$output" = "deadbeef" ]
+    run grep -F -- '--json' "$GH_LOG"
+    [ "$status" -ne 0 ]
+    run grep -F -- 'api repos/o/r/pulls/487' "$GH_LOG"
+    [ "$status" -eq 0 ]
+}
+
+@test "_post_pr_comment: default command is REST (issues/{n}/comments), never gh pr comment" {
+    unset REVIEWER_LADDER_POST_CMD
+    GH_LOG="$BATS_TEST_TMPDIR/gh-post.log"
+    : >"$GH_LOG"
+    gh() {
+        printf '%s\n' "$*" >>"$GH_LOG"
+        cat >/dev/null
+    }
+    export -f gh
+    export GH_LOG
+
+    run _post_pr_comment o r 487 "hello world"
+    [ "$status" -eq 0 ]
+    run grep -F -- 'pr comment' "$GH_LOG"
+    [ "$status" -ne 0 ]
+    run grep -F -- 'api --method POST repos/o/r/issues/487/comments' "$GH_LOG"
+    [ "$status" -eq 0 ]
 }
 
 @test "_pr_remote_url: default fetches from the forge's owner/repo, never a local remote name" {
@@ -514,6 +605,45 @@ _make_bare_remote_with_pr() {
     [ -z "$PR_WORKTREE_DIR" ]
     run bash -c "compgen -G \"$TMPDIR/reviewer-ladder-pr556-*\""
     [ "$status" -ne 0 ]
+}
+
+@test "_checkout_pr_worktree: real path — a mismatch reports 'does not match', never 'cannot reach the forge'" {
+    export TMPDIR="$BATS_TEST_TMPDIR"
+    local bare="$BATS_TEST_TMPDIR/remote-556b.git"
+    _make_bare_remote_with_pr "$bare" 5561
+    fake_url() { printf 'file://%s\n' "$bare"; }
+    export -f fake_url
+    export REVIEWER_LADDER_REMOTE_URL_CMD=fake_url
+    fake_head_sha() { printf '%s\n' "$BASE_SHA"; }
+    export -f fake_head_sha
+    export REVIEWER_LADDER_HEAD_SHA_CMD=fake_head_sha
+    unset REVIEWER_LADDER_CHECKOUT_CMD
+
+    run _checkout_pr_worktree o r 5561
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"does not match the forge's head"* ]]
+    [[ "$output" != *"cannot reach the forge"* ]]
+}
+
+@test "_checkout_pr_worktree: real path — an ABSENT forge answer reports 'cannot reach the forge', never 'does not match' (dotfiles-dev#543)" {
+    export TMPDIR="$BATS_TEST_TMPDIR"
+    local bare="$BATS_TEST_TMPDIR/remote-557.git"
+    _make_bare_remote_with_pr "$bare" 557
+    fake_url() { printf 'file://%s\n' "$bare"; }
+    export -f fake_url
+    export REVIEWER_LADDER_REMOTE_URL_CMD=fake_url
+    # the forge does not answer at all — e.g. a GraphQL outage — never a
+    # real, differing sha. This is the exact #543 bug: it used to be
+    # reported identically to the mismatch case above.
+    fake_head_sha() { :; }
+    export -f fake_head_sha
+    export REVIEWER_LADDER_HEAD_SHA_CMD=fake_head_sha
+    unset REVIEWER_LADDER_CHECKOUT_CMD
+
+    run _checkout_pr_worktree o r 557
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot reach the forge to verify the head"* ]]
+    [[ "$output" != *"does not match the forge's head"* ]]
 }
 
 # --- _run_runtime_review: an empty diff is an error, never a finding --------
