@@ -48,6 +48,41 @@ teardown() {
 	[ "$GH_BUDGET_CLASS" = "unknown" ]
 }
 
+# --- secondary rate limit text variants (dotfiles-dev#533) ----------------------------------------
+# Measured 2026-09-26: GitHub's secondary limiter refused every GraphQL call for ~3 hours while
+# `gh api rate_limit` reported ~97% of the graphql quota free. The old fixed-phrase
+# "api rate limit exceeded" match missed the real wording ("... already exceeded"), fell through
+# to the generic "rate limit" branch, and misclassified a real GitHub outage as a CodeRabbit
+# review-slot busy-signal -- the opposite of terminal.
+
+@test "the real 2026-09-26 wording (\"already exceeded\") classifies as github-api-limit" {
+	gh_budget_classify 'GraphQL: API rate limit already exceeded for user ID 55053188.'
+	[ "$GH_BUDGET_CLASS" = "github-api-limit" ]
+}
+
+@test "\"submitted too quickly\" classifies as github-api-limit" {
+	gh_budget_classify 'Your request was submitted too quickly, please try again.'
+	[ "$GH_BUDGET_CLASS" = "github-api-limit" ]
+}
+
+@test "a captured Retry-After header classifies as github-api-limit" {
+	gh_budget_classify 'HTTP/2 403
+retry-after: 30
+body: forbidden'
+	[ "$GH_BUDGET_CLASS" = "github-api-limit" ]
+}
+
+@test "a captured x-ratelimit-remaining: 0 header classifies as github-api-limit" {
+	gh_budget_classify 'x-ratelimit-remaining: 0
+x-ratelimit-reset: 1790470148'
+	[ "$GH_BUDGET_CLASS" = "github-api-limit" ]
+}
+
+@test "a CodeRabbit review-slot notice still classifies as coderabbit-review-limit after the fix" {
+	gh_budget_classify '⚠️ Rate limit exceeded — please wait 4 minutes before requesting another review.'
+	[ "$GH_BUDGET_CLASS" = "coderabbit-review-limit" ]
+}
+
 @test "empty text classifies as unknown" {
 	gh_budget_classify ''
 	[ "$GH_BUDGET_CLASS" = "unknown" ]
@@ -254,4 +289,64 @@ STUB
     leftovers=("$GH_BUDGET_LATCH_FILE".tmp.*)
     shopt -u nullglob
     [ "${#leftovers[@]}" -eq 0 ]
+}
+
+# --- gh_budget_retry_after_ttl: honour the real Retry-After header (dotfiles-dev#533) --------------
+
+@test "retry_after_ttl reads a lowercase retry-after header" {
+    ttl="$(gh_budget_retry_after_ttl 'retry-after: 30')"
+    [ "$ttl" = "30" ]
+}
+
+@test "retry_after_ttl reads an uppercase, no-space Retry-After header" {
+    ttl="$(gh_budget_retry_after_ttl 'Retry-After:12')"
+    [ "$ttl" = "12" ]
+}
+
+@test "retry_after_ttl falls back to the default when the header is absent" {
+    ttl="$(gh_budget_retry_after_ttl 'API rate limit already exceeded' 45)"
+    [ "$ttl" = "45" ]
+}
+
+@test "retry_after_ttl falls back to the default on a zero or unparsable value" {
+    ttl="$(gh_budget_retry_after_ttl 'retry-after: 0' 45)"
+    [ "$ttl" = "45" ]
+}
+
+# --- gh_budget_graphql_probe: a REST probe cannot answer for GraphQL (dotfiles-dev#533) -------------
+
+stub_gh_graphql() {
+    # $1 = exit code, $2 = stderr body on failure.
+    cat > "$BIN/gh" <<STUB
+#!/bin/bash
+case "\$*" in
+"api graphql -f query={ viewer { login } }")
+    echo "$2" >&2
+    exit $1
+    ;;
+*) exit 1 ;;
+esac
+STUB
+    chmod +x "$BIN/gh"
+}
+
+@test "graphql_probe succeeds and clears GH_BUDGET_CLASS when GraphQL is reachable" {
+    stub_gh_graphql 0 ""
+    GH_BUDGET_CLASS="stale"
+    run gh_budget_graphql_probe
+    [ "$status" -eq 0 ]
+}
+
+@test "graphql_probe fails and classifies a secondary-limit error as github-api-limit" {
+    stub_gh_graphql 1 "API rate limit already exceeded for user ID 55053188."
+    run gh_budget_graphql_probe
+    [ "$status" -ne 0 ]
+    gh_budget_graphql_probe || true
+    [ "$GH_BUDGET_CLASS" = "github-api-limit" ]
+}
+
+@test "graphql_probe failure with unrelated text classifies as unknown, never terminal" {
+    stub_gh_graphql 1 "some transient network error"
+    gh_budget_graphql_probe || true
+    [ "$GH_BUDGET_CLASS" = "unknown" ]
 }
