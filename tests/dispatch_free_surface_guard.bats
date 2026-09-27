@@ -171,6 +171,41 @@ transcript_dev_loop_background_agent_status() {
     printf '%s\n' "$f"
 }
 
+# transcript_dev_loop_background_agent_status_named ISSUE STATUS — same shape as
+# transcript_dev_loop_background_agent_status, but the declared issue is a parameter instead of
+# hardcoded 4 — needed to test RESOLVED-via-plan against a plan that does NOT include it.
+transcript_dev_loop_background_agent_status_named() {
+    local declared="$1" status="$2"
+    local f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        jq -nc --arg n "issue-$declared-bg-agent" \
+            '{type:"assistant",message:{content:[{type:"tool_use",id:"agent1",name:"Agent",input:{name:$n,prompt:"work"}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":[{"type":"text","text":"Async agent launched successfully."}]}]}}'
+        jq -nc --arg s "$status" \
+            '{type:"queue-operation",operation:"enqueue",content:("<task-notification>\n<tool-use-id>agent1</tool-use-id>\n<status>"+$s+"</status>\n</task-notification>")}'
+    } >"$f"
+    printf '%s\n' "$f"
+}
+
+# transcript_dev_loop_many_failed_agents N — N distinct background dispatches, each declaring a
+# distinct issue (101, 102, ...) and each FAILED, in transcript order (oldest first).
+transcript_dev_loop_many_failed_agents() {
+    local n="$1" f="$TEST_TMP/transcript.jsonl" i
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        for ((i = 1; i <= n; i++)); do
+            jq -nc --arg id "agent$i" --arg n "issue-$((100 + i))-bg" \
+                '{type:"assistant",message:{content:[{type:"tool_use",id:$id,name:"Agent",input:{name:$n,prompt:"work"}}]}}'
+            jq -nc --arg id "agent$i" \
+                '{type:"user",message:{content:[{type:"tool_result",tool_use_id:$id,content:[{type:"text",text:"Async agent launched successfully."}]}]}}'
+            jq -nc --arg id "agent$i" \
+                '{type:"queue-operation",operation:"enqueue",content:("<task-notification>\n<tool-use-id>"+$id+"</tool-use-id>\n<status>failed</status>\n</task-notification>")}'
+        done
+    } >"$f"
+    printf '%s\n' "$f"
+}
+
 # --- fail-open prerequisites ---------------------------------------------------------------
 
 @test "exits 0 when stop_hook_active is true (one nudge per turn)" {
