@@ -254,27 +254,14 @@ gh_budget_retry_after_ttl() {
 	printf '%s\n' "$default_ttl"
 }
 
-# gh_budget_graphql_probe
-# A trivial, side-effect-free GraphQL call (`{ viewer { login } }`) standing in for "can THIS
-# surface actually be reached right now" — dotfiles-dev#533: the REST probe callers already run
-# (e.g. `gh_budget_gate` in subagent_stop_sweep.sh) cannot answer that question for GraphQL,
-# because REST and GraphQL are rate-limited independently, and `gh api rate_limit`'s own graphql
-# field has been measured reporting ~97% free while every real GraphQL call was refused. Classifies
-# any failure through gh_budget_classify, so the same github-api-limit/CodeRabbit/unknown rules
-# this file already enforces apply here too — a caller checks gh_budget_is_terminal afterward
-# exactly as it does after a REST probe. Returns 0 when the probe succeeds (GraphQL reachable,
-# GH_BUDGET_CLASS cleared), 1 otherwise.
-gh_budget_graphql_probe() {
-	local err rc
-	err="$(mktemp)"
-	gh api graphql -f query='{ viewer { login } }' >/dev/null 2>"$err"
-	rc=$?
-	if [ "$rc" -ne 0 ]; then
-		gh_budget_classify "$(cat "$err" 2>/dev/null)"
-		rm -f "$err"
-		return 1
-	fi
-	rm -f "$err"
-	GH_BUDGET_CLASS=""
-	return 0
-}
+# NOTE (dotfiles-dev#533, retracted 2026-09-27): a `gh_budget_graphql_probe` predictive probe
+# (`{ viewer { login } }`) was tried here and removed. Measured same day: GitHub's secondary
+# limiter is COST- and TIME-based, not transport-based — a trivial query can pass while a more
+# expensive GraphQL call on the exact same token is refused seconds later, and the threshold
+# tightens as aggregate spend rises across concurrent callers. A probe that passed a minute ago
+# carries no information about the call about to run, so a predictive probe is the same defect as
+# `/rate_limit` one layer down: cheap, healthy-looking, and wrong. The design that survives is
+# "latch on the first REAL refusal" — gh_budget_classify (above) plus gh_budget_is_terminal is
+# that whole mechanism; no separate probe belongs in this file. See
+# ~/.claude/memory/lessons-claude-toolchain/rate-limit-endpoint-cannot-see-the-secondary-limit.md
+# for the full measurement trail before reintroducing anything probe-shaped here.
