@@ -1,4 +1,4 @@
-# dotfiles-dev <img src="https://upload.wikimedia.org/wikipedia/commons/3/35/Tux.svg" align="right" width="120" style="border-radius: 15px;" alt="Linux Penguin">
+# dotfiles-linux-dev <img src="https://upload.wikimedia.org/wikipedia/commons/3/35/Tux.svg" align="right" width="120" style="border-radius: 15px;" alt="Linux Penguin">
 
 [![Project Status: Active – The project has reached a stable, usable state and is being actively developed.](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
 ![Shell Version](https://img.shields.io/badge/shell-Bash%20%7C%20Zsh-blue.svg)
@@ -6,7 +6,7 @@
 ![Open Issues](https://img.shields.io/github/issues/guilhermegor/dotfiles-linux-dev)
 ![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-darkgreen.svg)
 
-**dotfiles-dev** is a comprehensive initialization and configuration toolkit for Linux distributions. It provides automated setup scripts for system configuration, driver installation, storage management, and development environment setup.
+**dotfiles-linux-dev** is a comprehensive initialization and configuration toolkit for Linux distributions. It provides automated setup scripts for system configuration, driver installation, storage management, and development environment setup.
 
 **🎯 Features a powerful Makefile** for easy command execution and workflow automation - no need to remember complex script paths!
 
@@ -74,7 +74,7 @@ sudo apt install dkms git -y
 mkdir ~/github
 cd ~/github
 git clone https://github.com/guilhermegor/dotfiles-linux-dev.git
-cd dotfiles-dev
+cd dotfiles-linux-dev
 
 make run
 ```
@@ -161,7 +161,7 @@ not restored — a backed-up value may already be expired):
 **Option 1: Step-by-Step with Makefile**
 ```bash
 git clone https://github.com/guilhermegor/dotfiles-linux-dev.git
-cd dotfiles-dev
+cd dotfiles-linux-dev
 
 # Make all scripts executable
 make permissions
@@ -239,7 +239,7 @@ bash storage/storage_hiato.sh
 
 ## 📂 Project Structure
 ```
-dotfiles-dev/
+dotfiles-linux-dev/
 │
 ├── 📋 Makefile                   # Automation recipes for all scripts
 │
@@ -296,7 +296,7 @@ dotfiles-dev/
 1. **Clone and Initialize (One Command)**
 ```bash
    git clone https://github.com/guilhermegor/dotfiles-linux-dev.git
-   cd dotfiles-dev
+   cd dotfiles-linux-dev
    make run
 ```
 
