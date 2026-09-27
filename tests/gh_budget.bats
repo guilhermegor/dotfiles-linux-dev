@@ -313,46 +313,10 @@ STUB
     [ "$ttl" = "45" ]
 }
 
-# --- gh_budget_graphql_probe: a REST probe cannot answer for GraphQL (dotfiles-dev#533) -------------
-
-stub_gh_graphql() {
-    # $1 = exit code, $2 = stderr body on failure.
-    cat > "$BIN/gh" <<STUB
-#!/bin/bash
-case "\$*" in
-"api graphql -f query={ viewer { login } }")
-    echo "$2" >&2
-    exit $1
-    ;;
-*) exit 1 ;;
-esac
-STUB
-    chmod +x "$BIN/gh"
-}
-
-@test "graphql_probe succeeds and clears GH_BUDGET_CLASS when GraphQL is reachable" {
-    stub_gh_graphql 0 ""
-    GH_BUDGET_CLASS="stale"
-    # Not `run`: it forks a subshell, so a variable the function sets would not be visible to
-    # this test afterward -- confirmed by an "unbound variable" failure when this used `run` and
-    # then read $GH_BUDGET_CLASS below. A direct call under `set -u` needs its own status guard.
-    probe_rc=0
-    gh_budget_graphql_probe || probe_rc=$?
-    [ "$probe_rc" -eq 0 ]
-}
-
-@test "graphql_probe fails and classifies a secondary-limit error as github-api-limit" {
-    stub_gh_graphql 1 "API rate limit already exceeded for user ID 55053188."
-    probe_rc=0
-    gh_budget_graphql_probe || probe_rc=$?
-    [ "$probe_rc" -ne 0 ]
-    [ "$GH_BUDGET_CLASS" = "github-api-limit" ]
-}
-
-@test "graphql_probe failure with unrelated text classifies as unknown, never terminal" {
-    stub_gh_graphql 1 "some transient network error"
-    probe_rc=0
-    gh_budget_graphql_probe || probe_rc=$?
-    [ "$probe_rc" -ne 0 ]
-    [ "$GH_BUDGET_CLASS" = "unknown" ]
-}
+# NOTE (dotfiles-dev#533, retracted 2026-09-27): a `gh_budget_graphql_probe` predictive probe and
+# its tests were removed here. A trivial GraphQL probe cannot predict whether a real, costlier
+# GraphQL call moments later will be refused -- the secondary limiter is cost- and time-based, not
+# transport-based (measured same day; see gh_budget.sh's own NOTE at this location and
+# ~/.claude/memory/lessons-claude-toolchain/rate-limit-endpoint-cannot-see-the-secondary-limit.md).
+# The design that survives is "latch on the first REAL refusal", already covered by the
+# gh_budget_classify tests above.
