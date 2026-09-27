@@ -165,8 +165,36 @@ def _run(cmd: list[str]) -> str:
 	return result.stdout.strip()
 
 
+# Anchored on the HOST, not just the shape: a bare `[:/]owner/name` tail also matches
+# git@gitlab.com:team/project.git and would hand build_plan() a slug it then queries GitHub for —
+# a plausible answer about a repository that is not this checkout (PR #545 review, Major). Any
+# other origin falls through to `gh repo view`, which is the documented fallback and answers
+# correctly for a GitHub Enterprise host this pattern deliberately does not try to guess.
+SLUG_RE = re.compile(
+	r"^(?:(?:https?|ssh|git)://)?(?:[^@/]+@)?github\.com[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$"
+)
+
+
 def repo_slug() -> str:
-	"""Return ``owner/name`` for the repo rooted at the current working directory."""
+	"""Return ``owner/name`` for the repo rooted at the current working directory.
+
+	Read from the local ``origin`` remote, not from the forge. The slug is a LOCAL fact and this
+	was the first call ``build_plan()`` made, so asking GitHub for it made the whole planner
+	unreadable during a GraphQL outage: ``gh repo view --json`` routes through GraphQL, and when
+	that surface is refused the planner died here with an uncaught CalledProcessError, before it
+	had read a single issue (dotfiles-dev#534). Measured 2026-09-27: GraphQL refused every call
+	for over half an hour while ``git remote get-url`` answered instantly and REST was healthy.
+
+	``gh repo view`` stays as the fallback for the one case the remote cannot answer — a checkout
+	with no ``origin``, or a URL shape this does not match — so a working setup never regresses.
+	"""
+	try:
+		url = _run(["git", "remote", "get-url", "origin"])
+	except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+		url = ""
+	match = SLUG_RE.search(url)
+	if match:
+		return f"{match.group(1)}/{match.group(2)}"
 	return _run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"])
 
 
@@ -240,23 +268,36 @@ def open_issues(slug: str) -> list[dict]:
 
 	Capped at ``FREE_SURFACE_ISSUE_CAP`` — ``build_plan`` refuses to print a plan when the
 	result hits that cap (dotfiles-dev#433 finding 2).
+
+	Read over REST, never ``gh issue list --json``: that form routes through GraphQL, and it was the
+	SECOND place this planner died during the GraphQL outage measured 2026-09-27 — immediately after
+	``repo_slug()`` and for the same reason (dotfiles-dev#534). REST answered normally throughout, so
+	the whole planner now survives an outage that only affects GraphQL.
+
+	⚠️ REST's ``/issues`` returns PULL REQUESTS too — GitHub models a PR as an issue — so every
+	record carrying ``pull_request`` is dropped. Measured on this repo the same day, one page held 22
+	issues and 5 PRs: without the filter the planner would treat its own open PRs as dispatch
+	candidates. ``gh issue list`` did that filtering for us; ``gh api`` does not.
+
+	``--paginate`` merges pages into a single array (verified with ``per_page=5``, which returned all
+	27 records), and the result is truncated to the cap so the refuse-at-the-cap behaviour keeps its
+	original meaning: a full slice still means "there may be more than we read".
 	"""
 	raw = _run(
 		[
 			"gh",
-			"issue",
-			"list",
-			"--repo",
-			slug,
-			"--state",
-			"open",
-			"--limit",
-			str(FREE_SURFACE_ISSUE_CAP),
-			"--json",
-			"number,body",
+			"api",
+			"--paginate",
+			f"repos/{slug}/issues?state=open&per_page=100",
 		]
 	)
-	return json.loads(raw) if raw else []
+	records = json.loads(raw) if raw else []
+	issues = [
+		{"number": r.get("number"), "body": r.get("body") or ""}
+		for r in records
+		if "pull_request" not in r
+	]
+	return issues[:FREE_SURFACE_ISSUE_CAP]
 
 
 def open_prs(slug: str) -> list[dict]:
@@ -443,7 +484,27 @@ def build_plan() -> dict:
 		)
 
 	issue_numbers = {issue["number"] for issue in issues}
-	prs = open_prs(slug) if issue_numbers else []
+	# `closingIssuesReferences` has no REST equivalent, so this one read stays on GraphQL and can be
+	# refused while the rest of the planner is healthy (dotfiles-dev#534). Dying here printed nothing
+	# at all, and both Stop guards then reported the plan UNREADABLE — true, but it hid a plan that
+	# was otherwise fully computable. Excluding every candidate BY NAME with this reason is the
+	# documented legitimate-zero shape: fail closed, stay readable, say which read failed.
+	try:
+		prs = open_prs(slug) if issue_numbers else []
+	except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+		return {
+			"dispatchable": [],
+			"excluded": [
+				{
+					"issue": number,
+					"reason": (
+						"claimed-by-PR check UNREADABLE (gh pr list --json "
+						"closingIssuesReferences refused — GraphQL) — never assumed free"
+					),
+				}
+				for number in sorted(issue_numbers, reverse=True)
+			],
+		}
 	if len(prs) >= OPEN_PR_LIST_CAP:
 		raise RuntimeError(
 			f"open PR count ({len(prs)}) is at or past the {OPEN_PR_LIST_CAP}-PR cap this "
