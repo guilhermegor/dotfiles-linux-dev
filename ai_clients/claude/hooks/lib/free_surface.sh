@@ -248,6 +248,12 @@ live_agent_classify_files() {
 _live_agent_held_paths() {
 	local cwd="$1" default="$2"
 	local path="" branch="" line held="" out out_lc untracked self
+	# Every git read below is piped through `tr` to decode -z output, and a pipeline reports only
+	# its LAST command's status — which would make `|| return 1` watch `tr` instead of git, undoing
+	# the fail-closed contract this function exists to hold. `local -` scopes the option to this
+	# function, restored on return, so no caller inherits it.
+	local -
+	set -o pipefail
 
 	git -C "$cwd" worktree list --porcelain >/dev/null 2>&1 || return 1
 
@@ -270,17 +276,31 @@ _live_agent_held_paths() {
 			branch="${line#branch refs/heads/}"
 			;;
 		"")
-			if [ -n "$path" ] && [ -d "$path" ] && [ -n "$branch" ] && [ "$path" != "$self" ]; then
+			# No `[ -n "$branch" ]` here: `worktree list --porcelain` prints `detached` instead of
+			# `branch` for a detached HEAD, so requiring a branch dropped every detached worktree —
+			# including the ones an agent creates to check out a PR head — and its uncommitted files
+			# never reached $held. The branch is required only for the committed-divergence diff
+			# below, which is the one read that genuinely needs a branch name (#523 review).
+			if [ -n "$path" ] && [ -d "$path" ] && [ "$path" != "$self" ]; then
 				# Committed divergence only means something against a DIFFERENT branch; for a
 				# second worktree sitting on $default the diff is empty by definition, so skip
 				# the call rather than spend it. Its dirty state below still counts.
-				if [ "$branch" != "$default" ]; then
-					if out="$(git -C "$cwd" diff --name-only "$default...$branch" 2>&1)"; then
+				if [ -n "$branch" ] && [ "$branch" != "$default" ]; then
+					# `origin/$default`, never the bare name: $default comes from
+					# refs/remotes/origin/HEAD (or a VERIFIED refs/remotes/origin/<cand>), so the
+					# remote-tracking ref is the one known to exist — a repo with no local branch of
+					# that name made `$default...$branch` fail with "unknown revision", which the
+					# case below then swallowed, dropping EVERY worktree's committed divergence while
+					# the gate still returned `ok` (#523 review).
+					if out="$(git -C "$cwd" diff --name-only -z "origin/$default...$branch" 2>&1 | tr '\0' '\n')"; then
 						[ -n "$out" ] && held="$(printf '%s\n%s' "$held" "$out")"
 					else
 						out_lc="$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')"
 						case "$out_lc" in
-						*"no merge base"* | *"unrelated histories"* | *"unknown revision"* | *"bad revision"*) : ;;
+						# ONLY the no-shared-history case is a no-op. "unknown revision"/"bad
+						# revision" are read failures — a missing or misspelled ref, not an orphan
+						# branch — and tolerating them was the fail-open above.
+						*"no merge base"* | *"unrelated histories"*) : ;;
 						*) return 1 ;;
 						esac
 					fi
@@ -294,9 +314,16 @@ _live_agent_held_paths() {
 				# already the stated contract; these lines were the exception nobody declared.
 				# Status is checked WITHOUT folding stderr into the value: a git warning on a
 				# successful read would otherwise be parsed as a pathname.
-				out="$(git -C "$path" diff HEAD --name-only 2>/dev/null)" || return 1
+				# `-z` because git's DEFAULT path quoting (core.quotePath) wraps a non-ASCII or
+				# tab-bearing pathname in quotes and escapes it, while the candidate paths the
+				# classifier compares against are literal — so a held unusual path never matched
+				# `grep -qxF` and classified `free`. `core.quotePath=false` is not enough: it leaves
+				# tabs quoted. -z emits pathnames verbatim, and `tr` turns the NUL records into the
+				# newline-delimited form $held already uses (bash drops NUL bytes inside `$( )`, so
+				# the decode has to happen in the pipeline, not after it).
+				out="$(git -C "$path" diff HEAD --name-only -z 2>/dev/null | tr '\0' '\n')" || return 1
 				[ -n "$out" ] && held="$(printf '%s\n%s' "$held" "$out")"
-				untracked="$(git -C "$path" ls-files --others --exclude-standard 2>/dev/null)" || return 1
+				untracked="$(git -C "$path" ls-files --others --exclude-standard -z 2>/dev/null | tr '\0' '\n')" || return 1
 				[ -n "$untracked" ] && held="$(printf '%s\n%s' "$held" "$untracked")"
 			fi
 			path=""

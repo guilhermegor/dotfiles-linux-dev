@@ -230,3 +230,54 @@ teardown() {
 	[ "$LIVE_AGENT_STATUS" = "ok" ]
 	[[ "$LIVE_AGENT_PATHS" == *"nohead_work.txt"* ]]
 }
+
+# --- dotfiles-dev#523 review, second round: three more fail-open paths ------------------------
+
+@test "a DETACHED sibling worktree still holds its dirty files" {
+	WT="$TEST_TMP/wt-detached"
+	# what an agent checking out a PR head produces: no `branch` line in --porcelain at all
+	git -C "$REPO" worktree add -q --detach "$WT" master
+	run git -C "$WT" symbolic-ref -q HEAD
+	[ "$status" -ne 0 ]
+	echo detachedwork >"$WT/detached_work.txt"
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"detached_work.txt"* ]]
+
+	run live_agent_classify_files detached_work.txt
+	[[ "$output" == "held:detached_work.txt" ]]
+}
+
+@test "committed divergence is read against origin/<default>, so a missing LOCAL default still holds" {
+	WT="$TEST_TMP/wt-nolocaldefault"
+	git -C "$REPO" worktree add -q -b feature/nolocal "$WT" master
+	echo committed >"$WT/nolocal_committed.txt"
+	git -C "$WT" add nolocal_committed.txt
+	git -C "$WT" commit -q -m "add nolocal_committed.txt"
+	# the local branch named `master` is gone; refs/remotes/origin/master is not
+	git -C "$REPO" checkout -q --detach master
+	git -C "$REPO" branch -q -D master
+	run git -C "$REPO" rev-parse --verify --quiet refs/heads/master
+	[ "$status" -ne 0 ]
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"nolocal_committed.txt"* ]]
+}
+
+@test "a non-ASCII pathname is held literally, not in git's quoted form" {
+	WT="$TEST_TMP/wt-quoted"
+	git -C "$REPO" worktree add -q -b feature/quoted "$WT" master
+	echo work >"$WT/café.txt"
+	# pin the precondition: git's DEFAULT quoting is what used to break the comparison
+	run git -C "$WT" ls-files --others --exclude-standard
+	[[ "$output" == *'\303\251'* ]]
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"café.txt"* ]]
+
+	run live_agent_classify_files "café.txt"
+	[[ "$output" == "held:café.txt" ]]
+}

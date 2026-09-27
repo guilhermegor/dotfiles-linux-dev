@@ -856,10 +856,17 @@ shown for it):
 **Call the gate; never re-derive "which worktrees are live" by hand** (dotfiles-dev#340/#501):
 
 ```bash
-source ai_clients/claude/hooks/lib/free_surface.sh
-gate_live_agent_surface "$(pwd)" || echo "live-agent surface UNKNOWN — do not dispatch on it"
+cd <absolute-repo-path> &&
+  source ai_clients/claude/hooks/lib/free_surface.sh
+gate_live_agent_surface <absolute-repo-path> || echo "live-agent surface UNKNOWN — do not dispatch on it"
 live_agent_classify_files <paths the issue would touch>  # free | held:… | would-need-a-held-file:…
 ```
+
+⚠️ **Both the `cd` and the gate's argument are absolute, and `$(pwd)` is neither.** This snippet is
+copied verbatim into briefs, so it has to obey the same target-qualification rule the briefs below
+carry: the harness resets cwd after every Bash call and can reset it to a *different repository*,
+and `$(pwd)` would then hand the gate that repo's worktrees — a plausible answer about the wrong
+checkout, not an error (dotfiles-dev#229, #523 review).
 
 `gate_live_agent_surface` is local-only (no `gh` call) — it walks this checkout's worktrees
 exactly the way `hooks/lib/worktree_fanout.sh` already does for
