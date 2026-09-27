@@ -333,20 +333,26 @@ STUB
 @test "graphql_probe succeeds and clears GH_BUDGET_CLASS when GraphQL is reachable" {
     stub_gh_graphql 0 ""
     GH_BUDGET_CLASS="stale"
-    run gh_budget_graphql_probe
-    [ "$status" -eq 0 ]
+    # Not `run`: it forks a subshell, so a variable the function sets would not be visible to
+    # this test afterward -- confirmed by an "unbound variable" failure when this used `run` and
+    # then read $GH_BUDGET_CLASS below. A direct call under `set -u` needs its own status guard.
+    probe_rc=0
+    gh_budget_graphql_probe || probe_rc=$?
+    [ "$probe_rc" -eq 0 ]
 }
 
 @test "graphql_probe fails and classifies a secondary-limit error as github-api-limit" {
     stub_gh_graphql 1 "API rate limit already exceeded for user ID 55053188."
-    run gh_budget_graphql_probe
-    [ "$status" -ne 0 ]
-    gh_budget_graphql_probe || true
+    probe_rc=0
+    gh_budget_graphql_probe || probe_rc=$?
+    [ "$probe_rc" -ne 0 ]
     [ "$GH_BUDGET_CLASS" = "github-api-limit" ]
 }
 
 @test "graphql_probe failure with unrelated text classifies as unknown, never terminal" {
     stub_gh_graphql 1 "some transient network error"
-    gh_budget_graphql_probe || true
+    probe_rc=0
+    gh_budget_graphql_probe || probe_rc=$?
+    [ "$probe_rc" -ne 0 ]
     [ "$GH_BUDGET_CLASS" = "unknown" ]
 }
