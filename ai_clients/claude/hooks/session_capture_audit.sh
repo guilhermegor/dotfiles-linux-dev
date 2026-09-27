@@ -94,11 +94,16 @@ check_git() {
 }
 
 check_lessons() {
-	local entry store mirror_base kind target_repo readme file name
+	local entry store mirror_base kind target_repo legacy_dir resolved readme file name
 	for entry in "${LESSON_STORES[@]}"; do
-		IFS='|' read -r store mirror_base kind target_repo <<<"$entry"
+		IFS='|' read -r store mirror_base kind target_repo legacy_dir <<<"$entry"
+		# Falls back to the store's declared legacy directory (dotfiles-dev#536
+		# review, PR #546) so this checker never disagrees with what
+		# generate_lesson_mirrors.sh actually read from — same resolve_store_dir()
+		# both share via lib/lesson_mirrors.sh.
+		resolved="$(resolve_store_dir "$store" "$legacy_dir")" || continue
+		store="${resolved%%$'\t'*}"
 		readme="$store/README.md"
-		[ -d "$store" ] || continue
 		[ -f "$readme" ] || { add_gap "[lessons] $store has lesson files but no README index"; continue; }
 
 		for file in "$store"/*.md; do
@@ -137,11 +142,14 @@ check_mirrors() {
 	# The mirror is a GENERATED artifact (dotfiles-dev#386, `make lessons_mirror` /
 	# generate_lesson_mirrors.sh), not hand-typed — a gap here means "regenerate it",
 	# never "go hand-append an entry".
-	local cwd="$1" repo entry store mirror_base kind target_repo mirror rel file name
+	local cwd="$1" repo entry store mirror_base kind target_repo legacy_dir resolved mirror rel file name
 	repo="$(resolve_repo_identity_only "$cwd")" || return 0
 	for entry in "${LESSON_STORES[@]}"; do
-		IFS='|' read -r store mirror_base kind target_repo <<<"$entry"
-		[ -d "$store" ] || continue
+		IFS='|' read -r store mirror_base kind target_repo legacy_dir <<<"$entry"
+		# Same legacy-directory fallback as check_lessons() above (dotfiles-dev#536
+		# review, PR #546) — resolve_store_dir() is the ONE place this join happens.
+		resolved="$(resolve_store_dir "$store" "$legacy_dir")" || continue
+		store="${resolved%%$'\t'*}"
 		# When this repo IS the store's backport target (or the store is the "-"
 		# sentinel, lessons-other), the mirror is redundant by convention and
 		# deliberately absent — never flag it.
@@ -219,14 +227,24 @@ emit_completeness() {
 		return 0
 	}
 
-	local entry store mirror_base kind target_repo
+	local entry store mirror_base kind target_repo legacy_dir resolved effective_store dir_source
 	for entry in "${LESSON_STORES[@]}"; do
-		IFS='|' read -r store mirror_base kind target_repo <<<"$entry"
-		if [ ! -d "$store" ]; then
+		IFS='|' read -r store mirror_base kind target_repo legacy_dir <<<"$entry"
+		# Same legacy-directory fallback as check_lessons()/check_mirrors() above
+		# (dotfiles-dev#536 review, PR #546): a store that renamed its registry
+		# entry without a matching directory move is "using the old path", not
+		# "not on disk at all".
+		if ! resolved="$(resolve_store_dir "$store" "$legacy_dir")"; then
 			printf '  [%s] skipped (store not on disk: %s)\n' "$mirror_base" "$store"
 			continue
 		fi
-		emit_completeness_store "$cwd" "$mode" "$repo" "$store" "$mirror_base"
+		effective_store="${resolved%%$'\t'*}"
+		dir_source="${resolved##*$'\t'}"
+		if [ "$dir_source" = "legacy" ]; then
+			printf '  [%s] using legacy path %s (not yet migrated to %s)\n' \
+				"$mirror_base" "$effective_store" "$store"
+		fi
+		emit_completeness_store "$cwd" "$mode" "$repo" "$effective_store" "$mirror_base"
 	done
 }
 

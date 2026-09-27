@@ -268,6 +268,44 @@ STUB
 	[[ "$output" == *"[lessons-other] skipped (store not on disk"* ]]
 }
 
+# --- PR #546 review: LESSON_STORES ships via `make ai_clients`, `~/.claude/memory/`
+# ships via nothing — a machine that renamed the registry entry without moving its
+# directory must not have every check here read the toolchain store as absent.
+
+@test "check_lessons and emit_completeness fall back to the legacy lessons-dotfiles dir" {
+	LEGACY="$CLAUDE_CONFIG_DIR/memory/lessons-dotfiles"
+	mv "$STORE" "$LEGACY"
+	printf '# some-lesson.md\n\n- **Tier:** language-common\n- **Origin:** filings-cvm\n' \
+		>"$LEGACY/some-lesson.md"
+	printf -- '- some-lesson.md\n' >>"$LEGACY/README.md"
+
+	OTHER_REPO="$TEST_TMP/filings-cvm"
+	mkdir -p "$OTHER_REPO"
+	git -C "$OTHER_REPO" init -q
+	git -C "$OTHER_REPO" remote add origin https://github.com/guilhermegor/filings-cvm.git
+
+	run bash -c "cd '$OTHER_REPO' && PATH='$TEST_TMP/bin:$PATH' bash '$HOOK' </dev/null"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"[claude-toolchain-lessons] using legacy path"* ]]
+	[[ "$output" != *"[claude-toolchain-lessons] skipped"* ]]
+	# check_lessons() must find the legacy README index and NOT flag a lost lesson.
+	[[ "$output" != *"'some-lesson.md' is not in the"* ]]
+	[[ "$output" != *"has lesson files but no README index"* ]]
+}
+
+@test "still reports skipped (never a false legacy match) when neither directory exists" {
+	rm -rf "$STORE"
+	OTHER_REPO="$TEST_TMP/filings-cvm"
+	mkdir -p "$OTHER_REPO"
+	git -C "$OTHER_REPO" init -q
+	git -C "$OTHER_REPO" remote add origin https://github.com/guilhermegor/filings-cvm.git
+
+	run bash -c "cd '$OTHER_REPO' && PATH='$TEST_TMP/bin:$PATH' bash '$HOOK' </dev/null"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"[claude-toolchain-lessons] skipped (store not on disk"* ]]
+	[[ "$output" != *"using legacy path"* ]]
+}
+
 # --- lessons-other: the third store, no distinct backport target (dotfiles-dev#356) -------------
 
 @test "lessons-other never expects a repo mirror even when Origin matches the current repo" {

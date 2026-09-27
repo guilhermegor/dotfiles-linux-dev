@@ -13,13 +13,14 @@
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 
-# All generalizable-lessons stores, each as "dir|mirror-basename|kind|target-repos".
-# target-repos is the store's backport target SET: a comma-separated list of every
-# repo that IS this store's own origin (a lesson originating in any one of them needs
-# no mirror there — the mirror would be redundant), so mirror_expected_for_repo()
-# below skips it for ALL of them. target-repos "-" (lessons-other, dotfiles-dev#356)
-# is a sentinel, not a repo name: that store has no distinct backport target at all,
-# so it never gets a mirror anywhere.
+# All generalizable-lessons stores, each as
+# "dir|mirror-basename|kind|target-repos|legacy-dir". target-repos is the store's
+# backport target SET: a comma-separated list of every repo that IS this store's own
+# origin (a lesson originating in any one of them needs no mirror there — the mirror
+# would be redundant), so mirror_expected_for_repo() below skips it for ALL of them.
+# target-repos "-" (lessons-other, dotfiles-dev#356) is a sentinel, not a repo name:
+# that store has no distinct backport target at all, so it never gets a mirror
+# anywhere.
 #
 # The set is declared explicitly, never guessed from a `dotfiles*` prefix
 # (dotfiles-dev#536): the toolchain repo has already been renamed once
@@ -29,14 +30,45 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 # naming drifts again — the same house style as an explicit, named exemption (e.g.
 # py-standards.md's stpstone Snyk exemption) over a pattern match.
 #
+# legacy-dir (optional, "" when a store has never been renamed) is this SAME
+# reasoning applied to the store's own directory, not just the repo identifier it
+# resolves (dotfiles-dev#536 review, PR #546): `LESSON_STORES` ships via
+# `make ai_clients`, but `~/.claude/memory/` is user data with no deploy step at
+# all — a machine that still holds the pre-rename `lessons-dotfiles/` directory
+# gets the renamed CODE immediately and the renamed DATA never, and nothing here
+# migrates it for that machine. resolve_store_dir() below falls back to this path
+# read-only (never auto-`mv`s user data) and says so, rather than reporting the
+# store as absent.
+#
 # Used by every file that sources this lib (session_capture_audit.sh,
 # generate_lesson_mirrors.sh) — shellcheck can't see those callers.
 # shellcheck disable=SC2034
 LESSON_STORES=(
-	"$CLAUDE_DIR/memory/lessons|blueprintx-lessons|blueprintx|blueprintx"
-	"$CLAUDE_DIR/memory/lessons-claude-toolchain|claude-toolchain-lessons|dotfiles|dotfiles-dev,dotfiles-linux-dev,dotfiles-macos-dev,dotfiles-linux-prod"
-	"$CLAUDE_DIR/memory/lessons-other|lessons-other|other|-"
+	"$CLAUDE_DIR/memory/lessons|blueprintx-lessons|blueprintx|blueprintx|"
+	"$CLAUDE_DIR/memory/lessons-claude-toolchain|claude-toolchain-lessons|dotfiles|dotfiles-dev,dotfiles-linux-dev,dotfiles-macos-dev,dotfiles-linux-prod|$CLAUDE_DIR/memory/lessons-dotfiles"
+	"$CLAUDE_DIR/memory/lessons-other|lessons-other|other|-|"
 )
+
+# resolve_store_dir STORE LEGACY
+# Prints "<effective-dir>\t<current|legacy>" — the directory a caller should
+# actually read this store from right now. Prefers STORE; falls back to LEGACY
+# only when STORE doesn't exist AND LEGACY is declared (non-empty) and does exist.
+# Read-only: never moves or copies anything, so a caller must still print its own
+# "not yet migrated" diagnostic when the source comes back "legacy" — this
+# function only answers "which directory", never "is this fine to leave as is".
+# Returns non-zero with empty output when neither directory exists.
+resolve_store_dir() {
+	local store="$1" legacy="$2"
+	if [ -d "$store" ]; then
+		printf '%s\tcurrent\n' "$store"
+		return 0
+	fi
+	if [ -n "$legacy" ] && [ -d "$legacy" ]; then
+		printf '%s\tlegacy\n' "$legacy"
+		return 0
+	fi
+	return 1
+}
 
 # A store's mirror path, relative to a repo's root — the ONE construction site
 # (dotfiles-dev#386) instead of the "$cwd/docs/$mirror_base.md" string that used
@@ -134,9 +166,12 @@ repo_citation_regex() {
 # store declares it. This is the ONE place "which repos are really the same thing"
 # is answered — by declaration, never by a `dotfiles*` prefix guess (dotfiles-dev#536).
 repo_alias_group() {
-	local repo="$1" entry _store _mirror_base _kind target_repos alias
+	local repo="$1" entry _store _mirror_base _kind target_repos _legacy alias
 	for entry in "${LESSON_STORES[@]}"; do
-		IFS='|' read -r _store _mirror_base _kind target_repos <<<"$entry"
+		# The trailing _legacy var is unused here but MUST be captured: `read` with
+		# fewer variables than fields folds every extra field into the LAST one,
+		# which would silently append "|<legacy-dir>" onto target_repos otherwise.
+		IFS='|' read -r _store _mirror_base _kind target_repos _legacy <<<"$entry"
 		[ "$target_repos" = "-" ] && continue
 		local IFS=','
 		for alias in $target_repos; do

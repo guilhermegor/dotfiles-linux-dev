@@ -20,8 +20,11 @@ setup() {
 	export CLAUDE_CONFIG_DIR="$TEST_TMP/claude"
 	BX_STORE="$CLAUDE_CONFIG_DIR/memory/lessons"
 	DF_STORE="$CLAUDE_CONFIG_DIR/memory/lessons-claude-toolchain"
+	DF_LEGACY="$CLAUDE_CONFIG_DIR/memory/lessons-dotfiles"
 	OTHER_STORE="$CLAUDE_CONFIG_DIR/memory/lessons-other"
 	mkdir -p "$BX_STORE" "$DF_STORE" "$OTHER_STORE"
+	# DF_LEGACY is deliberately NOT created here — the declared legacy directory
+	# (dotfiles-dev#536 review, PR #546) only matters to the tests that exercise it.
 
 	# No git remote by default — identity falls back to basename, same as before
 	# the dotfiles-dev#536 rename (the store's declared alias set includes
@@ -289,4 +292,70 @@ lesson() {
 	run bash "$GEN" "$REPO"
 	[ "$status" -eq 0 ]
 	[ ! -e "$REPO/.specs/_lessons/claude-toolchain-lessons.md" ]
+}
+
+# --- PR #546 review: a rename with no upgrade path for USER DATA -------------
+# LESSON_STORES ships via `make ai_clients`; `~/.claude/memory/` does not ship
+# anywhere. A machine still holding the pre-rename `lessons-dotfiles/` directory
+# must not have `make lessons_mirror` hard-fail on every repo forever.
+
+@test "falls back to the declared legacy directory when the renamed store is absent" {
+	OTHER="$TEST_TMP/wwdates"
+	mkdir -p "$OTHER"
+	rm -rf "$DF_STORE"
+	mkdir -p "$DF_LEGACY"
+	lesson "$DF_LEGACY" "toolchain-fix" "wwdates"
+
+	run bash "$GEN" "$OTHER"
+	[ "$status" -eq 0 ]
+	[ -f "$OTHER/.specs/_lessons/claude-toolchain-lessons.md" ]
+	grep -qF "toolchain-fix.md" "$OTHER/.specs/_lessons/claude-toolchain-lessons.md"
+	[[ "$output" == *"not found — reading the legacy path"* ]]
+	[[ "$output" == *"migrate with: mv"* ]]
+}
+
+@test "the legacy fallback never writes to or deletes the legacy directory" {
+	OTHER="$TEST_TMP/wwdates"
+	mkdir -p "$OTHER"
+	rm -rf "$DF_STORE"
+	mkdir -p "$DF_LEGACY"
+	lesson "$DF_LEGACY" "toolchain-fix" "wwdates"
+
+	run bash "$GEN" "$OTHER"
+	[ "$status" -eq 0 ]
+	[ -f "$DF_LEGACY/toolchain-fix.md" ]
+	[ ! -e "$DF_STORE" ]
+}
+
+@test "the current directory is preferred over the legacy one when both exist" {
+	OTHER="$TEST_TMP/wwdates"
+	mkdir -p "$OTHER" "$DF_LEGACY"
+	lesson "$DF_STORE" "current-fix" "wwdates"
+	lesson "$DF_LEGACY" "legacy-fix" "wwdates"
+
+	run bash "$GEN" "$OTHER"
+	[ "$status" -eq 0 ]
+	grep -qF "current-fix.md" "$OTHER/.specs/_lessons/claude-toolchain-lessons.md"
+	run grep -qF "legacy-fix.md" "$OTHER/.specs/_lessons/claude-toolchain-lessons.md"
+	[ "$status" -ne 0 ]
+	[[ "$output" != *"reading the legacy path"* ]]
+}
+
+@test "still fails loudly when NEITHER the current nor the legacy directory exists" {
+	OTHER="$TEST_TMP/wwdates"
+	mkdir -p "$OTHER"
+	rm -rf "$DF_STORE"
+	# DF_LEGACY was never created in this test.
+
+	run bash "$GEN" "$OTHER"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"registered store"* ]]
+	[[ "$output" == *"does not exist"* ]]
+}
+
+@test "a store with no declared legacy directory (blueprintx) gets no fallback" {
+	rm -rf "$BX_STORE"
+	run bash "$GEN" "$REPO"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"blueprintx-lessons"* ]]
 }
