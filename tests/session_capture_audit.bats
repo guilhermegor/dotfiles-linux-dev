@@ -18,9 +18,9 @@ setup() {
 	HOOK="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/session_capture_audit.sh"
 	TEST_TMP="$(mktemp -d)"
 
-	# Throwaway store, matching the dotfiles-dev lesson-store layout.
+	# Throwaway store, matching the claude-toolchain lesson-store layout.
 	export CLAUDE_CONFIG_DIR="$TEST_TMP/claude"
-	STORE="$CLAUDE_CONFIG_DIR/memory/lessons-dotfiles"
+	STORE="$CLAUDE_CONFIG_DIR/memory/lessons-claude-toolchain"
 	mkdir -p "$STORE"
 	printf '# index\n' >"$STORE/README.md"
 
@@ -202,7 +202,7 @@ STUB
 		GH_ARGV_LOG='$TEST_TMP/gh_argv' bash '$HOOK' </dev/null"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"--- completeness (both directions, dotfiles-dev#81) ---"* ]]
-	[[ "$output" == *"[dotfiles-dev-lessons]"* ]]
+	[[ "$output" == *"[claude-toolchain-lessons]"* ]]
 	[[ "$output" == *"lessons → issues :"* ]]
 }
 
@@ -211,8 +211,9 @@ STUB
 # lesson_capture_checkpoint.sh's reminder claims (now correctly) that the mirror check matches
 # on the bare filename appearing anywhere in the mirror text. Pin that here directly against
 # check_mirrors()'s real behaviour — `grep -qF "$name" "$mirror"` — so the two files cannot
-# silently re-diverge. Uses a repo that is neither store's backport target (dotfiles-dev-lessons'
-# target is "dotfiles-dev"), since check_mirrors() skips the same-repo mirror entirely otherwise.
+# silently re-diverge. Uses a repo that is neither store's backport target (lessons-claude-toolchain's
+# target set is dotfiles-dev/dotfiles-linux-dev/dotfiles-macos-dev/dotfiles-linux-prod), since
+# check_mirrors() skips the same-repo mirror entirely otherwise.
 
 @test "check_mirrors accepts a mirror entry containing only the bare filename" {
 	OTHER_REPO="$TEST_TMP/filings-cvm"
@@ -226,12 +227,12 @@ STUB
 
 	# Only the bare filename, mid-sentence — no "- **Source:**" field. This is exactly
 	# what the corrected checkpoint reminder now promises is sufficient.
-	printf 'Ported over: origin-lesson.md\n' >"$OTHER_REPO/.specs/_lessons/dotfiles-dev-lessons.md"
+	printf 'Ported over: origin-lesson.md\n' >"$OTHER_REPO/.specs/_lessons/claude-toolchain-lessons.md"
 
 	run bash -c "cd '$OTHER_REPO' && PATH='$TEST_TMP/bin:$PATH' GH_ISSUES='' \
 		GH_ARGV_LOG='$TEST_TMP/gh_argv' bash '$HOOK' </dev/null"
 	[ "$status" -eq 0 ]
-	[[ "$output" != *"origin-lesson.md' originated here but is not in .specs/_lessons/dotfiles-dev-lessons.md"* ]]
+	[[ "$output" != *"origin-lesson.md' originated here but is not in .specs/_lessons/claude-toolchain-lessons.md"* ]]
 }
 
 @test "check_mirrors still flags a mirror missing the filename entirely (non-vacuous control)" {
@@ -244,12 +245,12 @@ STUB
 		>"$STORE/origin-lesson.md"
 	printf -- '- origin-lesson.md\n' >>"$STORE/README.md"
 
-	printf 'nothing relevant here\n' >"$OTHER_REPO/.specs/_lessons/dotfiles-dev-lessons.md"
+	printf 'nothing relevant here\n' >"$OTHER_REPO/.specs/_lessons/claude-toolchain-lessons.md"
 
 	run bash -c "cd '$OTHER_REPO' && PATH='$TEST_TMP/bin:$PATH' GH_ISSUES='' \
 		GH_ARGV_LOG='$TEST_TMP/gh_argv' bash '$HOOK' </dev/null"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"origin-lesson.md' originated here but is not in .specs/_lessons/dotfiles-dev-lessons.md"* ]]
+	[[ "$output" == *"origin-lesson.md' originated here but is not in .specs/_lessons/claude-toolchain-lessons.md"* ]]
 }
 
 @test "a store absent from disk is reported as skipped, never silently omitted" {
@@ -298,17 +299,17 @@ STUB
 	printf '# origin-lesson\n\n- **Tier:** language-common\n- **Status:** delivered\n- **Origin:** filings-cvm\n' \
 		>"$STORE/origin-lesson.md"
 	printf -- '- origin-lesson.md\n' >>"$STORE/README.md"
-	printf 'Ported over: origin-lesson.md\n' >"$OTHER_REPO/.specs/_lessons/dotfiles-dev-lessons.md"
+	printf 'Ported over: origin-lesson.md\n' >"$OTHER_REPO/.specs/_lessons/claude-toolchain-lessons.md"
 
 	# Mirror written first, then the lesson appended to afterwards — the append never
 	# propagated, and filename presence alone can't see that.
-	touch -d '2026-09-01T00:00:00' "$OTHER_REPO/.specs/_lessons/dotfiles-dev-lessons.md"
+	touch -d '2026-09-01T00:00:00' "$OTHER_REPO/.specs/_lessons/claude-toolchain-lessons.md"
 	touch -d '2026-09-02T00:00:00' "$STORE/origin-lesson.md"
 
 	run bash -c "cd '$OTHER_REPO' && PATH='$TEST_TMP/bin:$PATH' GH_ISSUES='' \
 		GH_ARGV_LOG='$TEST_TMP/gh_argv' bash '$HOOK' </dev/null"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"origin-lesson.md' changed after .specs/_lessons/dotfiles-dev-lessons.md"* ]]
+	[[ "$output" == *"origin-lesson.md' changed after .specs/_lessons/claude-toolchain-lessons.md"* ]]
 }
 
 @test "check_mirrors does not flag a lesson touched before its mirror (negative control)" {
@@ -320,14 +321,56 @@ STUB
 	printf '# origin-lesson\n\n- **Tier:** language-common\n- **Status:** delivered\n- **Origin:** filings-cvm\n' \
 		>"$STORE/origin-lesson.md"
 	printf -- '- origin-lesson.md\n' >>"$STORE/README.md"
-	printf 'Ported over: origin-lesson.md\n' >"$OTHER_REPO/.specs/_lessons/dotfiles-dev-lessons.md"
+	printf 'Ported over: origin-lesson.md\n' >"$OTHER_REPO/.specs/_lessons/claude-toolchain-lessons.md"
 
 	# Lesson written first, mirror updated afterwards — fully propagated, no staleness.
 	touch -d '2026-09-01T00:00:00' "$STORE/origin-lesson.md"
-	touch -d '2026-09-02T00:00:00' "$OTHER_REPO/.specs/_lessons/dotfiles-dev-lessons.md"
+	touch -d '2026-09-02T00:00:00' "$OTHER_REPO/.specs/_lessons/claude-toolchain-lessons.md"
 
 	run bash -c "cd '$OTHER_REPO' && PATH='$TEST_TMP/bin:$PATH' GH_ISSUES='' \
 		GH_ARGV_LOG='$TEST_TMP/gh_argv' bash '$HOOK' </dev/null"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"origin-lesson.md' changed after"* ]]
+}
+
+# --- dotfiles-dev#536: repo identity via remote, and the declared alias set ---------------------
+
+@test "identity resolves via the remote and says so, even when the directory name differs" {
+	# The renamed-repo case: directory still called "dotfiles-dev" locally, but the
+	# remote already points at the new name — the report must say which repo AND
+	# which signal, so a mismatch is visible instead of silently assumed.
+	git -C "$REPO" remote set-url origin https://github.com/guilhermegor/dotfiles-linux-dev.git
+	lesson "some-lesson.md" "42"
+	run_report ""
+	[[ "$output" == *"=== Session capture audit — dotfiles-linux-dev via remote"* ]]
+}
+
+@test "a citation written before the rename still counts as accounted for after it" {
+	# lesson() stamps "guilhermegor/dotfiles-dev#42" (the pre-rename citation shape).
+	# Once the remote points at dotfiles-linux-dev, repo resolves to the NEW name —
+	# the citation must still match via the store's declared alias set, not a fresh
+	# literal string comparison, or ~242 real lessons would all flip to "unaccounted".
+	git -C "$REPO" remote set-url origin https://github.com/guilhermegor/dotfiles-linux-dev.git
+	lesson "tracked-lesson.md" "42"
+	run_report ""
+	[[ "$output" == *"lessons → issues : 1 in store, 0 without a PR ref — 0 delivered, 0 advisory, 0 superseded, 0 genuinely unaccounted"* ]]
+}
+
+@test "the same run behaves identically for a dotfiles-dev vs dotfiles-linux-dev checkout" {
+	# Acceptance proof: same lesson content, only the checkout directory name (and
+	# matching remote) differ — the completeness row must be byte-identical.
+	RENAMED_REPO="$TEST_TMP/dotfiles-linux-dev"
+	mkdir -p "$RENAMED_REPO"
+	git -C "$RENAMED_REPO" init -q
+	git -C "$RENAMED_REPO" remote add origin https://github.com/guilhermegor/dotfiles-linux-dev.git
+
+	lesson "tracked-lesson.md" "42"
+	run_report ""
+	old_line="$(printf '%s\n' "$output" | grep 'lessons → issues :')"
+
+	run bash -c "cd '$RENAMED_REPO' && PATH='$TEST_TMP/bin:$PATH' GH_ISSUES='' \
+		GH_ARGV_LOG='$TEST_TMP/gh_argv' bash '$HOOK' </dev/null"
+	new_line="$(printf '%s\n' "$output" | grep 'lessons → issues :')"
+
+	[ "$old_line" = "$new_line" ]
 }

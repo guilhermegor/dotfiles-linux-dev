@@ -19,10 +19,13 @@ setup() {
 
 	export CLAUDE_CONFIG_DIR="$TEST_TMP/claude"
 	BX_STORE="$CLAUDE_CONFIG_DIR/memory/lessons"
-	DF_STORE="$CLAUDE_CONFIG_DIR/memory/lessons-dotfiles"
+	DF_STORE="$CLAUDE_CONFIG_DIR/memory/lessons-claude-toolchain"
 	OTHER_STORE="$CLAUDE_CONFIG_DIR/memory/lessons-other"
 	mkdir -p "$BX_STORE" "$DF_STORE" "$OTHER_STORE"
 
+	# No git remote by default — identity falls back to basename, same as before
+	# the dotfiles-dev#536 rename (the store's declared alias set includes
+	# "dotfiles-dev", so this directory name still self-mirror-skips).
 	REPO="$TEST_TMP/dotfiles-dev"
 	mkdir -p "$REPO"
 }
@@ -59,7 +62,55 @@ lesson() {
 	lesson "$DF_STORE" "toolchain-fix" "dotfiles-dev"
 	run bash "$GEN" "$REPO"
 	[ "$status" -eq 0 ]
-	[ ! -e "$REPO/.specs/_lessons/dotfiles-dev-lessons.md" ]
+	[ ! -e "$REPO/.specs/_lessons/claude-toolchain-lessons.md" ]
+}
+
+# --- dotfiles-dev#536: a declared repo SET, resolved from the remote first ---------------
+
+@test "a declared alias of the store's own repo also self-mirror-skips (the renamed repo)" {
+	# The exact inverse bug from the issue: a checkout literally named after the NEW
+	# repo name must still be recognised as the store's own repo, not just the old one.
+	RENAMED="$TEST_TMP/dotfiles-linux-dev"
+	mkdir -p "$RENAMED"
+	lesson "$DF_STORE" "toolchain-fix" "dotfiles-dev"
+	run bash "$GEN" "$RENAMED"
+	[ "$status" -eq 0 ]
+	[ ! -e "$RENAMED/.specs/_lessons/claude-toolchain-lessons.md" ]
+	[[ "$output" == *"no self-mirror"* ]]
+}
+
+@test "an unrelated repo directory named after a declared alias still resolves via the remote" {
+	# git remote wins over basename: a checkout named "dotfiles-macos-dev" but pointing
+	# at an unrelated remote must NOT be treated as this store's own repo — it is a
+	# legitimate (if empty) backport target, not a self-mirror skip.
+	MISNAMED="$TEST_TMP/dotfiles-macos-dev"
+	mkdir -p "$MISNAMED"
+	git -C "$MISNAMED" init -q
+	git -C "$MISNAMED" remote add origin https://github.com/guilhermegor/filings-cvm.git
+	lesson "$DF_STORE" "toolchain-fix" "dotfiles-dev"
+	run bash "$GEN" "$MISNAMED"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"Resolved repo identity: filings-cvm (via remote)"* ]]
+	[[ "$output" != *"no self-mirror"* ]]
+	[ -f "$MISNAMED/.specs/_lessons/claude-toolchain-lessons.md" ]
+	run grep -qF "toolchain-fix.md" "$MISNAMED/.specs/_lessons/claude-toolchain-lessons.md"
+	[ "$status" -ne 0 ]
+}
+
+@test "the reproduction: a fresh dotfiles-macos-dev checkout writes no empty mirror" {
+	# dotfiles-dev#536's own repro: git init + nothing else, directory named after a
+	# declared alias with no remote at all (basename fallback). Before the fix this
+	# produced a mirror with the RIGHT title and ZERO entries; after the fix it must
+	# produce no file at all, with a stated reason.
+	MACOS="$TEST_TMP/dotfiles-macos-dev"
+	mkdir -p "$MACOS"
+	git -C "$MACOS" init -q
+	lesson "$DF_STORE" "toolchain-fix" "dotfiles-dev"
+	run bash "$GEN" "$MACOS"
+	[ "$status" -eq 0 ]
+	[ ! -e "$MACOS/.specs/_lessons/claude-toolchain-lessons.md" ]
+	[[ "$output" == *"Resolved repo identity: dotfiles-macos-dev (via basename)"* ]]
+	[[ "$output" == *"declared as one of this store's own repos"* ]]
 }
 
 @test "lessons-other is never mirrored, even when Origin matches the repo" {
@@ -118,7 +169,7 @@ lesson() {
 }
 
 # The two real Origin shapes a literal whole-field compare would drop (8 of 43 real
-# lessons in lessons-dotfiles were written this way, measured 2026-09-14).
+# lessons in lessons-claude-toolchain were written this way, measured 2026-09-14).
 @test "a two-repo Origin (blueprintx / dotfiles-dev) is included for either repo" {
 	lesson "$BX_STORE" "shared-finding" "blueprintx / dotfiles-dev (2026-08-17), after x"
 	run bash "$GEN" "$REPO"
