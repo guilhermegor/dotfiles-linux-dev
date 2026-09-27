@@ -110,6 +110,18 @@ stub_gh() {
 #!/bin/bash
 case "\$*" in
 "repo view --json nameWithOwner -q .nameWithOwner") echo "acme/widgets" ;;
+"api --paginate repos/acme/widgets/issues"*)
+    # open_issues() reads REST, not \`gh issue list\` -- GraphQL refuses under the secondary
+    # limiter while REST keeps answering. A prefix pattern, because the query string carries
+    # \`?\` and \`&\`, both of which are glob metacharacters inside \`case\`.
+    #
+    # \`gh api --paginate\` MERGES array pages into one array (measured: per_page=5 over 6
+    # pages -> a single 28-element array \`json.loads\` parses), so the stub emits one array
+    # exactly as the real command does -- never one array per page.
+    cat <<'JSON'
+$issues_json
+JSON
+    ;;
 "issue list --repo acme/widgets --state open --limit 500 --json number,body")
     cat <<'JSON'
 $issues_json
