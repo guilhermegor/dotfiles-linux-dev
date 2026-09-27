@@ -94,3 +94,103 @@ print((step.get('with') or {}).get('ref',''))
     [ "$status" -eq 0 ]
     [[ "$output" == *"default_branch"* ]]
 }
+
+# --- dotfiles-dev#550: the ladder marker's history path -------------------------------------------
+#
+# CodeRabbit's marker was already re-resolved from PR HISTORY (comments after head_seen_at), so a
+# later ordinary comment re-running this job could never revoke it. The ladder marker (#444/#446)
+# had no such path: it was credited ONLY from the triggering event's own COMMENT_BODY. The reply
+# that ANSWERS a ladder finding is itself an issue_comment, so it re-ran this job with a
+# non-matching body and revoked the credit -- the whole defect in one sentence. This test proves
+# the fix: an earlier ladder marker, now resolved from history, survives a later non-marker reply
+# triggering the run.
+
+# run_ladder_step COMMENT_BODY COMMENTS_JSON
+# Stubs every `gh` call the script makes and a minimal gate_pr_thread_state() (this test is scoped
+# to the reviewer_reported logic in review_threads.yml, not a review_thread_gate.sh integration --
+# that file has its own suite). Runs from a scratch WORKDIR carrying a stub
+# ai_clients/claude/hooks/lib/review_thread_gate.sh so the script's own `source` line resolves.
+run_ladder_step() {
+    local triggering_body="$1" comments_json="$2"
+    mkdir -p "$BATS_TEST_TMPDIR/ai_clients/claude/hooks/lib"
+    cat > "$BATS_TEST_TMPDIR/ai_clients/claude/hooks/lib/review_thread_gate.sh" <<'GATE'
+gate_pr_thread_state() { GATE_STATUS=clean; GATE_DETAIL="stub-clean"; }
+GATE
+
+    CHECK_RUN_OUT="$BATS_TEST_TMPDIR/check-run.json"
+    : > "$CHECK_RUN_OUT"
+
+    run env OWNER=o REPO=r PR_NUMBER=9 EVENT_NAME=issue_comment \
+        COMMENT_AUTHOR=guilhermegor COMMENT_AUTHOR_ASSOCIATION=OWNER \
+        COMMENT_BODY="$triggering_body" \
+        RUN_SCRIPT="$RUN_SCRIPT" WORKDIR="$BATS_TEST_TMPDIR" \
+        COMMENTS_JSON="$comments_json" HEAD_SEEN="2026-09-27T12:00:00Z" \
+        CHECK_RUN_OUT="$CHECK_RUN_OUT" \
+        bash -c '
+            cd "$WORKDIR" || exit 1
+            gh() {
+                case "$*" in
+                    *"/pulls/"*)        echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" ;;
+                    *"--json files"*)   printf "%s\n" "ai_clients/claude/hooks/lib/foo.sh" ;;
+                    *"--json reviews"*) echo "0" ;;
+                    *check-suites*)     echo "$HEAD_SEEN" ;;
+                    *"/comments"*)      printf "%s\n" "$COMMENTS_JSON" ;;
+                    *check-runs*)       cat > "$CHECK_RUN_OUT" ;;
+                    *) return 1 ;;
+                esac
+            }
+            export -f gh
+            bash "$RUN_SCRIPT"
+        '
+}
+
+@test "#550: a marker earned in HISTORY is not revoked by a later non-marker reply" {
+    marker_body=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\n\nNo issues found.'
+    second_body='Thanks, fixed in abc123.'
+    comments_json="$(jq -nc --arg m "$marker_body" --arg s "$second_body" '[
+      {user:{login:"guilhermegor",type:"User"}, author_association:"OWNER",
+       body:$m, created_at:"2026-09-27T12:38:40Z"},
+      {user:{login:"guilhermegor",type:"User"}, author_association:"OWNER",
+       body:$s, created_at:"2026-09-27T12:39:49Z"}
+    ]')"
+
+    run_ladder_step "$second_body" "$comments_json"
+
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.conclusion' "$CHECK_RUN_OUT")" = "success" ]
+}
+
+@test "#550: no marker anywhere in history still fails, the gate is not disabled" {
+    comments_json='[{"user":{"login":"guilhermegor","type":"User"},"author_association":"OWNER","body":"just chatting","created_at":"2026-09-27T12:39:49Z"}]'
+
+    run_ladder_step "just chatting" "$comments_json"
+
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.conclusion' "$CHECK_RUN_OUT")" = "failure" ]
+}
+
+@test "#550: a forged marker from a NONE-association commenter is ignored (CWE-345 survives history)" {
+    marker_body=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\n\nNo issues found.'
+    comments_json="$(jq -nc --arg m "$marker_body" '[
+      {user:{login:"randomuser",type:"User"}, author_association:"NONE",
+       body:$m, created_at:"2026-09-27T12:38:40Z"}
+    ]')"
+
+    run_ladder_step "unrelated reply" "$comments_json"
+
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.conclusion' "$CHECK_RUN_OUT")" = "failure" ]
+}
+
+@test "#550: a marker posted BEFORE the current head does not validate it" {
+    marker_body=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\n\nNo issues found.'
+    comments_json="$(jq -nc --arg m "$marker_body" '[
+      {user:{login:"guilhermegor",type:"User"}, author_association:"OWNER",
+       body:$m, created_at:"2026-09-27T11:00:00Z"}
+    ]')"
+
+    run_ladder_step "unrelated reply" "$comments_json"
+
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.conclusion' "$CHECK_RUN_OUT")" = "failure" ]
+}
