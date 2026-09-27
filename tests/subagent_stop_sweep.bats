@@ -114,6 +114,33 @@ STUB
     [[ "$output" == "UNKNOWN" ]]
 }
 
+# --- format_free_surface_report: item [6]'s label can never read as dispatch_plan.py's verdict ----
+#
+# dotfiles-dev#535: item [6] used to print "dispatch these 13: ..." for the exact 13 issues
+# dispatch_plan.py excluded the same round — one enumeration read as fact would have sent 13
+# agents onto undeclared surfaces. The fix pinned here is wording, not a live cross-check: the
+# label must never claim "dispatch"/"dispatchable" (dispatch_plan.py's own, stricter verdict)
+# and must always name the narrower question it actually answers.
+
+@test "a non-empty free surface never claims to be dispatchable" {
+    run format_free_surface_report "#10 #30"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"dispatch these"* ]]
+    [[ "$output" == *"unclaimed by a PR"* ]]
+    [[ "$output" == *"NOT dispatch_plan.py"* ]]
+}
+
+@test "an UNKNOWN free surface still says UNKNOWN, not empty" {
+    run format_free_surface_report "UNKNOWN"
+    [[ "$output" == *"UNKNOWN"* ]]
+    [[ "$output" != *"dispatch these"* ]]
+}
+
+@test "an empty free surface reports empty, not dispatchable" {
+    run format_free_surface_report ""
+    [[ "$output" == "dispatch: free surface empty" ]]
+}
+
 # --- sweep_worktrees: every linked worktree is residue, whatever it is named ---------------------
 
 @test "a clean worktree reports none" {

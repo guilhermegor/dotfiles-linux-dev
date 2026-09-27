@@ -28,8 +28,16 @@
 #
 # Query, not judgement (the reference sweep's own framing): every section
 # below only prints states that need action, and the final line is always
-# explicit — "dispatch these N: ..." or "dispatch: free surface empty" —
+# explicit — "unclaimed by a PR (N): ..." or "dispatch: free surface empty" —
 # because silence is indistinguishable from the check having been skipped.
+# ⚠️ Item [6]'s label is NOT the dispatch plan (dotfiles-dev#535). It answers
+# gate_free_surface's question ("not claimed by an open/merged PR"), which is
+# strictly weaker than dispatch_plan.py's ("dispatchable": also excludes an
+# UNDECLARED surface, a live-agent collision, and a bare-#N PR mention).
+# Measured 2026-09-27: this line printed "dispatch these 13: ..." for the
+# exact 13 issues dispatch_plan.py excluded the same round — one enumeration
+# read as fact would have sent 13 agents onto undeclared surfaces. See
+# format_free_surface_report() below for the wording contract this pins.
 #
 # Emits its report as SubagentStop `additionalContext` JSON so the parent
 # session sees it without anyone asking. Never blocks: this hook cannot spawn
@@ -333,6 +341,10 @@ sweep_behind_base() {
 # for; dotfiles-dev#340). Prints "#N #M ..." (space-separated), "UNKNOWN" on an API failure
 # (never an empty string — empty is indistinguishable from "nothing left to dispatch"), or
 # nothing when every open issue is already claimed.
+#
+# ⚠️ This is "unclaimed by a PR", never "dispatchable" — see format_free_surface_report()
+# below, which is the ONLY place that turns this raw list into report prose, and states the
+# distinction in the label every time (dotfiles-dev#535).
 free_dispatch_surface() {
 	local repo="$1" owner="${1%%/*}" name="${1##*/}"
 	if ! gate_free_surface "$owner" "$name"; then
@@ -345,6 +357,28 @@ free_dispatch_surface() {
 		free_list+=("#$n")
 	done <<<"$FREE_UNCLAIMED_ISSUES"
 	[ "${#free_list[@]}" -gt 0 ] && printf '%s\n' "${free_list[*]}"
+}
+
+# format_free_surface_report FREE
+# Renders item [6]'s report line from free_dispatch_surface's raw output ("$FREE" is its
+# stdout: "UNKNOWN", empty, or "#N #M ..."). Named explicitly as "unclaimed by a PR" — never
+# "dispatch"/"dispatchable" — because that word is dispatch_plan.py's own, STRICTER verdict
+# (it also excludes an UNDECLARED surface, a live-agent collision, and a bare-#N PR mention;
+# see dispatch_plan.py's module docstring). Conflating the two is the dotfiles-dev#535 defect:
+# this exact line used to read "dispatch these 13: ..." for the 13 issues dispatch_plan.py
+# excluded the same round. Pinned by tests/subagent_stop_sweep.bats so the two labels cannot
+# drift back together.
+format_free_surface_report() {
+	local free="$1"
+	if [ "$free" = "UNKNOWN" ]; then
+		echo "dispatch: UNKNOWN — free surface unreadable (gh API failure), not empty"
+	elif [ -n "$free" ]; then
+		# shellcheck disable=SC2086 # word-splitting is intentional: count the tokens
+		set -- $free
+		echo "unclaimed by a PR ($#, NOT dispatch_plan.py's dispatchable set): $free"
+	else
+		echo "dispatch: free surface empty"
+	fi
 }
 
 # gh_budget_gate REPO
@@ -442,17 +476,9 @@ dispatch: UNKNOWN — $BUDGET_GATE_REASON"
 		sweep_no_automerge "$repo"
 		echo "[5] PR behind base ($db)"
 		sweep_behind_base "$cwd" "$repo" "$db"
-		echo "[6] free dispatch surface"
+		echo "[6] PR-unclaimed issues (narrower than dispatch_plan.py — see its own [d]/[x])"
 		free="$(free_dispatch_surface "$repo")"
-		if [ "$free" = "UNKNOWN" ]; then
-			echo "dispatch: UNKNOWN — free surface unreadable (gh API failure), not empty"
-		elif [ -n "$free" ]; then
-			# shellcheck disable=SC2086 # word-splitting is intentional: count the tokens
-			set -- $free
-			echo "dispatch these $#: $free"
-		else
-			echo "dispatch: free surface empty"
-		fi
+		format_free_surface_report "$free"
 		echo "[7] kanban reconcile (open PRs -> In review)"
 		if reconcile_kanban "$owner" "$name"; then
 			if [ -n "$RECONCILE_KANBAN_REPORT" ]; then
