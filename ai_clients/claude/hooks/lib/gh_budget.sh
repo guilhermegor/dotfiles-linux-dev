@@ -42,7 +42,24 @@ gh_budget_classify() {
 
 	# GitHub's OWN api/graphql rate-limit error text, checked FIRST because it also contains the
 	# substring "rate limit" that CodeRabbit's unrelated review-slot notice uses below.
-	if [[ "$text_lc" == *"api rate limit exceeded"* ]] || [[ "$text_lc" == *"secondary rate limit"* ]]; then
+	#
+	# "api rate limit"*"exceeded" (two anchors, not one fixed phrase) rather than the old fixed
+	# "api rate limit exceeded" substring: measured 2026-09-26 (dotfiles-dev#533), GitHub's OWN
+	# secondary limiter returned "API rate limit ALREADY exceeded" — the inserted word broke the
+	# fixed-phrase match, fell through to the generic "rate limit" check below, and misclassified
+	# a real ~3-hour GraphQL outage as a CodeRabbit review-slot busy-signal. `/rate_limit` read
+	# ~97% of the GraphQL quota free the entire time — the failing call's own response text is
+	# the only surface this ever showed up on (this file's header warning, now proven in the
+	# wild). "submitted too quickly" and the raw `retry-after`/`x-ratelimit-remaining: 0` headers
+	# are additional secondary-limit signatures measured the same session — none of GitHub's
+	# variants contain the word "api" is not guaranteed, but CodeRabbit's own notices never carry
+	# a `retry-after` header or the word "api" at all, so these stay unambiguous.
+	if [[ "$text_lc" == *"api rate limit"*"exceeded"* ]] \
+		|| [[ "$text_lc" == *"secondary rate limit"* ]] \
+		|| [[ "$text_lc" == *"submitted too quickly"* ]] \
+		|| [[ "$text_lc" == *"retry-after"* ]] \
+		|| [[ "$text_lc" == *"x-ratelimit-remaining: 0"* ]] \
+		|| [[ "$text_lc" == *"x-ratelimit-remaining:0"* ]]; then
 		GH_BUDGET_CLASS="github-api-limit"
 		return 0
 	fi
@@ -217,4 +234,47 @@ gh_budget_quota_exhausted() {
 		fi
 	done
 	return 1
+}
+
+# gh_budget_retry_after_ttl TEXT [DEFAULT_TTL]
+# Pulls a `Retry-After: N` value (any case, with or without a space after the colon) out of a
+# captured response TEXT and returns N seconds — dotfiles-dev#533 scope: a secondary rate limit
+# clears on ITS OWN schedule, never the hourly quota reset gh_budget_reset_ttl reads, and GitHub
+# sends this header specifically so a caller does not have to guess which one applies. Falls back
+# to DEFAULT_TTL (45s, the same burst-backoff default used elsewhere in this file) when the
+# header is absent or its value is not a positive integer — never upgraded to a longer guess,
+# same fail-safe shape as gh_budget_reset_ttl's own fallback.
+gh_budget_retry_after_ttl() {
+	local text="$1" default_ttl="${2:-45}" seconds
+	seconds="$(printf '%s' "${text,,}" | grep -oE 'retry-after: *[0-9]+' | grep -oE '[0-9]+' | head -n1)"
+	if [[ "$seconds" =~ ^[0-9]+$ ]] && [ "$seconds" -gt 0 ]; then
+		printf '%s\n' "$seconds"
+		return 0
+	fi
+	printf '%s\n' "$default_ttl"
+}
+
+# gh_budget_graphql_probe
+# A trivial, side-effect-free GraphQL call (`{ viewer { login } }`) standing in for "can THIS
+# surface actually be reached right now" — dotfiles-dev#533: the REST probe callers already run
+# (e.g. `gh_budget_gate` in subagent_stop_sweep.sh) cannot answer that question for GraphQL,
+# because REST and GraphQL are rate-limited independently, and `gh api rate_limit`'s own graphql
+# field has been measured reporting ~97% free while every real GraphQL call was refused. Classifies
+# any failure through gh_budget_classify, so the same github-api-limit/CodeRabbit/unknown rules
+# this file already enforces apply here too — a caller checks gh_budget_is_terminal afterward
+# exactly as it does after a REST probe. Returns 0 when the probe succeeds (GraphQL reachable,
+# GH_BUDGET_CLASS cleared), 1 otherwise.
+gh_budget_graphql_probe() {
+	local err rc
+	err="$(mktemp)"
+	gh api graphql -f query='{ viewer { login } }' >/dev/null 2>"$err"
+	rc=$?
+	if [ "$rc" -ne 0 ]; then
+		gh_budget_classify "$(cat "$err" 2>/dev/null)"
+		rm -f "$err"
+		return 1
+	fi
+	rm -f "$err"
+	GH_BUDGET_CLASS=""
+	return 0
 }
