@@ -848,16 +848,42 @@ low, and prefer a memory checkpoint over a fresh spawn when in doubt — a check
 its entire value is existing before the window closes, the same principle step 0 already applies
 to the 7-day cron expiry.
 
-Compute the free surface: the exact files the open PRs touch, versus the exact files each open
-issue would touch. ⚠️ **This PR-vs-issue check is the merge-risk annotation from the priority
-section above, never the collision that blocks dispatch** — dispatch against live agents, note a
-PR overlap in the brief. **Call the gate; never re-derive it by hand** (dotfiles-dev#340):
+Two gates answer two different questions here — never conflate them, and never let the second one
+gate dispatch (dotfiles-dev#501, closing the gap between this rule and the code that used to be
+shown for it):
+
+**The blocker — is a candidate's file surface already being written by a LIVE agent right now?**
+**Call the gate; never re-derive "which worktrees are live" by hand** (dotfiles-dev#340/#501):
 
 ```bash
-source ai_clients/claude/hooks/lib/free_surface.sh
+cd <absolute-repo-path> &&
+  source ai_clients/claude/hooks/lib/free_surface.sh
+gate_live_agent_surface <absolute-repo-path> || echo "live-agent surface UNKNOWN — do not dispatch on it"
+live_agent_classify_files <paths the issue would touch>  # free | held:… | would-need-a-held-file:…
+```
+
+⚠️ **Both the `cd` and the gate's argument are absolute, and `$(pwd)` is neither.** This snippet is
+copied verbatim into briefs, so it has to obey the same target-qualification rule the briefs below
+carry: the harness resets cwd after every Bash call and can reset it to a *different repository*,
+and `$(pwd)` would then hand the gate that repo's worktrees — a plausible answer about the wrong
+checkout, not an error (dotfiles-dev#229, #523 review).
+
+`gate_live_agent_surface` is local-only (no `gh` call) — it walks this checkout's worktrees
+exactly the way `hooks/lib/worktree_fanout.sh` already does for
+`session_start_context.sh`/`quota_gap_rescue.sh`, and the way `hooks/lib/dispatch_plan.py`'s
+`live_agent_held_paths()` already enforces via `round_dispatch_guard.sh` — one liveness notion,
+not a fourth heuristic layered under this step.
+
+**Merge-risk annotation only, never a blocker — does an open PR already touch the same files?**
+An open PR is a frozen branch awaiting review, not a live writer; overlapping it is an ordinary,
+resolvable future merge conflict (dotfiles-dev#433). Compute it only for the brief's heads-up, and
+to read `FREE_UNCLAIMED_ISSUES` (the claimed-issue check below — a different question, deliberately
+agent-vs-{open,merged}-PR, left untouched by this rule):
+
+```bash
 gate_free_surface <owner> <repo> || echo "free surface UNKNOWN — do not dispatch on it"
 printf '%s\n' "$FREE_UNCLAIMED_ISSUES"            # open issues no PR (open OR merged) closes
-free_classify_files <paths the issue would touch>  # free | held:… | would-need-a-held-file:…
+free_classify_files <paths the issue would touch>  # heads-up note only — never gates dispatch
 ```
 
 The candidate file list per issue is still yours to supply — that needs reading the issue.
@@ -871,13 +897,19 @@ overestimates it — same family as the rtk-proxy `(empty)` collapse and a `wc -
 line: a lossy summary read as field truth. If a sweep tool hands you a directory-level
 "concentration" figure, treat it as a human-reading aid only, never as the collision verdict.
 
-Name three states, not two — collapsing the third into "blocked" is the failure:
-- **free** — no open PR's exact file list intersects this issue's files.
-- **held** — an open PR's exact file list intersects this issue's files.
-- **would-need-a-held-file** — the issue's natural solution touches one file another PR holds, but
-  the rest is free. Not a "no": it is usually one trivial line (e.g. an added `cp` line) — dispatch
-  it anyway and land the small conflict as its own commit at the end, the house pattern for trivial
-  overlaps.
+Name three states, not two, for the **live-agent** gate above — collapsing the third into
+"blocked" is the failure, and it is load-bearing (dotfiles-dev#501):
+- **free** — no live agent's exact file list intersects this issue's files. Dispatch.
+- **held** — a live agent's exact file list intersects this issue's files. Do not dispatch this
+  candidate; it is genuinely colliding with a live writer right now.
+- **would-need-a-held-file** — the issue's natural solution touches one file a live agent holds,
+  but the rest is free. Not a "no": it is usually one trivial line (e.g. an added `cp` line) —
+  dispatch it anyway and land the small conflict as its own commit at the end, the house pattern
+  for trivial overlaps.
+
+The open-PR gate's own `held`/`would-need-a-held-file` verdict (`free_classify_files`) is never
+read this way — it answers the separate, non-blocking merge-risk question above, and its result is
+a note in the brief, never a reason to exclude a candidate.
 
 🔴 **Before dispatching anything, confirm it is not already done.** A file-collision check only
 sees PR-vs-PR overlap; it cannot see an issue already satisfied by code that already merged.
