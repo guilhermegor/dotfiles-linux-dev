@@ -234,9 +234,16 @@ jobs:
               # tell a Bot from a User (CWE-345) — a forgeable reviewer report
               # on a deny-by-default gate. REST carries the exact login and
               # the account type; both are required.
-              marker_count="$(gh api --paginate \
+              #
+              # One page fetch, two independent filters below (dotfiles-dev#550) —
+              # CodeRabbit's and the ladder's markers are unrelated signals, but
+              # re-fetching per signal would double the API calls this gate makes
+              # per run for no benefit.
+              comments_json="$(gh api --paginate \
                 "repos/$OWNER/$REPO/issues/$PR_NUMBER/comments" --jq '.' |
-                jq -s --arg since "$head_seen_at" 'add // [] | [
+                jq -s 'add // []')"
+
+              marker_count="$(printf '%s' "$comments_json" | jq --arg since "$head_seen_at" '[
                   .[]
                   | select(.user.login == "coderabbitai[bot]")
                   | select(.user.type == "Bot")
@@ -245,6 +252,32 @@ jobs:
                 ] | length')"
               if [ "${marker_count:-0}" -gt 0 ]; then
                 reviewer_reported=1
+              fi
+
+              # ⚠️ dotfiles-dev#550: the ladder marker's own history path. Before
+              # this it was credited ONLY from the triggering event's own
+              # COMMENT_BODY (the event-triggered branch above, kept as the fast
+              # path) — so the reply that ANSWERS a finding, itself an
+              # issue_comment, re-ran this job with a non-matching body and
+              # revoked the credit. Same two guarantees as the event-triggered
+              # branch, now applied to history instead of a single payload:
+              # author_association is still the unforgeable half (the marker
+              # TEXT is public and anyone could paste it into a comment,
+              # CWE-345 — same lesson #446 taught the ladder itself), and
+              # head_seen_at still scopes out a marker posted before this head
+              # existed. First-line-anchored, same as the event branch, so a
+              # marker mentioned mid-body by an unrelated reply cannot count.
+              if [ "$reviewer_reported" -eq 0 ]; then
+                ladder_marker_count="$(printf '%s' "$comments_json" | jq --arg since "$head_seen_at" '[
+                    .[]
+                    | select(.created_at > $since)
+                    | select((.author_association // "") | test("^(OWNER|MEMBER|COLLABORATOR)$"))
+                    | select(((.body // "") | split("\n")[0])
+                        | test("^Fallback review — runtime: (qwen|codex), model: .+ \\(selected by: .+\\)$"))
+                  ] | length')"
+                if [ "${ladder_marker_count:-0}" -gt 0 ]; then
+                  reviewer_reported=1
+                fi
               fi
             fi
           fi
