@@ -115,6 +115,49 @@ gh() {
     [ "$FREE_UNCLAIMED_ISSUES" = $'5\n6\n7' ]
 }
 
+# --- live_agent_classify_files: same set math, wired to a DIFFERENT global pair (dotfiles-dev#501)
+# free_classify_files and live_agent_classify_files answer two different questions (open-PR
+# merge-risk vs. actual dispatch-collision blocker — see the file header). These pin that they
+# stay wired to their OWN globals and never bleed into each other's.
+
+@test "live_agent_classify_files: held against LIVE_AGENT_PATHS, ignoring FREE_HELD_PATHS" {
+    LIVE_AGENT_STATUS="ok"
+    LIVE_AGENT_PATHS="a/held.sh"
+    FREE_STATUS="ok"
+    FREE_HELD_PATHS="a/free.sh"
+
+    run live_agent_classify_files a/held.sh
+    [[ "$output" == "held:a/held.sh" ]]
+
+    run free_classify_files a/held.sh
+    [[ "$output" == "free" ]]
+}
+
+@test "live_agent_classify_files: would-need-a-held-file, not held, on partial overlap" {
+    LIVE_AGENT_STATUS="ok"
+    LIVE_AGENT_PATHS="a/held.sh"
+    run live_agent_classify_files a/held.sh a/free.sh
+    [[ "$output" == "would-need-a-held-file:a/held.sh" ]]
+}
+
+@test "live_agent_classify_files: fails closed on unset LIVE_AGENT_STATUS, never free" {
+    unset LIVE_AGENT_STATUS
+    unset LIVE_AGENT_PATHS
+    run live_agent_classify_files a/held.sh
+    [ "$status" -eq 1 ]
+    [[ "$output" == "UNKNOWN" ]]
+}
+
+@test "live_agent_classify_files: FREE_STATUS=ok does not make an unprimed live-agent call free" {
+    FREE_STATUS="ok"
+    FREE_HELD_PATHS=""
+    unset LIVE_AGENT_STATUS
+    unset LIVE_AGENT_PATHS
+    run live_agent_classify_files a/held.sh
+    [ "$status" -eq 1 ]
+    [[ "$output" == "UNKNOWN" ]]
+}
+
 @test "gate_free_surface: one failing call fails the whole gate closed, no partial answer" {
     gh() {
         case "$*" in
