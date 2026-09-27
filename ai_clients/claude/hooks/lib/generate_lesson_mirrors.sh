@@ -56,9 +56,20 @@ render_entry() {
 
 # Regenerates one store's mirror for $repo, if this store expects one here.
 generate_store_mirror() {
-	local cwd="$1" repo="$2" store="$3" mirror_base="$4" target_repo="$5"
+	local cwd="$1" repo="$2" store="$3" mirror_base="$4" target_repo="$5" identity_source="$6"
 	[ -d "$store" ] || return 0
-	mirror_expected_for_repo "$target_repo" "$repo" || return 0
+	if ! mirror_expected_for_repo "$target_repo" "$repo"; then
+		# The "-" sentinel (lessons-other) has no repo to name — nothing to explain.
+		# A repo that IS one of the store's declared aliases DOES need explaining: this
+		# is the exact case that used to write an empty, authoritative-looking mirror
+		# (dotfiles-dev#536) — say why nothing was written instead of writing nothing
+		# silently.
+		if [ "$target_repo" != "-" ]; then
+			printf 'ℹ %s: no mirror for %s (repo identity resolved via %s; declared as one of this store'"'"'s own repos) — no self-mirror\n' \
+				"$mirror_base" "$repo" "$identity_source" >&2
+		fi
+		return 0
+	fi
 
 	local -a matches=()
 	local file
@@ -117,7 +128,7 @@ generate_store_mirror() {
 }
 
 main() {
-	local cwd repo entry store mirror_base _kind target_repo
+	local cwd repo identity identity_source entry store mirror_base _kind target_repo
 	# This file runs under `set -uo pipefail`, NOT `-e`, so a failed `cd` would
 	# leave $cwd empty and every mirror path would be built under `/.specs/`
 	# — writing outside the repo, or failing confusingly. Reject it here.
@@ -125,14 +136,28 @@ main() {
 		printf 'Invalid repository root: %s\n' "${1:-$PWD}" >&2
 		return 1
 	}
-	repo="$(basename "$cwd")"
+
+	# repo="$(basename "$cwd")" alone made a DIRECTORY NAME production configuration
+	# (dotfiles-dev#536) — prefer the `origin` remote, basename only as a fallback,
+	# and say which one was used so a mismatch is visible rather than silent.
+	identity="$(resolve_repo_identity "$cwd")" || {
+		printf 'Could not resolve repo identity for %s (no origin remote, no usable basename) — writing no mirrors, never an empty one.\n' "$cwd" >&2
+		return 1
+	}
+	repo="${identity%%$'\t'*}"
+	identity_source="${identity##*$'\t'}"
+	if [ -z "$repo" ]; then
+		printf 'Repo identity unresolved for %s — writing no mirrors, never an empty one.\n' "$cwd" >&2
+		return 1
+	fi
+	printf 'Resolved repo identity: %s (via %s)\n' "$repo" "$identity_source" >&2
 
 	for entry in "${LESSON_STORES[@]}"; do
 		IFS='|' read -r store mirror_base _kind target_repo <<<"$entry"
 		# Propagate: without this the loop swallows a failed mkdir/redirect and
 		# the LAST store's status becomes the exit code, so `make lessons_mirror`
 		# reports success having written no mirror (PR #388 review).
-		generate_store_mirror "$cwd" "$repo" "$store" "$mirror_base" "$target_repo" || return 1
+		generate_store_mirror "$cwd" "$repo" "$store" "$mirror_base" "$target_repo" "$identity_source" || return 1
 	done
 }
 

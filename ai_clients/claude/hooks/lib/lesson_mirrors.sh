@@ -13,18 +13,28 @@
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 
-# All generalizable-lessons stores, each as "dir|mirror-basename|kind|target-repo".
-# target-repo is the store's backport target: a lesson that ORIGINATED in that
-# repo needs no mirror there (the mirror would be redundant), so
-# mirror_expected_for_repo() below skips it. target-repo "-" (lessons-other,
-# dotfiles-dev#356) is a sentinel, not a repo name: that store has no distinct
-# backport target at all, so it never gets a mirror anywhere.
+# All generalizable-lessons stores, each as "dir|mirror-basename|kind|target-repos".
+# target-repos is the store's backport target SET: a comma-separated list of every
+# repo that IS this store's own origin (a lesson originating in any one of them needs
+# no mirror there — the mirror would be redundant), so mirror_expected_for_repo()
+# below skips it for ALL of them. target-repos "-" (lessons-other, dotfiles-dev#356)
+# is a sentinel, not a repo name: that store has no distinct backport target at all,
+# so it never gets a mirror anywhere.
+#
+# The set is declared explicitly, never guessed from a `dotfiles*` prefix
+# (dotfiles-dev#536): the toolchain repo has already been renamed once
+# (dotfiles-dev → dotfiles-linux-dev on GitHub, while local checkouts kept the old
+# directory name) with dotfiles-macos-dev/dotfiles-linux-prod planned, and a name
+# guessed from a pattern would silently include or exclude the wrong repo the moment
+# naming drifts again — the same house style as an explicit, named exemption (e.g.
+# py-standards.md's stpstone Snyk exemption) over a pattern match.
+#
 # Used by every file that sources this lib (session_capture_audit.sh,
 # generate_lesson_mirrors.sh) — shellcheck can't see those callers.
 # shellcheck disable=SC2034
 LESSON_STORES=(
 	"$CLAUDE_DIR/memory/lessons|blueprintx-lessons|blueprintx|blueprintx"
-	"$CLAUDE_DIR/memory/lessons-dotfiles|dotfiles-dev-lessons|dotfiles|dotfiles-dev"
+	"$CLAUDE_DIR/memory/lessons-claude-toolchain|claude-toolchain-lessons|dotfiles|dotfiles-dev,dotfiles-linux-dev,dotfiles-macos-dev,dotfiles-linux-prod"
 	"$CLAUDE_DIR/memory/lessons-other|lessons-other|other|-"
 )
 
@@ -57,13 +67,100 @@ mirror_path() {
 	printf '%s/%s\n' "$cwd" "$(mirror_rel_path "$mirror_base")"
 }
 
-# Does a store need a mirror inside $repo at all? Same-repo-as-target and the
-# "-" sentinel are both "no distinct backport target" cases — never expect a
-# mirror either way (dotfiles-dev#356, #386).
+# resolve_repo_identity CWD
+# Prints "<repo-name>\t<source>" — the bare repo name plus which signal produced it,
+# so a caller can say which one was used (dotfiles-dev#536). Prefers the `origin`
+# remote (owner/name → the name half, works for both SSH and HTTPS forms), falling
+# back to the directory basename only when there is no parseable origin.
+#
+# `repo="$(basename "$cwd")"` alone made a DIRECTORY NAME production configuration:
+# this very toolchain repo was renamed dotfiles-dev → dotfiles-linux-dev on GitHub
+# while every existing local checkout kept the old directory name, and the reverse
+# (a fresh clone picking up the new name) is one `git clone` away.
+#
+# Returns non-zero with EMPTY output only when NEITHER signal resolves to a
+# non-empty name (no origin remote AND no usable basename) — callers must treat
+# that as UNRESOLVED, never as "no repo", and must write nothing rather than guess
+# (scope 4: an unresolved identity must never produce an empty mirror that reads as
+# a verdict).
+resolve_repo_identity() {
+	local cwd="$1" url name
+	url="$(git -C "$cwd" remote get-url origin 2>/dev/null)"
+	if [ -n "$url" ]; then
+		name="${url%.git}"
+		name="${name##*/}"
+		if [ -n "$name" ]; then
+			printf '%s\tremote\n' "$name"
+			return 0
+		fi
+	fi
+	name="$(basename -- "$cwd" 2>/dev/null)"
+	if [ -n "$name" ] && [ "$name" != "/" ]; then
+		printf '%s\tbasename\n' "$name"
+		return 0
+	fi
+	return 1
+}
+
+# resolve_repo_identity_only CWD
+# Convenience wrapper over resolve_repo_identity() for callers that only need the
+# bare repo name, not which signal produced it. Same unresolved contract: non-zero
+# with empty output, never a guess.
+resolve_repo_identity_only() {
+	local identity
+	identity="$(resolve_repo_identity "$1")" || return 1
+	printf '%s\n' "${identity%%$'\t'*}"
+}
+
+# repo_citation_regex REPO
+# An ERE alternation of REPO's full declared alias group (repo_alias_group), for
+# matching a `<repo>#<issue>` citation written under ANY of that repo's names — the
+# same alias-set reasoning as lesson_originates_in_repo, applied to the completeness
+# table's PR-citation check (dotfiles-dev#536): a citation written as
+# `dotfiles-dev#42` before the rename must still count as accounted for when the
+# CURRENT identity resolves to `dotfiles-linux-dev`.
+repo_citation_regex() {
+	local repo="$1" alias joined=""
+	while IFS= read -r alias; do
+		[ -n "$alias" ] || continue
+		if [ -z "$joined" ]; then joined="$alias"; else joined="$joined|$alias"; fi
+	done < <(repo_alias_group "$repo")
+	printf '%s\n' "$joined"
+}
+
+# repo_alias_group REPO
+# Newline-separated list of REPO's declared aliases: the target-repos field of
+# whichever LESSON_STORES entry declares REPO among its set, or REPO alone when no
+# store declares it. This is the ONE place "which repos are really the same thing"
+# is answered — by declaration, never by a `dotfiles*` prefix guess (dotfiles-dev#536).
+repo_alias_group() {
+	local repo="$1" entry _store _mirror_base _kind target_repos alias
+	for entry in "${LESSON_STORES[@]}"; do
+		IFS='|' read -r _store _mirror_base _kind target_repos <<<"$entry"
+		[ "$target_repos" = "-" ] && continue
+		local IFS=','
+		for alias in $target_repos; do
+			if [ "${alias,,}" = "${repo,,}" ]; then
+				printf '%s\n' "$target_repos" | tr ',' '\n'
+				return 0
+			fi
+		done
+	done
+	printf '%s\n' "$repo"
+}
+
+# Does a store need a mirror inside $repo at all? $repo being a MEMBER of the
+# store's declared target-repos set (not just an exact single-string match — the
+# set may hold several aliases of the same repo, dotfiles-dev#536) and the "-"
+# sentinel are both "no distinct backport target" cases — never expect a mirror
+# either way (dotfiles-dev#356, #386).
 mirror_expected_for_repo() {
-	local target_repo="$1" repo="$2"
-	[ "$target_repo" = "-" ] && return 1
-	[ "$target_repo" = "$repo" ] && return 1
+	local target_repos="$1" repo="$2" alias
+	[ "$target_repos" = "-" ] && return 1
+	local IFS=','
+	for alias in $target_repos; do
+		[ "${alias,,}" = "${repo,,}" ] && return 1
+	done
 	return 0
 }
 
@@ -93,8 +190,16 @@ mirror_expected_for_repo() {
 # the whole point. It also correctly declines `dotfiles-dev#126 / PR #127, from
 # blueprintx #180` for repo `blueprintx`: cut at the comma, blueprintx is cited
 # as the SOURCE of the idea, not the origin repo — the old regex matched it.
+#
+# $repo is expanded to its full declared alias group (repo_alias_group) before
+# comparing — an existing lesson stamped `**Origin:** dotfiles-dev` still resolves
+# for a `dotfiles-linux-dev`/`dotfiles-macos-dev`/`dotfiles-linux-prod` checkout
+# without touching any of the ~242 lesson files (dotfiles-dev#536 scope 5: the
+# matcher accepts the alias set rather than migrating every Origin line — chosen
+# because the store is a GLOBAL directory written concurrently by other sessions,
+# and a mass rewrite of every file races those writers for no behavioural gain).
 lesson_originates_in_repo() {
-	local file="$1" repo="$2" value segment token
+	local file="$1" repo="$2" value segment token alias
 	value="$(sed -nE 's/^[[:space:]]*([-*][[:space:]]+)?\*\*[Oo]rigin:\*\*[[:space:]]*(.*)/\2/p' \
 		"$file" 2>/dev/null | head -n1)"
 	[ -n "$value" ] || return 1
@@ -103,12 +208,19 @@ lesson_originates_in_repo() {
 	value="${value%%.*}"
 	value="${value%%—*}"
 
+	local -a aliases=()
+	while IFS= read -r alias; do
+		[ -n "$alias" ] && aliases+=("$alias")
+	done < <(repo_alias_group "$repo")
+
 	local IFS='/'
 	for segment in $value; do
 		token="${segment#"${segment%%[![:space:]]*}"}"   # ltrim
 		token="${token%%[[:space:]]*}"                    # first word only
 		token="${token%%#*}"                              # drop a #NNN issue ref
-		[ "${token,,}" = "${repo,,}" ] && return 0
+		for alias in "${aliases[@]}"; do
+			[ "${token,,}" = "${alias,,}" ] && return 0
+		done
 	done
 	return 1
 }

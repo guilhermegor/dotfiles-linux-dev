@@ -138,7 +138,7 @@ check_mirrors() {
 	# generate_lesson_mirrors.sh), not hand-typed — a gap here means "regenerate it",
 	# never "go hand-append an entry".
 	local cwd="$1" repo entry store mirror_base kind target_repo mirror rel file name
-	repo="$(basename "$cwd")"
+	repo="$(resolve_repo_identity_only "$cwd")" || return 0
 	for entry in "${LESSON_STORES[@]}"; do
 		IFS='|' read -r store mirror_base kind target_repo <<<"$entry"
 		[ -d "$store" ] || continue
@@ -212,9 +212,12 @@ repo_slug() {
 # skip can never be misread as "checked and clean".
 emit_completeness() {
 	local cwd="$1" mode="$2" repo
-	repo="$(basename "$cwd")"
-
 	printf '%s\n' "--- completeness (both directions, dotfiles-dev#81) ---"
+
+	repo="$(resolve_repo_identity_only "$cwd")" || {
+		printf '  repo identity unresolved (no origin remote, no usable basename) — skipped\n'
+		return 0
+	}
 
 	local entry store mirror_base kind target_repo
 	for entry in "${LESSON_STORES[@]}"; do
@@ -245,6 +248,12 @@ emit_completeness_store() {
 	# delivered + 4 advisory — zero of the 19 were actually owed).
 	local total=0 no_ref=0 delivered=0 advisory=0 superseded=0 file name
 	local -a unaccounted=()
+	# Alias-aware: a citation written as `dotfiles-dev#42` before the rename must
+	# still count as accounted for when the CURRENT identity resolves to
+	# `dotfiles-linux-dev` (dotfiles-dev#536) — repo_citation_regex expands $repo to
+	# its full declared alias group.
+	local citation_re
+	citation_re="$(repo_citation_regex "$repo")"
 	for file in "$store"/*.md; do
 		[ -e "$file" ] || continue
 		name="$(basename "$file")"
@@ -252,7 +261,7 @@ emit_completeness_store() {
 		total=$((total + 1))
 
 		# A direct citation accounts for the lesson regardless of its Status value.
-		grep -qE "${repo}#[0-9]+" "$file" && continue
+		grep -qE "(${citation_re})#[0-9]+" "$file" && continue
 		no_ref=$((no_ref + 1))
 
 		if grep -qE '^[[:space:]]*([-*][[:space:]]+)?\*\*Status:\*\* *delivered' "$file"; then
@@ -289,7 +298,7 @@ emit_completeness_store() {
 		while IFS= read -r n; do
 			[ -n "$n" ] || continue
 			icount=$((icount + 1))
-			if grep -qE "${repo}#${n}([^0-9]|\$)" "$store"/*.md 2>/dev/null; then
+			if grep -qE "(${citation_re})#${n}([^0-9]|\$)" "$store"/*.md 2>/dev/null; then
 				sourced=$((sourced + 1))
 			else
 				orphans+=("#$n")
@@ -315,11 +324,21 @@ emit_completeness_store() {
 }
 
 emit_report() {
-	local cwd="$1" mode="${2:-report}" repo date_str
-	repo="$(basename "$cwd")"
+	local cwd="$1" mode="${2:-report}" repo identity identity_source date_str
 	date_str="$(date +%Y-%m-%d)"
 
-	printf '%s\n' "=== Session capture audit — $repo ($date_str) ==="
+	# resolve_repo_identity() over basename (dotfiles-dev#536) — say which signal
+	# was used so a mismatch (renamed remote, stale local directory name) is
+	# visible in the report header rather than silently assumed.
+	identity="$(resolve_repo_identity "$cwd" 2>/dev/null || true)"
+	repo="${identity%%$'\t'*}"
+	identity_source="${identity##*$'\t'}"
+	if [ -z "$repo" ]; then
+		repo="(unresolved)"
+		identity_source="none"
+	fi
+
+	printf '%s\n' "=== Session capture audit — $repo via $identity_source ($date_str) ==="
 	if [ "${#GAPS[@]}" -eq 0 ]; then
 		printf '%s\n' "Mechanical checks: clean (git, lesson index, mirrors)."
 	else
