@@ -67,7 +67,17 @@ An agent killed mid-flight leaves work in its worktree. A worktree is torn down;
   if /usr/bin/git -C "$p" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
     u=$(/usr/bin/git -C "$p" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
   else
-    u=NO-REMOTE
+    # No upstream at all: still check for commits never pushed anywhere
+    # (dotfiles-dev#571), counting only patches not already on origin/<default>
+    # so a squash-merged branch isn't misreported.
+    def=$(/usr/bin/git -C "$p" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+    def="${def#origin/}"
+    if [ -n "$def" ] && [ "$b" != "$def" ]; then
+      u=$(/usr/bin/git -C "$p" cherry "origin/$def" HEAD 2>/dev/null | grep -c '^+')
+      [ "$u" != "0" ] && u="${u}-NO-UPSTREAM"
+    else
+      u=NO-REMOTE
+    fi
   fi
   [ "$d" != "0" ] || { [ "$u" != "0" ] && [ "$u" != "NO-REMOTE" ]; } && echo "$b dirty=$d unpushed=$u"
 done
