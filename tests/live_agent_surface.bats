@@ -281,3 +281,255 @@ teardown() {
 	run live_agent_classify_files "café.txt"
 	[[ "$output" == "held:café.txt" ]]
 }
+
+# --- dotfiles-dev#551: a dead worktree is not a live writer -----------------------------------
+#
+# The walk above has no pruning, so a long-lived checkout saturates: measured at 61 worktrees,
+# 56 on branches the forge reports MERGED, leaving ~0 genuine live writers while every candidate
+# file still read `held`. These cases pin the exclusion AND, more importantly, every direction it
+# must refuse to take — a prune that guesses loses work, which is strictly worse than a gate that
+# over-holds.
+#
+# `gh` is stubbed here, unlike every test above it: this is the one path in the file that reaches
+# the forge at all. GH_STUB_STATE drives the answer, GH_STUB_LOG records that a call happened,
+# and a test asserting ZERO calls is as load-bearing as the ones asserting a verdict.
+#
+# The stub answers `gh pr list --state all` the way the forge would: one PR per `feature/*`
+# branch of the fixture, headed at that branch's current commit. GH_STUB_CROSS=true marks every
+# row as a fork PR; GH_STUB_OID overrides every row's head commit (a branch reused after its PR
+# closed).
+
+_stub_gh() {
+	mkdir -p "$TEST_TMP/bin"
+	cat >"$TEST_TMP/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$GH_STUB_LOG"
+case "${GH_STUB_STATE:-NONE}" in
+FAIL) exit 1 ;;
+NONE) printf '[]\n' ;;
+*)
+	git -C "$GH_STUB_REPO" for-each-ref --format='%(objectname) %(refname:short)' refs/heads/feature/ \
+		| jq -Rn --arg s "$GH_STUB_STATE" --arg oid "${GH_STUB_OID:-}" \
+			--argjson cross "${GH_STUB_CROSS:-false}" \
+			'[inputs | split(" ")
+			  | {headRefOid: (if $oid == "" then .[0] else $oid end), headRefName: .[1],
+			     state: $s, isCrossRepository: $cross}]'
+	;;
+esac
+STUB
+	chmod +x "$TEST_TMP/bin/gh"
+	export GH_STUB_LOG="$TEST_TMP/gh_calls"
+	export GH_STUB_REPO="$REPO"
+	: >"$GH_STUB_LOG"
+	PATH="$TEST_TMP/bin:$PATH"
+}
+
+# _github_origin — swap the fixture's local-path origin for a GitHub URL, which is what ARMS the
+# enhancement. Done AFTER any push, so the upstream ref exists while origin is still reachable.
+_github_origin() {
+	git -C "$REPO" remote set-url origin git@github.com:acme/widget.git
+}
+
+# _pushed_worktree NAME FILE — a worktree whose branch is committed, pushed, and tracking, i.e.
+# holding no work its PR does not already account for. Echoes its path.
+_pushed_worktree() {
+	local name="$1" file="$2"
+	local wt="$TEST_TMP/wt-$name"
+	git -C "$REPO" worktree add -q -b "feature/$name" "$wt" master
+	echo work >"$wt/$file"
+	git -C "$wt" add "$file"
+	git -C "$wt" commit -q -m "add $file"
+	git -C "$wt" push -q -u origin "feature/$name"
+	printf '%s\n' "$wt"
+}
+
+@test "551: _origin_owner_repo parses the SSH and HTTPS GitHub forms, stripping .git" {
+	git -C "$REPO" remote set-url origin git@github.com:acme/widget.git
+	run _origin_owner_repo "$REPO"
+	[ "$status" -eq 0 ]
+	[ "$output" = "acme widget" ]
+
+	git -C "$REPO" remote set-url origin https://github.com/acme/widget.git
+	run _origin_owner_repo "$REPO"
+	[ "$status" -eq 0 ]
+	[ "$output" = "acme widget" ]
+}
+
+@test "551: a local-path origin disables the enhancement and spends ZERO gh calls" {
+	_stub_gh
+	WT="$TEST_TMP/wt-localorigin"
+	git -C "$REPO" worktree add -q -b feature/localorigin "$WT" master
+	echo work >"$WT/localorigin_work.txt"
+
+	# the fixture clones from a path, which is every repo not cloned from GitHub
+	run _origin_owner_repo "$REPO"
+	[ "$status" -ne 0 ]
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"localorigin_work.txt"* ]]
+	# the whole point of "best-effort": an unresolvable origin costs nothing and changes nothing
+	[ ! -s "$GH_STUB_LOG" ]
+}
+
+@test "551: a forge-MERGED, clean, pushed worktree stops holding its files" {
+	_stub_gh
+	_pushed_worktree merged merged_work.txt >/dev/null
+	_github_origin
+	export GH_STUB_STATE=MERGED
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" != *"merged_work.txt"* ]]
+
+	run live_agent_classify_files merged_work.txt
+	[ "$output" = "free" ]
+	# and it got there by ASKING, not by assuming
+	[ -s "$GH_STUB_LOG" ]
+}
+
+@test "551: a CLOSED PR counts as dead too, not only a merged one" {
+	_stub_gh
+	_pushed_worktree closed closed_work.txt >/dev/null
+	_github_origin
+	export GH_STUB_STATE=CLOSED
+
+	gate_live_agent_surface "$REPO"
+	# status first: a failed gate clears LIVE_AGENT_PATHS, which would pass the absence check
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" != *"closed_work.txt"* ]]
+	run live_agent_classify_files closed_work.txt
+	[ "$output" = "free" ]
+}
+
+@test "551: a closed FORK PR sharing the branch name never marks a local worktree dead" {
+	_stub_gh
+	_pushed_worktree forked forked_work.txt >/dev/null
+	_github_origin
+	export GH_STUB_STATE=CLOSED GH_STUB_CROSS=true
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"forked_work.txt"* ]]
+}
+
+@test "551: a branch REUSED after its PR closed is held — the dead PR's head is not this HEAD" {
+	_stub_gh
+	_pushed_worktree reused reused_work.txt >/dev/null
+	_github_origin
+	export GH_STUB_STATE=MERGED GH_STUB_OID=0000000000000000000000000000000000000000
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"reused_work.txt"* ]]
+}
+
+@test "551: the forge is asked ONCE per gate call, however many worktrees there are" {
+	_stub_gh
+	_pushed_worktree one one_work.txt >/dev/null
+	_pushed_worktree two two_work.txt >/dev/null
+	_pushed_worktree three three_work.txt >/dev/null
+	_github_origin
+	export GH_STUB_STATE=MERGED
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[ "$(wc -l <"$GH_STUB_LOG")" -eq 1 ]
+}
+
+@test "551: a MERGED branch with UNCOMMITTED work is still held — never prune before rescue" {
+	_stub_gh
+	WT="$(_pushed_worktree dirtymerged dirtymerged_work.txt)"
+	echo "work the merged PR never saw" >"$WT/unrescued.txt"
+	_github_origin
+	export GH_STUB_STATE=MERGED
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"unrescued.txt"* ]]
+}
+
+@test "551: a MERGED branch AHEAD of its upstream is still held" {
+	_stub_gh
+	WT="$(_pushed_worktree aheadmerged aheadmerged_work.txt)"
+	echo more >"$WT/ahead_only.txt"
+	git -C "$WT" add ahead_only.txt
+	git -C "$WT" commit -q -m "committed but never pushed"
+	_github_origin
+	export GH_STUB_STATE=MERGED
+
+	gate_live_agent_surface "$REPO"
+	[[ "$LIVE_AGENT_PATHS" == *"ahead_only.txt"* ]]
+}
+
+@test "551: a branch with NO upstream is never pruned, whatever the forge says" {
+	_stub_gh
+	WT="$TEST_TMP/wt-noupstream"
+	git -C "$REPO" worktree add -q -b feature/noupstream "$WT" master
+	echo work >"$WT/noupstream_work.txt"
+	git -C "$WT" add noupstream_work.txt
+	git -C "$WT" commit -q -m "add noupstream_work.txt"
+	# deliberately never pushed: its commits cannot be verified as already-shipped
+	_github_origin
+	export GH_STUB_STATE=MERGED
+
+	gate_live_agent_surface "$REPO"
+	[[ "$LIVE_AGENT_PATHS" == *"noupstream_work.txt"* ]]
+}
+
+@test "551: a branch with no PR at all is UNEXAMINED, never dead" {
+	_stub_gh
+	_pushed_worktree nopr nopr_work.txt >/dev/null
+	_github_origin
+	export GH_STUB_STATE=NONE
+
+	gate_live_agent_surface "$REPO"
+	[[ "$LIVE_AGENT_PATHS" == *"nopr_work.txt"* ]]
+}
+
+@test "551: an OPEN PR is a live writer" {
+	_stub_gh
+	_pushed_worktree openpr openpr_work.txt >/dev/null
+	_github_origin
+	export GH_STUB_STATE=OPEN
+
+	gate_live_agent_surface "$REPO"
+	[[ "$LIVE_AGENT_PATHS" == *"openpr_work.txt"* ]]
+}
+
+@test "551: a gh read failure fails closed to 'not dead', never to 'prune it'" {
+	_stub_gh
+	_pushed_worktree ghfail ghfail_work.txt >/dev/null
+	_github_origin
+	export GH_STUB_STATE=FAIL
+
+	gate_live_agent_surface "$REPO"
+	# the gate itself still succeeds — an unreadable forge disables the enhancement, it does not
+	# turn a healthy local walk into `unknown`
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"ghfail_work.txt"* ]]
+}
+
+@test "551: _dead_branch_index is empty-but-ok for no PRs and fails on a gh error" {
+	_stub_gh
+	_pushed_worktree idx idx_work.txt >/dev/null
+
+	export GH_STUB_STATE=NONE
+	run _dead_branch_index acme widget
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+
+	export GH_STUB_STATE=MERGED
+	run _dead_branch_index acme widget
+	[ "$status" -eq 0 ]
+	[ "$output" = "$(git -C "$REPO" rev-parse feature/idx)	feature/idx" ]
+
+	# an OPEN PR is not dead, so it never enters the index
+	export GH_STUB_STATE=OPEN
+	run _dead_branch_index acme widget
+	[ -z "$output" ]
+
+	export GH_STUB_STATE=FAIL
+	run _dead_branch_index acme widget
+	[ "$status" -ne 0 ]
+}
