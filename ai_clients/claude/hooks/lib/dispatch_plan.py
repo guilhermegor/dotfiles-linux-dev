@@ -61,6 +61,18 @@ parseable to stdout, which is exactly what round_dispatch_guard.sh's own shape c
 UNREADABLE and blocks on. A *recoverable* gate failure (a rate limit, a bad compare, or the
 live-agent worktree walk itself failing) is different: it is surfaced as a named UNKNOWN
 exclusion reason on every open issue — still a valid, still fail-closed JSON object.
+
+A blocked issue is excluded too (dotfiles-dev#560): a `state:blocked` label or an open native
+`issues/<n>/dependencies/blocked_by` entry reports "dispatchable" a candidate no agent's PR could
+ever land. Blocked state is read in that order — native relation first (authoritative; it is
+what GitHub itself resolves on close), the label second — and reported as its own reason,
+distinct from ``UNDECLARED``: an issue can be blocked with or without a declared surface, and
+collapsing the two hides which is true. The native read reuses ``roadmap_unblock.sh``'s own
+``_ru_native_blockers`` (sourced, never re-derived) so a fix to that function's pagination or
+parsing reaches this planner automatically instead of drifting from it. A board-only
+``Status = Blocked`` (no label, no native dependency) is deliberately NOT a third source here —
+that mismatch is `roadmap_unblock.sh`'s own reconciliation gap to close, not a signal this
+planner re-derives. A native-blocker read failure is UNKNOWN and excluded, never "not blocked".
 """
 
 from __future__ import annotations
@@ -74,8 +86,17 @@ from pathlib import Path
 
 LIB_DIR = Path(__file__).resolve().parent
 FREE_SURFACE_SH = LIB_DIR / "free_surface.sh"
+ROADMAP_UNBLOCK_SH = LIB_DIR / "roadmap_unblock.sh"
 GH_TIMEOUT = 20
 GATE_TIMEOUT = 25
+# One `_ru_native_blockers` call per open issue, sequential inside a single subprocess (same
+# reasoning as GATE_TIMEOUT for the free-surface gate) — generous because a 500-issue repo would
+# otherwise need this to scale, but LATENT at this repo's ~33 open issues like the other caps.
+BLOCKED_TIMEOUT = 120
+
+# The label this repo's board triad (dotfiles-dev#369/#528) uses for a blocked issue —
+# `_ru_unblock` in roadmap_unblock.sh adds/removes the very same string.
+BLOCKED_LABEL = "state:blocked"
 
 # gate_free_surface's own `gh issue list --state open --limit 500` cap (free_surface.sh) — not
 # editable from here (dotfiles-dev#433 finding 2, see module docstring).
@@ -262,8 +283,26 @@ def live_agent_held_paths(root: Path) -> tuple[bool, list[str]]:
 	return True, sorted(p for p in lines[1:] if p)
 
 
+def _label_names(record: dict) -> list[str]:
+	"""Return a REST issue record's label names, tolerating both shapes the API has used.
+
+	REST normally returns each label as ``{"name": ..., ...}``; a bare string is also accepted
+	defensively rather than raising, since a shape this function gets wrong would surface as a
+	crash on an unrelated issue's labels, not as a blocked-state false negative on this one.
+	"""
+	names: list[str] = []
+	for label in record.get("labels") or []:
+		if isinstance(label, dict):
+			name = label.get("name")
+			if name:
+				names.append(name)
+		elif isinstance(label, str):
+			names.append(label)
+	return names
+
+
 def open_issues(slug: str) -> list[dict]:
-	"""Return every open issue's number and body for ``slug`` (``owner/name``).
+	"""Return every open issue's number, body, and label names for ``slug`` (``owner/name``).
 
 	Capped at ``FREE_SURFACE_ISSUE_CAP`` — ``build_plan`` refuses to print a plan when the
 	result hits that cap (dotfiles-dev#433 finding 2).
@@ -292,7 +331,7 @@ def open_issues(slug: str) -> list[dict]:
 	)
 	records = json.loads(raw) if raw else []
 	issues = [
-		{"number": r.get("number"), "body": r.get("body") or ""}
+		{"number": r.get("number"), "body": r.get("body") or "", "labels": _label_names(r)}
 		for r in records
 		if "pull_request" not in r
 	]
@@ -361,6 +400,103 @@ def mentioned_without_closing(issue_numbers: set[int], prs: list[dict], slug: st
 					"verify by hand (missing `Closes`, or a deliberate stacked follow-up)"
 				)
 	return reasons
+
+
+# Sources roadmap_unblock.sh and calls its OWN `_ru_native_blockers` per issue number read from
+# stdin — never a re-derived `gh api .../dependencies/blocked_by` call. A fix to that function
+# (pagination, jq parsing) reaches this planner the moment roadmap_unblock.sh changes instead of
+# needing a second, independent edit here (dotfiles-dev#560's explicit ask).
+_BLOCKED_SCRIPT = r"""
+set -eu
+repo="$1"; roadmap_unblock_sh="$2"
+# shellcheck source=/dev/null
+source "$roadmap_unblock_sh"
+
+gh() { timeout "${DISPATCH_PLAN_GH_TIMEOUT:-15}" gh "$@"; }
+
+while IFS= read -r number; do
+	[ -n "$number" ] || continue
+	if native="$(_ru_native_blockers "$repo" "$number")"; then
+		printf '%s\tOK\t%s\n' "$number" "$(printf '%s' "$native" | tr '\n' ';')"
+	else
+		printf '%s\tFAIL\t\n' "$number"
+	fi
+done
+"""
+
+
+def native_open_blockers(slug: str, numbers: list[int]) -> dict[int, list[str] | None]:
+	"""Return ``{issue: open_blocker_refs}`` from the native ``blocked_by`` relation.
+
+	``open_blocker_refs`` is a list of ``owner/repo#number`` refs still open (empty means the
+	native read succeeded and found none). ``None`` means the read itself failed for that issue
+	— the caller's fail-closed signal, same contract as every other gate in this file: a failed
+	read is UNKNOWN, never "not blocked".
+
+	One subprocess for every issue, not one subprocess per issue: each call is a fresh ``gh`` API
+	round-trip, and batching keeps this the same shape as ``run_gate``'s single free-surface
+	subprocess rather than multiplying process-spawn and rate-limit cost by the open-issue count.
+	"""
+	if not numbers:
+		return {}
+	stdin = "".join(f"{n}\n" for n in numbers)
+	try:
+		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
+			["bash", "-c", _BLOCKED_SCRIPT, "dispatch_plan", slug, str(ROADMAP_UNBLOCK_SH)],
+			input=stdin,
+			capture_output=True,
+			text=True,
+			timeout=BLOCKED_TIMEOUT,
+		)
+	except subprocess.TimeoutExpired:
+		# Uncaught, this killed build_plan and printed no plan at all (#569 review) — a slow read
+		# must exclude every issue as UNKNOWN, the same answer as a driver that broke.
+		return dict.fromkeys(numbers, None)
+	if proc.returncode != 0:
+		# The driver itself broke (e.g. roadmap_unblock.sh failed to source) before it could even
+		# report a per-issue FAIL line — every requested number is equally undetermined.
+		return dict.fromkeys(numbers, None)
+
+	result: dict[int, list[str] | None] = {}
+	for line in proc.stdout.splitlines():
+		if not line.strip():
+			continue
+		number_s, status, refs_s = line.split("\t", 2)
+		number = int(number_s)
+		if status != "OK":
+			result[number] = None
+			continue
+		open_refs = []
+		for entry in refs_s.split(";"):
+			if not entry:
+				continue
+			state, _, ref = entry.partition("\t")
+			if state != "closed":
+				open_refs.append(ref)
+		result[number] = open_refs
+	return result
+
+
+def blocked_reason(issue: dict, native_refs: list[str] | None) -> str | None:
+	"""Return the exclusion reason for a blocked issue, or ``None`` when it is not blocked.
+
+	Checked in the order dotfiles-dev#560 specifies: the native relation first (authoritative —
+	it is what GitHub itself resolves on close), the ``state:blocked`` label second. A board-only
+	``Status = Blocked`` is deliberately not a third source here (module docstring) — that
+	mismatch belongs to `roadmap_unblock.sh`'s own reconcile step.
+	"""
+	if native_refs is None:
+		return (
+			"blocked-state UNKNOWN (native dependency read failed) — never assumed dispatchable"
+		)
+	if native_refs:
+		return "blocked: open native dependency " + ", ".join(sorted(native_refs))
+	if BLOCKED_LABEL in (issue.get("labels") or []):
+		return (
+			f"blocked: '{BLOCKED_LABEL}' label set (no open native dependency recorded — a "
+			"roadmap_unblock reconcile gap, not cleared here)"
+		)
+	return None
 
 
 def declared_surface(body: str) -> list[str]:
@@ -554,10 +690,17 @@ def build_plan() -> dict:
 	else:
 		gate_ok, unclaimed, verdicts = False, set(), {}
 
+	# Only worth reading once the rest of the plan is actually usable — every issue below is
+	# excluded on live_ok/gate_ok alone otherwise, and this read is never consulted for that.
+	native_refs: dict[int, list[str] | None] = {}
+	if live_ok and gate_ok and issue_numbers:
+		native_refs = native_open_blockers(slug, sorted(issue_numbers))
+
 	candidates: list[dict] = []
 	excluded: list[dict] = []
 	for issue in issues:
 		number = issue["number"]
+		reason = blocked_reason(issue, native_refs.get(number)) if live_ok and gate_ok else None
 		if not live_ok:
 			excluded.append(
 				{
@@ -574,6 +717,8 @@ def build_plan() -> dict:
 					"verify non-collision by hand",
 				}
 			)
+		elif reason is not None:
+			excluded.append({"issue": number, "reason": reason})
 		elif number not in unclaimed:
 			excluded.append(
 				{"issue": number, "reason": "already claimed by an open or merged pull request"}
