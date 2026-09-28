@@ -247,21 +247,36 @@ ladder_poster_login() {
 	gh api user --jq '.login' 2>/dev/null
 }
 
-# ladder_already_covered COMMENTS_JSON
+# ladder_already_covered COMMENTS_JSON HEAD_DATE
 # True when a fallback attribution line already exists among a PR's comments,
-# AUTHORED BY THE LADDER'S OWN POSTING ACCOUNT — a lower rung never re-reviews
-# what a higher one already covered. COMMENTS_JSON is the `gh api
-# .../issues/N/comments` array (or any `[{author|user.login, body}]` list);
-# structured, never joined text, because any PR commenter can type the marker
-# line and a text match would let them skip the review (CWE-345).
+# AUTHORED BY THE LADDER'S OWN POSTING ACCOUNT, and POSTED ON OR AFTER the
+# CURRENT head's commit date — a lower rung never re-reviews what a higher one
+# already covered FOR THIS HEAD. COMMENTS_JSON is the `gh api
+# .../issues/N/comments` array (or any `[{author|user.login, body,
+# created_at|createdAt}]` list); structured, never joined text, because any PR
+# commenter can type the marker line and a text match would let them skip the
+# review (CWE-345) — that check is unchanged by this function; freshness is an
+# independent AND clause next to it.
+#
+# ⚠️ dotfiles-dev#555: a marker predating the head reviewed a commit the head
+# has since moved past and must NOT grant credit for the commit that replaced
+# it — measured on #546, a marker 45 minutes older than the head still read as
+# "already covered" and the ladder refused the fresh review that would have
+# turned the required check green. HEAD_DATE unknown (empty, e.g. a `gh`
+# error) fails CLOSED into "not covered", same direction as
+# _gate_reported_filter's `$head_date != ""` guard — an unresolvable head
+# never silently trusts a stale marker forever; worst case is one extra
+# review, never a permanent skip.
 ladder_already_covered() {
-	local comments="$1" poster
+	local comments="$1" head_date="${2:-}" poster
 	poster="$(ladder_poster_login)"
 	[ -n "$poster" ] || return 1
-	printf '%s' "$comments" | jq -e --arg who "$poster" '
+	printf '%s' "$comments" | jq -e --arg who "$poster" --arg head_date "$head_date" '
 		type == "array" and any(.[];
 			((.author.login // .user.login // "") == $who)
-			and ((.body // "") | test("^Fallback review — runtime:"; "m")))
+			and ((.body // "") | test("^Fallback review — runtime:"; "m"))
+			and (($head_date != "")
+			     and ((.created_at // .createdAt // "") >= $head_date)))
 	' >/dev/null 2>&1 || return 1
 }
 
@@ -319,6 +334,29 @@ _pr_head_sha() {
 		return $?
 	fi
 	gh api "repos/$owner/$repo/pulls/$pr_number" --jq '.head.sha' 2>/dev/null
+}
+
+# _pr_head_committed_at OWNER REPO PR_NUMBER
+# The forge's own commit date for the PR's current head (issue #555): the ONLY
+# ground truth `ladder_already_covered` can anchor a fallback-review marker's
+# timestamp to. Without it, a marker that reviewed a since-superseded commit
+# reads as covering the CURRENT head forever — the ladder's mirror image of
+# #550. Override via REVIEWER_LADDER_HEAD_DATE_CMD for tests. Empty on any
+# `gh` error (the caller then fails closed into "not covered" -- see
+# ladder_already_covered).
+#
+# REST, never GraphQL, same reasoning as _pr_head_sha (issue #543): built on
+# top of that same head-sha lookup, so a degraded GraphQL layer never blocks
+# either call.
+_pr_head_committed_at() {
+	local owner="$1" repo="$2" pr_number="$3" sha
+	if [ -n "${REVIEWER_LADDER_HEAD_DATE_CMD:-}" ]; then
+		"$REVIEWER_LADDER_HEAD_DATE_CMD" "$owner" "$repo" "$pr_number"
+		return $?
+	fi
+	sha="$(_pr_head_sha "$owner" "$repo" "$pr_number")"
+	[ -n "$sha" ] || return 1
+	gh api "repos/$owner/$repo/commits/$sha" --jq '.commit.committer.date' 2>/dev/null
 }
 
 # _pr_remote_url OWNER REPO
@@ -522,7 +560,13 @@ run_fallback_review() {
 	local dry_run="${DRY_RUN:-0}"
 	[ "${8:-}" = "--dry-run" ] && dry_run=1
 
-	if ladder_already_covered "$comments"; then
+	# issue #555: the head's own commit date is what anchors a marker's
+	# freshness — fetched once, up front, since ladder_already_covered has no
+	# way to resolve it itself (it takes plain JSON in, never a `gh` call).
+	local head_date
+	head_date="$(_pr_head_committed_at "$owner" "$repo" "$pr_number")"
+
+	if ladder_already_covered "$comments" "$head_date"; then
 		print_status "info" "PR #$pr_number already covered by a higher rung — skipping"
 		return 0
 	fi

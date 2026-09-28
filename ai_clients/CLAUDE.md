@@ -142,15 +142,26 @@ worktree or the main checkout, and stays visible to `ls` at the repo root
 not easier to lose.
 
 `hooks/pr_body_orphan_check.sh` is the deterministic reaper's first half:
-run it (`ai_clients/claude/hooks/pr_body_orphan_check.sh [repo-root]`) to
-report every `.git-pr-*.md` file with **no corresponding PR**, matched by
-CONTENT rather than filename (a name like `issue_rmw.md` says nothing
-about which PR it belongs to). It is deliberately **not** wired into
-`settings.json` as a live hook — it is a manual/periodic report, run by a
-human or `/session-closeout`-style flow. It **never deletes anything**: a
-file whose PR can't be determined (no `gh`/`jq`, or the `gh` call itself
-fails) is reported UNKNOWN, never treated as orphaned — reaping is a
-follow-up once the matching is trusted, not this cut.
+run it (`ai_clients/claude/hooks/pr_body_orphan_check.sh [repo-root]`, or
+`~/.claude/hooks/pr_body_orphan_check.sh` once deployed) to report every
+`.git-pr-*.md` file with **no corresponding PR**, matched by CONTENT rather
+than filename (a name like `issue_rmw.md` says nothing about which PR it
+belongs to). It is deliberately **not** wired into `settings.json` as a live
+hook — it is a manual/periodic report, run by a human or
+`/session-closeout`-style flow. It **never deletes anything**: a file whose
+PR can't be determined (no `gh`/`jq`, or the `gh` call itself fails) is
+reported UNKNOWN, never treated as orphaned — reaping is a follow-up once
+the matching is trusted, not this cut.
+
+⚠️ "Not a live hook" is about `settings.json` event wiring only — it is
+still `copy_hook_file`'d by `install_hooks()` like every other script under
+`hooks/`, so it actually reaches `~/.claude/hooks/` for a human or skill to
+run. It shipped tested and documented but missing exactly that
+`copy_hook_file` call for a while (dotfiles-dev#532): a bats suite that
+exercises the script directly stays green whether or not it was ever
+installed, so passing tests were never evidence it was reachable.
+`tests/hooks_install_parity.bats` now asserts every script under `hooks/`
+is installed, not just every script settings.json references.
 
 ## PR merge guard: review threads AND a reviewer's own check
 
