@@ -7,7 +7,7 @@
 # frozen into a fixture file: three of the six cases turn on "is the stated wait still running",
 # which a fixed timestamp answers correctly only on the day it was written.
 #
-# The cases below are the ones that found real defects (dotfiles-dev#433, #473):
+# The cases below are the ones that found real defects (dotfiles-dev#433, #473, #538):
 #   1. a live-shaped page where an unrelated notice is NEWEST and masks a running limit;
 #   2. the wrapper/sibling pair, where the newer of the two carries no stated wait;
 #   3. a stated wait that has already expired;
@@ -16,8 +16,14 @@
 #   6. garbage that is not JSON at all;
 #   7. the SAME two-notice shape as case 1's chat/review split, fed in GitHub's real,
 #      oldest-first REST order — pins dotfiles-dev#473 (an older CHAT-quota notice read as
-#      "newest" masks a newer, still-running REVIEW limit).
-# ⚠️ Cases 5 and 6 must print UNKNOWN. UNKNOWN must never read as free.
+#      "newest" masks a newer, still-running REVIEW limit);
+#   8. the eligibility ("fewer than 10 stars") notice alone reports ASK-ONLY, never plain
+#      FREE — the slot is free, but nothing will ever use it unasked (dotfiles-dev#538);
+#   9. the eligibility notice does not mask a REAL, concurrent rate limit (a manual
+#      `@coderabbitai review` ask can still get rate-limited on an ineligible repo);
+#  10. a comment shaped in a way the parser cannot make sense of (an unparseable
+#      timestamp) prints UNKNOWN, never a silent FREE default.
+# ⚠️ Cases 5, 6 and 10 must print UNKNOWN. UNKNOWN must never read as free.
 #
 # Run locally: bats tests/slot_classify.bats
 
@@ -114,6 +120,41 @@ JSON"
 
 @test "garbage on stdin is UNKNOWN, never free" {
     run bash -c "printf '%s' 'gh: command not found' | python3 '$CLASSIFY'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "UNKNOWN" ]
+}
+
+@test "the eligibility notice alone reports ASK-ONLY, not plain FREE" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY'
+[
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 1)\",
+   \"body\": \"> [!IMPORTANT]\\n> ## Review skipped\\n> This repository does not receive automatic reviews because it has fewer than 10 stars.\"}
+]
+JSON"
+    [ "$status" -eq 0 ]
+    [ "$output" = "ASK-ONLY|no-automatic-review-fewer-than-10-stars" ]
+}
+
+@test "the eligibility notice does not mask a real concurrent rate limit" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY'
+[
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 5)\",
+   \"body\": \"> [!IMPORTANT]\\n> ## Review skipped\\n> This repository does not receive automatic reviews because it has fewer than 10 stars.\"},
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 1)\",
+   \"body\": \"Rate limit exceeded. Reviews will be available in 30 minutes.\"}
+]
+JSON"
+    [ "$status" -eq 0 ]
+    [ "$output" = "BUSY|until-$(reset_hhmm 1 30)Z" ]
+}
+
+@test "a comment with an unparseable timestamp is UNKNOWN, never defaults to FREE" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY'
+[
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"not-a-real-timestamp\",
+   \"body\": \"Rate limit exceeded. Reviews will be available in 5 minutes.\"}
+]
+JSON"
     [ "$status" -eq 0 ]
     [ "$output" = "UNKNOWN" ]
 }

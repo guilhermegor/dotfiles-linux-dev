@@ -1,14 +1,21 @@
 """Classify the review slot from a page of reviewer roster notices on stdin.
 
-Prints exactly one token: ``FREE|<reason>``, ``BUSY|<reason>`` or ``UNKNOWN``.
+Prints exactly one token: ``FREE|<reason>``, ``BUSY|<reason>``, ``ASK-ONLY|<reason>``
+or ``UNKNOWN``.
 
 ⚠️ ``UNKNOWN`` is the fail-closed answer and must never be read as free — it means
 the page could not be classified (unparseable body, a forge error page, a 403),
 not that the slot is idle. s:dev-loop step 4b spends the slot on that verdict.
 
+⚠️ ``ASK-ONLY`` is also free, but for a different reason than ``FREE``: the repo
+carries the reviewer's "fewer than 10 stars" eligibility notice, so no automatic
+review will EVER arrive here — an explicit ask is the only path in, permanently,
+not just right now. Losing that distinction reads a permanently-manual repo as an
+ordinary idle slot (dotfiles-dev#538).
+
 Reviewer-agnostic by construction: every vendor-specific phrase lives in the
 constants below, so pointing this at a different review bot is an edit to those
-five strings and nothing else.
+six strings and nothing else.
 
 Lives in its own file rather than inline in the watcher: the first version embedded
 this in ``python3 -c '...'`` inside a shell script, where the f-string's escaped
@@ -28,6 +35,7 @@ REVIEWER_LOGIN_SUBSTRING = "coderabbit"
 LIMIT_PHRASES = ("rate limit", "review limit reached")
 CHAT_QUOTA_PHRASE = "chat message"
 REVIEW_DONE_PHRASE = "review finished"
+ELIGIBILITY_PHRASE = "fewer than 10 stars"
 RE_STATED_WAIT = re.compile(r"available in (\d+) minutes?")
 
 
@@ -58,7 +66,7 @@ def classify(list_comments: list) -> str:
 	Returns
 	-------
 	str
-		``FREE|<reason>``, ``BUSY|<reason>`` or ``UNKNOWN``.
+		``FREE|<reason>``, ``BUSY|<reason>``, ``ASK-ONLY|<reason>`` or ``UNKNOWN``.
 	"""
 	list_bot = [
 		c
@@ -89,6 +97,14 @@ def classify(list_comments: list) -> str:
 	)
 	dict_done = next((c for c in list_bot if REVIEW_DONE_PHRASE in body_of(c)), None)
 	if dict_limit is None:
+		# ⚠️ The eligibility notice is permanent and free-slot-shaped — no rate limit is
+		# ever posted for a repo this notice names, since the reviewer never runs on it
+		# unasked. Reporting it as ordinary FREE loses the actionable half: nothing will
+		# use this slot without an explicit ask, ever (dotfiles-dev#538). Only checked
+		# once no rate-limit notice was found above, so an explicit ask that DID hit a
+		# real limit still reports BUSY, not ASK-ONLY.
+		if any(ELIGIBILITY_PHRASE in body_of(c) for c in list_bot):
+			return "ASK-ONLY|no-automatic-review-fewer-than-10-stars"
 		return "FREE|no-rate-limit-notice-on-this-page"
 	if dict_done is not None and (dict_done.get("created_at") or "") > (
 		dict_limit.get("created_at") or ""
