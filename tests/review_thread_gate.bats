@@ -348,6 +348,38 @@ JSON
     [[ "$output" == *"after 3 attempts"* ]]
 }
 
+# dotfiles-dev#559 (PR #559 review, comment 4117399074): the OLD code discarded a GraphQL
+# HTTP-200-with-`.errors` refusal via `2>/dev/null` plus an unconditional `threads=""`, so a real
+# secondary rate limit (measured the same session: "API rate limit already exceeded" with
+# rate_limit reporting 4973/5000 remaining) was NEVER classified and NEVER latched -- the gate
+# just exhausted all 3 retries into a generic "unreadable after 3 attempts". This asserts the
+# fixed gate (a) classifies the captured refusal as github-api-limit, (b) stops on the FIRST
+# attempt instead of burning the other two against an already-exhausted budget, and (c) writes
+# the shared latch so the next sweep skips the identical call.
+@test "gate_pr_thread_state: an HTTP-200 GraphQL .errors rate-limit refusal classifies and latches" {
+    local latch
+    latch="$(mktemp -u)"
+    run env GATE_LIB="$GATE" GH_BUDGET_LATCH_FILE="$latch" bash -c '
+        sleep() { return 0; }
+        gh() {
+            echo "GraphQL: API rate limit exceeded for user ID 12345 (status: 200)" >&2
+            return 1
+        }
+        source "$GATE_LIB"
+        gate_pr_thread_state o r 5
+        echo "status=$GATE_STATUS"
+        echo "detail=$GATE_DETAIL"
+    '
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"status=unreadable"* ]]
+    [[ "$output" == *"github-api-limit"* ]]
+    [[ "$output" == *"API rate limit exceeded"* ]]
+    [[ "$output" != *"after 3 attempts"* ]]
+    [ -f "$latch" ]
+    rm -f "$latch"
+}
+
 # --- dotfiles-dev#490: the exact defect, end to end -----------------------------------------------
 #
 # Measured 2026-09-23: the gate reported `clean` for every one of 16 open PRs while #440 carried

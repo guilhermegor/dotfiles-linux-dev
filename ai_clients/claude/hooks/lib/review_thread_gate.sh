@@ -35,6 +35,14 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	exit 1
 fi
 
+# gh_budget_classify/is_terminal/latch_write/reset_ttl (dotfiles-dev#559): the retry loop below
+# needs to tell a GitHub API budget refusal apart from a transient/unknown failure, and both
+# callers of this file are not guaranteed to have sourced gh_budget.sh themselves --
+# open_review_threads_nudge.sh never does. Sourced here so the classify-and-latch behaviour is
+# available regardless of which caller loaded this file.
+# shellcheck source=gh_budget.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gh_budget.sh"
+
 _gate_min_reply_chars=100
 
 # The reviewer ladder's attribution marker (#455's exact regex, lifted verbatim from
@@ -327,11 +335,12 @@ gate_pr_thread_state() {
 	GATE_STATUS="unreadable"
 	GATE_DETAIL="could not reach the GitHub API"
 
-	local attempt attempts=3
+	local attempt attempts=3 err_file refusal
 	threads=""
 	for attempt in $(seq 1 "$attempts"); do
+		err_file="$(mktemp)"
 		threads="$(gh api graphql -f query="$(_gate_query)" \
-			-F owner="$owner" -F repo="$repo" -F number="$number" 2>/dev/null)" || threads=""
+			-F owner="$owner" -F repo="$repo" -F number="$number" 2>"$err_file")"
 		# GraphQL answers 200 with a PARTIAL body: `errors` alongside a half-filled `data`.
 		# Accepting that reads a truncated thread list as the whole truth.
 		# ⚠️ Every stubbed `gh` fixture anywhere in the test suite that feeds this function must
@@ -344,9 +353,32 @@ gate_pr_thread_state() {
 			and (.data.repository.pullRequest.reviewThreads != null)
 			and (.data.repository.pullRequest.comments != null)
 		' >/dev/null 2>&1; then
+			rm -f "$err_file"
 			break
 		fi
+		# dotfiles-dev#559: the OLD code discarded this attempt's response with `2>/dev/null` and
+		# an unconditional `threads=""`, throwing away the one piece of text that could tell a
+		# GitHub API budget refusal (secondary rate limit, HTTP 200 body with `.errors`) apart from
+		# a transient/unknown failure — the gate exhausted all 3 retries and returned
+		# GATE_STATUS=unreadable with no classification and no latch, so a secondary refusal with
+		# plenty of REST quota left (measured: 4973/5000 remaining) caused the sweep to repeat the
+		# identical doomed GraphQL call once per open PR, every sweep. `gh` may write the GraphQL
+		# error body to stdout even on a non-zero exit, so prefer stderr (gh's own summary) and
+		# fall back to stdout.
+		refusal="$(cat "$err_file" 2>/dev/null)"
+		rm -f "$err_file"
+		[ -n "$refusal" ] || refusal="$threads"
 		threads=""
+		gh_budget_classify "$refusal"
+		if gh_budget_is_terminal; then
+			# Terminal means retrying THIS call cannot succeed (same reasoning gh_budget_gate
+			# already applies before its own probe) — latch it so every other PR this sweep, and
+			# the next sweep's gh_budget_gate, skip the identical refusal instead of repeating it.
+			gh_budget_latch_write "$(gh_budget_reset_ttl)"
+			GATE_STATUS="unreadable"
+			GATE_DETAIL="review threads unreadable: GitHub API budget exhausted ($GH_BUDGET_CLASS) — $(printf '%s' "$refusal" | tr '\n' ' ' | cut -c1-300)"
+			return 0
+		fi
 		[ "$attempt" -lt "$attempts" ] && sleep $((attempt * 3))
 	done
 	if [ -z "$threads" ]; then
