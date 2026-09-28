@@ -211,6 +211,72 @@ dispatch_claimed_issues() {
 	_dispatch_live_claims "$claims" | cut -f2 | sort -un
 }
 
+# The shared, cross-agent half of dev-loop.md step 4b item 4's "one ask per invocation on the
+# primary rung" cap (dotfiles-dev#548). That prose binds only the reader of the skill file — a
+# dispatched subagent that asks for review on its own PR is invisible to it, so N subagents each
+# asking once is an N-ask burst against CodeRabbit's one ACCOUNT-level quota. Measured 2026-09-27:
+# four asks in five minutes (one orchestrator tick, three subagents) pushed the reviewer window
+# from 11:22Z to 12:21Z although the orchestrator itself asked zero times that round.
+#
+# Scope is PER REPO, not per PR — the account quota the cap defends does not care which PR the
+# ask was for, only how many landed. TTL is the step's own dedicated-tick cadence (`8,28,48 * * *
+# * *` in dev-loop.md) rather than a fresh constant: a second ask inside the SAME tick window is
+# the burst this cap exists to stop, and a later tick asking again is the legitimate re-spend
+# dotfiles-dev#477 already carved out for a BUSY/UNKNOWN slot.
+DISPATCH_REVIEW_ASK_TTL="${DISPATCH_REVIEW_ASK_TTL:-1200}"
+
+dispatch_review_ask_file() {
+	local dir
+	dir="$(dispatch_state_dir)" || return 1
+	printf '%s/dispatch-review-ask.tsv\n' "$dir"
+}
+
+# claim_review_ask
+# Atomic check-and-stamp for the shared one-ask budget. Prints exactly one of:
+#     GRANTED   — no ask was recorded within DISPATCH_REVIEW_ASK_TTL; the stamp is now this
+#                 call's — go ahead and post the @coderabbitai ask.
+#     BUSY      — another reader (orchestrator or subagent) already spent this window's ask.
+#     UNKNOWN   — could not be decided (no flock, no git dir); treat exactly like BUSY, never ask.
+# Returns 0 only on GRANTED. Reuses claim_files's own lock (dispatch_claims_lock) rather than a
+# second lock file of its own — a dedicated lock would let a claim_files writer and a
+# claim_review_ask writer interleave across the two registries independently, which is the same
+# race the single critical section above exists to prevent, just against a different pair of
+# files.
+claim_review_ask() {
+	command -v flock >/dev/null 2>&1 || {
+		echo "UNKNOWN"
+		return 1
+	}
+	local file lock
+	file="$(dispatch_review_ask_file)" || {
+		echo "UNKNOWN"
+		return 1
+	}
+	lock="$(dispatch_claims_lock)" || {
+		echo "UNKNOWN"
+		return 1
+	}
+
+	(
+		flock -w "${DISPATCH_CLAIM_LOCK_WAIT:-10}" 9 || {
+			echo "UNKNOWN"
+			exit 1
+		}
+
+		local now stamp
+		now="$(date +%s)"
+		stamp="$(cat "$file" 2>/dev/null)"
+		if [[ "$stamp" =~ ^[0-9]+$ ]] && ((now - stamp < DISPATCH_REVIEW_ASK_TTL)); then
+			echo "BUSY"
+			exit 1
+		fi
+
+		printf '%s\n' "$now" >"$file.tmp"
+		mv -f "$file.tmp" "$file"
+		echo "GRANTED"
+	) 9>>"$lock"
+}
+
 # refresh_pr_held_paths OWNER REPO
 # The ONE gate read per round (scope 5). Requires lib/free_surface.sh to be sourced already —
 # it is the gate's own file and this one does not duplicate it. Writes `<holder>\t<path>`.
