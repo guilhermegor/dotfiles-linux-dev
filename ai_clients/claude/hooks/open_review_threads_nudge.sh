@@ -242,6 +242,139 @@ _reclassify_running() {
 	fi
 }
 
+# DISPATCH_NAME_ISSUE_RE duplicated on purpose rather than sourced from
+# dispatch_free_surface_guard.sh — same precedent that file's own header already sets for
+# review_fanout_guard.sh's REVIEW_DISPATCH_NAME_RE: two Stop hooks answering "what is this
+# agent for?" must not drift by coupling through one script whose `main` would also need
+# guarding against a second, unwanted execution on source.
+_delegate_name_re='^issue-([0-9]+)(-|$)'
+
+# _delegated_agent_for_path TRANSCRIPT PATH
+# Prints "issue-<N>" when a live (unresolved), same-session Agent dispatch declares issue N in
+# its Agent `name`, AND issue N's own ```surface block (read live, never cached) covers PATH.
+# Prints nothing on ANY read failure — including no transcript, no matching dispatch, an
+# unreadable issue body, or no covering surface entry. That is the fail-CLOSED default
+# dotfiles-dev#516 requires: "if agent liveness or ownership cannot be read, block."
+#
+# "Live" mirrors dispatch_free_surface_guard.sh's inflight_dispatch_issues(): no tool_result yet
+# (silence reads as running), or a background dispatch whose <task-notification> has not yet
+# reported completed/failed. A COMPLETED or FAILED dispatch is not delegated work in flight —
+# resolving on the strength of an agent that already finished (or died) would be exactly the
+# override-flag risk the issue calls out.
+_delegated_agent_for_path() {
+	local transcript="$1" target="$2" ids id result status name issue body line in_block matched
+	[ -r "$transcript" ] || return 1
+
+	ids="$(jq -r 'select(.message.content != null) | .message.content[]?
+		| select(.type == "tool_use" and .name == "Agent") | .id' "$transcript" 2>/dev/null)"
+	[ -n "$ids" ] || return 1
+
+	while read -r id; do
+		[ -n "$id" ] || continue
+
+		result="$(jq -r --arg id "$id" 'select(.message.content != null)
+			| .message.content[]?
+			| select(.type == "tool_result" and .tool_use_id == $id)
+			| .content
+			| if type == "string" then . else ([.[]? | .text // ""] | join("\n")) end' \
+			"$transcript" 2>/dev/null)"
+		if [ -n "$result" ]; then
+			case "$result" in
+			*"Async agent launched successfully"*)
+				status="$(jq -r --arg needle "<tool-use-id>${id}</tool-use-id>" '
+					.. | strings | select(contains($needle))
+					| capture("<status>(?<s>completed|failed)</status>").s' \
+					"$transcript" 2>/dev/null | tail -1)"
+				[ "$status" = "completed" ] && continue
+				[ "$status" = "failed" ] && continue
+				;;
+			*) continue ;;
+			esac
+		fi
+
+		name="$(jq -r --arg id "$id" 'select(.message.content != null)
+			| .message.content[]?
+			| select(.type == "tool_use" and .id == $id)
+			| .input.name // ""' "$transcript" 2>/dev/null | head -1)"
+		[[ "$name" =~ $_delegate_name_re ]] || continue
+		issue="${BASH_REMATCH[1]}"
+
+		body="$(gh issue view "$issue" --json body --jq .body 2>/dev/null)" || continue
+		[ -n "$body" ] || continue
+
+		in_block=0
+		matched=0
+		while IFS= read -r line; do
+			if [ "$in_block" -eq 0 ]; then
+				[[ "$line" == '```surface'* ]] && in_block=1
+				continue
+			fi
+			[[ "$line" == '```'* ]] && break
+			[ -n "$line" ] || continue
+			# Deliberate glob match, mirroring dispatch_plan.py's fnmatch against a declared
+			# surface token — the RHS is a pattern, not a literal, on purpose.
+			# shellcheck disable=SC2053
+			if [[ "$target" == $line ]]; then
+				matched=1
+				break
+			fi
+		done <<<"$body"
+
+		if [ "$matched" -eq 1 ]; then
+			printf 'issue-%s\n' "$issue"
+			return 0
+		fi
+	done <<<"$ids"
+
+	return 1
+}
+
+_REPLIED_SUFFIX=": replied — still needs RESOLVING"
+
+# _apply_delegation_filter TRANSCRIPT
+# Downgrades a "problems" line to informational when its thread already carries a substantive
+# non-roster reply (the gate's own "replied — still needs RESOLVING" wording) AND a live,
+# same-session agent's declared surface covers that thread's path (dotfiles-dev#516). A thread
+# with NO reply yet ("needs a REPLY") is never touched — delegation presumes the orchestrator
+# already verified and handed off, which is exactly the "reply exists" signal the issue warns is
+# NOT enough on its own; requiring the RESOLVING wording keeps liveness+ownership as the deciding
+# factor instead of a reply alone. GATE_STATUS becomes "delegated" only when EVERY remaining
+# finding is covered — a single non-delegated finding still blocks the whole verdict.
+_apply_delegation_filter() {
+	local transcript="$1" line path agent
+	local still_blocking="" annotated="" any_delegated=0
+
+	[ "$GATE_STATUS" = "problems" ] || return 0
+	[ -n "$transcript" ] || return 0
+
+	while IFS= read -r line; do
+		[ -n "$line" ] || continue
+		if [[ "$line" == *"$_REPLIED_SUFFIX" ]]; then
+			path="${line#  }"
+			path="${path%"$_REPLIED_SUFFIX"}"
+			agent="$(_delegated_agent_for_path "$transcript" "$path")"
+			if [ -n "$agent" ]; then
+				any_delegated=1
+				annotated="$annotated
+  ${path}: delegated to ${agent} (in flight, declared surface covers this path) — not blocking"
+				continue
+			fi
+		fi
+		still_blocking="$still_blocking
+$line"
+		annotated="$annotated
+$line"
+	done <<<"$GATE_DETAIL"
+
+	[ "$any_delegated" -eq 1 ] || return 0
+
+	still_blocking="$(printf '%s\n' "$still_blocking" | sed '/^$/d')"
+	annotated="$(printf '%s\n' "$annotated" | sed '/^$/d')"
+
+	[ -z "$still_blocking" ] && GATE_STATUS="delegated"
+	GATE_DETAIL="$annotated"
+}
+
 # _emit_verdict NUMBER PREFIX
 # Prints the human-facing message for the current $GATE_STATUS/$GATE_DETAIL (set by a prior
 # gate_pr_thread_state call) and returns the exit code the hook should use. A non-empty PREFIX
@@ -297,6 +430,21 @@ _emit_verdict() {
 		return 0
 		;;
 	clean)
+		return 0
+		;;
+	delegated)
+		# dotfiles-dev#516: every remaining finding is answered-but-unresolved AND covered by a
+		# live, same-session agent's declared surface. The orchestrator cannot resolve these
+		# itself — the branch is checked out in the owning agent's worktree — so this is the
+		# "correct work already happening" case the issue exists to stop re-blocking on.
+		{
+			echo "${prefix}PR #${number}: every remaining review-thread finding is delegated to a"
+			echo "live, same-session agent whose declared file surface covers it — not blocking."
+			echo
+			printf '%s\n' "$GATE_DETAIL"
+			echo
+			echo "Re-check once that agent opens its PR; do not resolve these threads yourself."
+		} >&2
 		return 0
 		;;
 	problems | *)
@@ -363,13 +511,13 @@ _scan_cache_path() {
 	printf '%s/%s-%s_%s\n' "$dir" "$session_id" "$owner" "$name"
 }
 
-# _repo_wide_scan OWNER NAME SESSION_ID
+# _repo_wide_scan OWNER NAME SESSION_ID TRANSCRIPT
 # Sets GATE_STATUS/GATE_DETAIL/REPORT_NUMBER to the FIRST non-clean open PR found (REPORT_NUMBER
 # stays empty and GATE_STATUS=clean when every scanned PR is clean, or there are none), reusing
 # a same-session cache when it is still fresh. Returns 1 only when the PR list itself could not
 # be read — the caller's fail-open case.
 _repo_wide_scan() {
-	local owner="$1" name="$2" session_id="$3" cache now ts age cached prs n state
+	local owner="$1" name="$2" session_id="$3" transcript="$4" cache now ts age cached prs n state
 
 	cache="$(_scan_cache_path "$session_id" "$owner" "$name" 2>/dev/null)" || cache=""
 	if [ -n "$cache" ] && [ -r "$cache" ]; then
@@ -418,6 +566,9 @@ _repo_wide_scan() {
 		if [ "$GATE_STATUS" = "running" ]; then
 			_reclassify_running "$owner" "$name" "$n"
 		fi
+		if [ "$GATE_STATUS" = "problems" ]; then
+			_apply_delegation_filter "$transcript"
+		fi
 		# A non-required, indefinitely-PENDING status is not a reason to stop the scan here --
 		# it never blocks, so it must not be mistaken for the one finding this scan is looking
 		# for (dotfiles-dev#491). Keep looking at the rest of the open PRs.
@@ -428,6 +579,12 @@ _repo_wide_scan() {
 		# finding this scan looks for, and stopping the scan on it would hide a real finding on a
 		# later PR behind an unreviewed earlier one.
 		if [ "$GATE_STATUS" = "unreviewed" ]; then
+			continue
+		fi
+		# dotfiles-dev#516: every finding on this PR was delegated to a live, same-session agent
+		# whose declared surface covers it -- same "not the finding this scan looks for" shape as
+		# pending_indefinite/unreviewed above.
+		if [ "$GATE_STATUS" = "delegated" ]; then
 			continue
 		fi
 		if [ "$GATE_STATUS" != "clean" ]; then
@@ -446,13 +603,18 @@ _repo_wide_scan() {
 }
 
 main() {
-	local payload active number repo owner name session_id
+	local payload active number repo owner name session_id transcript
 
 	payload="$(cat)"
 
 	# Never block a stop that a hook already caused.
 	active="$(printf '%s' "$payload" | jq -r '.stop_hook_active // false' 2>/dev/null)"
 	[[ "$active" == "true" ]] && exit 0
+
+	# dotfiles-dev#516: the transcript is what makes "delegated to a live, same-session agent"
+	# decidable at all -- empty is fine, _apply_delegation_filter/_delegated_agent_for_path both
+	# fail closed (never delegated) on it.
+	transcript="$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)"
 
 	git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
@@ -470,6 +632,7 @@ main() {
 		# then sat resolved with no reasoning recorded.
 		gate_pr_thread_state "$owner" "$name" "$number" "$ROSTER_FILE"
 		[ "$GATE_STATUS" = "running" ] && _reclassify_running "$owner" "$name" "$number"
+		[ "$GATE_STATUS" = "problems" ] && _apply_delegation_filter "$transcript"
 		_emit_verdict "$number" ""
 		exit $?
 	fi
@@ -482,7 +645,7 @@ main() {
 	[[ -n "$owner" && -n "$name" ]] || exit 0
 	session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null)"
 
-	_repo_wide_scan "$owner" "$name" "$session_id" || exit 0
+	_repo_wide_scan "$owner" "$name" "$session_id" "$transcript" || exit 0
 	[ -n "$REPORT_NUMBER" ] || exit 0
 
 	_emit_verdict "$REPORT_NUMBER" "[repo-wide scan, no PR for this branch/HEAD] "
