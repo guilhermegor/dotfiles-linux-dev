@@ -305,6 +305,15 @@ _delegated_agent_for_path() {
 		in_block=0
 		matched=0
 		while IFS= read -r line; do
+			# Normalise BEFORE testing fence markers or matching entries — a CRLF issue body
+			# (common from the GitHub web editor) leaves a trailing \r that `read -r` does not
+			# strip, and a leading/trailing-space entry, so an otherwise-covering surface token
+			# would silently fail to match without this (CodeRabbit finding on PR #574, dotfiles-
+			# dev#516). Mirrors dispatch_plan.py's `declared_surface()`, which strips both via
+			# Python's `str.strip()` -- the two parsers must not disagree on the same issue body.
+			line="${line%$'\r'}"
+			line="${line#"${line%%[![:space:]]*}"}"
+			line="${line%"${line##*[![:space:]]}"}"
 			if [ "$in_block" -eq 0 ]; then
 				[[ "$line" == '```surface'* ]] && in_block=1
 				continue
@@ -518,6 +527,7 @@ _scan_cache_path() {
 # be read — the caller's fail-open case.
 _repo_wide_scan() {
 	local owner="$1" name="$2" session_id="$3" transcript="$4" cache now ts age cached prs n state
+	local saw_delegated=0
 
 	cache="$(_scan_cache_path "$session_id" "$owner" "$name" 2>/dev/null)" || cache=""
 	if [ -n "$cache" ] && [ -r "$cache" ]; then
@@ -585,6 +595,7 @@ _repo_wide_scan() {
 		# whose declared surface covers it -- same "not the finding this scan looks for" shape as
 		# pending_indefinite/unreviewed above.
 		if [ "$GATE_STATUS" = "delegated" ]; then
+			saw_delegated=1
 			continue
 		fi
 		if [ "$GATE_STATUS" != "clean" ]; then
@@ -593,7 +604,13 @@ _repo_wide_scan() {
 		fi
 	done <<<"$prs"
 
-	if [ -n "$cache" ]; then
+	# dotfiles-dev#516 (CodeRabbit review on PR #574): a "delegated" PR is excused only while its
+	# agent is LIVE, and liveness is exactly the kind of fact a cache must not extend past its own
+	# read -- the agent can complete or fail inside the TTL, and the cache-hit path above only
+	# re-verifies PR openness, never re-derives delegation. Skipping the write here forces the
+	# NEXT scan (whenever it happens) to re-check liveness fresh instead of replaying a stale
+	# "clean" verdict for up to $OPEN_THREADS_NUDGE_CACHE_TTL seconds.
+	if [ -n "$cache" ] && [ "$saw_delegated" -eq 0 ]; then
 		jq -nc --arg n "$REPORT_NUMBER" --arg s "$GATE_STATUS" --arg d "$GATE_DETAIL" \
 			--argjson ts "$(date +%s)" \
 			'{ts: $ts, number: (if ($n | length) > 0 then $n else null end), status: $s, detail: $d}' \

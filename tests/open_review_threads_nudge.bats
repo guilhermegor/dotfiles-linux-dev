@@ -469,6 +469,17 @@ checks_fixture() {
     [[ "$output" != *"delegated"* ]]
 }
 
+@test "delegated: a CRLF, whitespace-padded surface entry still matches (PR #574 review)" {
+    export PR_VIEW_NUMBER=75
+    replied_unresolved_fixture 75 "a/b.sh"
+    export ISSUE_BODY_606=$'```surface\r\n  a/b.sh  \r\n```'
+    TRANSCRIPT="$REPO/transcript.jsonl"
+    write_transcript "$TRANSCRIPT" "issue-606-fix-crlf"
+    run bash -c "payload false '' '$TRANSCRIPT' | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"delegated"* ]]
+}
+
 # --- stop_hook_active is honoured, and short-circuits before any gh call -------------------------
 
 @test "stop_hook_active exits 0 without ever calling gh" {
@@ -547,6 +558,28 @@ checks_fixture() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"PR #20"* ]]
     [ "$(wc -l <"$PRLIST_LOG")" -eq 1 ]
+}
+
+@test "repo-wide scan: a delegated verdict is never cached, even inside the TTL (PR #574 review)" {
+    # CodeRabbit's finding on PR #574: a delegated PR is excused only while its agent stays
+    # live, and the cache-hit path only re-verifies PR openness -- never re-derives liveness. If
+    # the scan cached "clean" here, a second call inside the TTL would reuse it without a second
+    # `gh pr list`/gate call. Asserting a SECOND pr-list call on the second invocation is exactly
+    # the fix: delegation is re-derived fresh every time, never replayed from a stale cache.
+    export PR_LIST=$'30'
+    export OPEN_THREADS_NUDGE_CACHE_TTL=600
+    replied_unresolved_fixture 30 "x/y.sh"
+    export ISSUE_BODY_610=$'```surface\nx/y.sh\n```'
+    TRANSCRIPT="$REPO/transcript.jsonl"
+    write_transcript "$TRANSCRIPT" "issue-610-fix-xy"
+
+    run bash -c "payload false sess-delegated '$TRANSCRIPT' | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <"$PRLIST_LOG")" -eq 1 ]
+
+    run bash -c "payload false sess-delegated '$TRANSCRIPT' | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <"$PRLIST_LOG")" -eq 2 ]
 }
 
 @test "an expired cache entry triggers a fresh scan" {
