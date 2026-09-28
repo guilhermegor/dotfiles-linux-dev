@@ -109,6 +109,65 @@ teardown() {
     [[ "$fn_body" == *'Registry apps not placed'* ]]
 }
 
+# Issue #565: Microsoft's .deb renamed VS Code's launcher to the reverse-DNS id
+# com.microsoft.VSCode.desktop; the registry still declared the pre-rename
+# `code.desktop`, which resolves to nothing on any installed system.
+
+@test "install_vscode's registry entry names the real installed launcher, not the pre-rename id" {
+    local entry fn _label _folder desktop found=""
+    for entry in "${INSTALL_REGISTRY[@]}"; do
+        IFS=':' read -r fn _label _folder desktop <<< "$entry"
+        [ "$fn" = "install_vscode" ] || continue
+        found="$desktop"
+        break
+    done
+    [ "$found" = "com.microsoft.VSCode.desktop" ]
+}
+
+# The resolver (find_app_desktop_file, nested in organize_app_folders) is what
+# turns "verify before writing" into "fail loud, don't guess". Asserted
+# statically against the function's own source text — the same style already
+# used above for MISSING_DESKTOP_IDS — because /usr/share/applications,
+# /var/lib/snapd/desktop/applications, and the flatpak export dir are not
+# writable from an unprivileged test process.
+@test "the resolver searches all four XDG application directories it claims to" {
+    local fn_body
+    fn_body="$(declare -f organize_app_folders)"
+    [[ "$fn_body" == *'$HOME/.local/share/applications/$app_name'* ]]
+    [[ "$fn_body" == *'/usr/share/applications/$app_name'* ]]
+    [[ "$fn_body" == *'/var/lib/snapd/desktop/applications/$app_name'* ]]
+    [[ "$fn_body" == *'/var/lib/flatpak/exports/share/applications/$app_name'* ]]
+}
+
+@test "organize_app_folders places the real VS Code launcher and drops the renamed-away code.desktop id" {
+    mkdir -p "$HOME/.local/share/applications"
+    # The launcher the installed .deb actually ships.
+    : > "$HOME/.local/share/applications/com.microsoft.VSCode.desktop"
+    # A decoy for the pre-rename id: its mere presence on disk must not be
+    # enough to place it — nothing in the registry names it any more, and a
+    # reconcile (full overwrite each run) must never append beside a stale id.
+    : > "$HOME/.local/share/applications/code.desktop"
+
+    run organize_app_folders
+    [ "$status" -eq 0 ]
+
+    [[ "$output" == *"'com.microsoft.VSCode.desktop'"* ]]
+    [[ "$output" != *"'code.desktop'"* ]]
+}
+
+@test "a dangling registry desktop_file is reported by name and never written into a folder's apps list" {
+    mkdir -p "$HOME/.local/share/applications"
+    INSTALL_REGISTRY=(
+        "install_fake_app:Fake App:Code:definitely-not-installed.desktop"
+    )
+
+    run organize_app_folders
+    [ "$status" -eq 0 ]
+
+    [[ "$output" == *"definitely-not-installed.desktop (install_fake_app -> Code)"* ]]
+    [[ "$output" != *"'definitely-not-installed.desktop'"* ]]
+}
+
 # Issue #391: an app landed in two GNOME folders at once, and three
 # independent mechanisms can each cause it — hardcoded <folder>_app_names id
 # lists, INSTALL_REGISTRY's gnome_folder field, and filename globs — with no
