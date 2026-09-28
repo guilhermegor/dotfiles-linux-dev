@@ -93,13 +93,76 @@ write_ref_state() {
     [ "$state" = "FAIL" ] || printf '%s' "$state" > "$TEST_TMP/refstate-$key.json"
 }
 
+# write_throttled
+# Makes the `_board_throttled` probe (`gh api graphql -f query='query{rateLimit{remaining}}'`)
+# fail with rate-limit-shaped text, confirming a throttle (dotfiles-dev#567). Absent (the
+# default): the probe succeeds, i.e. GraphQL itself is healthy.
+write_throttled() {
+    touch "$TEST_TMP/throttled"
+}
+
+# graphql_item REPO NUMBER STATUS BLOCKED_BY_TEXT BODY
+# One `repositoryOwner.projectV2.items.nodes[]` entry, shaped like the real GraphQL response
+# `_board_item_list_graphql` (kanban_reconcile.sh, sourced by this file) translates into the
+# porcelain's own `{"items":[...]}` JSON — same fields `item()` above emits via the porcelain
+# fixture, so a fallback-read test can reuse every existing assertion.
+graphql_item() {
+    local repo="$1" number="$2" status="$3" blocked_by="$4" body="$5"
+    jq -nc --arg repo "$repo" --argjson number "$number" --arg status "$status" \
+        --arg blocked_by "$blocked_by" --arg body "$body" \
+        --arg url "https://github.com/$repo/issues/$number" '
+        {id: ("ITEM_" + ($number|tostring)),
+         content: {__typename: "Issue", number: $number, url: $url, body: $body,
+                   repository: {nameWithOwner: $repo}},
+         fieldValues: {nodes: (
+            [{__typename: "ProjectV2ItemFieldSingleSelectValue", name: $status,
+              field: {name: "Status"}}]
+            + (if $blocked_by == "" then [] else
+                [{__typename: "ProjectV2ItemFieldTextValue", text: $blocked_by,
+                  field: {name: "Blocked by"}}]
+              end)
+         )}}
+    '
+}
+
+# write_item_list_graphql NODE_JSON... | FAIL
+# Registers the `gh api graphql` fallback response read when `project item-list` has failed and
+# no throttle was confirmed.
+write_item_list_graphql() {
+    if [ "$1" = "FAIL" ]; then
+        echo FAIL > "$TEST_TMP/item-fallback.json"
+        return
+    fi
+    printf '%s\n' "$@" | jq -sc \
+        '{data: {repositoryOwner: {projectV2: {items: {pageInfo: {hasNextPage: false}, nodes: .}}}}}' \
+        > "$TEST_TMP/item-fallback.json"
+}
+
 write_fake_gh() {
     cat > "$FAKE_BIN/gh" <<EOF
 #!/bin/bash
 echo "\$*" >> "$GH_LOG"
 case "\$1 \$2" in
     "project item-list")
+        [ -f "$TEST_TMP/fail-item-list" ] && exit 1
         cat "$TEST_TMP/items.json"
+        ;;
+    "api graphql")
+        full="\$*"
+        if printf '%s' "\$full" | grep -q 'rateLimit'; then
+            if [ -f "$TEST_TMP/throttled" ]; then
+                echo 'gh: API rate limit exceeded (RATE_LIMIT)' >&2
+                exit 1
+            fi
+            echo '{"data":{"rateLimit":{"remaining":4999}}}'
+        elif printf '%s' "\$full" | grep -q 'items(first'; then
+            f="$TEST_TMP/item-fallback.json"
+            [ -f "\$f" ] || exit 1
+            [ "\$(cat "\$f")" = "FAIL" ] && exit 1
+            cat "\$f"
+        else
+            exit 1
+        fi
         ;;
     "api "*)
         path="\$2"
@@ -501,4 +564,40 @@ run_reconcile() {
     run_reconcile
     [[ "$output" == *"blocked by nothing owner/repo#13"* ]]
     [[ "$output" != *"blocker-kind"* ]]
+}
+
+# --- dotfiles-dev#567: gh project throttle vs a genuinely unreadable board ------------------------
+
+@test "project items read: item-list fails but GraphQL is healthy, falls back and succeeds" {
+    write_item_list_graphql "$(graphql_item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" == *"unblocked owner/repo#3"* ]]
+}
+
+@test "project items read: item-list fails, GraphQL fallback also fails: UNKNOWN board unreadable" {
+    write_item_list_graphql FAIL
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run bash -c "source '$LIB'; reconcile_roadmap_unblock owner 17; echo \"rc=\$?\"; \
+        echo \"STATUS=\$RECONCILE_STATUS\"; echo \"REPORT=\$RECONCILE_REPORT\""
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"UNKNOWN (board unreadable): could not read project owner/17"* ]]
+    refute_gh 'issue edit'
+}
+
+@test "project items read: item-list fails, GraphQL confirms a throttle: UNKNOWN throttled" {
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    write_throttled
+    run bash -c "source '$LIB'; reconcile_roadmap_unblock owner 17; echo \"rc=\$?\"; \
+        echo \"STATUS=\$RECONCILE_STATUS\"; echo \"REPORT=\$RECONCILE_REPORT\""
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"UNKNOWN (throttled)"* ]]
+    refute_gh 'issue edit'
 }
