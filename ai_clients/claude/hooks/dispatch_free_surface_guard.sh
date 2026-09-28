@@ -184,15 +184,32 @@ _agent_dispatch_issue() {
 	printf '%s\n' "${BASH_REMATCH[1]}"
 }
 
-# _sendmessage_resumed TRANSCRIPT NAME
-# True when a SendMessage tool_use anywhere in the transcript addresses this agent's name — the
-# model already picked the failure back up, so it is RESOLVED and does not belong on the rescue
-# list (dotfiles-dev#540, candidate signal 2). A blank NAME (the dispatch declared none) can
-# never match: fail closed, never assumed resumed on silence.
+# _sendmessage_resumed TRANSCRIPT ID NAME
+# True when a SendMessage tool_use addresses this agent's name AFTER this dispatch's own failure
+# notification for tool_use ID — the model already picked THIS failure back up, so it is
+# RESOLVED and does not belong on the rescue list (dotfiles-dev#540, candidate signal 2). A
+# blank NAME (the dispatch declared none) can never match: fail closed, never assumed resumed
+# on silence.
+#
+# ⚠️ Ordering is load-bearing, not incidental (review finding on this file). A name match with
+# no ordering check false-positives on a SendMessage sent BEFORE this instance ever failed — a
+# status-check ping while the agent was still running, or a resume of an EARLIER instance that
+# reused the same `issue-<N>-slug` name — either of which would silence a rescue that is still
+# needed. The transcript is JSONL, one record per line, so `input_line_number` after jq finishes
+# reading a record is that record's own line — a cheap, exact proxy for "which happened first".
 _sendmessage_resumed() {
-	local transcript="$1" name="$2"
+	local transcript="$1" id="$2" name="$3"
 	[ -n "$name" ] || return 1
-	jq -e --arg n "$name" 'select(.message.content != null)
+	local fail_line
+	fail_line="$(jq -r --arg needle "<tool-use-id>${id}</tool-use-id>" '
+		select(.. | strings | contains($needle))
+		| select(.. | strings | contains("<status>failed</status>"))
+		| input_line_number
+	' "$transcript" 2>/dev/null | tail -1)"
+	[ -n "$fail_line" ] || return 1
+	jq -e --arg n "$name" --argjson after "$fail_line" '
+		select(input_line_number > $after)
+		| select(.message.content != null)
 		| .message.content[]?
 		| select(.type == "tool_use" and .name == "SendMessage" and .input.to == $n)' \
 		"$transcript" >/dev/null 2>&1
@@ -250,9 +267,9 @@ inflight_dispatch_issues() {
 						| .message.content[]?
 						| select(.type == "tool_use" and .id == $id)
 						| (.input.name // "")' "$transcript" 2>/dev/null | head -1)"
-					# RESOLVED: the model already resumed this agent by name — do not
-					# re-nag for it (dotfiles-dev#540, signal 2).
-					_sendmessage_resumed "$transcript" "$agent_name" && continue
+					# RESOLVED: the model already resumed this agent by name, AFTER this
+					# failure — do not re-nag for it (dotfiles-dev#540, signal 2).
+					_sendmessage_resumed "$transcript" "$id" "$agent_name" && continue
 					desc="$(jq -r --arg id "$id" 'select(.message.content != null)
 						| .message.content[]?
 						| select(.type == "tool_use" and .id == $id)
@@ -329,26 +346,39 @@ report_unreadable() {
 # forever (measured: 34 names on every single Stop, one of them literally duplicated) — a
 # failed dispatch had no way to become resolved. Three checks, applied here:
 #
-#   1. Dedup. The same agent name can reach FAILED_BACKGROUND_AGENTS twice (two dispatch
-#      attempts sharing a name) — `awk '!seen[$0]++'` collapses that to one line.
+#   1. Dedup, keeping each name's LATEST occurrence. The same agent name can reach
+#      FAILED_BACKGROUND_AGENTS twice (two dispatch attempts sharing a name) — `tac | awk
+#      '!seen[$0]++' | tac` collapses that to one line at its MOST RECENT position, not its
+#      first. Deduping at the first occurrence (review finding on this file) pins a name to a
+#      stale position: a name failing again after FAILED_AGENTS_MAX other distinct names have
+#      since accumulated would be cut by the cap below despite its most recent failure being the
+#      one that matters — reversing before the dedup and reversing back keeps chronological
+#      order (oldest first) while resolving ties toward the latest occurrence.
 #   2. RESOLVED via the plan. A failed dispatch that declared an issue (DISPATCH_NAME_ISSUE_RE)
 #      whose number is no longer in REMAINING has already been settled some other way — merged,
 #      claimed by the registry, or picked up by a live dispatch — so it drops off. An UNDECLARED
 #      name (blank issue field) fails CLOSED: nothing here can prove it settled, so it is always
 #      kept. (Signal 2, the SendMessage resume, is checked earlier in inflight_dispatch_issues —
-#      a resumed dispatch never reaches this list at all.)
+#      a resumed dispatch never reaches this list at all.) ⚠️ The record is split on the FIRST
+#      tab with `${line%%$'\t'*}` / `${line#*$'\t'}`, never `IFS=$'\t' read` (review finding on
+#      this file): bash's `read` strips LEADING IFS whitespace even under a custom IFS, so a
+#      record with an empty decl_issue ("\tname") would lose the name into `fissue` and drop an
+#      undeclared failure that must fail closed and always be kept.
 #   3. Cap, never silent drop. The newest FAILED_AGENTS_MAX names are printed, oldest first,
 #      with a COUNT for the rest — a session-long list is unreadable by construction, but an
 #      uncounted truncation would read as "that's all of them."
 rescue_note() {
 	local remaining="$1" names total
+	local line fissue fname
 	names="$(printf '%s\n' "$FAILED_BACKGROUND_AGENTS" | sed '/^$/d' |
-		while IFS=$'\t' read -r fissue fname; do
+		while IFS= read -r line; do
+			fissue="${line%%$'\t'*}"
+			fname="${line#*$'\t'}"
 			if [ -n "$fissue" ] && ! printf '%s\n' "$remaining" | grep -qxF "$fissue"; then
 				continue # RESOLVED: no longer in REMAINING (merged/claimed/covered).
 			fi
 			printf '%s\n' "$fname"
-		done | awk '!seen[$0]++')"
+		done | tac | awk '!seen[$0]++' | tac)"
 	[ -n "$names" ] || return 0
 
 	total=$(printf '%s\n' "$names" | grep -c .)
