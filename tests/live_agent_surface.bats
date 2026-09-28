@@ -293,6 +293,11 @@ teardown() {
 # `gh` is stubbed here, unlike every test above it: this is the one path in the file that reaches
 # the forge at all. GH_STUB_STATE drives the answer, GH_STUB_LOG records that a call happened,
 # and a test asserting ZERO calls is as load-bearing as the ones asserting a verdict.
+#
+# The stub answers `gh pr list --state all` the way the forge would: one PR per `feature/*`
+# branch of the fixture, headed at that branch's current commit. GH_STUB_CROSS=true marks every
+# row as a fork PR; GH_STUB_OID overrides every row's head commit (a branch reused after its PR
+# closed).
 
 _stub_gh() {
 	mkdir -p "$TEST_TMP/bin"
@@ -302,11 +307,19 @@ printf '%s\n' "$*" >>"$GH_STUB_LOG"
 case "${GH_STUB_STATE:-NONE}" in
 FAIL) exit 1 ;;
 NONE) printf '[]\n' ;;
-*) printf '[{"state":"%s"}]\n' "$GH_STUB_STATE" ;;
+*)
+	git -C "$GH_STUB_REPO" for-each-ref --format='%(objectname) %(refname:short)' refs/heads/feature/ \
+		| jq -Rn --arg s "$GH_STUB_STATE" --arg oid "${GH_STUB_OID:-}" \
+			--argjson cross "${GH_STUB_CROSS:-false}" \
+			'[inputs | split(" ")
+			  | {headRefOid: (if $oid == "" then .[0] else $oid end), headRefName: .[1],
+			     state: $s, isCrossRepository: $cross}]'
+	;;
 esac
 STUB
 	chmod +x "$TEST_TMP/bin/gh"
 	export GH_STUB_LOG="$TEST_TMP/gh_calls"
+	export GH_STUB_REPO="$REPO"
 	: >"$GH_STUB_LOG"
 	PATH="$TEST_TMP/bin:$PATH"
 }
@@ -382,7 +395,46 @@ _pushed_worktree() {
 	export GH_STUB_STATE=CLOSED
 
 	gate_live_agent_surface "$REPO"
+	# status first: a failed gate clears LIVE_AGENT_PATHS, which would pass the absence check
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
 	[[ "$LIVE_AGENT_PATHS" != *"closed_work.txt"* ]]
+	run live_agent_classify_files closed_work.txt
+	[ "$output" = "free" ]
+}
+
+@test "551: a closed FORK PR sharing the branch name never marks a local worktree dead" {
+	_stub_gh
+	_pushed_worktree forked forked_work.txt >/dev/null
+	_github_origin
+	export GH_STUB_STATE=CLOSED GH_STUB_CROSS=true
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"forked_work.txt"* ]]
+}
+
+@test "551: a branch REUSED after its PR closed is held — the dead PR's head is not this HEAD" {
+	_stub_gh
+	_pushed_worktree reused reused_work.txt >/dev/null
+	_github_origin
+	export GH_STUB_STATE=MERGED GH_STUB_OID=0000000000000000000000000000000000000000
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"reused_work.txt"* ]]
+}
+
+@test "551: the forge is asked ONCE per gate call, however many worktrees there are" {
+	_stub_gh
+	_pushed_worktree one one_work.txt >/dev/null
+	_pushed_worktree two two_work.txt >/dev/null
+	_pushed_worktree three three_work.txt >/dev/null
+	_github_origin
+	export GH_STUB_STATE=MERGED
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[ "$(wc -l <"$GH_STUB_LOG")" -eq 1 ]
 }
 
 @test "551: a MERGED branch with UNCOMMITTED work is still held — never prune before rescue" {
@@ -458,19 +510,26 @@ _pushed_worktree() {
 	[[ "$LIVE_AGENT_PATHS" == *"ghfail_work.txt"* ]]
 }
 
-@test "551: _worktree_pr_state says NONE for an empty list and fails on a gh error" {
+@test "551: _dead_branch_index is empty-but-ok for no PRs and fails on a gh error" {
 	_stub_gh
+	_pushed_worktree idx idx_work.txt >/dev/null
 
 	export GH_STUB_STATE=NONE
-	run _worktree_pr_state acme widget feature/x
+	run _dead_branch_index acme widget
 	[ "$status" -eq 0 ]
-	[ "$output" = "NONE" ]
+	[ -z "$output" ]
 
 	export GH_STUB_STATE=MERGED
-	run _worktree_pr_state acme widget feature/x
-	[ "$output" = "MERGED" ]
+	run _dead_branch_index acme widget
+	[ "$status" -eq 0 ]
+	[ "$output" = "$(git -C "$REPO" rev-parse feature/idx)	feature/idx" ]
+
+	# an OPEN PR is not dead, so it never enters the index
+	export GH_STUB_STATE=OPEN
+	run _dead_branch_index acme widget
+	[ -z "$output" ]
 
 	export GH_STUB_STATE=FAIL
-	run _worktree_pr_state acme widget feature/x
+	run _dead_branch_index acme widget
 	[ "$status" -ne 0 ]
 }

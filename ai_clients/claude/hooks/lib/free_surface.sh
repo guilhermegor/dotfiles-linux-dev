@@ -275,33 +275,57 @@ _origin_owner_repo() {
 	printf '%s %s\n' "$owner" "$repo"
 }
 
-# _worktree_pr_state OWNER REPO BRANCH
-# Echoes the forge's state for BRANCH's most recent PR: MERGED | CLOSED | OPEN | NONE (no PR ever
-# opened from this branch). Never `git merge-base` — a squash-merged branch is never an ancestor
-# of its base (dotfiles-dev#551), so only the forge can answer this. Returns 1 on any read
-# failure; a caller must treat that as "unexamined", never as NONE.
-_worktree_pr_state() {
-	local owner="$1" repo="$2" branch="$3" json
-	local slug="$owner/$repo"
-	json="$(gh pr list --repo "$slug" --head "$branch" --state all --json state --limit 1 2>/dev/null)" || return 1
-	printf '%s' "$json" | jq -r 'if length == 0 then "NONE" else .[0].state end' 2>/dev/null
+# _dead_branch_index OWNER REPO
+# ONE forge call per gate invocation, emitting "<headRefOid><TAB><headRefName>" for every PR of
+# THIS repository that is already MERGED or CLOSED. Returns 1 on a read failure; an empty index is
+# a legitimate answer (no dead PRs) and is NOT an error — the caller distinguishes the two by the
+# return code, never by emptiness.
+#
+# ⚠️ Built once and passed down, never called per worktree (#566 review). A per-worktree lookup
+# issued one `gh pr list` per eligible worktree, so the 61-worktree checkout that motivated
+# dotfiles-dev#551 would spend dozens of sequential forge requests before classifying a single
+# file — and the shared 5000/h quota is per USER, drained by every concurrent agent at once
+# (measured to exhaustion twice). A gate whose cost scales with worktree count is a quota bomb
+# aimed at the very fleet it exists to coordinate.
+#
+# ⚠️ TWO filters here are correctness, not tidiness (#566 review):
+#   1. `isCrossRepository == false` — `gh pr list --head <branch>` matches on branch NAME and
+#      accepts no `<owner>:<branch>` form, so a closed FORK PR that happens to share a branch name
+#      would otherwise mark a clean local worktree dead.
+#   2. The row carries `headRefOid`, and the caller requires it to equal the worktree's HEAD. A
+#      branch REUSED after its PR closed has the same name and new commits; name alone would read
+#      those as already-shipped. Binding to the exact commit also survives a squash merge, where
+#      the branch head is never an ancestor of the base.
+# Anything the index cannot vouch for stays held.
+_dead_branch_index() {
+	local owner="$1" repo="$2" json
+	json="$(gh pr list --repo "$owner/$repo" --state all \
+		--limit "${FREE_SURFACE_PR_SCAN_LIMIT:-200}" \
+		--json headRefName,headRefOid,state,isCrossRepository 2>/dev/null)" || return 1
+	printf '%s' "$json" | jq -r '
+		.[]
+		| select((.isCrossRepository // false) == false)
+		| select(.state == "MERGED" or .state == "CLOSED")
+		| "\(.headRefOid)\t\(.headRefName)"' 2>/dev/null
 }
 
-# _worktree_dead_and_clean OWNER REPO BRANCH PATH
-# True (0) only when BOTH hold: the forge confirms BRANCH's PR already MERGED or CLOSED, AND
-# PATH's tree is clean (no uncommitted/untracked changes) with nothing ahead of its upstream. This
-# is the RESCUE-safety boundary the issue asks for verbatim — "never prune before the RESCUE
-# check" — applied here to mean "never exclude a worktree that still holds work the merged PR
-# does not account for". Fails closed to "not dead" (1) on any read failure, ambiguous state, or
-# missing upstream (an unpushed branch's local commits cannot be verified as already-shipped) —
-# this only ever narrows LIVE_AGENT_PATHS, never on a guess (dotfiles-dev#551).
+# _worktree_dead_and_clean INDEX BRANCH PATH
+# True (0) only when ALL of these hold: INDEX carries a MERGED/CLOSED PR of this repository whose
+# head commit IS this worktree's current HEAD, AND PATH's tree is clean, AND nothing is ahead of
+# its upstream. This is the RESCUE-safety boundary the issue asks for verbatim — "never prune
+# before the RESCUE check" — applied here to mean "never exclude a worktree that still holds work
+# the merged PR does not account for". Fails closed to "not dead" (1) on any read failure, an
+# unreadable HEAD, an empty index, or a missing upstream (an unpushed branch's local commits
+# cannot be verified as already-shipped) — this only ever narrows LIVE_AGENT_PATHS, never on a
+# guess (dotfiles-dev#551).
 _worktree_dead_and_clean() {
-	local owner="$1" repo="$2" branch="$3" path="$4" state porcelain ahead
-	state="$(_worktree_pr_state "$owner" "$repo" "$branch")" || return 1
-	case "$state" in
-	MERGED | CLOSED) ;;
-	*) return 1 ;;
-	esac
+	local index="$1" branch="$2" path="$3" head row porcelain ahead
+	[ -n "$index" ] && [ -n "$branch" ] || return 1
+
+	head="$(git -C "$path" rev-parse HEAD 2>/dev/null)" || return 1
+	[ -n "$head" ] || return 1
+	row="$(printf '%s\t%s' "$head" "$branch")"
+	printf '%s\n' "$index" | grep -qxF -- "$row" || return 1
 
 	porcelain="$(git -C "$path" status --porcelain 2>/dev/null)" || return 1
 	[ -z "$porcelain" ] || return 1
@@ -344,6 +368,13 @@ _live_agent_held_paths() {
 	self="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || return 1
 	[ -n "$self" ] || return 1
 
+	# One forge read for the whole walk (see _dead_branch_index). A failed read leaves the index
+	# empty, which disables the exclusion — every worktree stays held, never pruned on a guess.
+	local dead_index=""
+	if [ -n "$owner" ] && [ -n "$repo" ]; then
+		dead_index="$(_dead_branch_index "$owner" "$repo")" || dead_index=""
+	fi
+
 	while IFS= read -r line; do
 		case "$line" in
 		"worktree "*)
@@ -365,8 +396,8 @@ _live_agent_held_paths() {
 				# armed when the caller resolved an owner/repo (see the file header); with neither,
 				# this is always false and every existing caller's behaviour is unchanged byte for
 				# byte.
-				if [ -n "$owner" ] && [ -n "$repo" ] && [ -n "$branch" ] && [ "$branch" != "$default" ] \
-					&& _worktree_dead_and_clean "$owner" "$repo" "$branch" "$path"; then
+				if [ -n "$dead_index" ] && [ -n "$branch" ] && [ "$branch" != "$default" ] \
+					&& _worktree_dead_and_clean "$dead_index" "$branch" "$path"; then
 					path=""
 					branch=""
 					continue
