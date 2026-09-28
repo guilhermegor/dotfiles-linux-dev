@@ -454,6 +454,44 @@ STUB
     [ -f "$GH_BUDGET_LATCH_FILE" ]
 }
 
+# dotfiles-dev#559 (PR #559 review, comment 4117399074): gate_pr_thread_state() latching on ITS
+# OWN terminal refusal is only half the fix -- without this, PR #10's latch does nothing to stop
+# PR #20's identical GraphQL call a moment later in the SAME sweep, which is the "repeated
+# fan-out attempts" the finding named. This asserts the loop stops after the first PR and never
+# even calls gh for the second.
+@test "sweep_review_gate stops the per-PR loop once the GraphQL budget latches" {
+    export GH_BUDGET_LATCH_FILE="$REPO/latch"
+    cat > "$BIN/gh" <<STUB
+#!/bin/bash
+case "\$*" in
+"api repos/o/r/pulls?state=open --jq .[].number")
+    printf '10\n20\n'
+    ;;
+*"-F owner=o -F repo=r -F number=10")
+    echo "GraphQL: API rate limit exceeded for user ID 1 (status: 200)" >&2
+    exit 1
+    ;;
+*"-F owner=o -F repo=r -F number=20")
+    touch "$BIN/CALLED-20"
+    exit 1
+    ;;
+*)
+    exit 1
+    ;;
+esac
+STUB
+    chmod +x "$BIN/gh"
+
+    run sweep_review_gate "o" "r" "o/r" ""
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"github-api-limit"* ]]
+    [[ "$output" == *"budget latched, skipping remaining PRs"* ]]
+    [[ "$output" != *"#20"* ]]
+    [ ! -f "$BIN/CALLED-20" ]
+    [ -f "$GH_BUDGET_LATCH_FILE" ]
+}
+
 # dotfiles-dev#511 review (Minor): the latch write can fail (marker path owned by another user,
 # read-only filesystem, ...) and the old gh_budget_gate never checked it, so BUDGET_GATE_REASON
 # claimed "latched until reset" even though nothing was written. Called directly (not via `run`,

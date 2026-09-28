@@ -169,6 +169,14 @@ sweep_review_gate() {
 	local n
 	while read -r n; do
 		[ -n "$n" ] || continue
+		# dotfiles-dev#559: gate_pr_thread_state() latches on its OWN terminal GitHub API budget
+		# refusal, but a latch written for PR N does nothing to stop PR N+1's identical call a
+		# moment later unless this loop checks it too — the exact "repeated fan-out attempts" the
+		# finding named. Skip every remaining PR this sweep once the budget is latched.
+		if gh_budget_latch_active; then
+			echo "    UNKNOWN — GitHub API budget latched, skipping remaining PRs this sweep"
+			break
+		fi
 		gate_pr_thread_state "$owner" "$name" "$n" "$roster_file"
 		# ⚠️ The `*)` arm is load-bearing, not defensive padding. This `case` had no catch-all,
 		# so a status the shared gate gained later printed NOTHING and the PR disappeared from
