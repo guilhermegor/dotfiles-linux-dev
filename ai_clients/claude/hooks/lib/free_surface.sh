@@ -56,17 +56,33 @@
 #                           is touching right now — its branch's committed diff against the
 #                           default branch, UNION its current uncommitted/untracked working-tree
 #                           state (a fresh worktree with no commits yet is still live).
-#     Local-only (no `gh` call) — a worktree IS the live-agent signal, same notion
-#     `hooks/lib/worktree_fanout.sh` walks for session_start_context.sh/quota_gap_rescue.sh, and
-#     the same notion `hooks/lib/dispatch_plan.py`'s `live_agent_held_paths()` already enforces
-#     via `round_dispatch_guard.sh` (dotfiles-dev#433/#476) — this is the shared, testable form
-#     of that same recipe for any caller working in bash (dev-loop.md's manual step 6 included),
-#     not a fourth, independently-drifting liveness heuristic. It deliberately does NOT reuse
+#     A worktree IS the live-agent signal, same notion `hooks/lib/worktree_fanout.sh` walks for
+#     session_start_context.sh/quota_gap_rescue.sh, and the same notion
+#     `hooks/lib/dispatch_plan.py`'s `live_agent_held_paths()` already enforces via
+#     `round_dispatch_guard.sh` (dotfiles-dev#433/#476) — this is the shared, testable form of
+#     that same recipe for any caller working in bash (dev-loop.md's manual step 6 included), not
+#     a fourth, independently-drifting liveness heuristic. It deliberately does NOT reuse
 #     `worktree_fanout.sh`'s `classify_worktree_diff` staleness filter: that question ("should a
 #     human resume this worktree?") is not this one ("is a file being written right now?") — a
 #     worktree mid-revert is still a live writer for collision purposes even though it is not
 #     worth resuming. Returns 1 and sets LIVE_AGENT_STATUS=unknown on any read failure — never
 #     returns 0 with an empty LIVE_AGENT_PATHS on a failure, same fail-closed contract as above.
+#
+#     ⚠️ dotfiles-dev#551: nothing ever prunes a worktree whose agent finished, so the walk above
+#     saturates over the life of a long-lived checkout — measured at 61 worktrees, 56 on branches
+#     the forge reports MERGED, leaving ~0 genuine live writers while every candidate file still
+#     read `held`. `git merge-base --is-ancestor` cannot detect this (a squash-merged branch is
+#     never an ancestor of its base — the same trap `s:dev-loop` step 1 already documents), so this
+#     gate now ALSO asks the forge, best-effort: if CWD's `origin` remote resolves to a GitHub
+#     `owner/repo` (see `_origin_owner_repo`), a worktree whose branch's PR is forge-confirmed
+#     MERGED or CLOSED, AND whose tree is clean with nothing ahead of its upstream (see
+#     `_worktree_dead_and_clean`), is excluded from LIVE_AGENT_PATHS entirely — it already shipped
+#     or was abandoned, not a live writer. A non-GitHub or unparseable origin (every fixture in
+#     tests/live_agent_surface.bats included, and any repo cloned by local path) simply disables
+#     this one enhancement; it is never a reason to fail the gate closed, and it makes zero `gh`
+#     calls in that case — the local-only walk above is still the whole answer. A branch with NO
+#     PR at all is UNEXAMINED, never dead — this gate does not content-diff against the default
+#     branch to guess "superseded"; that call needs a human or a follow-up issue, not a guess here.
 #
 #   live_agent_classify_files FILE...
 #     Same free/held/would-need-a-held-file trichotomy as free_classify_files, against
@@ -237,7 +253,88 @@ live_agent_classify_files() {
 	_classify_files_against "${LIVE_AGENT_STATUS:-}" "${LIVE_AGENT_PATHS:-}" "$@"
 }
 
-# _live_agent_held_paths CWD DEFAULT_BRANCH
+# _origin_owner_repo CWD
+# Best-effort "owner repo" (space-separated) from CWD's `origin` remote URL, recognizing GitHub
+# SSH and HTTPS forms only. Returns 1 (silently — never logged as a failure) for anything else: a
+# local-path remote (every fixture in tests/live_agent_surface.bats), a non-GitHub host, or a
+# missing `origin` at all. Callers treat a 1 here as "the forge-exclusion enhancement below is
+# unavailable", never as a reason to fail the whole gate closed (dotfiles-dev#551) — resolving the
+# repo is a capability probe, not a correctness gate.
+_origin_owner_repo() {
+	local cwd="$1" url
+	url="$(git -C "$cwd" remote get-url origin 2>/dev/null)" || return 1
+	case "$url" in
+	git@github.com:*/*) url="${url#git@github.com:}" ;;
+	https://github.com/*/* | http://github.com/*/*) url="${url#*github.com/}" ;;
+	*) return 1 ;;
+	esac
+	url="${url%.git}"
+	local owner="${url%%/*}" repo="${url#*/}"
+	repo="${repo%%/*}"
+	[ -n "$owner" ] && [ -n "$repo" ] || return 1
+	printf '%s %s\n' "$owner" "$repo"
+}
+
+# _dead_branch_index OWNER REPO
+# ONE forge call per gate invocation, emitting "<headRefOid><TAB><headRefName>" for every PR of
+# THIS repository that is already MERGED or CLOSED. Returns 1 on a read failure; an empty index is
+# a legitimate answer (no dead PRs) and is NOT an error — the caller distinguishes the two by the
+# return code, never by emptiness.
+#
+# ⚠️ Built once and passed down, never called per worktree (#566 review). A per-worktree lookup
+# issued one `gh pr list` per eligible worktree, so the 61-worktree checkout that motivated
+# dotfiles-dev#551 would spend dozens of sequential forge requests before classifying a single
+# file — and the shared 5000/h quota is per USER, drained by every concurrent agent at once
+# (measured to exhaustion twice). A gate whose cost scales with worktree count is a quota bomb
+# aimed at the very fleet it exists to coordinate.
+#
+# ⚠️ TWO filters here are correctness, not tidiness (#566 review):
+#   1. `isCrossRepository == false` — `gh pr list --head <branch>` matches on branch NAME and
+#      accepts no `<owner>:<branch>` form, so a closed FORK PR that happens to share a branch name
+#      would otherwise mark a clean local worktree dead.
+#   2. The row carries `headRefOid`, and the caller requires it to equal the worktree's HEAD. A
+#      branch REUSED after its PR closed has the same name and new commits; name alone would read
+#      those as already-shipped. Binding to the exact commit also survives a squash merge, where
+#      the branch head is never an ancestor of the base.
+# Anything the index cannot vouch for stays held.
+_dead_branch_index() {
+	local owner="$1" repo="$2" json
+	json="$(gh pr list --repo "$owner/$repo" --state all \
+		--limit "${FREE_SURFACE_PR_SCAN_LIMIT:-200}" \
+		--json headRefName,headRefOid,state,isCrossRepository 2>/dev/null)" || return 1
+	printf '%s' "$json" | jq -r '
+		.[]
+		| select((.isCrossRepository // false) == false)
+		| select(.state == "MERGED" or .state == "CLOSED")
+		| "\(.headRefOid)\t\(.headRefName)"' 2>/dev/null
+}
+
+# _worktree_dead_and_clean INDEX BRANCH PATH
+# True (0) only when ALL of these hold: INDEX carries a MERGED/CLOSED PR of this repository whose
+# head commit IS this worktree's current HEAD, AND PATH's tree is clean, AND nothing is ahead of
+# its upstream. This is the RESCUE-safety boundary the issue asks for verbatim — "never prune
+# before the RESCUE check" — applied here to mean "never exclude a worktree that still holds work
+# the merged PR does not account for". Fails closed to "not dead" (1) on any read failure, an
+# unreadable HEAD, an empty index, or a missing upstream (an unpushed branch's local commits
+# cannot be verified as already-shipped) — this only ever narrows LIVE_AGENT_PATHS, never on a
+# guess (dotfiles-dev#551).
+_worktree_dead_and_clean() {
+	local index="$1" branch="$2" path="$3" head row porcelain ahead
+	[ -n "$index" ] && [ -n "$branch" ] || return 1
+
+	head="$(git -C "$path" rev-parse HEAD 2>/dev/null)" || return 1
+	[ -n "$head" ] || return 1
+	row="$(printf '%s\t%s' "$head" "$branch")"
+	printf '%s\n' "$index" | grep -qxF -- "$row" || return 1
+
+	porcelain="$(git -C "$path" status --porcelain 2>/dev/null)" || return 1
+	[ -z "$porcelain" ] || return 1
+
+	ahead="$(git -C "$path" rev-list --count '@{upstream}..HEAD' 2>/dev/null)" || return 1
+	[ "$ahead" = "0" ]
+}
+
+# _live_agent_held_paths CWD DEFAULT_BRANCH [OWNER REPO]
 # Exact paths any OTHER worktree of CWD is touching right now: its branch's committed diff
 # against DEFAULT_BRANCH, union its current uncommitted/untracked working-tree state. See the
 # file header for why this does not reuse worktree_fanout.sh's staleness classifier. Fails
@@ -245,8 +342,13 @@ live_agent_classify_files() {
 # orphan branch that has never diverged from default is not a read failure, mirroring
 # _free_held_paths's own "No common ancestor" tolerance above, just against local git's wording
 # instead of the GitHub compare API's.
+#
+# OWNER/REPO are optional (dotfiles-dev#551): when both are non-empty, a worktree's committed
+# divergence is skipped entirely once `_worktree_dead_and_clean` confirms it is dead — the forge
+# already shipped or closed its PR, and it holds no unaccounted-for work. Every existing caller
+# that passes only CWD/DEFAULT keeps the prior, purely-local behaviour byte for byte.
 _live_agent_held_paths() {
-	local cwd="$1" default="$2"
+	local cwd="$1" default="$2" owner="${3:-}" repo="${4:-}"
 	local path="" branch="" line held="" out out_lc untracked self
 	# Every git read below is piped through `tr` to decode -z output, and a pipeline reports only
 	# its LAST command's status — which would make `|| return 1` watch `tr` instead of git, undoing
@@ -266,6 +368,13 @@ _live_agent_held_paths() {
 	self="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || return 1
 	[ -n "$self" ] || return 1
 
+	# One forge read for the whole walk (see _dead_branch_index). A failed read leaves the index
+	# empty, which disables the exclusion — every worktree stays held, never pruned on a guess.
+	local dead_index=""
+	if [ -n "$owner" ] && [ -n "$repo" ]; then
+		dead_index="$(_dead_branch_index "$owner" "$repo")" || dead_index=""
+	fi
+
 	while IFS= read -r line; do
 		case "$line" in
 		"worktree "*)
@@ -282,6 +391,17 @@ _live_agent_held_paths() {
 			# never reached $held. The branch is required only for the committed-divergence diff
 			# below, which is the one read that genuinely needs a branch name (#523 review).
 			if [ -n "$path" ] && [ -d "$path" ] && [ "$path" != "$self" ]; then
+				# dotfiles-dev#551: a forge-confirmed dead-and-clean worktree contributes nothing
+				# — skip it entirely rather than walk its (empty, by definition) diffs below. Only
+				# armed when the caller resolved an owner/repo (see the file header); with neither,
+				# this is always false and every existing caller's behaviour is unchanged byte for
+				# byte.
+				if [ -n "$dead_index" ] && [ -n "$branch" ] && [ "$branch" != "$default" ] \
+					&& _worktree_dead_and_clean "$dead_index" "$branch" "$path"; then
+					path=""
+					branch=""
+					continue
+				fi
 				# Committed divergence only means something against a DIFFERENT branch; for a
 				# second worktree sitting on $default the diff is empty by definition, so skip
 				# the call rather than spend it. Its dirty state below still counts.
@@ -335,7 +455,9 @@ _live_agent_held_paths() {
 	printf '%s\n' "$held" | sed '/^$/d' | sort -u
 }
 
-# gate_live_agent_surface CWD — see the file header contract. No `gh` call: local git only.
+# gate_live_agent_surface CWD — see the file header contract. Purely local unless CWD's
+# `origin` resolves to a GitHub owner/repo (dotfiles-dev#551), in which case it also excludes any
+# worktree whose branch is forge-confirmed dead-and-clean; see _origin_owner_repo.
 gate_live_agent_surface() {
 	local cwd="$1"
 	LIVE_AGENT_STATUS="unknown"
@@ -367,7 +489,14 @@ gate_live_agent_surface() {
 	fi
 	[ -n "$default_branch" ] || return 1
 
-	held="$(_live_agent_held_paths "$cwd" "$default_branch")" || return 1
+	# Best-effort only (dotfiles-dev#551): a local-path or non-GitHub origin (every fixture in
+	# tests/live_agent_surface.bats included) leaves owner/repo empty, which disables the
+	# forge-exclusion enhancement in _live_agent_held_paths without affecting this gate's own
+	# fail-closed contract — parse failure here is never a reason to return unknown.
+	local owner="" repo="" owner_repo
+	owner_repo="$(_origin_owner_repo "$cwd")" && read -r owner repo <<<"$owner_repo"
+
+	held="$(_live_agent_held_paths "$cwd" "$default_branch" "$owner" "$repo")" || return 1
 
 	LIVE_AGENT_PATHS="$held"
 	# shellcheck disable=SC2034 # read by callers after this returns, not within this file

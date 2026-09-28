@@ -456,6 +456,216 @@ install_kimi() {
 }
 
 # ============================================================================
+# CODEXBAR (Codex/Claude usage & spend tray — Swift CLI + Qt 6 desktop)
+# ============================================================================
+
+# _codexbar_version_ge CANDIDATE FLOOR
+# True if CANDIDATE >= FLOOR, compared as dotted version numbers.
+_codexbar_version_ge() {
+    local candidate="$1" floor="$2"
+    [ "$(printf '%s\n%s\n' "$candidate" "$floor" | sort -V | head -n1)" = "$floor" ]
+}
+
+# _codexbar_installed_qt_version
+# Reads the installed Qt 6 core library version straight from the package
+# manager — the only way to know the REAL floor without a qmake6/qtpaths6
+# dev tool, which the runtime-only package set below does not install.
+_codexbar_installed_qt_version() {
+    case "$PACKAGE_MANAGER" in
+        apt)
+            dpkg-query -W -f='${Version}' libqt6core6t64 2>/dev/null \
+                || dpkg-query -W -f='${Version}' libqt6core6 2>/dev/null
+            ;;
+        dnf | yum)
+            rpm -q --qf '%{VERSION}\n' qt6-qtbase-common 2>/dev/null \
+                || rpm -q --qf '%{VERSION}\n' qt6-qtbase 2>/dev/null
+            ;;
+        pacman)
+            pacman -Q qt6-base 2>/dev/null | awk '{print $2}'
+            ;;
+    esac
+}
+
+# Installs the Qt 6 / QML runtime set CodexBar needs. install_package takes one
+# name per family; Debian/Ubuntu split the QML modules into several packages
+# that shape cannot express, and the widgets package name itself differs
+# between Ubuntu 24.04 (libqt6widgets6t64) and Debian 13 (libqt6widgets6) — so
+# this is a deliberate local case block, not a repeated install_package call.
+_codexbar_install_qt_runtime() {
+    case "$PACKAGE_MANAGER" in
+        apt)
+            local widgets_pkg="libqt6widgets6t64"
+            apt-cache show libqt6widgets6t64 &>/dev/null || widgets_pkg="libqt6widgets6"
+            $INSTALL_CMD qml6-module-qtquick qml6-module-qtquick-controls \
+                qml6-module-qtquick-layouts qml6-module-qtquick-templates \
+                qml6-module-qtquick-window qml6-module-qtqml-workerscript \
+                "$widgets_pkg" libqt6svg6 qt6-wayland
+            ;;
+        dnf | yum)
+            $INSTALL_CMD qt6-qtbase qt6-qtdeclarative qt6-qtsvg qt6-qtwayland
+            ;;
+        pacman)
+            $INSTALL_CMD qt6-base qt6-declarative qt6-svg qt6-wayland
+            ;;
+        *)
+            print_status "error" "No known Qt 6/QML runtime package set for package manager: $PACKAGE_MANAGER"
+            return 1
+            ;;
+    esac
+}
+
+# Downloads both CodexBar release archives (+ .sha256 files) for ARCH into
+# DEST_DIR. Prefers `gh release download` — the documented fallback for the
+# unauthenticated GitHub API's rate limit, and `gh` is already installed by
+# install_github_cli — falling back to curl + the releases API otherwise.
+_codexbar_download_release() {
+    local arch="$1" dest_dir="$2"
+
+    if command_exists gh; then
+        print_status "info" "Downloading CodexBar release archives via gh (avoids anonymous API rate limits)..."
+        gh release download --repo steipete/CodexBar \
+            --pattern "CodexBar*-linux-${arch}.tar.gz*" \
+            --dir "$dest_dir" --clobber 2>>"$LOG_FILE"
+        return $?
+    fi
+
+    print_status "info" "gh not found — downloading CodexBar release archives via curl..."
+    local api="https://api.github.com/repos/steipete/CodexBar/releases/latest"
+    curl -fsSL "$api" -o "$dest_dir/release.json" 2>>"$LOG_FILE" || return 1
+
+    local version
+    version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tag_name"])' \
+        "$dest_dir/release.json" 2>/dev/null)
+    [ -n "$version" ] || return 1
+
+    local base="https://github.com/steipete/CodexBar/releases/download/$version"
+    local name
+    for name in "CodexBarCLI-$version-linux-$arch.tar.gz" "CodexBarDesktop-$version-linux-$arch.tar.gz"; do
+        curl -fSL "$base/$name" -o "$dest_dir/$name" 2>>"$LOG_FILE" || return 1
+        curl -fSL "$base/$name.sha256" -o "$dest_dir/$name.sha256" 2>>"$LOG_FILE" || return 1
+    done
+}
+
+install_codexbar() {
+    print_status "section" "CODEXBAR (CODEX USAGE & SPEND TRAY)"
+
+    if command_exists codexbar-linux; then
+        print_status "info" "CodexBar is already installed ($(timeout 10 codexbar-linux --version 2>/dev/null | head -n1 || echo "unknown"))"
+        print_status "info" "Re-running the installer to update to the latest release"
+    fi
+
+    # Release archives are published for x86_64/aarch64 only (upstream README).
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64 | aarch64) ;;
+        *)
+            print_status "error" "CodexBar release archives support x86_64/aarch64 only — unsupported architecture: $arch"
+            return 1
+            ;;
+    esac
+
+    # Release binaries require glibc 2.39+; older systems need a source build
+    # (upstream README). getconf reads it directly, no ldd output to parse.
+    local glibc_version
+    glibc_version=$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')
+    if [ -z "$glibc_version" ] || ! _codexbar_version_ge "$glibc_version" "2.39"; then
+        print_status "error" "CodexBar requires glibc 2.39+ (detected: ${glibc_version:-unknown}) — build from source instead"
+        return 1
+    fi
+
+    if ! command_exists curl; then
+        print_status "error" "curl is not available. Please install curl first."
+        return 1
+    fi
+
+    print_status "info" "Installing Qt 6 / QML runtime packages..."
+    install_package "python3" "python3" "python3" "python3"
+    _codexbar_install_qt_runtime || return 1
+
+    # Verify the floor against what actually landed, not what was requested —
+    # Qt below 6.4 installs cleanly and then the binary fails to start (#563).
+    local qt_version
+    qt_version="$(_codexbar_installed_qt_version)"
+    qt_version="${qt_version%%[-+~]*}"
+    if [ -z "$qt_version" ] || ! _codexbar_version_ge "$qt_version" "6.4"; then
+        print_status "error" "CodexBar requires Qt 6.4+ (detected: ${qt_version:-unknown})"
+        return 1
+    fi
+
+    local work_dir
+    work_dir=$(mktemp -d)
+    # shellcheck disable=SC2064  # intentional immediate expansion of work_dir
+    trap "rm -rf '$work_dir'" RETURN
+
+    if ! _codexbar_download_release "$arch" "$work_dir"; then
+        print_status "error" "Failed to download CodexBar release archives — check $LOG_FILE"
+        return 1
+    fi
+
+    local cli_archive desktop_archive
+    cli_archive=$(find "$work_dir" -maxdepth 1 -name "CodexBarCLI-*-linux-${arch}.tar.gz" -print -quit)
+    desktop_archive=$(find "$work_dir" -maxdepth 1 -name "CodexBarDesktop-*-linux-${arch}.tar.gz" -print -quit)
+
+    # Verify BOTH checksums before extracting EITHER archive — upstream's own
+    # ordering, preserved deliberately (#563).
+    local archive
+    for archive in "$cli_archive" "$desktop_archive"; do
+        if [ -z "$archive" ] || [ ! -f "$archive" ] || [ ! -f "$archive.sha256" ]; then
+            print_status "error" "Missing a CodexBar release archive or checksum for $arch — check $LOG_FILE"
+            return 1
+        fi
+        if ! (cd "$(dirname "$archive")" && sha256sum -c "$(basename "$archive").sha256") &>>"$LOG_FILE"; then
+            print_status "error" "Checksum verification failed for $(basename "$archive") — check $LOG_FILE"
+            return 1
+        fi
+    done
+    print_status "success" "Checksums verified for both CodexBar archives"
+
+    local cli_dir="$HOME/.local/lib/codexbar-cli"
+    mkdir -p "$cli_dir" "$HOME/.local/bin"
+    tar -xzf "$cli_archive" -C "$cli_dir"
+    ln -sfn "$cli_dir/codexbar" "$HOME/.local/bin/codexbar"
+    export PATH="$HOME/.local/bin:$PATH"
+
+    if ! "$HOME/.local/bin/codexbar" --version &>>"$LOG_FILE"; then
+        print_status "error" "CodexBar CLI failed to run after install — check $LOG_FILE"
+        return 1
+    fi
+
+    tar -xzf "$desktop_archive" -C "$work_dir"
+    local desktop_dir
+    desktop_dir=$(find "$work_dir" -maxdepth 1 -type d -name 'CodexBarDesktop-*' -print -quit)
+    if [ -z "$desktop_dir" ]; then
+        print_status "error" "Could not locate the extracted CodexBarDesktop directory — check $LOG_FILE"
+        return 1
+    fi
+
+    # Calling upstream's own installer, not replicating it: it owns the
+    # .desktop entry, autostart, and the adapter socket, so reimplementing
+    # that here would be drift waiting to happen (#563).
+    print_status "info" "Running upstream's Integrations/Linux/install.py..."
+    if ! (cd "$desktop_dir" && python3 Integrations/Linux/install.py --cli "$HOME/.local/bin/codexbar") &>>"$LOG_FILE"; then
+        print_status "error" "CodexBar desktop installer failed — check $LOG_FILE"
+        return 1
+    fi
+
+    if command_exists codexbar-linux; then
+        print_status "success" "CodexBar installed successfully"
+    else
+        print_status "error" "CodexBar installed but codexbar-linux is not on PATH — check $LOG_FILE"
+        return 1
+    fi
+
+    echo ""
+    print_status "info" "CodexBar usage:"
+    print_status "config" "  Open settings: codexbar-linux --settings"
+    print_status "config" "  Sign in/out: use the Codex/Claude CLI (codexbar-linux opens it for you)"
+    print_status "config" "  Update: quit CodexBar, re-run this installer entry, then reopen it"
+    print_status "config" "    (preferences and disabled autostart survive; no auto-updater yet)"
+}
+
+# ============================================================================
 # CLAUDESTATUS (+ display/api/cli patches)
 # ============================================================================
 
@@ -1016,6 +1226,7 @@ INSTALL_REGISTRY+=(
     "install_qwen:Qwen Code::"
     "install_codex:OpenAI Codex CLI::"
     "install_kimi:Kimi Code CLI (Moonshot AI)::"
+    "install_codexbar:CodexBar (Codex Usage & Spend tray):Utilitarios:com.steipete.CodexBar.desktop"
     "install_claudestatus:claudestatus (Claude Usage Dashboard)::"
     "install_rtk:RTK (Rust Token Killer)::"
     "install_faster_whisper:faster-whisper (Speech-to-Text CLI)::"

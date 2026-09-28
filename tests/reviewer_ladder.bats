@@ -8,6 +8,16 @@
 setup() {
     source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/reviewer_ladder.sh"
     FIXTURES="$BATS_TEST_DIRNAME/fixtures/reviewer_ladder"
+
+    # dotfiles-dev#555: run_fallback_review now resolves the head's own commit
+    # date up front (ladder_already_covered's freshness check needs it, and it
+    # has no way to fetch one itself). Stub it to a fixed, ancient date by
+    # default so calling run_fallback_review never reaches the network just
+    # because a test does not care about freshness -- a test that DOES care
+    # overrides this export itself.
+    _default_fake_head_date() { echo "1970-01-01T00:00:00Z"; }
+    export -f _default_fake_head_date
+    export REVIEWER_LADDER_HEAD_DATE_CMD=_default_fake_head_date
 }
 
 # --- codex resolver ----------------------------------------------------------
@@ -202,29 +212,43 @@ setup() {
 
 ATTRIBUTION='Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)'
 
+# HEAD_DATE anchors the freshness tests below to the same measured shape as
+# #546 (dotfiles-dev#555): a real PR head's committed date. Tests that are not
+# about freshness at all still have to pass SOME head date now that
+# ladder_already_covered takes one — they use a marker timestamped after it,
+# which is the ordinary "ladder reviewed the current head" shape, not the
+# defect under test.
+HEAD_DATE='2026-09-27T13:28:42Z'
+FRESH_CREATED_AT='2026-09-27T13:40:00Z'   # after HEAD_DATE
+STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marker time
+
 @test "already-covered: the ladder's own attribution comment blocks a re-review" {
     export REVIEWER_LADDER_POSTER=ladder-bot
-    run ladder_already_covered "$(jq -cn --arg a "$ATTRIBUTION" \
-        '[{user:{login:"someone"},body:"some comment"},{user:{login:"ladder-bot"},body:$a}]')"
+    run ladder_already_covered "$(jq -cn --arg a "$ATTRIBUTION" --arg c "$FRESH_CREATED_AT" \
+        '[{user:{login:"someone"},body:"some comment"},
+          {user:{login:"ladder-bot"},body:$a,created_at:$c}]')" \
+        "$HEAD_DATE"
     [ "$status" -eq 0 ]
 }
 
 @test "already-covered: no attribution line present is not covered" {
     export REVIEWER_LADDER_POSTER=ladder-bot
-    run ladder_already_covered '[{"user":{"login":"ladder-bot"},"body":"a normal comment, no marker"}]'
+    run ladder_already_covered '[{"user":{"login":"ladder-bot"},"body":"a normal comment, no marker"}]' \
+        "$HEAD_DATE"
     [ "$status" -eq 1 ]
 }
 
 @test "already-covered: a forged marker from another commenter does NOT skip the review" {
     export REVIEWER_LADDER_POSTER=ladder-bot
-    run ladder_already_covered "$(jq -cn --arg a "$ATTRIBUTION" \
-        '[{user:{login:"drive-by"},body:$a}]')"
+    run ladder_already_covered "$(jq -cn --arg a "$ATTRIBUTION" --arg c "$FRESH_CREATED_AT" \
+        '[{user:{login:"drive-by"},body:$a,created_at:$c}]')" \
+        "$HEAD_DATE"
     [ "$status" -eq 1 ]
 }
 
 @test "already-covered: joined text (the old contract) is not an array — not covered" {
     export REVIEWER_LADDER_POSTER=ladder-bot
-    run ladder_already_covered "$ATTRIBUTION"
+    run ladder_already_covered "$ATTRIBUTION" "$HEAD_DATE"
     [ "$status" -eq 1 ]
 }
 
@@ -232,7 +256,44 @@ ATTRIBUTION='Fallback review — runtime: codex, model: codex-auto-review (selec
     export REVIEWER_LADDER_POSTER=""
     gh() { return 1; }
     export -f gh
-    run ladder_already_covered "$(jq -cn --arg a "$ATTRIBUTION" '[{user:{login:"x"},body:$a}]')"
+    run ladder_already_covered \
+        "$(jq -cn --arg a "$ATTRIBUTION" --arg c "$FRESH_CREATED_AT" \
+            '[{user:{login:"x"},body:$a,created_at:$c}]')" \
+        "$HEAD_DATE"
+    [ "$status" -eq 1 ]
+}
+
+# --- dotfiles-dev#555: a stale marker must not grant credit forever -----------------------------
+#
+# Measured on #546: marker at 12:43:28Z, head committed 13:28:42Z. The marker predates the head by
+# 45 minutes and reviewed a commit the head has since moved past -- `ladder_already_covered` used
+# to have no head data at all, so this always read as "covered". These are the tests that fail
+# before the fix (the first would report "covered").
+
+@test "already-covered: a marker OLDER than the head is not covered (#555, #546's own shape)" {
+    export REVIEWER_LADDER_POSTER=ladder-bot
+    run ladder_already_covered \
+        "$(jq -cn --arg a "$ATTRIBUTION" --arg c "$STALE_CREATED_AT" \
+            '[{user:{login:"ladder-bot"},body:$a,created_at:$c}]')" \
+        "$HEAD_DATE"
+    [ "$status" -eq 1 ]
+}
+
+@test "already-covered: a marker NEWER than the head still blocks a re-review" {
+    export REVIEWER_LADDER_POSTER=ladder-bot
+    run ladder_already_covered \
+        "$(jq -cn --arg a "$ATTRIBUTION" --arg c "$FRESH_CREATED_AT" \
+            '[{user:{login:"ladder-bot"},body:$a,created_at:$c}]')" \
+        "$HEAD_DATE"
+    [ "$status" -eq 0 ]
+}
+
+@test "already-covered: an unresolvable head date fails closed into not covered" {
+    export REVIEWER_LADDER_POSTER=ladder-bot
+    run ladder_already_covered \
+        "$(jq -cn --arg a "$ATTRIBUTION" --arg c "$FRESH_CREATED_AT" \
+            '[{user:{login:"ladder-bot"},body:$a,created_at:$c}]')" \
+        ""
     [ "$status" -eq 1 ]
 }
 
@@ -287,10 +348,29 @@ ATTRIBUTION='Fallback review — runtime: codex, model: codex-auto-review (selec
     resolve_fallback_reviewer() { echo "SHOULD NOT RESOLVE" >&2; return 1; }
     export -f resolve_fallback_reviewer
 
+    # created_at postdates setup()'s stubbed (ancient) head date -- this is the
+    # ordinary "ladder already reviewed the current head" shape, not #555's bug.
     run run_fallback_review o r 42 BLOCKED "" 5000 \
-        "$(jq -cn --arg a "$ATTRIBUTION" '[{user:{login:"ladder-bot"},body:$a}]')"
+        "$(jq -cn --arg a "$ATTRIBUTION" --arg c "$FRESH_CREATED_AT" \
+            '[{user:{login:"ladder-bot"},body:$a,created_at:$c}]')"
     [ "$status" -eq 0 ]
     [[ "$output" != *"SHOULD NOT RESOLVE"* ]]
+}
+
+@test "already-covered check does not skip a review for a marker predating the CURRENT head (#555)" {
+    export REVIEWER_LADDER_POSTER=ladder-bot
+    fake_head_date() { echo "2026-09-27T13:28:42Z"; }
+    export -f fake_head_date
+    export REVIEWER_LADDER_HEAD_DATE_CMD=fake_head_date
+    resolve_fallback_reviewer() { echo "RESOLVER WAS CALLED" >&2; return 1; }
+    export -f resolve_fallback_reviewer
+
+    # #546's own measured shape: marker at 12:43:28Z, head committed 13:28:42Z.
+    run run_fallback_review o r 42 BLOCKED "" 5000 \
+        "$(jq -cn --arg a "$ATTRIBUTION" --arg c "$STALE_CREATED_AT" \
+            '[{user:{login:"ladder-bot"},body:$a,created_at:$c}]')"
+    [[ "$output" == *"RESOLVER WAS CALLED"* ]]
+    [[ "$output" != *"already covered by a higher rung"* ]]
 }
 
 @test "a DIRTY PR is refused before the resolver ever runs" {
@@ -500,6 +580,51 @@ _make_two_commit_repo() {
     [ "$status" -ne 0 ]
     run grep -F -- 'api repos/o/r/pulls/487' "$GH_LOG"
     [ "$status" -eq 0 ]
+}
+
+# --- dotfiles-dev#555: the head-date lookup ladder_already_covered anchors on ---------------------
+
+@test "_pr_head_committed_at: override receives owner, repo, and PR number" {
+    fake() { printf '%s/%s#%s\n' "$1" "$2" "$3"; }
+    export -f fake
+    export REVIEWER_LADDER_HEAD_DATE_CMD=fake
+    run _pr_head_committed_at o r 487
+    [ "$output" = "o/r#487" ]
+}
+
+@test "_pr_head_committed_at: default command is REST, built on _pr_head_sha, never GraphQL" {
+    unset REVIEWER_LADDER_HEAD_DATE_CMD REVIEWER_LADDER_HEAD_SHA_CMD
+    GH_LOG="$BATS_TEST_TMPDIR/gh-head-date.log"
+    : >"$GH_LOG"
+    gh() {
+        printf '%s\n' "$*" >>"$GH_LOG"
+        case "$*" in
+        *"pulls/487"*) echo deadbeef ;;
+        *"commits/deadbeef"*) echo "2026-09-27T13:28:42Z" ;;
+        *) return 1 ;;
+        esac
+    }
+    export -f gh
+    export GH_LOG
+
+    run _pr_head_committed_at o r 487
+    [ "$status" -eq 0 ]
+    [ "$output" = "2026-09-27T13:28:42Z" ]
+    run grep -F -- '--json' "$GH_LOG"
+    [ "$status" -ne 0 ]
+    run grep -F -- 'api repos/o/r/commits/deadbeef' "$GH_LOG"
+    [ "$status" -eq 0 ]
+}
+
+@test "_pr_head_committed_at: empty when the head sha itself cannot be resolved" {
+    unset REVIEWER_LADDER_HEAD_DATE_CMD
+    fake_sha() { :; }
+    export -f fake_sha
+    export REVIEWER_LADDER_HEAD_SHA_CMD=fake_sha
+
+    run _pr_head_committed_at o r 487
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
 }
 
 @test "_post_pr_comment: default command is REST (issues/{n}/comments), never gh pr comment" {
