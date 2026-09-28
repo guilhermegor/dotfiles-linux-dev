@@ -424,6 +424,46 @@ _pushed_worktree() {
 	[[ "$LIVE_AGENT_PATHS" == *"reused_work.txt"* ]]
 }
 
+# --- dotfiles-dev#572: HEAD an ANCESTOR of the dead PR's head, not only an exact match --------
+#
+# GitHub's "Update branch" button merges the default branch into an open PR; once that PR is
+# later merged/closed, a worktree that never re-fetched has a HEAD strictly BEHIND the real dead
+# head, never equal to it. 28 of 62 dead worktrees measured needed this (dotfiles-dev#572).
+
+@test "551: HEAD an ancestor of the dead PR's head is dead too, not just an exact match" {
+	_stub_gh
+	WT="$(_pushed_worktree ancestor ancestor_work.txt)"
+	local head new_oid
+	head="$(git -C "$WT" rev-parse HEAD)"
+	# Fabricate the commit GitHub's "Update branch" would have created: a real object in the
+	# SHARED object store (any worktree of $REPO can create one without checking anything
+	# out), parented on this worktree's own HEAD, with no ref pointing to it — the worktree's
+	# HEAD never moves, so it is an ancestor of, never equal to, the dead PR's real head.
+	new_oid="$(git -C "$REPO" commit-tree "$head^{tree}" -p "$head" -m "simulated update-branch merge")"
+	_github_origin
+	export GH_STUB_STATE=MERGED GH_STUB_OID="$new_oid"
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" != *"ancestor_work.txt"* ]]
+
+	run live_agent_classify_files ancestor_work.txt
+	[ "$output" = "free" ]
+}
+
+@test "551: an unfetchable dead-PR head fails closed — HEAD stays held, never guessed dead" {
+	_stub_gh
+	_pushed_worktree unfetchable unfetchable_work.txt >/dev/null
+	_github_origin
+	# A syntactically valid sha this repo has never seen: _dead_branch_reaches must not guess
+	# ancestry for a commit it cannot inspect locally (never a network fetch).
+	export GH_STUB_STATE=MERGED GH_STUB_OID=1111111111111111111111111111111111111111
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"unfetchable_work.txt"* ]]
+}
+
 @test "551: the forge is asked ONCE per gate call, however many worktrees there are" {
 	_stub_gh
 	_pushed_worktree one one_work.txt >/dev/null
@@ -531,5 +571,37 @@ _pushed_worktree() {
 
 	export GH_STUB_STATE=FAIL
 	run _dead_branch_index acme widget
+	[ "$status" -ne 0 ]
+}
+
+@test "572: _dead_branch_reaches — exact match, ancestor match, and the fail-closed misses" {
+	WT="$TEST_TMP/wt-reaches"
+	git -C "$REPO" worktree add -q -b feature/reaches "$WT" master
+	echo work >"$WT/reaches.txt"
+	git -C "$WT" add reaches.txt
+	git -C "$WT" commit -q -m "add reaches.txt"
+	local head new_oid index
+	head="$(git -C "$WT" rev-parse HEAD)"
+	new_oid="$(git -C "$REPO" commit-tree "$head^{tree}" -p "$head" -m "simulated update")"
+
+	# exact match (the #566 case)
+	index="$(printf '%s\t%s' "$head" "feature/reaches")"
+	run _dead_branch_reaches "$index" "feature/reaches" "$head" "$WT"
+	[ "$status" -eq 0 ]
+
+	# ancestor match (dotfiles-dev#572): the index carries a LATER commit for the same branch,
+	# and HEAD is reachable from it.
+	index="$(printf '%s\t%s' "$new_oid" "feature/reaches")"
+	run _dead_branch_reaches "$index" "feature/reaches" "$head" "$WT"
+	[ "$status" -eq 0 ]
+
+	# fail-closed: a syntactically valid sha this repo has never seen must not be guessed at
+	index="$(printf '%s\t%s' "1111111111111111111111111111111111111111" "feature/reaches")"
+	run _dead_branch_reaches "$index" "feature/reaches" "$head" "$WT"
+	[ "$status" -ne 0 ]
+
+	# a real, fetchable commit for a DIFFERENT branch name never reaches this one
+	index="$(printf '%s\t%s' "$new_oid" "feature/other")"
+	run _dead_branch_reaches "$index" "feature/reaches" "$head" "$WT"
 	[ "$status" -ne 0 ]
 }
