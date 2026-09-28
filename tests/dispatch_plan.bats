@@ -87,7 +87,23 @@ issue_json() {
     printf '{"number": %s, "body": "%s"}' "$number" "$body"
 }
 
+# issue_json_labeled NUMBER LABEL SURFACE_PATH...
+# Same as issue_json but with a "labels" array carrying LABEL — dedicated variant so the common
+# case (issue_json) never has to thread an empty/optional labels list through every test.
+issue_json_labeled() {
+    local number="$1" label="$2"
+    shift 2
+    local body="\`\`\`surface\\n"
+    local f
+    for f in "$@"; do
+        body="${body}${f}\\n"
+    done
+    body="${body}\`\`\`"
+    printf '{"number": %s, "body": "%s", "labels": [{"name": "%s"}]}' "$number" "$body" "$label"
+}
+
 # stub_gh ISSUES_JSON [HELD_FILE] [CLAIMED_ISSUE] [FAIL_BRANCH] [FROZEN_PR_FILE] [MENTION_PRS_JSON]
+#         [NATIVE_BLOCK_ISSUE] [NATIVE_BLOCK_JSON] [NATIVE_BLOCK_FAIL_ISSUE]
 # ISSUES_JSON is the full `gh issue list --json number,body` array. HELD_FILE, if given, is the
 # one file the "feature" branch's compare reports as held (gate_free_surface's OWN held-paths
 # computation — unused by the planner's classification since #433 finding 1, still exercised
@@ -98,10 +114,15 @@ issue_json() {
 # live agent behind it — no matching worktree) touches, for finding 1's own test. MENTION_PRS_JSON,
 # if given, is the full `gh pr list --json number,title,body,closingIssuesReferences` array the
 # planner's OWN mention-without-closing read (dotfiles-dev#413) returns — default `[]` (no PRs
-# mention anything).
+# mention anything). NATIVE_BLOCK_ISSUE/NATIVE_BLOCK_JSON, if given, make the
+# `issues/<n>/dependencies/blocked_by` read for that one issue return NATIVE_BLOCK_JSON (a
+# `_ru_native_blockers`-shaped array) instead of the default `[]` (no native blockers).
+# NATIVE_BLOCK_FAIL_ISSUE, if given, makes that same read FAIL for that one issue (dotfiles-
+# dev#560's fail-closed path). Every other issue's blocked_by read defaults to `[]`.
 stub_gh() {
     local issues_json="$1" held="${2:-}" claimed="${3:-}" fail="${4:-0}" frozen="${5:-}"
     local mention_prs="${6:-[]}"
+    local native_block_issue="${7:-}" native_block_json="${8:-[]}" native_block_fail_issue="${9:-}"
     local claimed_nodes="[]"
     [ -n "$claimed" ] && claimed_nodes="[{\"closingIssuesReferences\":{\"nodes\":[{\"number\":$claimed}]}}]"
     local pr_list='[]'
@@ -150,6 +171,13 @@ JSON
 "pr view 99 --repo acme/widgets --json files --jq .files[].path") echo "$frozen" ;;
 "api repos/acme/widgets/branches --paginate --jq .[].name") printf 'main\nfeature\n' ;;
 "api repos/acme/widgets/compare/main...feature --jq .files[]?.filename") echo "$held" ;;
+"api repos/acme/widgets/issues/${native_block_fail_issue}/dependencies/blocked_by"*) exit 1 ;;
+"api repos/acme/widgets/issues/${native_block_issue}/dependencies/blocked_by"*)
+    cat <<'JSON'
+$native_block_json
+JSON
+    ;;
+"api repos/acme/widgets/issues/"*"/dependencies/blocked_by"*) echo '[]' ;;
 "api graphql -f query="*)
     echo '{"data":{"search":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":$claimed_nodes}}}'
     ;;
@@ -232,6 +260,60 @@ field() {
     [ "$(field '.dispatchable[0].issue')" = "6" ]
     [ "$(field '.excluded[0].issue')" = "5" ]
     [[ "$(field '.excluded[0].reason')" == *"already claimed"* ]]
+}
+
+# --- blocked state (dotfiles-dev#560): distinct from UNDECLARED, never dispatchable ----------
+
+@test "an open native blocker excludes the issue as blocked, not UNDECLARED (no surface)" {
+    # Mirrors #119: an open issue with no declared surface AND a native blocked_by relation --
+    # pre-fix this read as UNDECLARED, hiding the real, more fundamental reason.
+    stub_gh "[$(issue_json 119)]" "" "" 0 "" "[]" \
+        119 '[{"state":"open","repository":{"full_name":"acme/widgets"},"number":334}]'
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [ "$(field '.excluded[0].issue')" = "119" ]
+    [[ "$(field '.excluded[0].reason')" == *"blocked"* ]]
+    [[ "$(field '.excluded[0].reason')" == *"acme/widgets#334"* ]]
+    [[ "$(field '.excluded[0].reason')" != *"UNDECLARED"* ]]
+}
+
+@test "an open native blocker excludes an otherwise-free issue, never dispatched" {
+    stub_gh "[$(issue_json 120 free/a.sh)]" "" "" 0 "" "[]" \
+        120 '[{"state":"open","repository":{"full_name":"acme/widgets"},"number":119}]'
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [ "$(field '.excluded[0].issue')" = "120" ]
+    [[ "$(field '.excluded[0].reason')" == *"blocked"* ]]
+}
+
+@test "a closed native blocker does not block — the issue is still dispatchable" {
+    stub_gh "[$(issue_json 8 free/a.sh)]" "" "" 0 "" "[]" \
+        8 '[{"state":"closed","repository":{"full_name":"acme/widgets"},"number":7}]'
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable[0].issue')" = "8" ]
+    [ "$(field '.excluded | length')" -eq 0 ]
+}
+
+@test "a state:blocked label with no native blocker excludes the issue as blocked" {
+    stub_gh "[$(issue_json_labeled 9 state:blocked free/a.sh)]"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [ "$(field '.excluded[0].issue')" = "9" ]
+    [[ "$(field '.excluded[0].reason')" == *"blocked"* ]]
+    [[ "$(field '.excluded[0].reason')" == *"state:blocked"* ]]
+}
+
+@test "a failed native-blocker read excludes the issue as UNKNOWN, never dispatched" {
+    stub_gh "[$(issue_json 13 free/a.sh)]" "" "" 0 "" "[]" "" "[]" 13
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [ "$(field '.excluded[0].issue')" = "13" ]
+    [[ "$(field '.excluded[0].reason')" == *"UNKNOWN"* ]]
 }
 
 # --- glob expansion against the real tree ----------------------------------------------------
