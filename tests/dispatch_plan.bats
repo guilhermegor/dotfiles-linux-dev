@@ -79,6 +79,23 @@ mk_agent_worktree() {
     /usr/bin/git -C "$wt" -c user.email=t@t -c user.name=t commit -q -m "agent: $branch"
 }
 
+# mk_dead_agent_worktree BRANCH FILE -> echoes the worktree's HEAD sha.
+# Like mk_agent_worktree, but also fabricates a same-commit upstream tracking ref — this
+# fixture has no real remote to push to, and _worktree_dead_and_clean (free_surface.sh,
+# dotfiles-dev#551) requires "nothing ahead of upstream" before it will call a worktree dead.
+# Exercises the #572 delegation end-to-end: a forge-confirmed dead worktree must stop holding
+# its files once dispatch_plan.py routes through gate_live_agent_surface.
+mk_dead_agent_worktree() {
+    local branch="$1" file="$2"
+    mk_agent_worktree "$branch" "$file"
+    local wt="${AGENT_WORKTREES[${#AGENT_WORKTREES[@]}-1]}"
+    local head
+    head="$(/usr/bin/git -C "$wt" rev-parse HEAD)"
+    /usr/bin/git -C "$TEST_TMP" update-ref "refs/remotes/origin/$branch" "$head"
+    /usr/bin/git -C "$wt" branch --set-upstream-to="origin/$branch" "$branch"
+    printf '%s\n' "$head"
+}
+
 # gh_field NAME -> the .body value of one gh issue-list record: a fenced ```surface block
 # built from the remaining args, one path/glob per line. No args -> no block at all.
 issue_json() {
