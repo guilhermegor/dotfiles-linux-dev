@@ -42,6 +42,23 @@
 # Emits its report as SubagentStop `additionalContext` JSON so the parent
 # session sees it without anyone asking. Never blocks: this hook cannot spawn
 # agents, so blocking the stop would accomplish nothing — it only informs.
+#
+# ⚠️ Fires ONLY for dev/implementation agent types (dotfiles-dev#508). This hook used to run
+# unconditionally for every stopping subagent — a reviewer, `Explore`, `Plan`, or a skill fork
+# like `code-review` received the board sweep as `additionalContext`, spent its turn reacting to
+# dev-loop chatter, and handed back that instead of its actual result. Measured 2026-09-25: a
+# forked `code-review` subagent reviewing ditto#681 received 45 sweep injections and its final
+# report was a refusal to do dev-loop orchestration — the real review buried mid-transcript.
+# `sweep_agent_allowed()` gates on the payload's `agent_type` field — confirmed against the
+# installed Claude Code build (v2.1.283) by decompiling its bundled schema: the SubagentStop
+# payload is `{hook_event_name, stop_hook_active, agent_id, agent_transcript_path, agent_type,
+# ...}` — `agent_type`, never `subagent_type` (that name belongs to the Agent TOOL CALL's own
+# input parameter in the DISPATCHING session's transcript, a different field on a different
+# object entirely). An ALLOWLIST, not a denylist, per the same rule the free-surface gate above
+# already follows: a newly added read-only agent type is silent by default, never opted in by
+# omission. Absent/empty `agent_type` fails OPEN (fires) rather than silent — the manual
+# invocation `s:dev-loop` documents (`subagent_stop_sweep.sh <<<'{}'`) carries no agent_type at
+# all, and that contract must keep working outside a real SubagentStop trigger.
 set -uo pipefail
 
 GIT=/usr/bin/git
@@ -61,6 +78,33 @@ source "$HOOK_DIR/lib/gh_budget.sh"
 emit() {
 	# $1 = plain-text report body. Wraps it as SubagentStop additionalContext.
 	jq -n --arg ctx "$1" '{hookSpecificOutput: {hookEventName: "SubagentStop", additionalContext: $ctx}}'
+}
+
+# Dev/implementation agent types s:dev-loop dispatches for issue work — the only ones this
+# sweep is useful to. See this file's header comment for the field name and why absent/empty
+# fails open instead of silent (dotfiles-dev#508).
+SWEEP_AGENT_ALLOWLIST=(general-purpose claude)
+
+# sweep_agent_type PAYLOAD
+# Reads .agent_type off the raw SubagentStop JSON. Empty when absent or unparseable.
+sweep_agent_type() {
+	local payload="$1"
+	[ -n "$payload" ] || return 0
+	printf '%s' "$payload" | jq -r '.agent_type // empty' 2>/dev/null
+}
+
+# sweep_agent_allowed AGENT_TYPE
+# Empty/absent (no signal at all — a manual invocation, or a build that never sends the field)
+# returns true: same "fail open on missing data" rule every other gate in this file follows.
+# A named type must appear in SWEEP_AGENT_ALLOWLIST — anything else (a reviewer, Explore, Plan,
+# or a "fork" running a read-only skill, the ditto#681 case that opened this issue) is refused.
+sweep_agent_allowed() {
+	local t="$1" a
+	[ -z "$t" ] && return 0
+	for a in "${SWEEP_AGENT_ALLOWLIST[@]}"; do
+		[ "$t" = "$a" ] && return 0
+	done
+	return 1
 }
 
 resolve_cwd() {
@@ -440,8 +484,14 @@ gh_budget_gate() {
 }
 
 main() {
-	local payload cwd repo owner name db roster_file report
+	local payload cwd repo owner name db roster_file report agent_type
 	if [ ! -t 0 ]; then payload="$(cat)"; else payload=""; fi
+
+	# Gate on agent type FIRST, before any git/gh call — a silenced stop should cost nothing
+	# beyond parsing the payload (dotfiles-dev#508).
+	agent_type="$(sweep_agent_type "$payload")"
+	sweep_agent_allowed "$agent_type" || exit 0
+
 	cwd="$(resolve_cwd "$payload")"
 
 	$GIT -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
