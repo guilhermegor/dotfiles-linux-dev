@@ -443,6 +443,70 @@ transcript_dev_loop_many_failed_agents() {
     [[ "$output" == *"bg-agent"* ]]
 }
 
+# --- a failed dispatch becomes RESOLVED (dotfiles-dev#540) ----------------------------------
+# Before #540 a FAILED dispatch had no way to become resolved: it stayed on the rescue list for
+# the rest of the session, unbounded and undeduplicated (measured: 34 names on every Stop, one
+# of them literally duplicated). Three fixtures pin the fix.
+
+@test "a failed dispatch's issue no longer in the plan is RESOLVED, not named" {
+    # Nothing here proves #6 was resumed directly — but the planner no longer offers it at all
+    # (merged, claimed, or otherwise settled since the failure), so re-nagging for it would be
+    # asking to dispatch a duplicate over settled work.
+    plan_of "4"
+    run run_guard "$(transcript_dev_loop_background_agent_status_named 6 failed)"
+    [ "$status" -eq 2 ]
+    [[ ! "$output" == *"RESCUE"* ]]
+    [[ ! "$output" == *"bg-agent"* ]]
+}
+
+@test "a SendMessage resume addressed to the failed agent's name is RESOLVED, not named" {
+    plan_of "4"
+    local f
+    f="$(transcript_dev_loop_background_agent_working)"
+    {
+        echo '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<tool-use-id>agent1</tool-use-id>\n<status>failed</status>\n</task-notification>"}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"sm1","name":"SendMessage","input":{"to":"issue-4-bg-agent","message":"resume"}}]}}'
+    } >>"$f"
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    [[ ! "$output" == *"RESCUE"* ]]
+}
+
+@test "the rescue list deduplicates the same agent name failing twice" {
+    # Reproduces the real measurement: "agent-425" appeared twice in one session's rescue list.
+    plan_of "4"
+    local f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"issue-4-dup","prompt":"work"}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":[{"type":"text","text":"Async agent launched successfully."}]}]}}'
+        echo '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<tool-use-id>agent1</tool-use-id>\n<status>failed</status>\n</task-notification>"}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent2","name":"Agent","input":{"name":"issue-4-dup","prompt":"work again"}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent2","content":[{"type":"text","text":"Async agent launched successfully."}]}]}}'
+        echo '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<tool-use-id>agent2</tool-use-id>\n<status>failed</status>\n</task-notification>"}'
+    } >"$f"
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    local count
+    count=$(grep -o "issue-4-dup" <<<"$output" | wc -l)
+    [ "$count" -eq 1 ]
+}
+
+@test "the rescue list is capped, newest first, with a count for the rest" {
+    local issues="" i
+    for i in $(seq 101 112); do issues="$issues $i"; done
+    plan_of "$issues"
+    DISPATCH_GUARD_FAILED_AGENTS_MAX=10
+    export DISPATCH_GUARD_FAILED_AGENTS_MAX
+    run run_guard "$(transcript_dev_loop_many_failed_agents 12)"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"issue-112-bg"* ]]
+    [[ "$output" == *"issue-103-bg"* ]]
+    [[ ! "$output" == *"issue-101-bg"* ]]
+    [[ ! "$output" == *"issue-102-bg"* ]]
+    [[ "$output" == *"2 more"* ]]
+}
+
 # --- #526 review: one Agent covers exactly ONE issue and holds exactly ONE slot ---------------
 # The first cut joined name+description+prompt and took every `#N`. Measured on two real
 # dispatches: 5 and 6 issues extracted from one agent each.
