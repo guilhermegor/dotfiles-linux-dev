@@ -28,6 +28,14 @@
 #   refresh_pr_held_paths OWNER REPO
 #       Runs gate_free_surface ONCE and writes its held-path union to the registry directory.
 #
+#   claim_review_ask
+#       The shared, cross-agent primary-rung review-ask budget (dotfiles-dev#548). Atomic
+#       check-and-stamp, prints exactly one of:
+#           GRANTED    — go ahead and post the @coderabbitai ask
+#           BUSY       — another reader already spent this window's ask
+#           UNKNOWN    — could not be decided (no flock, no git dir); treat like BUSY
+#       Returns 0 only on GRANTED.
+#
 # ⚠️ ONE gate read per round, never one per agent (dotfiles-dev#405 scope 5). Measured
 # 2026-09-17: 8 agents dispatched in one batch each ran `gate_free_surface` inside their own
 # claim step; it compares every branch against the default branch (33 branches, one API call
@@ -265,7 +273,10 @@ claim_review_ask() {
 
 		local now stamp
 		now="$(date +%s)"
-		stamp="$(cat "$file" 2>/dev/null)"
+		stamp=""
+		if [ -s "$file" ]; then
+			stamp="$(cat "$file" 2>/dev/null)"
+		fi
 		if [[ "$stamp" =~ ^[0-9]+$ ]] && ((now - stamp < DISPATCH_REVIEW_ASK_TTL)); then
 			echo "BUSY"
 			exit 1

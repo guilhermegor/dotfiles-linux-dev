@@ -230,6 +230,55 @@ refute() {
     [ "$output" = "3" ]
 }
 
+# --- the shared review-ask budget (dotfiles-dev#548) --------------------------------------
+
+@test "the first review ask is GRANTED and recorded in the shared git common dir" {
+    run claim_review_ask
+    [ "$status" -eq 0 ]
+    [ "$output" = "GRANTED" ]
+    [ -s "$TEST_TMP/.git/dispatch-review-ask.tsv" ]
+}
+
+@test "a second ask inside the TTL window is BUSY, from any reader" {
+    claim_review_ask
+    run claim_review_ask
+    [ "$status" -ne 0 ]
+    [ "$output" = "BUSY" ]
+}
+
+@test "the ask budget is shared by every worktree of the repo, not per worktree" {
+    claim_review_ask
+    git worktree add -q "$TEST_TMP/wt-ask" -b other-ask main
+    cd "$TEST_TMP/wt-ask" || return 1
+    # A subagent in its own worktree sees the orchestrator's ask and is refused too.
+    run claim_review_ask
+    [ "$status" -ne 0 ]
+    [ "$output" = "BUSY" ]
+}
+
+@test "an ask past DISPATCH_REVIEW_ASK_TTL is GRANTED again" {
+    claim_review_ask
+    DISPATCH_REVIEW_ASK_TTL=0
+    run claim_review_ask
+    [ "$status" -eq 0 ]
+    [ "$output" = "GRANTED" ]
+}
+
+@test "an undecidable ask (no flock on PATH) is UNKNOWN, never GRANTED" {
+    mkdir -p "$TEST_TMP/emptybin"
+    run env PATH="$TEST_TMP/emptybin" /bin/bash -c \
+        'cd "$2" || exit 9; . "$1"; claim_review_ask' _ "$LIB" "$TEST_TMP"
+    [ "$status" -ne 0 ]
+    [ "$output" = "UNKNOWN" ]
+}
+
+@test "the review-ask TTL default is the tick cadence, and is overridable" {
+    run /bin/bash -c 'unset DISPATCH_REVIEW_ASK_TTL; . "$1"; echo "$DISPATCH_REVIEW_ASK_TTL"' _ "$LIB"
+    [ "$output" = "1200" ]
+    run /bin/bash -c 'DISPATCH_REVIEW_ASK_TTL=60; . "$1"; echo "$DISPATCH_REVIEW_ASK_TTL"' _ "$LIB"
+    [ "$output" = "60" ]
+}
+
 @test "the UNDECLARED token matches the one dispatch_plan.py emits" {
     # One word, two languages: the planner emits it in its exclusion reason and the guard greps
     # for it. Pinning both sides to the same literal here is what keeps them from drifting.
