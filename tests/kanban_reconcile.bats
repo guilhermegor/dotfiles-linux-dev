@@ -88,6 +88,70 @@ write_closing() {
         > "$TEST_TMP/closing-$pr.json"
 }
 
+# write_board_cache
+# Pre-populates the on-disk board cache `board_config` reads, so a test can fail `gh project
+# field-list` for `_kr_status_names`'s OWN read (dotfiles-dev#567) without also breaking
+# `board_config`'s unrelated discover-on-cache-miss call to the same porcelain subcommand.
+write_board_cache() {
+    mkdir -p "$CLAUDE_CONFIG_DIR/kanban-boards"
+    jq -n '{project_number: 1, project_node_id: "PVT_1", status_field_id: "FIELD_1",
+        options: {Backlog: "OPT_BACKLOG", "In progress": "OPT_PROGRESS",
+                  "In review": "OPT_REVIEW", Done: "OPT_DONE"}}' \
+        > "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
+}
+
+# write_throttled
+# Makes the `_board_throttled` probe (`gh api graphql -f query='query{rateLimit{remaining}}'`)
+# fail with rate-limit-shaped text, confirming a throttle. Absent (the default): the probe
+# succeeds, i.e. GraphQL itself is healthy.
+write_throttled() {
+    touch "$TEST_TMP/throttled"
+}
+
+# graphql_node ID NUMBER REPO STATUS
+# One `repositoryOwner.projectV2.items.nodes[]` entry, shaped like the real GraphQL response
+# `_board_item_list_graphql` translates into the porcelain's own `{"items":[...]}` JSON.
+graphql_node() {
+    jq -nc --arg id "$1" --argjson number "$2" --arg repo "$3" --arg status "$4" '
+        {id: $id, content: {__typename: "Issue", number: $number, url: "", body: "",
+            repository: {nameWithOwner: $repo}},
+         fieldValues: {nodes: [{__typename: "ProjectV2ItemFieldSingleSelectValue",
+            name: $status, field: {name: "Status"}}]}}
+    '
+}
+
+# write_item_list_graphql [TRUNCATED] NODE_JSON... | FAIL
+# Registers the `gh api graphql` fallback response `_board_item_list_graphql` reads when the
+# `project item-list` porcelain call has failed and no throttle was confirmed. A leading
+# "TRUNCATED" sets `hasNextPage: true` — the single-page fallback's own truncation case.
+write_item_list_graphql() {
+    if [ "$1" = "FAIL" ]; then
+        echo FAIL > "$TEST_TMP/item-fallback.json"
+        return
+    fi
+    local has_next=false
+    if [ "$1" = "TRUNCATED" ]; then
+        has_next=true
+        shift
+    fi
+    printf '%s\n' "$@" | jq -sc --argjson hasNext "$has_next" \
+        '{data: {repositoryOwner: {projectV2: {items: {pageInfo: {hasNextPage: $hasNext}, nodes: .}}}}}' \
+        > "$TEST_TMP/item-fallback.json"
+}
+
+# write_status_names_graphql NAME... | FAIL
+# Registers the `gh api graphql` fallback response `_kr_status_names` reads when `project
+# field-list` has failed and no throttle was confirmed.
+write_status_names_graphql() {
+    if [ "$1" = "FAIL" ]; then
+        echo FAIL > "$TEST_TMP/status-fallback.json"
+        return
+    fi
+    printf '%s\n' "$@" | jq -R '{name: .}' | jq -sc \
+        '{data: {repositoryOwner: {projectV2: {fields: {nodes: [{name: "Status", options: .}]}}}}}' \
+        > "$TEST_TMP/status-fallback.json"
+}
+
 write_fake_gh() {
     cat > "$FAKE_BIN/gh" <<EOF
 #!/bin/bash
@@ -120,15 +184,35 @@ case "\$1 \$2" in
         ;;
     "api graphql")
         full="\$*"
-        num="\${full#*pullRequest(number:}"
-        num="\${num%%)*}"
-        f="$TEST_TMP/closing-\$num.json"
-        if [ ! -f "\$f" ]; then
-            echo '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"nodes":[]}}}}}'
-        elif [ "\$(cat "\$f")" = "FAIL" ]; then
-            exit 1
-        else
+        if printf '%s' "\$full" | grep -q 'rateLimit'; then
+            if [ -f "$TEST_TMP/throttled" ]; then
+                echo 'gh: API rate limit exceeded (RATE_LIMIT)' >&2
+                exit 1
+            fi
+            echo '{"data":{"rateLimit":{"remaining":4999}}}'
+        elif printf '%s' "\$full" | grep -q 'pullRequest(number:'; then
+            num="\${full#*pullRequest(number:}"
+            num="\${num%%)*}"
+            f="$TEST_TMP/closing-\$num.json"
+            if [ ! -f "\$f" ]; then
+                echo '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"nodes":[]}}}}}'
+            elif [ "\$(cat "\$f")" = "FAIL" ]; then
+                exit 1
+            else
+                cat "\$f"
+            fi
+        elif printf '%s' "\$full" | grep -q 'items(first'; then
+            f="$TEST_TMP/item-fallback.json"
+            [ -f "\$f" ] || exit 1
+            [ "\$(cat "\$f")" = "FAIL" ] && exit 1
             cat "\$f"
+        elif printf '%s' "\$full" | grep -q 'fields(first'; then
+            f="$TEST_TMP/status-fallback.json"
+            [ -f "\$f" ] || exit 1
+            [ "\$(cat "\$f")" = "FAIL" ] && exit 1
+            cat "\$f"
+        else
+            exit 1
         fi
         ;;
     *)
@@ -337,4 +421,100 @@ run_reconcile() {
     touch "$TEST_TMP/fail-item-edit"
     run_reconcile
     [[ "$output" == *"FAILED to move issue #42 to In review"* ]]
+}
+
+# --- dotfiles-dev#567: gh project throttle vs a genuinely unreadable board ------------------------
+
+@test "Status column read: field-list fails but GraphQL is healthy, falls back and succeeds" {
+    write_board_cache
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_status_names_graphql Backlog "In progress" "In review" Done
+    write_fake_gh
+    touch "$TEST_TMP/fail-field-list"
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" == *"moved issue #42 to In review"* ]]
+}
+
+@test "Status column read: field-list fails, GraphQL fallback also fails: UNKNOWN board unreadable" {
+    write_board_cache
+    write_prs 10
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_status_names_graphql FAIL
+    write_fake_gh
+    touch "$TEST_TMP/fail-field-list"
+    run_reconcile
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"UNKNOWN (board unreadable): could not read Status column order"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "Status column read: field-list fails, GraphQL confirms a throttle: UNKNOWN throttled" {
+    write_board_cache
+    write_prs 10
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_fake_gh
+    touch "$TEST_TMP/fail-field-list"
+    write_throttled
+    run_reconcile
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"UNKNOWN (throttled)"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "project items read: item-list fails but GraphQL is healthy, falls back and succeeds" {
+    write_board_cache
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_item_list_graphql "$(graphql_node ITEM_42 42 owner/repo Backlog)"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" == *"moved issue #42 to In review"* ]]
+    grep -q -- '--id ITEM_42 --field-id FIELD_1 --single-select-option-id OPT_REVIEW' "$GH_LOG"
+}
+
+@test "project items read: item-list fails, GraphQL fallback also fails: UNKNOWN board unreadable" {
+    write_board_cache
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_item_list_graphql FAIL
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run_reconcile
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"UNKNOWN (board unreadable): could not read project items"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "project items read: item-list fails, GraphQL confirms a throttle: UNKNOWN throttled" {
+    write_board_cache
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    write_throttled
+    run_reconcile
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"UNKNOWN (throttled)"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "project items read: a truncated GraphQL fallback page is unreadable, never a partial read" {
+    write_board_cache
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_item_list_graphql TRUNCATED "$(graphql_node ITEM_42 42 owner/repo Backlog)"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run_reconcile
+    [[ "$output" == *"STATUS=unknown"* ]]
+    refute_gh 'item-edit'
 }
