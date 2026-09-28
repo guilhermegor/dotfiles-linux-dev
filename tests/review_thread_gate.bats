@@ -421,13 +421,53 @@ JSON
 }
 
 @test "_gate_reported_filter: a verified ladder comment counts as reported even with no findings" {
+    # No createdAt on the comment/commit here: reviewed_fixture() defaults both to HEAD_DATE, so
+    # the marker satisfies the #555 freshness constraint (>=, equal counts as fresh) without this
+    # test having to restate head identity -- it is exercising the author check, not staleness.
+    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\n\nNo issues found.'
+    fixture="$(reviewed_fixture '[]' \
+        "$(jq -cn --arg b "$body" '[{author:{login:"guilhermegor"},authorAssociation:"MEMBER",body:$b}]')")"
+    run_reported_filter "$fixture" "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ "$output" = "true" ]
+}
+
+# --- dotfiles-dev#555: a stale ladder marker must not grant credit forever ----------------------
+#
+# Measured on #546, 2026-09-27: marker at 12:43:28Z, head committed 13:28:42Z -- the marker
+# predates the head by 45 minutes and reviewed a commit the head has since moved past. The
+# completion-comment branch directly above the marker branch already carried this constraint;
+# the marker branch did not, so a fallback review of a superseded commit read as `reported=true`
+# forever. These two tests are the ones that fail before the fix (both would read `true`).
+
+@test "_gate_reported_filter: a ladder marker PREDATING the head is not a report" {
     body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\n\nNo issues found.'
     fixture="$(jq -nc --arg body "$body" '
       { data: { repository: { pullRequest: {
           reviews: { totalCount: 0, nodes: [] },
           comments: { totalCount: 1, nodes: [
-            { author: { login: "guilhermegor" }, authorAssociation: "MEMBER", body: $body }
-          ] } } } } }
+            { author: { login: "guilhermegor" }, authorAssociation: "OWNER", body: $body,
+              createdAt: "2026-09-27T12:43:28Z" }
+          ] },
+          commits: { nodes: [ { commit: { oid: "4117bcf7",
+                                           committedDate: "2026-09-27T13:28:42Z" } } ] } } } } }
+    ')"
+    run_reported_filter "$fixture" "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ "$output" = "false" ]
+}
+
+@test "_gate_reported_filter: a ladder marker NEWER than the head still counts as reported" {
+    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\n\nNo issues found.'
+    fixture="$(jq -nc --arg body "$body" '
+      { data: { repository: { pullRequest: {
+          reviews: { totalCount: 0, nodes: [] },
+          comments: { totalCount: 1, nodes: [
+            { author: { login: "guilhermegor" }, authorAssociation: "OWNER", body: $body,
+              createdAt: "2026-09-27T13:40:00Z" }
+          ] },
+          commits: { nodes: [ { commit: { oid: "4117bcf7",
+                                           committedDate: "2026-09-27T13:28:42Z" } } ] } } } } }
     ')"
     run_reported_filter "$fixture" "coderabbitai"
     [ "$status" -eq 0 ]
