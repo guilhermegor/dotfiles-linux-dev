@@ -64,6 +64,22 @@ case "$1 $2" in
     [ "${PR_LIST_FAIL:-0}" = 1 ] && exit 1
     printf '%s\n' "$PR_LIST"
     ;;
+"issue view")
+    shift 2
+    number=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+        --json) shift ;;
+        --jq | -q) shift ;;
+        --repo | -R) shift ;;
+        -*) ;;
+        *) number="$1" ;;
+        esac
+        shift
+    done
+    var="ISSUE_BODY_${number}"
+    printf '%s\n' "${!var:-}"
+    ;;
 "api graphql")
     shift 2
     num="" query=""
@@ -105,10 +121,62 @@ teardown() {
     rm -rf "$REPO"
 }
 
-# payload STOP_HOOK_ACTIVE SESSION_ID
+# payload STOP_HOOK_ACTIVE SESSION_ID TRANSCRIPT_PATH
 payload() {
-    jq -nc --argjson active "${1:-false}" --arg sid "${2:-}" \
-        '{stop_hook_active: $active, session_id: $sid}'
+    jq -nc --argjson active "${1:-false}" --arg sid "${2:-}" --arg tp "${3:-}" \
+        '{stop_hook_active: $active, session_id: $sid, transcript_path: $tp}'
+}
+
+# write_transcript PATH ISSUE_NAME [RESULT_TEXT]
+# Writes a one-line JSONL transcript with a single dispatched Agent tool_use whose `name`
+# declares ISSUE_NAME (e.g. "issue-600-fix-thing"). With no third argument the dispatch has NO
+# tool_result yet -- "live" per inflight_dispatch_issues()'s own convention (dotfiles-dev#516).
+# A third argument is written as the tool_result content instead (used to simulate a completed
+# or failed background dispatch, which must NOT count as delegated work in flight).
+write_transcript() {
+    local path="$1" name="$2" result="${3:-}"
+    {
+        jq -nc --arg name "$name" \
+            '{message: {content: [{type: "tool_use", name: "Agent", id: "toolu_1",
+                                    input: {name: $name}}]}}'
+        if [ -n "$result" ]; then
+            jq -nc --arg r "$result" \
+                '{message: {content: [{type: "tool_result", tool_use_id: "toolu_1",
+                                        content: $r}]}}'
+        fi
+    } >"$path"
+}
+
+# append_notification PATH ID STATUS
+# Appends a <task-notification> record naming ID's completed/failed status -- the shape
+# _task_notification_status-style scans (`.. | strings`) find regardless of which JSON field
+# carries it, so a plain top-level `content` key is enough for a test fixture.
+append_notification() {
+    local path="$1" id="$2" status_val="$3"
+    jq -nc --arg t "<task-notification><tool-use-id>${id}</tool-use-id><status>${status_val}</status></task-notification>" \
+        '{content: $t}' >>"$path"
+}
+
+# replied_unresolved_fixture NUM PATH
+# A thread with a substantive HUMAN reply to a Bot finding, still unresolved -- the gate's own
+# "replied — still needs RESOLVING" shape (no roster file, so __NO_ROSTER__ treats any non-Bot
+# author as the reply that counts).
+replied_unresolved_fixture() {
+    local body
+    body="$(printf 'y%.0s' {1..150})"
+    jq -nc --arg path "$2" --arg body "$body" '{data: {repository: {pullRequest: {
+        reviewThreads: {
+            totalCount: 1,
+            nodes: [{isResolved: false, path: $path, comments: {
+                totalCount: 2,
+                nodes: [
+                    {author: {login: "coderabbitai", __typename: "Bot"}, body: $body},
+                    {author: {login: "guilhermegor", __typename: "User"}, body: $body}
+                ]
+            }}]
+        },
+        comments: {totalCount: 0, nodes: []}
+    }}}}' >"$FIXTURE_DIR/$1.json"
 }
 
 # dotfiles-dev#490: gate_pr_thread_state retries until the body carries a non-null `comments` key
@@ -324,6 +392,81 @@ checks_fixture() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"PR #42"* ]]
     [[ "$output" != *"repo-wide"* ]]
+}
+
+# --- dotfiles-dev#516: delegated to a live, same-session agent covering the thread's path --------
+
+@test "delegated: a replied-but-unresolved thread covered by a live same-session agent does not block" {
+    export PR_VIEW_NUMBER=70
+    replied_unresolved_fixture 70 "a/b.sh"
+    export ISSUE_BODY_600=$'```surface\na/b.sh\n```'
+    TRANSCRIPT="$REPO/transcript.jsonl"
+    write_transcript "$TRANSCRIPT" "issue-600-fix-budget"
+    run bash -c "payload false '' '$TRANSCRIPT' | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"delegated"* ]]
+    [[ "$output" == *"issue-600"* ]]
+}
+
+@test "delegated: an agent whose declared surface does NOT cover the path still blocks" {
+    export PR_VIEW_NUMBER=71
+    replied_unresolved_fixture 71 "a/b.sh"
+    export ISSUE_BODY_601=$'```surface\nother/file.sh\n```'
+    TRANSCRIPT="$REPO/transcript.jsonl"
+    write_transcript "$TRANSCRIPT" "issue-601-unrelated"
+    run bash -c "payload false '' '$TRANSCRIPT' | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"a/b.sh: replied — still needs RESOLVING"* ]]
+    [[ "$output" != *"delegated"* ]]
+}
+
+@test "delegated: a COMPLETED dispatch is not in flight and still blocks" {
+    export PR_VIEW_NUMBER=72
+    replied_unresolved_fixture 72 "a/b.sh"
+    export ISSUE_BODY_602=$'```surface\na/b.sh\n```'
+    TRANSCRIPT="$REPO/transcript.jsonl"
+    write_transcript "$TRANSCRIPT" "issue-602-fix-budget" "Async agent launched successfully"
+    append_notification "$TRANSCRIPT" "toolu_1" "completed"
+    run bash -c "payload false '' '$TRANSCRIPT' | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"a/b.sh: replied — still needs RESOLVING"* ]]
+    [[ "$output" != *"delegated"* ]]
+}
+
+@test "delegated: partial coverage still blocks on the uncovered thread, annotates the covered one" {
+    export PR_VIEW_NUMBER=73
+    jq -nc --arg body "$(printf 'y%.0s' {1..150})" '{data: {repository: {pullRequest: {
+        reviewThreads: {totalCount: 2, nodes: [
+            {isResolved: false, path: "a/b.sh", comments: {totalCount: 2, nodes: [
+                {author: {login: "coderabbitai", __typename: "Bot"}, body: $body},
+                {author: {login: "guilhermegor", __typename: "User"}, body: $body}
+            ]}},
+            {isResolved: false, path: "c/d.sh", comments: {totalCount: 2, nodes: [
+                {author: {login: "coderabbitai", __typename: "Bot"}, body: $body},
+                {author: {login: "guilhermegor", __typename: "User"}, body: $body}
+            ]}}
+        ]},
+        comments: {totalCount: 0, nodes: []}
+    }}}}' >"$FIXTURE_DIR/73.json"
+    export ISSUE_BODY_604=$'```surface\na/b.sh\n```'
+    TRANSCRIPT="$REPO/transcript.jsonl"
+    write_transcript "$TRANSCRIPT" "issue-604-fix-one"
+    run bash -c "payload false '' '$TRANSCRIPT' | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"c/d.sh: replied — still needs RESOLVING"* ]]
+    [[ "$output" == *"a/b.sh: delegated to issue-604"* ]]
+}
+
+@test "delegated: a thread with no reply yet is never delegated, even with a covering live agent" {
+    export PR_VIEW_NUMBER=74
+    problem_fixture 74
+    export ISSUE_BODY_605=$'```surface\na.sh\n```'
+    TRANSCRIPT="$REPO/transcript.jsonl"
+    write_transcript "$TRANSCRIPT" "issue-605-fix-a"
+    run bash -c "payload false '' '$TRANSCRIPT' | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"needs a REPLY"* ]]
+    [[ "$output" != *"delegated"* ]]
 }
 
 # --- stop_hook_active is honoured, and short-circuits before any gh call -------------------------
