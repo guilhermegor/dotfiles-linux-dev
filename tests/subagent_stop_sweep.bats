@@ -454,6 +454,44 @@ STUB
     [ -f "$GH_BUDGET_LATCH_FILE" ]
 }
 
+# dotfiles-dev#559 (PR #559 review, comment 4117399074): gate_pr_thread_state() latching on ITS
+# OWN terminal refusal is only half the fix -- without this, PR #10's latch does nothing to stop
+# PR #20's identical GraphQL call a moment later in the SAME sweep, which is the "repeated
+# fan-out attempts" the finding named. This asserts the loop stops after the first PR and never
+# even calls gh for the second.
+@test "sweep_review_gate stops the per-PR loop once the GraphQL budget latches" {
+    export GH_BUDGET_LATCH_FILE="$REPO/latch"
+    cat > "$BIN/gh" <<STUB
+#!/bin/bash
+case "\$*" in
+"api repos/o/r/pulls?state=open --jq .[].number")
+    printf '10\n20\n'
+    ;;
+*"-F owner=o -F repo=r -F number=10")
+    echo "GraphQL: API rate limit exceeded for user ID 1 (status: 200)" >&2
+    exit 1
+    ;;
+*"-F owner=o -F repo=r -F number=20")
+    touch "$BIN/CALLED-20"
+    exit 1
+    ;;
+*)
+    exit 1
+    ;;
+esac
+STUB
+    chmod +x "$BIN/gh"
+
+    run sweep_review_gate "o" "r" "o/r" ""
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"github-api-limit"* ]]
+    [[ "$output" == *"budget latched, skipping remaining PRs"* ]]
+    [[ "$output" != *"#20"* ]]
+    [ ! -f "$BIN/CALLED-20" ]
+    [ -f "$GH_BUDGET_LATCH_FILE" ]
+}
+
 # dotfiles-dev#511 review (Minor): the latch write can fail (marker path owned by another user,
 # read-only filesystem, ...) and the old gh_budget_gate never checked it, so BUDGET_GATE_REASON
 # claimed "latched until reset" even though nothing was written. Called directly (not via `run`,
@@ -544,4 +582,91 @@ STUB
     run sweep_orphan_branches "$REPO" "o/r" "o" "main"
     [[ "$output" == *"UNKNOWN — could not list files for PR #9"* ]]
     [[ "$output" != *"no open or merged PR touches these files"* ]]
+}
+
+# --- agent-type gate: sweep fires only for dev/implementation subagents (dotfiles-dev#508) -------
+# A reviewer, Explore, Plan, or a "fork" running a read-only skill (the ditto#681 case measured in
+# the issue: 45 sweep injections into one forked code-review subagent) must get NO
+# additionalContext at all — not an empty one, none — so its real result isn't buried under
+# dev-loop chatter it has no way to act on.
+
+@test "sweep_agent_allowed accepts the dev-loop allowlist" {
+    run sweep_agent_allowed "general-purpose"
+    [ "$status" -eq 0 ]
+    run sweep_agent_allowed "claude"
+    [ "$status" -eq 0 ]
+}
+
+@test "sweep_agent_allowed refuses known read-only agent types" {
+    run sweep_agent_allowed "Explore"
+    [ "$status" -eq 1 ]
+    run sweep_agent_allowed "Plan"
+    [ "$status" -eq 1 ]
+    run sweep_agent_allowed "pr-review-toolkit:code-reviewer"
+    [ "$status" -eq 1 ]
+}
+
+@test "sweep_agent_allowed refuses a 'fork' running a read-only skill (the ditto#681 case)" {
+    run sweep_agent_allowed "fork"
+    [ "$status" -eq 1 ]
+}
+
+@test "sweep_agent_allowed fails open on an empty/absent agent_type" {
+    run sweep_agent_allowed ""
+    [ "$status" -eq 0 ]
+}
+
+@test "sweep_agent_type reads .agent_type off the raw payload" {
+    run sweep_agent_type '{"agent_type":"Explore","cwd":"/tmp"}'
+    [ "$output" = "Explore" ]
+}
+
+@test "sweep_agent_type is empty on a payload with no agent_type (manual invocation)" {
+    run sweep_agent_type '{}'
+    [ -z "$output" ]
+}
+
+# --- end-to-end: main()'s own gate order, not just the helper it calls ---------------------------
+# Runs the real script as a SUBPROCESS (never sourced) so the gate is proven to run before any
+# git/gh call, not merely reachable in isolation. `gh` only needs to exist on PATH for the
+# top-of-script `command -v gh` check — repo_slug() fails immediately after (the fixture repo's
+# origin is a local bare-repo path, not a github.com URL), so `emit`'s "no GitHub origin" branch
+# fires and no gh call is ever actually made; a real `gh` binary being on PATH already satisfies
+# this without a stub, but a stub keeps the test hermetic in a CI image that lacks one.
+
+stub_gh_present_only() {
+    cat > "$BIN/gh" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+    chmod +x "$BIN/gh"
+}
+
+@test "main() emits no output at all for a non-dev agent_type" {
+    stub_gh_present_only
+    run bash "$SWEEP_SRC" <<<"{\"agent_type\":\"Explore\",\"cwd\":\"$REPO\"}"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "main() emits no output at all for a 'fork' running a skill" {
+    stub_gh_present_only
+    run bash "$SWEEP_SRC" <<<"{\"agent_type\":\"fork\",\"cwd\":\"$REPO\"}"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "main() still fires (emits additionalContext) for a dev agent_type" {
+    stub_gh_present_only
+    run bash "$SWEEP_SRC" <<<"{\"agent_type\":\"general-purpose\",\"cwd\":\"$REPO\"}"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"hookSpecificOutput"* ]]
+    [[ "$output" == *"SubagentStop"* ]]
+}
+
+@test "main() still fires for an empty payload (the documented manual invocation)" {
+    stub_gh_present_only
+    run bash "$SWEEP_SRC" <<<"{\"cwd\":\"$REPO\"}"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"hookSpecificOutput"* ]]
 }

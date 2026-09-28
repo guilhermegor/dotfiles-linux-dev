@@ -42,7 +42,24 @@ gh_budget_classify() {
 
 	# GitHub's OWN api/graphql rate-limit error text, checked FIRST because it also contains the
 	# substring "rate limit" that CodeRabbit's unrelated review-slot notice uses below.
-	if [[ "$text_lc" == *"api rate limit exceeded"* ]] || [[ "$text_lc" == *"secondary rate limit"* ]]; then
+	#
+	# "api rate limit"*"exceeded" (two anchors, not one fixed phrase) rather than the old fixed
+	# "api rate limit exceeded" substring: measured 2026-09-26 (dotfiles-dev#533), GitHub's OWN
+	# secondary limiter returned "API rate limit ALREADY exceeded" — the inserted word broke the
+	# fixed-phrase match, fell through to the generic "rate limit" check below, and misclassified
+	# a real ~3-hour GraphQL outage as a CodeRabbit review-slot busy-signal. `/rate_limit` read
+	# ~97% of the GraphQL quota free the entire time — the failing call's own response text is
+	# the only surface this ever showed up on (this file's header warning, now proven in the
+	# wild). "submitted too quickly" and the raw `retry-after`/`x-ratelimit-remaining: 0` headers
+	# are additional secondary-limit signatures measured the same session — none of GitHub's
+	# variants contain the word "api" is not guaranteed, but CodeRabbit's own notices never carry
+	# a `retry-after` header or the word "api" at all, so these stay unambiguous.
+	if [[ "$text_lc" == *"api rate limit"*"exceeded"* ]] \
+		|| [[ "$text_lc" == *"secondary rate limit"* ]] \
+		|| [[ "$text_lc" == *"submitted too quickly"* ]] \
+		|| [[ "$text_lc" == *"retry-after"* ]] \
+		|| [[ "$text_lc" == *"x-ratelimit-remaining: 0"* ]] \
+		|| [[ "$text_lc" == *"x-ratelimit-remaining:0"* ]]; then
 		GH_BUDGET_CLASS="github-api-limit"
 		return 0
 	fi
@@ -218,3 +235,33 @@ gh_budget_quota_exhausted() {
 	done
 	return 1
 }
+
+# gh_budget_retry_after_ttl TEXT [DEFAULT_TTL]
+# Pulls a `Retry-After: N` value (any case, with or without a space after the colon) out of a
+# captured response TEXT and returns N seconds — dotfiles-dev#533 scope: a secondary rate limit
+# clears on ITS OWN schedule, never the hourly quota reset gh_budget_reset_ttl reads, and GitHub
+# sends this header specifically so a caller does not have to guess which one applies. Falls back
+# to DEFAULT_TTL (45s, the same burst-backoff default used elsewhere in this file) when the
+# header is absent or its value is not a positive integer — never upgraded to a longer guess,
+# same fail-safe shape as gh_budget_reset_ttl's own fallback.
+gh_budget_retry_after_ttl() {
+	local text="$1" default_ttl="${2:-45}" seconds
+	seconds="$(printf '%s' "${text,,}" | grep -oE 'retry-after: *[0-9]+' | grep -oE '[0-9]+' | head -n1)"
+	if [[ "$seconds" =~ ^[0-9]+$ ]] && [ "$seconds" -gt 0 ]; then
+		printf '%s\n' "$seconds"
+		return 0
+	fi
+	printf '%s\n' "$default_ttl"
+}
+
+# NOTE (dotfiles-dev#533, retracted 2026-09-27): a `gh_budget_graphql_probe` predictive probe
+# (`{ viewer { login } }`) was tried here and removed. Measured same day: GitHub's secondary
+# limiter is COST- and TIME-based, not transport-based — a trivial query can pass while a more
+# expensive GraphQL call on the exact same token is refused seconds later, and the threshold
+# tightens as aggregate spend rises across concurrent callers. A probe that passed a minute ago
+# carries no information about the call about to run, so a predictive probe is the same defect as
+# `/rate_limit` one layer down: cheap, healthy-looking, and wrong. The design that survives is
+# "latch on the first REAL refusal" — gh_budget_classify (above) plus gh_budget_is_terminal is
+# that whole mechanism; no separate probe belongs in this file. See
+# ~/.claude/memory/lessons-claude-toolchain/rate-limit-endpoint-cannot-see-the-secondary-limit.md
+# for the full measurement trail before reintroducing anything probe-shaped here.
