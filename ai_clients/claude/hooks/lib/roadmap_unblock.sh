@@ -65,12 +65,20 @@
 # "cross-repo native blocker" bats case below is a defensive path — this file tolerates whatever
 # repo a native entry happens to name — not a claim that GitHub's own UI offers cross-repo native
 # linking.)
+# dotfiles-dev#567: `reconcile_roadmap_unblock`'s own project item read shared the same
+# single-channel `gh project item-list` dependency as kanban_reconcile.sh's — two independent
+# call sites, same defect. `_board_item_list` (throttle-confirm + one `gh api graphql` fallback)
+# now lives in kanban_reconcile.sh, which already serves as this repo's shared board-helpers
+# file (see its own header), and is sourced below rather than duplicated here.
 set -u
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	echo "roadmap_unblock.sh is meant to be sourced, not executed." >&2
 	exit 1
 fi
+
+# shellcheck source=kanban_reconcile.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/kanban_reconcile.sh"
 
 _ru_is_decision() {
 	# Case-insensitive "decision:" anywhere in the text — checked against both the project's
@@ -294,18 +302,25 @@ reconcile_roadmap_unblock() {
 	RECONCILE_STATUS="unknown"
 	RECONCILE_REPORT=""
 
-	local items_json blocked
-	items_json="$(gh project item-list "$project" --owner "$owner" --format json --limit 500 2>/dev/null)" \
-		|| { RECONCILE_REPORT="UNKNOWN: could not read project $owner/$project"; return 1; }
+	local items_json blocked rc
+	items_json="$(_board_item_list "$owner" "$project" 500)"; rc=$?
+	if (( rc != 0 )); then
+		if (( rc == 2 )); then
+			RECONCILE_REPORT="UNKNOWN (throttled): GitHub GraphQL rate limit — retry next round"
+		else
+			RECONCILE_REPORT="UNKNOWN (board unreadable): could not read project $owner/$project"
+		fi
+		return 1
+	fi
 	# Shape-check before filtering: `.items[]?` exits 0 on `{}` and on `{"items": null}`, so
 	# without this an unusable response would report ok having silently processed nothing —
 	# indistinguishable from a board with no blocked items (PR #376 review).
 	printf '%s' "$items_json" | jq -e 'type == "object" and (.items | type == "array")' \
 		>/dev/null 2>&1 \
-		|| { RECONCILE_REPORT="UNKNOWN: could not parse project $owner/$project"; return 1; }
+		|| { RECONCILE_REPORT="UNKNOWN (board unreadable): could not parse project $owner/$project"; return 1; }
 	blocked="$(printf '%s' "$items_json" \
 		| jq -c '.items[] | select(.status == "Blocked" and .content.type == "Issue")' 2>/dev/null)" \
-		|| { RECONCILE_REPORT="UNKNOWN: could not parse project $owner/$project"; return 1; }
+		|| { RECONCILE_REPORT="UNKNOWN (board unreadable): could not parse project $owner/$project"; return 1; }
 
 	local item line report=""
 	while IFS= read -r item; do
