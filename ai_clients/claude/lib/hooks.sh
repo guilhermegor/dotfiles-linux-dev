@@ -2,13 +2,27 @@
 # Installs user-level hook scripts into ~/.claude/hooks/.
 #
 # Source files live in ai_clients/claude/hooks/<name>.sh and are copied verbatim,
-# matching the same pattern used for rules, commands, agents, and skills. The
-# scripts are referenced from settings.json (e.g. the SessionStart hook).
+# matching the same pattern used for rules, commands, agents, and skills. Most
+# are referenced from settings.json (e.g. the SessionStart hook); a few are
+# manual/periodic reports run by hand or by a skill instead (see the
+# ORPHAN_ALLOWLIST note in tests/hooks_install_parity.bats).
 #
 # To add a new hook:
 #   1. Create ai_clients/claude/hooks/<name>.sh.
-#   2. Add a copy_hook_file "<name>.sh" call inside install_hooks().
-#   3. Reference it from settings.json's "hooks" block.
+#   2. Add a copy_hook_file "<name>.sh" call inside install_hooks() — a literal
+#      string, not an interpolated one, so tests/hooks_install_parity.bats's
+#      static extractor can see it (the same reason the lib/ loop below needs
+#      its own dedicated "actually installed" test rather than reusing that
+#      extractor). Forgetting this step is dotfiles-dev#532:
+#      pr_body_orphan_check.sh shipped a script, a bats suite, and a
+#      CLAUDE.md entry with no copy_hook_file call, so it was tested,
+#      documented, and never installed. The bats suite's
+#      "every hooks/*.sh in the source tree is installed by hooks.sh" test
+#      now fails loudly if this step is skipped again.
+#   3. If it fires on an event, reference it from settings.json's "hooks"
+#      block. If it is deliberately manual (like pr_body_orphan_check.sh),
+#      add it to ORPHAN_ALLOWLIST in tests/hooks_install_parity.bats with a
+#      one-line reason instead.
 
 HOOKS_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" && pwd)"
 
@@ -94,6 +108,11 @@ install_hooks() {
     copy_hook_file "pr_self_assign.sh" "$hooks_dir"
     copy_hook_file "rtk_worktree_passthrough.sh" "$hooks_dir"
     copy_hook_file "stale_local_ref_guard.sh" "$hooks_dir"
+    # Manual/periodic report (dotfiles-dev#441) — installed so it CAN be run by
+    # hand or by /session-closeout, deliberately never wired to a settings.json
+    # event. Missing here is the exact defect dotfiles-dev#532 reported: tested
+    # and documented, but never installed, so it never ran either way.
+    copy_hook_file "pr_body_orphan_check.sh" "$hooks_dir"
 
     invalidate_hook_caches
 }

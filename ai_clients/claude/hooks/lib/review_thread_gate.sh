@@ -256,6 +256,14 @@ JQ
 # author, or a bot outside the roster, must not count (the issue's own warning). No roster
 # (__NO_ROSTER__) falls back to "any Bot account", the same fallback _gate_problems_filter already
 # uses, via __typename rather than a forgeable login substring (CWE-345, dotfiles-dev#455).
+#
+# ⚠️ dotfiles-dev#555: ALL THREE branches must carry the same `>= $head_date` freshness
+# constraint, not two of three -- the marker branch was missing it while the completion-comment
+# branch directly above already had it, so a fallback review of a superseded commit granted credit
+# FOREVER (mirror image of #550's "credit revoked by a later event"). Measured on #546: marker at
+# 12:43:28Z, head committed 13:28:42Z -- the marker predates the head by 45 minutes and must not
+# satisfy this filter. The CWE-345 author-association check stays exactly as it was; freshness is
+# an additional, independent AND clause, never a replacement for it.
 _gate_reported_filter() {
 	cat <<'JQ'
 ($roster | split("\n") | map(select(length > 0)) | map(ascii_downcase)) as $bots
@@ -281,6 +289,7 @@ _gate_reported_filter() {
    or ($cs | any(
         (((.body // "") | split("\n")[0]) | test($marker))
         and ((.authorAssociation // "") | test("^(OWNER|MEMBER|COLLABORATOR)$"))
+        and (($head_date != "") and ((.createdAt // "") >= $head_date))
       )))
 JQ
 }

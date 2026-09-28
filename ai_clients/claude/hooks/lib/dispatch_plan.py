@@ -376,21 +376,45 @@ def declared_surface(body: str) -> list[str]:
 	return [line.strip() for line in match.group(1).splitlines() if line.strip()]
 
 
+def _walk_repo_files(root: Path) -> list[str]:
+	"""List every file under ``root`` as a root-relative path, ``.git`` excluded.
+
+	The one walk both sides of ``expand_tokens`` match a glob token against with
+	``fnmatch`` — see that function's docstring for why ``root.glob`` was dropped.
+	"""
+	return [
+		str(p.relative_to(root))
+		for p in root.rglob("*")
+		if p.is_file() and ".git" not in p.relative_to(root).parts
+	]
+
+
 def expand_tokens(tokens: list[str], root: Path, held: list[str]) -> list[str]:
 	"""Expand each glob token against the repo tree AND the live-agent held-paths set.
 
+	Both sides match with ``fnmatch`` — the issue template states the intended semantics
+	("`*` matches across `/`, so `docs/*` and `docs/**` are equivalent"), which is what
+	``fnmatch`` does and ``pathlib.Path.glob`` does not (``pathlib``'s `*` stops at `/`,
+	and its `**` yields directories, not files — matching ``docs/**`` against the repo
+	tree that way returned zero files while ``fnmatch`` matched everything under
+	``docs/``, dotfiles-dev#549). Using one matcher for both sides means a token can no
+	longer expand to two disagreeing answers depending on which side evaluates it.
+
 	A live agent can add a file matching an issue's glob token on its own branch, invisible to
-	``root.glob`` since it never reaches this checkout (dotfiles-dev#433 finding 3) — matching
-	the token against ``held`` too (``fnmatch``) surfaces that collision instead of reading the
-	issue as free. A literal (non-glob) token passes through unchanged whether or not it exists
-	yet — an issue's declared surface may name a file its own solution would create. A token
-	that matches nothing anywhere is kept as its literal pattern for the same reason, rather
-	than silently dropped.
+	the local walk since it never reaches this checkout (dotfiles-dev#433 finding 3) — matching
+	the token against ``held`` too surfaces that collision instead of reading the issue as free.
+	A literal (non-glob) token passes through unchanged whether or not it exists yet — an
+	issue's declared surface may name a file its own solution would create. A token that
+	matches nothing anywhere is kept as its literal pattern for the same reason, rather than
+	silently dropped.
 	"""
 	files: list[str] = []
+	local_files: list[str] | None = None
 	for token in tokens:
 		if any(ch in token for ch in GLOB_CHARS):
-			local_matches = {str(p.relative_to(root)) for p in root.glob(token)}
+			if local_files is None:
+				local_files = _walk_repo_files(root)
+			local_matches = {p for p in local_files if fnmatch.fnmatch(p, token)}
 			held_matches = {p for p in held if fnmatch.fnmatch(p, token)}
 			matches = sorted(local_matches | held_matches)
 			files.extend(matches or [token])

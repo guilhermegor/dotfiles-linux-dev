@@ -30,8 +30,13 @@ setup() {
 }
 
 # Hooks installed by hooks.sh but intentionally not registered as a hook entry in
-# settings.json. Empty today -- any future entry here must carry a one-line reason.
-ORPHAN_ALLOWLIST=()
+# settings.json. Any entry here must carry a one-line reason.
+ORPHAN_ALLOWLIST=(
+    # Manual/periodic report (dotfiles-dev#441), run by hand or by a
+    # /session-closeout-style flow -- never triggered by a live event. Was
+    # tested and documented but not even INSTALLED until dotfiles-dev#532.
+    "pr_body_orphan_check.sh"
+)
 
 # Every "hooks/<name>.sh" path named in settings.json, deduped.
 # Every hook name INVOKED by a hook command entry under .hooks. Scoped to those command
@@ -186,6 +191,30 @@ installed_hooks() {
 
     if [ -n "$absent" ]; then
         echo "copy_hook_file names a file that does not exist in hooks/:$absent"
+        return 1
+    fi
+}
+
+# The third fact, and the one that actually would have caught #532: the two tests
+# above only ever look at names installed_hooks() already produced, so a source
+# file with NO copy_hook_file call at all -- pr_body_orphan_check.sh's exact
+# defect -- is invisible to both. This walks the source directory instead of the
+# extractor's own output.
+@test "every hooks/*.sh in the source tree is installed by hooks.sh" {
+    local uninstalled=""
+    local src
+    for src in "$REPO_ROOT"/ai_clients/claude/hooks/*.sh; do
+        [ -f "$src" ] || continue
+        local name
+        name="$(basename "$src")"
+        if ! installed_hooks | grep -qxF "$name"; then
+            uninstalled="$uninstalled $name"
+        fi
+    done
+
+    if [ -n "$uninstalled" ]; then
+        echo "Exists in hooks/ but never installed by install_hooks():$uninstalled"
+        echo "Add a copy_hook_file call (or confirm the directory-derived loop covers it)."
         return 1
     fi
 }
