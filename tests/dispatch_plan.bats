@@ -92,7 +92,7 @@ mk_dead_agent_worktree() {
     local head
     head="$(/usr/bin/git -C "$wt" rev-parse HEAD)"
     /usr/bin/git -C "$TEST_TMP" update-ref "refs/remotes/origin/$branch" "$head"
-    /usr/bin/git -C "$wt" branch --set-upstream-to="origin/$branch" "$branch"
+    /usr/bin/git -C "$wt" branch --set-upstream-to="origin/$branch" "$branch" >/dev/null
     printf '%s\n' "$head"
 }
 
@@ -130,7 +130,7 @@ issue_json_labeled() {
 }
 
 # stub_gh ISSUES_JSON [HELD_FILE] [CLAIMED_ISSUE] [FAIL_BRANCH] [FROZEN_PR_FILE] [MENTION_PRS_JSON]
-#         [NATIVE_BLOCK_ISSUE] [NATIVE_BLOCK_JSON] [NATIVE_BLOCK_FAIL_ISSUE]
+#         [NATIVE_BLOCK_ISSUE] [NATIVE_BLOCK_JSON] [NATIVE_BLOCK_FAIL_ISSUE] [DEAD_PR_ROW]
 # ISSUES_JSON is the full `gh issue list --json number,body` array. HELD_FILE, if given, is the
 # one file the "feature" branch's compare reports as held (gate_free_surface's OWN held-paths
 # computation — unused by the planner's classification since #433 finding 1, still exercised
@@ -145,15 +145,24 @@ issue_json_labeled() {
 # `issues/<n>/dependencies/blocked_by` read for that one issue return NATIVE_BLOCK_JSON (a
 # `_ru_native_blockers`-shaped array) instead of the default `[]` (no native blockers).
 # NATIVE_BLOCK_FAIL_ISSUE, if given, makes that same read FAIL for that one issue (dotfiles-
-# dev#560's fail-closed path). Every other issue's blocked_by read defaults to `[]`.
+# dev#560's fail-closed path). Every other issue's blocked_by read defaults to `[]`. DEAD_PR_ROW,
+# if given as "<oid>:<branch>", is the one row `_dead_branch_index` (free_surface.sh,
+# dotfiles-dev#572) reports as a MERGED PR — default `[]` (no dead PRs), which is what keeps the
+# forge dead-worktree exclusion off for every test that does not opt in via a GitHub-shaped
+# origin (see mk_dead_agent_worktree).
 stub_gh() {
     local issues_json="$1" held="${2:-}" claimed="${3:-}" fail="${4:-0}" frozen="${5:-}"
     local mention_prs="${6:-[]}"
     local native_block_issue="${7:-}" native_block_json="${8:-[]}" native_block_fail_issue="${9:-}"
+    local dead_row="${10:-}"
     local claimed_nodes="[]"
     [ -n "$claimed" ] && claimed_nodes="[{\"closingIssuesReferences\":{\"nodes\":[{\"number\":$claimed}]}}]"
     local pr_list='[]'
     [ -n "$frozen" ] && pr_list='[{"number":99,"headRefName":"frozen-pr-branch"}]'
+    local dead_prs='[]'
+    if [ -n "$dead_row" ]; then
+        dead_prs="[{\"headRefName\":\"${dead_row#*:}\",\"headRefOid\":\"${dead_row%%:*}\",\"state\":\"MERGED\",\"isCrossRepository\":false}]"
+    fi
     cat >"$BIN/gh" <<STUB
 #!/bin/bash
 case "\$*" in
@@ -205,6 +214,9 @@ $native_block_json
 JSON
     ;;
 "api repos/acme/widgets/issues/"*"/dependencies/blocked_by"*) echo '[]' ;;
+"pr list --repo acme/widgets --state all --limit 200 --json headRefName,headRefOid,state,isCrossRepository")
+    echo '$dead_prs'
+    ;;
 "api graphql -f query="*)
     echo '{"data":{"search":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":$claimed_nodes}}}'
     ;;
@@ -428,6 +440,19 @@ PY
     [ "$status" -eq 0 ]
     [ "$(field '.dispatchable | length')" -eq 0 ]
     [[ "$(field '.excluded[0].reason')" == *"agent/held.sh"* ]]
+}
+
+# --- dotfiles-dev#572: the shared gate's dead-worktree exclusion reaches the planner too --------
+
+@test "a forge-confirmed dead worktree is no longer counted as a live writer" {
+    local dead_oid
+    dead_oid="$(mk_dead_agent_worktree agent-dead dead/held.sh)"
+    /usr/bin/git -C "$TEST_TMP" remote set-url origin git@github.com:acme/widgets.git
+    stub_gh "[$(issue_json 13 dead/held.sh)]" "" "" 0 "" "[]" "" "[]" "" "$dead_oid:agent-dead"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable[0].issue')" = "13" ]
+    [ "$(field '.excluded | length')" -eq 0 ]
 }
 
 # --- finding 2: a truncated issue read must not yield a complete-looking plan (LATENT here) ---
