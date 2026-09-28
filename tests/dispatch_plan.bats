@@ -316,6 +316,22 @@ field() {
     [[ "$(field '.excluded[0].reason')" == *"UNKNOWN"* ]]
 }
 
+@test "a native-blocker batch that times out is UNKNOWN for every issue, never a crash" {
+    run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import subprocess, sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+
+def timeout(*_args, **_kwargs):
+    raise subprocess.TimeoutExpired(cmd="bash", timeout=1)
+
+dispatch_plan.subprocess.run = timeout
+print(dispatch_plan.native_open_blockers("acme/widget", [3, 7]))
+PY
+    [ "$status" -eq 0 ]
+    [ "$output" = "{3: None, 7: None}" ]
+}
+
 # --- glob expansion against the real tree ----------------------------------------------------
 
 @test "a glob token expands to the concrete files it matches in the tree" {

@@ -441,13 +441,18 @@ def native_open_blockers(slug: str, numbers: list[int]) -> dict[int, list[str] |
 	if not numbers:
 		return {}
 	stdin = "".join(f"{n}\n" for n in numbers)
-	proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
-		["bash", "-c", _BLOCKED_SCRIPT, "dispatch_plan", slug, str(ROADMAP_UNBLOCK_SH)],
-		input=stdin,
-		capture_output=True,
-		text=True,
-		timeout=BLOCKED_TIMEOUT,
-	)
+	try:
+		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
+			["bash", "-c", _BLOCKED_SCRIPT, "dispatch_plan", slug, str(ROADMAP_UNBLOCK_SH)],
+			input=stdin,
+			capture_output=True,
+			text=True,
+			timeout=BLOCKED_TIMEOUT,
+		)
+	except subprocess.TimeoutExpired:
+		# Uncaught, this killed build_plan and printed no plan at all (#569 review) — a slow read
+		# must exclude every issue as UNKNOWN, the same answer as a driver that broke.
+		return dict.fromkeys(numbers, None)
 	if proc.returncode != 0:
 		# The driver itself broke (e.g. roadmap_unblock.sh failed to source) before it could even
 		# report a per-issue FAIL line — every requested number is equally undetermined.
