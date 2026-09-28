@@ -27,6 +27,16 @@ setup() {
     /usr/bin/git config user.email t@t
     /usr/bin/git config user.name t
     /usr/bin/git commit -q --allow-empty -m init
+    # dotfiles-dev#572: live_agent_held_paths() now delegates to gate_live_agent_surface
+    # (free_surface.sh), which resolves ITS OWN default branch from a real `origin` remote --
+    # unlike the planner's old from-scratch walk, which took the branch name as a plain
+    # argument and needed no remote at all. A non-GitHub URL keeps every test below byte-for-
+    # byte unchanged (the forge dead-worktree exclusion stays off, same as every fixture in
+    # tests/live_agent_surface.bats) while giving the gate a real refs/remotes/origin/HEAD to
+    # resolve "main" from, with no network call.
+    /usr/bin/git remote add origin "$TEST_TMP"
+    /usr/bin/git update-ref refs/remotes/origin/main refs/heads/main
+    /usr/bin/git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 
     AGENT_WORKTREES=()
 
