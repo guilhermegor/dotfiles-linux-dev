@@ -171,6 +171,41 @@ transcript_dev_loop_background_agent_status() {
     printf '%s\n' "$f"
 }
 
+# transcript_dev_loop_background_agent_status_named ISSUE STATUS — same shape as
+# transcript_dev_loop_background_agent_status, but the declared issue is a parameter instead of
+# hardcoded 4 — needed to test RESOLVED-via-plan against a plan that does NOT include it.
+transcript_dev_loop_background_agent_status_named() {
+    local declared="$1" status="$2"
+    local f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        jq -nc --arg n "issue-$declared-bg-agent" \
+            '{type:"assistant",message:{content:[{type:"tool_use",id:"agent1",name:"Agent",input:{name:$n,prompt:"work"}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":[{"type":"text","text":"Async agent launched successfully."}]}]}}'
+        jq -nc --arg s "$status" \
+            '{type:"queue-operation",operation:"enqueue",content:("<task-notification>\n<tool-use-id>agent1</tool-use-id>\n<status>"+$s+"</status>\n</task-notification>")}'
+    } >"$f"
+    printf '%s\n' "$f"
+}
+
+# transcript_dev_loop_many_failed_agents N — N distinct background dispatches, each declaring a
+# distinct issue (101, 102, ...) and each FAILED, in transcript order (oldest first).
+transcript_dev_loop_many_failed_agents() {
+    local n="$1" f="$TEST_TMP/transcript.jsonl" i
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        for ((i = 1; i <= n; i++)); do
+            jq -nc --arg id "agent$i" --arg n "issue-$((100 + i))-bg" \
+                '{type:"assistant",message:{content:[{type:"tool_use",id:$id,name:"Agent",input:{name:$n,prompt:"work"}}]}}'
+            jq -nc --arg id "agent$i" \
+                '{type:"user",message:{content:[{type:"tool_result",tool_use_id:$id,content:[{type:"text",text:"Async agent launched successfully."}]}]}}'
+            jq -nc --arg id "agent$i" \
+                '{type:"queue-operation",operation:"enqueue",content:("<task-notification>\n<tool-use-id>"+$id+"</tool-use-id>\n<status>failed</status>\n</task-notification>")}'
+        done
+    } >"$f"
+    printf '%s\n' "$f"
+}
+
 # --- fail-open prerequisites ---------------------------------------------------------------
 
 @test "exits 0 when stop_hook_active is true (one nudge per turn)" {
@@ -406,6 +441,137 @@ transcript_dev_loop_background_agent_status() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"RESCUE"* ]]
     [[ "$output" == *"bg-agent"* ]]
+}
+
+# --- a failed dispatch becomes RESOLVED (dotfiles-dev#540) ----------------------------------
+# Before #540 a FAILED dispatch had no way to become resolved: it stayed on the rescue list for
+# the rest of the session, unbounded and undeduplicated (measured: 34 names on every Stop, one
+# of them literally duplicated). Three fixtures pin the fix.
+
+@test "a failed dispatch's issue no longer in the plan is RESOLVED, not named" {
+    # Nothing here proves #6 was resumed directly — but the planner no longer offers it at all
+    # (merged, claimed, or otherwise settled since the failure), so re-nagging for it would be
+    # asking to dispatch a duplicate over settled work.
+    plan_of "4"
+    run run_guard "$(transcript_dev_loop_background_agent_status_named 6 failed)"
+    [ "$status" -eq 2 ]
+    [[ ! "$output" == *"RESCUE"* ]]
+    [[ ! "$output" == *"bg-agent"* ]]
+}
+
+@test "a SendMessage resume addressed to the failed agent's name is RESOLVED, not named" {
+    plan_of "4"
+    local f
+    f="$(transcript_dev_loop_background_agent_working)"
+    {
+        echo '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<tool-use-id>agent1</tool-use-id>\n<status>failed</status>\n</task-notification>"}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"sm1","name":"SendMessage","input":{"to":"issue-4-bg-agent","message":"resume"}}]}}'
+    } >>"$f"
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    [[ ! "$output" == *"RESCUE"* ]]
+}
+
+@test "a SendMessage sent BEFORE the failure is not read as a resume" {
+    # Review finding on this file: matching a SendMessage anywhere in the transcript, with no
+    # ordering check against the failure, false-positives on an early ping (or a resume of an
+    # EARLIER instance reusing the same name) sent while the agent was still running.
+    plan_of "4"
+    local f
+    f="$(transcript_dev_loop_background_agent_working)"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"sm0","name":"SendMessage","input":{"to":"issue-4-bg-agent","message":"status check"}}]}}'
+        echo '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<tool-use-id>agent1</tool-use-id>\n<status>failed</status>\n</task-notification>"}'
+    } >>"$f"
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE"* ]]
+    [[ "$output" == *"bg-agent"* ]]
+}
+
+@test "an undeclared failed dispatch is never dropped by the tab split" {
+    # Review finding on this file: bash's `read` strips a LEADING tab even under a custom IFS,
+    # so a record with an empty decl_issue lost its name into the wrong field and the undeclared
+    # failure (which must fail closed and always be kept) silently vanished from the list.
+    plan_of "4"
+    local f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"background-worker","prompt":"work"}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":[{"type":"text","text":"Async agent launched successfully."}]}]}}'
+        echo '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<tool-use-id>agent1</tool-use-id>\n<status>failed</status>\n</task-notification>"}'
+    } >"$f"
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE"* ]]
+    [[ "$output" == *"background-worker"* ]]
+}
+
+@test "the rescue list keeps a name's LATEST failure position under the cap" {
+    # Review finding on this file: `awk '!seen[$0]++'` keeps a name's FIRST occurrence, so a
+    # name failing again after FAILED_AGENTS_MAX other distinct names accumulate stays pinned to
+    # its stale position and gets cut by the `tail -n` cap despite its most recent failure being
+    # the one that matters.
+    plan_of "4"
+    DISPATCH_GUARD_FAILED_AGENTS_MAX=10
+    export DISPATCH_GUARD_FAILED_AGENTS_MAX
+    local f="$TEST_TMP/transcript.jsonl" i id
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        # repeat-agent fails FIRST — the stale position dedup must not pin it to.
+        jq -nc '{type:"assistant",message:{content:[{type:"tool_use",id:"agentX0",name:"Agent",input:{name:"repeat-agent",prompt:"work"}}]}}'
+        jq -nc '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"agentX0",content:[{type:"text",text:"Async agent launched successfully."}]}]}}'
+        jq -nc '{type:"queue-operation",operation:"enqueue",content:"<task-notification>\n<tool-use-id>agentX0</tool-use-id>\n<status>failed</status>\n</task-notification>"}'
+        # 11 distinct filler failures push repeat-agent's stale position out of the cap window.
+        for i in $(seq 1 11); do
+            id="filler$i"
+            jq -nc --arg id "$id" '{type:"assistant",message:{content:[{type:"tool_use",id:$id,name:"Agent",input:{name:$id,prompt:"work"}}]}}'
+            jq -nc --arg id "$id" '{type:"user",message:{content:[{type:"tool_result",tool_use_id:$id,content:[{type:"text",text:"Async agent launched successfully."}]}]}}'
+            jq -nc --arg id "$id" '{type:"queue-operation",operation:"enqueue",content:("<task-notification>\n<tool-use-id>"+$id+"</tool-use-id>\n<status>failed</status>\n</task-notification>")}'
+        done
+        # repeat-agent fails AGAIN — its most recent failure, chronologically last.
+        jq -nc '{type:"assistant",message:{content:[{type:"tool_use",id:"agentX1",name:"Agent",input:{name:"repeat-agent",prompt:"work again"}}]}}'
+        jq -nc '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"agentX1",content:[{type:"text",text:"Async agent launched successfully."}]}]}}'
+        jq -nc '{type:"queue-operation",operation:"enqueue",content:"<task-notification>\n<tool-use-id>agentX1</tool-use-id>\n<status>failed</status>\n</task-notification>"}'
+    } >"$f"
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"repeat-agent"* ]]
+}
+
+@test "the rescue list deduplicates the same agent name failing twice" {
+    # Reproduces the real measurement: "agent-425" appeared twice in one session's rescue list.
+    plan_of "4"
+    local f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"issue-4-dup","prompt":"work"}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":[{"type":"text","text":"Async agent launched successfully."}]}]}}'
+        echo '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<tool-use-id>agent1</tool-use-id>\n<status>failed</status>\n</task-notification>"}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent2","name":"Agent","input":{"name":"issue-4-dup","prompt":"work again"}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent2","content":[{"type":"text","text":"Async agent launched successfully."}]}]}}'
+        echo '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<tool-use-id>agent2</tool-use-id>\n<status>failed</status>\n</task-notification>"}'
+    } >"$f"
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    local count
+    count=$(grep -o "issue-4-dup" <<<"$output" | wc -l)
+    [ "$count" -eq 1 ]
+}
+
+@test "the rescue list is capped, newest first, with a count for the rest" {
+    local issues="" i
+    for i in $(seq 101 112); do issues="$issues $i"; done
+    plan_of "$issues"
+    DISPATCH_GUARD_FAILED_AGENTS_MAX=10
+    export DISPATCH_GUARD_FAILED_AGENTS_MAX
+    run run_guard "$(transcript_dev_loop_many_failed_agents 12)"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"issue-112-bg"* ]]
+    [[ "$output" == *"issue-103-bg"* ]]
+    [[ ! "$output" == *"issue-101-bg"* ]]
+    [[ ! "$output" == *"issue-102-bg"* ]]
+    [[ "$output" == *"2 more"* ]]
 }
 
 # --- #526 review: one Agent covers exactly ONE issue and holds exactly ONE slot ---------------
