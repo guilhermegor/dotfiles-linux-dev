@@ -28,6 +28,14 @@
 #   refresh_pr_held_paths OWNER REPO
 #       Runs gate_free_surface ONCE and writes its held-path union to the registry directory.
 #
+#   claim_review_ask
+#       The shared, cross-agent primary-rung review-ask budget (dotfiles-dev#548). Atomic
+#       check-and-stamp, prints exactly one of:
+#           GRANTED    — go ahead and post the @coderabbitai ask
+#           BUSY       — another reader already spent this window's ask
+#           UNKNOWN    — could not be decided (no flock, no git dir); treat like BUSY
+#       Returns 0 only on GRANTED.
+#
 # ⚠️ ONE gate read per round, never one per agent (dotfiles-dev#405 scope 5). Measured
 # 2026-09-17: 8 agents dispatched in one batch each ran `gate_free_surface` inside their own
 # claim step; it compares every branch against the default branch (33 branches, one API call
@@ -209,6 +217,78 @@ dispatch_claimed_issues() {
 	local claims
 	claims="$(dispatch_claims_file "${1:-$PWD}")" || return 1
 	_dispatch_live_claims "$claims" | cut -f2 | sort -un
+}
+
+# The shared, cross-agent half of dev-loop.md step 4b item 4's "one ask per invocation on the
+# primary rung" cap (dotfiles-dev#548). That prose binds only the reader of the skill file — a
+# dispatched subagent that asks for review on its own PR is invisible to it, so N subagents each
+# asking once is an N-ask burst against CodeRabbit's one ACCOUNT-level quota. Measured 2026-09-27:
+# four asks in five minutes (one orchestrator tick, three subagents) pushed the reviewer window
+# from 11:22Z to 12:21Z although the orchestrator itself asked zero times that round.
+#
+# Scope is PER REPO, not per PR — the account quota the cap defends does not care which PR the
+# ask was for, only how many landed. TTL is the step's own dedicated-tick cadence (`8,28,48 * * *
+# * *` in dev-loop.md) rather than a fresh constant: a second ask inside the SAME tick window is
+# the burst this cap exists to stop, and a later tick asking again is the legitimate re-spend
+# dotfiles-dev#477 already carved out for a BUSY/UNKNOWN slot.
+DISPATCH_REVIEW_ASK_TTL="${DISPATCH_REVIEW_ASK_TTL:-1200}"
+# A non-integer TTL (`abc`, `10m`) makes the `((…))` check below fail, which falls through to
+# GRANTED — fail-open on the very budget this cap defends. Reset it rather than trust it.
+[[ "$DISPATCH_REVIEW_ASK_TTL" =~ ^[0-9]+$ ]] || DISPATCH_REVIEW_ASK_TTL=1200
+
+dispatch_review_ask_file() {
+	local dir
+	dir="$(dispatch_state_dir)" || return 1
+	printf '%s/dispatch-review-ask.tsv\n' "$dir"
+}
+
+# claim_review_ask
+# Atomic check-and-stamp for the shared one-ask budget. Prints exactly one of:
+#     GRANTED   — no ask was recorded within DISPATCH_REVIEW_ASK_TTL; the stamp is now this
+#                 call's — go ahead and post the @coderabbitai ask.
+#     BUSY      — another reader (orchestrator or subagent) already spent this window's ask.
+#     UNKNOWN   — could not be decided (no flock, no git dir); treat exactly like BUSY, never ask.
+# Returns 0 only on GRANTED. Reuses claim_files's own lock (dispatch_claims_lock) rather than a
+# second lock file of its own — a dedicated lock would let a claim_files writer and a
+# claim_review_ask writer interleave across the two registries independently, which is the same
+# race the single critical section above exists to prevent, just against a different pair of
+# files.
+claim_review_ask() {
+	command -v flock >/dev/null 2>&1 || {
+		echo "UNKNOWN"
+		return 1
+	}
+	local file lock
+	file="$(dispatch_review_ask_file)" || {
+		echo "UNKNOWN"
+		return 1
+	}
+	lock="$(dispatch_claims_lock)" || {
+		echo "UNKNOWN"
+		return 1
+	}
+
+	(
+		flock -w "${DISPATCH_CLAIM_LOCK_WAIT:-10}" 9 || {
+			echo "UNKNOWN"
+			exit 1
+		}
+
+		local now stamp
+		now="$(date +%s)"
+		stamp=""
+		if [ -s "$file" ]; then
+			stamp="$(cat "$file" 2>/dev/null)"
+		fi
+		if [[ "$stamp" =~ ^[0-9]+$ ]] && ((now - stamp < DISPATCH_REVIEW_ASK_TTL)); then
+			echo "BUSY"
+			exit 1
+		fi
+
+		printf '%s\n' "$now" >"$file.tmp"
+		mv -f "$file.tmp" "$file"
+		echo "GRANTED"
+	) 9>>"$lock"
 }
 
 # refresh_pr_held_paths OWNER REPO
