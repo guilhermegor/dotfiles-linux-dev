@@ -226,13 +226,19 @@ resolve_fallback_reviewer() {
 
 # --- attribution, blast radius, posting -------------------------------------
 
-# ladder_attribution_line RUNTIME MODEL SIGNAL
+# ladder_attribution_line RUNTIME MODEL SIGNAL HEAD_SHA
 # The line every fallback review posts (issue #444 item 5) — a reader must
-# never have to guess which reviewer produced a finding.
+# never have to guess which reviewer produced a finding. issue #564: HEAD_SHA
+# rides on a SECOND line ("Reviewed head: <sha>"), never appended to the
+# first — the first line is matched by an `$`-anchored regex in three other
+# places (review_thread_gate.sh's _gate_ladder_marker_re, and
+# review_threads.yml:166/:276), and all three are first-line-anchored via
+# `split("\n")[0]`/parameter expansion, never the whole body. Changing that
+# line would stop every one of them from matching.
 ladder_attribution_line() {
-	local runtime="$1" model="$2" signal="$3"
-	printf 'Fallback review — runtime: %s, model: %s (selected by: %s)\n' \
-		"$runtime" "$model" "$signal"
+	local runtime="$1" model="$2" signal="$3" head_sha="$4"
+	printf 'Fallback review — runtime: %s, model: %s (selected by: %s)\nReviewed head: %s\n' \
+		"$runtime" "$model" "$signal" "$head_sha"
 }
 
 # ladder_poster_login
@@ -247,7 +253,7 @@ ladder_poster_login() {
 	gh api user --jq '.login' 2>/dev/null
 }
 
-# ladder_already_covered COMMENTS_JSON HEAD_DATE
+# ladder_already_covered COMMENTS_JSON HEAD_DATE HEAD_SHA
 # True when a fallback attribution line already exists among a PR's comments,
 # AUTHORED BY THE LADDER'S OWN POSTING ACCOUNT, and POSTED ON OR AFTER the
 # CURRENT head's commit date — a lower rung never re-reviews what a higher one
@@ -267,16 +273,31 @@ ladder_poster_login() {
 # _gate_reported_filter's `$head_date != ""` guard — an unresolvable head
 # never silently trusts a stale marker forever; worst case is one extra
 # review, never a permanent skip.
+#
+# ⚠️ dotfiles-dev#564: HEAD_DATE alone is not enough — it is the commit's own
+# `committer.date`, which whoever pushes controls, so a backdated push can
+# make a NEW head look OLDER than an EXISTING marker and inherit credit for
+# code that marker never reviewed (CWE-345's narrower residual left by #555).
+# HEAD_SHA is the second, independent AND clause that closes it: the marker's
+# OWN second line ("Reviewed head: <sha>", written by ladder_attribution_line)
+# must equal the CURRENT head SHA. Neither clause subsumes the other — HEAD_SHA
+# answers "was this the same commit", HEAD_DATE still catches a marker written
+# before the head existed at all. HEAD_SHA empty (unresolved) OR the marker
+# carrying no second line at all (every marker written before this shipped)
+# both fail CLOSED into "not covered" — one extra review is the acceptable
+# cost, a permanent skip under a new name is not.
 ladder_already_covered() {
-	local comments="$1" head_date="${2:-}" poster
+	local comments="$1" head_date="${2:-}" head_sha="${3:-}" poster
 	poster="$(ladder_poster_login)"
 	[ -n "$poster" ] || return 1
-	printf '%s' "$comments" | jq -e --arg who "$poster" --arg head_date "$head_date" '
+	printf '%s' "$comments" | jq -e --arg who "$poster" --arg head_date "$head_date" --arg head_sha "$head_sha" '
 		type == "array" and any(.[];
 			((.author.login // .user.login // "") == $who)
 			and ((.body // "") | test("^Fallback review — runtime:"; "m"))
 			and (($head_date != "")
-			     and ((.created_at // .createdAt // "") >= $head_date)))
+			     and ((.created_at // .createdAt // "") >= $head_date))
+			and (($head_sha != "")
+			     and ((((.body // "") | split("\n"))[1] // "") == ("Reviewed head: " + $head_sha))))
 	' >/dev/null 2>&1 || return 1
 }
 
@@ -560,13 +581,16 @@ run_fallback_review() {
 	local dry_run="${DRY_RUN:-0}"
 	[ "${8:-}" = "--dry-run" ] && dry_run=1
 
-	# issue #555: the head's own commit date is what anchors a marker's
-	# freshness — fetched once, up front, since ladder_already_covered has no
-	# way to resolve it itself (it takes plain JSON in, never a `gh` call).
-	local head_date
+	# issue #555: the head's own commit date anchors a marker's freshness.
+	# issue #564: the head's own SHA anchors which commit the marker actually
+	# reviewed. Both fetched once, up front, since ladder_already_covered has
+	# no way to resolve either itself (it takes plain JSON in, never a `gh`
+	# call).
+	local head_date head_sha
 	head_date="$(_pr_head_committed_at "$owner" "$repo" "$pr_number")"
+	head_sha="$(_pr_head_sha "$owner" "$repo" "$pr_number")"
 
-	if ladder_already_covered "$comments" "$head_date"; then
+	if ladder_already_covered "$comments" "$head_date" "$head_sha"; then
 		print_status "info" "PR #$pr_number already covered by a higher rung — skipping"
 		return 0
 	fi
@@ -591,7 +615,7 @@ run_fallback_review() {
 	fi
 
 	local attribution
-	attribution="$(ladder_attribution_line "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_SIGNAL")"
+	attribution="$(ladder_attribution_line "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_SIGNAL" "$head_sha")"
 
 	if [ "$dry_run" = "1" ]; then
 		print_status "info" "DRY RUN (candidates unprobed) — would probe, then post to PR #$pr_number: $attribution"
