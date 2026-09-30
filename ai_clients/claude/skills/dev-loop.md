@@ -571,6 +571,18 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    cap actually defends against is a **burst** — 12 rate-limit notices in 11 minutes, measured — not
    a second ask ~20 minutes later, which is exactly what the dedicated tick exists to spend.
 
+   🔴 **This cap binds every reader, not just whichever session is reading this file
+   (dotfiles-dev#548).** A dispatched subagent asking for review on its own PR is invisible to
+   the orchestrator and to every sibling subagent — N of them each asking once is an N-ask burst
+   against CodeRabbit's one account-level quota, measured 2026-09-27: four asks in five minutes
+   pushed the window out by 59 minutes while the orchestrator itself asked zero times that round.
+   So the FIRST `@coderabbitai` ask or push, by ANY reader (orchestrator or subagent), calls
+   `claim_review_ask` (`ai_clients/claude/hooks/lib/dispatch_claims.sh`) before posting it —
+   `GRANTED` means ask; `BUSY`/`UNKNOWN` means another reader already spent this window's ask, so
+   treat the primary rung as unavailable and fall through to item 5, exactly like a BUSY/UNKNOWN
+   slot read. A dispatch brief that asks a subagent to request review must say so explicitly, or
+   the subagent has no way to know the shared budget exists.
+
    🔴 **Then stop reading the ack.** CodeRabbit edits the acknowledgement **in place**: measured on
    blueprintx#330, 2026-09-01, the same comment id read `"Full review triggered"` at +10s and
    `"⚠️ Action not completed — Review rate limited."` after an edit at +8s post-create —
