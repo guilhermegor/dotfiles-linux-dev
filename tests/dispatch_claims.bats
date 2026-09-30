@@ -277,6 +277,10 @@ refute() {
     [ "$output" = "1200" ]
     run /bin/bash -c 'DISPATCH_REVIEW_ASK_TTL=60; . "$1"; echo "$DISPATCH_REVIEW_ASK_TTL"' _ "$LIB"
     [ "$output" = "60" ]
+    run /bin/bash -c 'DISPATCH_REVIEW_ASK_TTL=10m; . "$1"; echo "$DISPATCH_REVIEW_ASK_TTL"' _ "$LIB"
+    [ "$output" = "1200" ]
+    run /bin/bash -c 'DISPATCH_REVIEW_ASK_TTL=abc; . "$1"; echo "$DISPATCH_REVIEW_ASK_TTL"' _ "$LIB"
+    [ "$output" = "1200" ]
 }
 
 @test "the UNDECLARED token matches the one dispatch_plan.py emits" {

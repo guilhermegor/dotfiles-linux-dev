@@ -232,6 +232,9 @@ dispatch_claimed_issues() {
 # the burst this cap exists to stop, and a later tick asking again is the legitimate re-spend
 # dotfiles-dev#477 already carved out for a BUSY/UNKNOWN slot.
 DISPATCH_REVIEW_ASK_TTL="${DISPATCH_REVIEW_ASK_TTL:-1200}"
+# A non-integer TTL (`abc`, `10m`) makes the `((…))` check below fail, which falls through to
+# GRANTED — fail-open on the very budget this cap defends. Reset it rather than trust it.
+[[ "$DISPATCH_REVIEW_ASK_TTL" =~ ^[0-9]+$ ]] || DISPATCH_REVIEW_ASK_TTL=1200
 
 dispatch_review_ask_file() {
 	local dir
