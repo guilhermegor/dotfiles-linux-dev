@@ -9,7 +9,7 @@
 # Contains:
 #   - asdf helpers (asdf_set_*, is_tool_*, get_*)
 #   - npm helpers (npm_install_global, npm_global_install_all_nvm_versions)
-#   - Language installs: nodejs, nvm, npx, typescript, nestjs, rust
+#   - Language installs: nodejs, nvm, npx, typescript, nestjs, rust, flutter (+ fvm)
 #   - Framework CLIs: blueprintx
 #   - Cross-cutting: sync_globals_to_all_nvm_versions
 
@@ -893,6 +893,206 @@ install_rust() {
 }
 
 # ============================================================================
+# FLUTTER (manual SDK install, https://docs.flutter.dev/install/manual) + FVM
+# ============================================================================
+
+FLUTTER_RELEASES_MANIFEST="https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json"
+
+# Parses Flutter's own release manifest into "<archive_url> <sha256> <version>".
+# Verified live 2026-09-28: `curl -s "$FLUTTER_RELEASES_MANIFEST"` returns
+# pretty-printed JSON shaped {base_url, current_release: {stable: <hash>, beta:
+# ..., dev: ...}, releases: [{hash, channel, version, archive, sha256, ...}, ...]}.
+# Grep/sed instead of jq: no other install_* in this repo depends on jq, and the
+# manifest's one-field-per-line indentation makes it grep-safe.
+# ponytail: assumes Linux ships x64-only archives (true for every release in the
+# manifest today); add arch branching if Flutter ever publishes Linux arm64.
+_flutter_resolve_stable_release() {
+    local manifest_file="$1"
+
+    local base_url
+    base_url=$(grep -m1 '"base_url"' "$manifest_file" | sed -E 's/.*"base_url": *"([^"]+)".*/\1/')
+
+    local stable_hash
+    stable_hash=$(grep -A4 '"current_release"' "$manifest_file" \
+        | grep -m1 '"stable"' | sed -E 's/.*"stable": *"([^"]+)".*/\1/')
+
+    [ -n "$base_url" ] && [ -n "$stable_hash" ] || return 1
+
+    local hash_line
+    for hash_line in $(grep -n "\"hash\": *\"$stable_hash\"" "$manifest_file" | cut -d: -f1); do
+        local block
+        block=$(sed -n "${hash_line},+10p" "$manifest_file")
+        if echo "$block" | grep -q '"channel": *"stable"'; then
+            local archive sha256 version
+            archive=$(echo "$block" | grep -m1 '"archive"' | sed -E 's/.*"archive": *"([^"]+)".*/\1/')
+            sha256=$(echo "$block" | grep -m1 '"sha256"' | sed -E 's/.*"sha256": *"([^"]+)".*/\1/')
+            version=$(echo "$block" | grep -m1 '"version"' | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+            [ -n "$archive" ] && [ -n "$sha256" ] || return 1
+            echo "$base_url/$archive $sha256 $version"
+            return 0
+        fi
+    done
+    return 1
+}
+
+_install_flutter_sdk() {
+    local flutter_home="$1"
+
+    print_status "info" "Resolving latest stable Flutter release from Flutter's manifest..."
+    local manifest_file work_dir
+    manifest_file=$(mktemp)
+    work_dir=$(mktemp -d)
+    # shellcheck disable=SC2064  # intentional immediate expansion of both paths
+    trap "rm -f '$manifest_file'; rm -rf '$work_dir'" RETURN
+
+    if ! curl -fsSL "$FLUTTER_RELEASES_MANIFEST" -o "$manifest_file"; then
+        print_status "error" "Failed to download the Flutter release manifest — check network"
+        return 1
+    fi
+
+    local resolved
+    resolved=$(_flutter_resolve_stable_release "$manifest_file")
+    if [ -z "$resolved" ]; then
+        print_status "error" "Could not resolve the latest stable Flutter release from the manifest"
+        return 1
+    fi
+
+    local archive_url sha256 version
+    read -r archive_url sha256 version <<< "$resolved"
+    print_status "info" "Latest stable Flutter: $version"
+
+    local archive_file
+    archive_file="$work_dir/$(basename "$archive_url")"
+    print_status "info" "Downloading $archive_url..."
+    if ! curl -fsSL "$archive_url" -o "$archive_file"; then
+        print_status "error" "Failed to download the Flutter SDK archive — check $LOG_FILE"
+        return 1
+    fi
+
+    print_status "info" "Verifying checksum..."
+    local actual_sha256
+    actual_sha256=$(sha256sum "$archive_file" | awk '{print $1}')
+    if [ "$actual_sha256" != "$sha256" ]; then
+        print_status "error" "Checksum mismatch for $(basename "$archive_file") — expected $sha256, got $actual_sha256"
+        return 1
+    fi
+    print_status "success" "Checksum verified"
+
+    mkdir -p "$HOME/develop"
+    print_status "info" "Extracting to $HOME/develop..."
+    if ! tar -xf "$archive_file" -C "$HOME/develop"; then
+        print_status "error" "Failed to extract the Flutter SDK archive"
+        return 1
+    fi
+
+    if [ ! -x "$flutter_home/bin/flutter" ]; then
+        print_status "error" "Extraction succeeded but $flutter_home/bin/flutter is missing"
+        return 1
+    fi
+    print_status "success" "Flutter $version extracted to $flutter_home"
+}
+
+# Appends the Flutter bin dir to ~/.bashrc PATH only when absent (idempotent —
+# re-running the installer must never duplicate the line, #578).
+_flutter_add_path_to_bashrc() {
+    local flutter_home="$1"
+    local bashrc="$HOME/.bashrc"
+
+    touch "$bashrc"
+    if grep -qF "$flutter_home/bin" "$bashrc"; then
+        print_status "info" "PATH already contains $flutter_home/bin in ~/.bashrc — skipping"
+        return 0
+    fi
+
+    {
+        echo ""
+        echo "# Flutter SDK"
+        echo "export PATH=\"\$PATH:$flutter_home/bin\""
+    } >> "$bashrc"
+    print_status "success" "Added $flutter_home/bin to PATH in ~/.bashrc"
+}
+
+_install_fvm() {
+    print_status "section" "FVM (FLUTTER VERSION MANAGEMENT)"
+
+    if command_exists fvm; then
+        print_status "info" "fvm already installed ($(fvm --version 2>/dev/null || echo "unknown"))"
+        return 0
+    fi
+
+    if ! command_exists brew; then
+        print_status "error" "Homebrew is required to install fvm — install Homebrew first (install_homebrew)"
+        return 1
+    fi
+
+    # fvm is a Homebrew/core formula (verified 2026-09-28: `curl -s
+    # https://formulae.brew.sh/api/formula/fvm.json` → "tap":"homebrew/core", no
+    # caveats) — no `leoafarias/fvm` tap needed, unlike older upstream docs.
+    print_status "info" "Installing fvm via Homebrew..."
+    if ! run_or_echo brew install fvm &>> "$LOG_FILE"; then
+        print_status "error" "Homebrew install of fvm failed — check $LOG_FILE"
+        return 1
+    fi
+
+    if ! command_exists fvm; then
+        print_status "error" "fvm installed but not found on PATH — check $LOG_FILE"
+        return 1
+    fi
+    print_status "success" "fvm installed: $(fvm --version 2>/dev/null)"
+}
+
+install_flutter() {
+    print_status "section" "FLUTTER SDK + FVM"
+
+    if ! command_exists curl; then
+        print_status "error" "curl is required to install Flutter — install it first"
+        return 1
+    fi
+
+    print_status "info" "Installing system dependencies (curl git unzip xz-utils zip libglu1-mesa)..."
+    install_package "curl" "curl" "curl" "curl"
+    install_package "git" "git" "git" "git"
+    install_package "unzip" "unzip" "unzip" "unzip"
+    install_package "xz-utils" "xz" "xz" "xz"
+    install_package "zip" "zip" "zip" "zip"
+    install_package "libglu1-mesa" "libglu1-mesa" "mesa-libGLU" "glu"
+
+    local flutter_home="$HOME/develop/flutter"
+
+    if [ -x "$flutter_home/bin/flutter" ]; then
+        print_status "info" "Flutter SDK already present at $flutter_home — skipping SDK download"
+    else
+        _install_flutter_sdk "$flutter_home" || return 1
+    fi
+
+    _flutter_add_path_to_bashrc "$flutter_home"
+
+    print_status "info" "Verifying installation (absolute path — PATH is not reloaded in this shell)..."
+    if ! "$flutter_home/bin/flutter" --version &>> "$LOG_FILE"; then
+        print_status "error" "flutter --version failed after install — check $LOG_FILE"
+        return 1
+    fi
+    print_status "success" "$("$flutter_home/bin/flutter" --version 2>/dev/null | head -n1)"
+
+    if ! "$flutter_home/bin/dart" --version &>> "$LOG_FILE"; then
+        print_status "error" "dart --version failed after install — check $LOG_FILE"
+        return 1
+    fi
+    print_status "success" "$("$flutter_home/bin/dart" --version 2>&1 | head -n1)"
+
+    print_status "warning" "PATH is not reloaded in the current shell — a bare 'flutter' here still"
+    print_status "warning" "reports 'command not found'. Run: source ~/.bashrc (or open a new terminal)"
+
+    print_status "info" "Running 'flutter doctor' (Android Studio/Chrome are separate follow-ups;"
+    print_status "info" "warnings here never fail this install)..."
+    "$flutter_home/bin/flutter" doctor &>> "$LOG_FILE" || true
+
+    # FVM manages further per-project SDK versions; the global SDK above stays
+    # the default (#578).
+    _install_fvm
+}
+
+# ============================================================================
 # POETRY (Python package manager, via pipx)
 # ============================================================================
 
@@ -1062,6 +1262,7 @@ INSTALL_REGISTRY+=(
     "install_typescript:TypeScript::"
     "install_nestjs:NestJS CLI::"
     "install_rust:Rust (asdf)::"
+    "install_flutter:Flutter SDK + FVM::"
     "install_poetry:Poetry (Python Package Manager)::"
     "install_blueprintx:BlueprintX (Project Scaffolding)::"
     "sync_globals_to_all_nvm_versions:Sync npm globals to all nvm versions::"
