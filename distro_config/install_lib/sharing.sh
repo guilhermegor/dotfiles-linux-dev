@@ -719,18 +719,30 @@ uninstall_insync() {
         print_status "error" "Step 2/5: local account directory not found: $account_dir"
         return 1
     fi
-    print_status "info" "Step 2/5: comparing remote '$remote:' against local '$account_dir' (read-only)..."
+    # --one-way means "source files must exist on destination" (rclone check
+    # --help) — the local tree must be the SOURCE so the check proves every
+    # local file made it to the remote, not the reverse (issue #577: with the
+    # remote as source, a file Insync never uploaded still passes and then
+    # gets deleted). --size-only skips hashing 1.3 T from disk, which would
+    # otherwise run silently for hours inside this $(...) capture.
+    local log_dir="."
+    [ -n "${LOG_FILE:-}" ] && log_dir="$(dirname "$LOG_FILE")"
+    local missing_on_dst_file="$log_dir/uninstall_insync_missing_on_dst.txt"
+    local differ_file="$log_dir/uninstall_insync_differ.txt"
+    print_status "info" "Step 2/5: comparing local '$account_dir' against remote '$remote:' (read-only)..."
     local check_output check_rc
-    check_output=$(rclone check "$remote:" "$account_dir" --one-way --dry-run 2>&1)
+    check_output=$(rclone check "$account_dir" "$remote:" --one-way --size-only \
+        --missing-on-dst "$missing_on_dst_file" --differ "$differ_file" 2>&1)
     check_rc=$?
     echo "$check_output" >> "$LOG_FILE"
-    if [ "$check_rc" -ne 0 ]; then
-        print_status "error" "Step 2/5: remote verification failed — refusing to delete anything"
-        print_status "info" "$check_output"
+    if [ "$check_rc" -ne 0 ] || [ -s "$missing_on_dst_file" ] || [ -s "$differ_file" ]; then
+        print_status "error" "Step 2/5: local copy is not fully backed up to the remote — refusing to delete anything"
+        print_status "info" "Files missing on remote: $missing_on_dst_file"
+        print_status "info" "Files that differ: $differ_file"
         print_status "info" "Resolve the discrepancy, then re-run uninstall_insync"
         return 1
     fi
-    print_status "success" "Step 2/5: remote matches local — comparison recorded in $LOG_FILE"
+    print_status "success" "Step 2/5: every local file exists on the remote — comparison recorded in $LOG_FILE"
 
     # Step 3: uninstall the package. Touches only the local machine; Google
     # Drive keeps everything regardless of which client is installed.
