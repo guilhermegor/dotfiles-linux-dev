@@ -134,7 +134,7 @@ JSON"
 ]
 JSON"
     [ "$status" -eq 0 ]
-    [ "$output" = "UNKNOWN|unreadable-records" ]
+    [ "$output" = "UNKNOWN" ]
 }
 
 @test "an empty page is FREE, not UNKNOWN" {

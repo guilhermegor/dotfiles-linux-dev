@@ -95,9 +95,10 @@ def classify(list_comments: list) -> str:
 	# no comments really has no notice. dotfiles-dev#544; deliberately does NOT
 	# accept the GraphQL shape as a fallback (the issue's own explicit scope) —
 	# absorbing it would hide which projection the caller used instead of telling
-	# them to fix the query.
+	# them to fix the query. Bare ``UNKNOWN``, like every other fail-closed path:
+	# the token set is a contract callers may compare literally.
 	if list_comments and not is_rest_shaped(list_comments):
-		return "UNKNOWN|unreadable-records"
+		return "UNKNOWN"
 
 	list_bot = [
 		c
