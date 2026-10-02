@@ -444,6 +444,22 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
     [[ "$output" != *"SHOULD NOT BE CALLED"* ]]
 }
 
+@test "an unresolved head SHA fails closed before any model call or post (#564)" {
+    # A marker posted as "Reviewed head: " is invisible to every coverage reader, so the
+    # review would be spent and repeated on every run. Nothing downstream may run.
+    _no_sha() { return 1; }
+    resolve_fallback_reviewer() { echo "SHOULD NOT RESOLVE" >&2; return 1; }
+    _post_pr_comment() { echo "SHOULD NOT BE CALLED" >&2; return 1; }
+    export -f _no_sha resolve_fallback_reviewer _post_pr_comment
+    export REVIEWER_LADDER_HEAD_SHA_CMD=_no_sha
+
+    run run_fallback_review o r 42 BLOCKED "" 5000 ""
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot resolve the head SHA"* ]]
+    [[ "$output" != *"SHOULD NOT RESOLVE"* ]]
+    [[ "$output" != *"SHOULD NOT BE CALLED"* ]]
+}
+
 # --- codex runtime invocation (measured live on #447, 2026-09-21) ------------
 
 @test "codex review: passes --base and never --skip-git-repo-check" {

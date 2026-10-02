@@ -590,6 +590,14 @@ run_fallback_review() {
 	head_date="$(_pr_head_committed_at "$owner" "$repo" "$pr_number")"
 	head_sha="$(_pr_head_sha "$owner" "$repo" "$pr_number")"
 
+	# Every marker reader requires a non-empty SHA, so a review posted without
+	# one is spent and can never count as coverage — the next run repeats it.
+	# Fail closed BEFORE any model call rather than after.
+	if [ -z "$head_sha" ]; then
+		print_status "error" "PR #$pr_number: cannot resolve the head SHA — refusing to review without one"
+		return 1
+	fi
+
 	if ladder_already_covered "$comments" "$head_date" "$head_sha"; then
 		print_status "info" "PR #$pr_number already covered by a higher rung — skipping"
 		return 0
