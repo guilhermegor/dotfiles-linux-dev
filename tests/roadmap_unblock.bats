@@ -145,6 +145,10 @@ echo "\$*" >> "$GH_LOG"
 case "\$1 \$2" in
     "project item-list")
         [ -f "$TEST_TMP/fail-item-list" ] && exit 1
+        # Per-board overrides (dotfiles-dev#531): a fail-board-<n> marker makes board <n>
+        # unreadable; items-<n>.json gives it its own items. Neither = the shared fixture.
+        [ -f "$TEST_TMP/fail-board-\$3" ] && exit 1
+        if [ -f "$TEST_TMP/items-\$3.json" ]; then cat "$TEST_TMP/items-\$3.json"; exit 0; fi
         cat "$TEST_TMP/items.json"
         ;;
     "api graphql")
@@ -600,4 +604,76 @@ run_reconcile() {
     [[ "$output" == *"STATUS=unknown"* ]]
     [[ "$output" == *"UNKNOWN (throttled)"* ]]
     refute_gh 'issue edit'
+}
+
+# --- dotfiles-dev#531: the declared board registry ------------------------------------------------
+
+# run_boards ENTRY...
+# Overrides ROADMAP_BOARDS with ENTRY... (none = an empty registry) and runs the registry sweep.
+run_boards() {
+    run bash -c "source '$LIB'; ROADMAP_BOARDS=(\"\$@\"); reconcile_roadmap_boards; \
+        echo \"rc=\$?\"; echo \"STATUS=\$RECONCILE_BOARDS_STATUS\"; echo REPORT_START; \
+        printf '%s\n' \"\$RECONCILE_BOARDS_REPORT\"; echo REPORT_END" _ "$@"
+}
+
+@test "registry: declares the six maintained boards and excludes stpstone (2) by declaration" {
+    run bash -c "source '$LIB'; printf '%s\n' \"\${ROADMAP_BOARDS[@]}\""
+    [ "$status" -eq 0 ]
+    for n in 8 9 13 15 16 17; do
+        [[ "$output" == *"guilhermegor|$n|"* ]]
+    done
+    [[ "$output" != *"guilhermegor|2|"* ]]
+}
+
+@test "registry sweep: one line per board, clean boards included, every board visited" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    echo '{"items": []}' > "$TEST_TMP/items-16.json"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_boards "owner|17|alpha" "owner|16|beta"
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" == *"board owner/17 (alpha): ok — 1 item line(s)"* ]]
+    [[ "$output" == *"  unblocked owner/repo#3"* ]]
+    [[ "$output" == *"board owner/16 (beta): ok — nothing to change"* ]]
+}
+
+@test "registry sweep: an unreadable board is UNKNOWN and the other boards still reconcile" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    : > "$TEST_TMP/fail-board-9"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_boards "owner|9|broken" "owner|17|alpha"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"board owner/9 (broken): UNKNOWN"* ]]
+    [[ "$output" == *"board owner/17 (alpha): ok"* ]]
+    [[ "$output" == *"unblocked owner/repo#3"* ]]
+}
+
+@test "registry sweep: an empty registry is UNKNOWN, never 'nothing to unblock'" {
+    write_fake_gh
+    run_boards
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"UNKNOWN: ROADMAP_BOARDS is empty"* ]]
+    refute_gh "project item-list"
+}
+
+@test "registry sweep: a malformed entry is UNKNOWN and the next entry is still swept" {
+    echo '{"items": []}' > "$TEST_TMP/items.json"
+    write_fake_gh
+    run_boards "owner|notanumber|bad" "owner|17|alpha"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"malformed registry entry"* ]]
+    [[ "$output" == *"board owner/17 (alpha): ok — nothing to change"* ]]
+}
+
+@test "registry sweep: a trailing delimiter is malformed, not silently trimmed" {
+    echo '{"items": []}' > "$TEST_TMP/items.json"
+    write_fake_gh
+    run_boards "owner|16|beta|" "owner|17|alpha"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"board owner|16|beta|: UNKNOWN — malformed registry entry"* ]]
+    [[ "$output" == *"board owner/17 (alpha): ok — nothing to change"* ]]
 }
