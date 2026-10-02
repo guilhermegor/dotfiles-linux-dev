@@ -1,6 +1,6 @@
 ---
 name: c:issue
-allowed-tools: Bash(rtk gh issue*), Bash(rtk gh project*), Bash(rtk gh repo*), Bash(rtk gh api*), Bash(rtk git*), Bash(rtk proxy curl*), AskUserQuestion, Read, Grep, Skill
+allowed-tools: Bash(rtk gh issue*), Bash(rtk gh pr view*), Bash(rtk gh project*), Bash(rtk gh repo*), Bash(rtk gh api*), Bash(rtk git*), Bash(rtk proxy curl*), AskUserQuestion, Read, Grep, Skill
 description: Create or resume a tracked issue (assigned to you), add it to the kanban, and open a linked recommended-name branch
 argument-hint: "<description | #number | issue-url> [--new] [--quick] [--parent <n>] [--work <type>] [--label <name>] [--project <name|number>] [--tracker <github|linear>]"
 ---
@@ -16,7 +16,11 @@ authoring half of a Linear-style flow. This command only sets the card's *starti
   `Closes #N` link in step 9 feeds it) — those two toggles are OFF by default and the API
   cannot enable them, so step 7 below verifies them every run. `subagent_stop_sweep.sh`'s
   kanban reconcile is the deterministic fallback when a human never flips them, or a card
-  lands in No Status with nothing to advance it (dotfiles-dev#556).
+  lands in No Status with nothing to advance it (dotfiles-dev#556). GitHub can silently
+  drop the link (`closingIssuesReferences: []`), so after `gh pr create` run
+  `gh pr view <n> --json closingIssuesReferences` and warn when empty. A repo-level
+  `close-linked-issues` workflow (guilhermegor/blueprintx#604) closes the issue from the
+  branch name and complements — never replaces — this native workflow.
 
 Follow these steps exactly. `$ARGUMENTS` holds an issue reference *or* a work description,
 plus optional flags.
@@ -492,3 +496,4 @@ Branch:  <type>/<ref>-<slug> (checked out)   (omit for parents)
 
 Then the **PR snippet:** ```Closes #<N>``` — tell the user to paste it in the PR body so merging
 the PR closes the issue, which the board's "Item closed → Done" workflow then moves to Done.
+After opening the PR, verify the link took: `gh pr view <n> --json closingIssuesReferences`.
