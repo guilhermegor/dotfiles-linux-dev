@@ -576,6 +576,26 @@ install_mousam() {
 }
 
 # ============================================================================
+# EMAIL FILE VIEWER
+# ============================================================================
+
+install_mailviewer() {
+    print_status "section" "MAILVIEWER (.eml/.msg viewer)"
+
+    if flatpak list 2>/dev/null | grep -q "io.github.alescdb.mailviewer"; then
+        print_status "info" "MailViewer already installed"
+        return 0
+    fi
+
+    setup_flatpak
+
+    print_status "info" "Installing MailViewer via Flatpak..."
+    run_or_echo flatpak install -y flathub io.github.alescdb.mailviewer
+    print_status "success" "MailViewer installed"
+    print_status "config" "Launch: flatpak run io.github.alescdb.mailviewer"
+}
+
+# ============================================================================
 # ESPANSO (TEXT EXPANDER)
 # ============================================================================
 
@@ -689,5 +709,6 @@ INSTALL_REGISTRY+=(
     "install_miro:Miro Collaboration Tool:Planning:miro_miro.desktop"
     "install_figma:Figma (via figma-linux snap, unofficial):Design:figma-linux_figma-linux.desktop"
     "install_mousam:Mousam Weather App:Utilitarios:io.github.amit9838.mousam.desktop"
+    "install_mailviewer:MailViewer (.eml/.msg viewer):Utilitarios:io.github.alescdb.mailviewer.desktop"
     "install_espanso:Espanso (Text Expander)::"
 )
