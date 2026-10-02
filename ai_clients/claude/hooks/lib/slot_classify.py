@@ -55,8 +55,25 @@ def body_of(dict_comment: dict) -> str:
 	return (dict_comment.get("body") or "").lower()
 
 
-def classify(list_comments: list) -> str:
-	"""Return the slot verdict for one page of roster comments.
+def is_reviewer(dict_comment: dict) -> bool:
+	"""Return whether a comment was posted by the roster reviewer.
+
+	Parameters
+	----------
+	dict_comment : dict
+		One comment record from the roster page.
+
+	Returns
+	-------
+	bool
+		True when the author login names the reviewer.
+	"""
+	str_login = (dict_comment.get("user") or {}).get("login") or ""
+	return REVIEWER_LOGIN_SUBSTRING in str_login.lower()
+
+
+def rate_limit_verdict(list_comments: list) -> str:
+	"""Return the rate-limit verdict for one page, blind to repository eligibility.
 
 	Parameters
 	----------
@@ -66,13 +83,9 @@ def classify(list_comments: list) -> str:
 	Returns
 	-------
 	str
-		``FREE|<reason>``, ``BUSY|<reason>``, ``ASK-ONLY|<reason>`` or ``UNKNOWN``.
+		``FREE|<reason>`` or ``BUSY|<reason>``.
 	"""
-	list_bot = [
-		c
-		for c in list_comments
-		if REVIEWER_LOGIN_SUBSTRING in ((c.get("user") or {}).get("login") or "").lower()
-	]
+	list_bot =[c for c in list_comments if is_reviewer(c)]
 	if not list_bot:
 		return "FREE|no-notice-on-this-page"
 
@@ -97,14 +110,6 @@ def classify(list_comments: list) -> str:
 	)
 	dict_done = next((c for c in list_bot if REVIEW_DONE_PHRASE in body_of(c)), None)
 	if dict_limit is None:
-		# ⚠️ The eligibility notice is permanent and free-slot-shaped — no rate limit is
-		# ever posted for a repo this notice names, since the reviewer never runs on it
-		# unasked. Reporting it as ordinary FREE loses the actionable half: nothing will
-		# use this slot without an explicit ask, ever (dotfiles-dev#538). Only checked
-		# once no rate-limit notice was found above, so an explicit ask that DID hit a
-		# real limit still reports BUSY, not ASK-ONLY.
-		if any(ELIGIBILITY_PHRASE in body_of(c) for c in list_bot):
-			return "ASK-ONLY|no-automatic-review-fewer-than-10-stars"
 		return "FREE|no-rate-limit-notice-on-this-page"
 	if dict_done is not None and (dict_done.get("created_at") or "") > (
 		dict_limit.get("created_at") or ""
@@ -139,6 +144,32 @@ def classify(list_comments: list) -> str:
 	if dt_now >= dt_reset:
 		return f"FREE|wait-expired-at-{str_reset}Z"
 	return f"BUSY|until-{str_reset}Z"
+
+
+def classify(list_comments: list) -> str:
+	"""Return the slot verdict for one page of roster comments.
+
+	Parameters
+	----------
+	list_comments : list
+		Comment records as returned by the forge's comment listing.
+
+	Returns
+	-------
+	str
+		``FREE|<reason>``, ``BUSY|<reason>``, ``ASK-ONLY|<reason>`` or ``UNKNOWN``.
+	"""
+	str_verdict = rate_limit_verdict(list_comments)
+	# ⚠️ Eligibility is permanent, rate limits are not: an ineligible repo's slot is
+	# ASK-ONLY whenever it is otherwise free, however the "free" was reached — no limit
+	# notice, an expired wait, a completed review, or a chat-only quota. Deciding it only
+	# when NO limit notice existed let any old notice demote the repo to plain FREE
+	# (dotfiles-dev#538 review). BUSY is left alone: a live limit is the more urgent fact.
+	if not str_verdict.startswith("FREE|"):
+		return str_verdict
+	if any(ELIGIBILITY_PHRASE in body_of(c) for c in list_comments if is_reviewer(c)):
+		return "ASK-ONLY|no-automatic-review-fewer-than-10-stars"
+	return str_verdict
 
 
 def main() -> int:

@@ -23,6 +23,8 @@
 #      `@coderabbitai review` ask can still get rate-limited on an ineligible repo);
 #  10. a comment shaped in a way the parser cannot make sense of (an unparseable
 #      timestamp) prints UNKNOWN, never a silent FREE default.
+#  11. an ineligible repo stays ASK-ONLY past any older limit notice that is expired,
+#      superseded by a completed review, or chat-only (dotfiles-dev#538 review, 3 cases).
 # ⚠️ Cases 5, 6 and 10 must print UNKNOWN. UNKNOWN must never read as free.
 #
 # Run locally: bats tests/slot_classify.bats
@@ -146,6 +148,47 @@ JSON"
 JSON"
     [ "$status" -eq 0 ]
     [ "$output" = "BUSY|until-$(reset_hhmm 1 30)Z" ]
+}
+
+@test "an ineligible repo with an expired older limit still reports ASK-ONLY" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY'
+[
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 1)\",
+   \"body\": \"> ## Review skipped\\n> This repository does not receive automatic reviews because it has fewer than 10 stars.\"},
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 120)\",
+   \"body\": \"Rate limit exceeded. Reviews will be available in 5 minutes.\"}
+]
+JSON"
+    [ "$status" -eq 0 ]
+    [ "$output" = "ASK-ONLY|no-automatic-review-fewer-than-10-stars" ]
+}
+
+@test "an ineligible repo whose manual review completed after a limit still reports ASK-ONLY" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY'
+[
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 90)\",
+   \"body\": \"This repository does not receive automatic reviews because it has fewer than 10 stars.\"},
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 30)\",
+   \"body\": \"Rate limit exceeded. Reviews will be available in 90 minutes.\"},
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 1)\",
+   \"body\": \"Actionable comments posted: 0. Review finished.\"}
+]
+JSON"
+    [ "$status" -eq 0 ]
+    [ "$output" = "ASK-ONLY|no-automatic-review-fewer-than-10-stars" ]
+}
+
+@test "an ineligible repo with only a chat-quota notice still reports ASK-ONLY" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY'
+[
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 10)\",
+   \"body\": \"This repository does not receive automatic reviews because it has fewer than 10 stars.\"},
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 1)\",
+   \"body\": \"You have exceeded the rate limit for chat messages. Please wait 5 minutes.\"}
+]
+JSON"
+    [ "$status" -eq 0 ]
+    [ "$output" = "ASK-ONLY|no-automatic-review-fewer-than-10-stars" ]
 }
 
 @test "a comment with an unparseable timestamp is UNKNOWN, never defaults to FREE" {
