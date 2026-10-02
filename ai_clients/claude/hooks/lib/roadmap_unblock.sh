@@ -320,3 +320,70 @@ reconcile_roadmap_unblock() {
 	RECONCILE_REPORT="$(printf '%s\n' "$report" | sed '/^$/d')"
 	return 0
 }
+
+# dotfiles-dev#531: the declared set of boards the reconciler sweeps — "owner|project|repo" per
+# entry, the same shape as LESSON_STORES (lib/lesson_mirrors.sh). Before this, "every project this
+# operator tracks" was session memory: a board nobody passed was indistinguishable from a board
+# with nothing to unblock, since both report nothing.
+#
+# A board is absent BY DECLARATION, never by omission: stpstone (project 2) is excluded because
+# its repo is no longer maintained. To add a board, add a row; to drop one, delete the row and say
+# why here. `repo` is the board's own repo, used only to label its report line.
+# shellcheck disable=SC2034 # read by reconcile_roadmap_boards below and by its callers' tests
+ROADMAP_BOARDS=(
+	"guilhermegor|17|greenfield"
+	"guilhermegor|16|wwdates"
+	"guilhermegor|15|filings-b3"
+	"guilhermegor|13|dotfiles-linux-dev"
+	"guilhermegor|9|filings-cvm"
+	"guilhermegor|8|blueprintx"
+)
+
+# reconcile_roadmap_boards
+#   Runs reconcile_roadmap_unblock over every ROADMAP_BOARDS entry. Sets:
+#     RECONCILE_BOARDS_STATUS = ok | unknown   (unknown when ANY board — or the registry — is unreadable)
+#     RECONCILE_BOARDS_REPORT = one "board OWNER/N (repo): ..." line per board, ALWAYS, plus that
+#                               board's own item lines indented beneath it. A board that reconciled
+#                               clean ("nothing to change") and one nobody swept (no line) must not
+#                               look alike.
+#   Returns 1 when RECONCILE_BOARDS_STATUS is unknown.
+#
+# ⚠️ Fail closed PER BOARD, never across the sweep: one unreadable board is reported UNKNOWN and the
+# loop continues. An early `return 1` here would let a single permissions error silently cancel
+# every other board's sweep. A malformed or empty registry is UNKNOWN too, never "nothing to do".
+reconcile_roadmap_boards() {
+	RECONCILE_BOARDS_STATUS="ok"
+	RECONCILE_BOARDS_REPORT=""
+	local lines="" entry owner project repo extra rc detail
+	if ((${#ROADMAP_BOARDS[@]} == 0)); then
+		# shellcheck disable=SC2034 # read by callers
+		RECONCILE_BOARDS_STATUS="unknown"
+		# shellcheck disable=SC2034 # read by callers
+		RECONCILE_BOARDS_REPORT="UNKNOWN: ROADMAP_BOARDS is empty — no board was swept"
+		return 1
+	fi
+	for entry in "${ROADMAP_BOARDS[@]}"; do
+		IFS='|' read -r owner project repo extra <<<"$entry"
+		if [[ -z "$owner" || ! "$project" =~ ^[0-9]+$ || -z "$repo" || -n "$extra" ]]; then
+			RECONCILE_BOARDS_STATUS="unknown"
+			lines+="board ${entry:-<empty>}: UNKNOWN — malformed registry entry (want owner|project|repo)"$'\n'
+			continue
+		fi
+		rc=0
+		reconcile_roadmap_unblock "$owner" "$project" || rc=$?
+		if ((rc != 0)); then
+			RECONCILE_BOARDS_STATUS="unknown"
+			lines+="board $owner/$project ($repo): UNKNOWN — $RECONCILE_REPORT"$'\n'
+		elif [[ -z "$RECONCILE_REPORT" ]]; then
+			lines+="board $owner/$project ($repo): ok — nothing to change"$'\n'
+		else
+			lines+="board $owner/$project ($repo): ok — $(printf '%s\n' "$RECONCILE_REPORT" | wc -l) item line(s)"$'\n'
+			while IFS= read -r detail; do
+				lines+="  $detail"$'\n'
+			done <<<"$RECONCILE_REPORT"
+		fi
+	done
+	# shellcheck disable=SC2034 # read by callers
+	RECONCILE_BOARDS_REPORT="$(printf '%s' "$lines" | sed '/^$/d')"
+	[[ "$RECONCILE_BOARDS_STATUS" == "ok" ]]
+}

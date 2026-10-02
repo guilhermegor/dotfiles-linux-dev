@@ -74,6 +74,8 @@ source "$HOOK_DIR/lib/free_surface.sh"
 source "$HOOK_DIR/lib/kanban_reconcile.sh"
 # shellcheck source=lib/gh_budget.sh
 source "$HOOK_DIR/lib/gh_budget.sh"
+# shellcheck source=lib/roadmap_unblock.sh
+source "$HOOK_DIR/lib/roadmap_unblock.sh"
 
 emit() {
 	# $1 = plain-text report body. Wraps it as SubagentStop additionalContext.
@@ -491,6 +493,18 @@ gh_budget_gate() {
 	return 0
 }
 
+# sweep_roadmap_boards
+# Prints reconcile_roadmap_boards' per-board report (one line per declared board, clean or not),
+# or an UNKNOWN line when the sweep produced no report at all (dotfiles-dev#531).
+sweep_roadmap_boards() {
+	reconcile_roadmap_boards || true
+	if [ -n "$RECONCILE_BOARDS_REPORT" ]; then
+		printf '%s\n' "$RECONCILE_BOARDS_REPORT"
+	else
+		echo "roadmap boards: UNKNOWN — no per-board report produced, not 'nothing to unblock'"
+	fi
+}
+
 main() {
 	local payload cwd repo owner name db roster_file report agent_type
 	if [ ! -t 0 ]; then payload="$(cat)"; else payload=""; fi
@@ -547,6 +561,8 @@ dispatch: UNKNOWN — $BUDGET_GATE_REASON"
 		else
 			echo "kanban reconcile: UNKNOWN — $RECONCILE_KANBAN_REPORT"
 		fi
+		echo "[8] roadmap boards (declared registry: ROADMAP_BOARDS in lib/roadmap_unblock.sh)"
+		sweep_roadmap_boards
 	)"
 
 	emit "$report"
