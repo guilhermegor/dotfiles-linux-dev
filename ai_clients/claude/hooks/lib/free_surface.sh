@@ -505,13 +505,36 @@ gate_live_agent_surface() {
 	[ -d "$cwd" ] || return 1
 	git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
 
-	local default_branch held cand
+	local default_branch="" held cand
+
+	# Best-effort only (dotfiles-dev#551): a local-path or non-GitHub origin (every fixture in
+	# tests/live_agent_surface.bats included) leaves owner/repo empty, which disables the
+	# forge-exclusion enhancement in _live_agent_held_paths without affecting this gate's own
+	# fail-closed contract — parse failure here is never a reason to return unknown.
+	local owner="" repo="" owner_repo
+	owner_repo="$(_origin_owner_repo "$cwd")" && read -r owner repo <<<"$owner_repo"
+
+	# The forge is the authority on the default branch whenever origin resolves to GitHub — it is
+	# what dispatch_plan.py read before it delegated here, and what _free_held_paths still reads.
+	# A local origin/HEAD can be stale yet resolvable (a rename that left the old branch on the
+	# remote), which would scope every diff below against the wrong base (#576 review). The answer
+	# is still verified against a local origin ref: a branch we cannot diff against is no answer.
+	if [ -n "$owner" ] && [ -n "$repo" ]; then
+		cand="$(gh api "repos/$owner/$repo" --jq '.default_branch' 2>/dev/null)" || cand=""
+		if [ -n "$cand" ] && git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$cand" >/dev/null 2>&1; then
+			default_branch="$cand"
+		fi
+	fi
+
+	# Local fallback when the forge is unavailable or unresolvable (fail closed below if none).
 	# `|| true` is load-bearing, not defensive noise: `symbolic-ref --quiet` EXITS NON-ZERO when
 	# the ref is absent, so under `set -e` this assignment aborted the whole function one line
 	# before the guard below ever ran. That is the actual mechanism behind the #523 review's
 	# "always returns unknown" — the fallback added below is unreachable without this.
-	default_branch="$(git -C "$cwd" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-	default_branch="${default_branch#origin/}"
+	if [ -z "$default_branch" ]; then
+		default_branch="$(git -C "$cwd" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+		default_branch="${default_branch#origin/}"
+	fi
 	# `symbolic-ref` does not check its target: after a default-branch rename it still prints the
 	# gone branch, and every `origin/<it>` diff below then dies with "unknown revision" and the
 	# gate fails closed for good (#576 review). Drop an unverifiable name so the fallback runs.
@@ -532,23 +555,6 @@ gate_live_agent_surface() {
 				break
 			fi
 		done
-	fi
-
-	# Best-effort only (dotfiles-dev#551): a local-path or non-GitHub origin (every fixture in
-	# tests/live_agent_surface.bats included) leaves owner/repo empty, which disables the
-	# forge-exclusion enhancement in _live_agent_held_paths without affecting this gate's own
-	# fail-closed contract — parse failure here is never a reason to return unknown.
-	local owner="" repo="" owner_repo
-	owner_repo="$(_origin_owner_repo "$cwd")" && read -r owner repo <<<"$owner_repo"
-
-	# Last resort for a default branch that is neither main nor master (e.g. `develop`): ask the
-	# forge, as dispatch_plan.py did itself before it delegated here (#576 review). REST, and the
-	# answer is still verified locally — a branch we have no origin ref for cannot scope a diff.
-	if [ -z "$default_branch" ] && [ -n "$owner" ] && [ -n "$repo" ]; then
-		cand="$(gh api "repos/$owner/$repo" --jq '.default_branch' 2>/dev/null)" || cand=""
-		if [ -n "$cand" ] && git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$cand" >/dev/null 2>&1; then
-			default_branch="$cand"
-		fi
 	fi
 	[ -n "$default_branch" ] || return 1
 

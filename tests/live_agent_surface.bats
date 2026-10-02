@@ -157,6 +157,34 @@ teardown() {
 	[[ "$LIVE_AGENT_PATHS" == *"stale_head.txt"* ]]
 }
 
+@test "a stale-but-existing origin/HEAD loses to the forge's default branch (#576 review)" {
+	# A rename that left the OLD branch (master) on the remote: origin/HEAD still resolves, to the
+	# wrong base. The forge says `develop`, which already holds the worktree's commit, so the
+	# worktree diverges from nothing real; diffed against stale master it would read held.
+	WT="$TEST_TMP/wt-stale-existing"
+	git -C "$REPO" worktree add -q -b feature/stale-existing "$WT" master
+	echo work >"$WT/stale_existing.txt"
+	git -C "$WT" add stale_existing.txt
+	git -C "$WT" commit -q -m "add stale_existing.txt"
+	git -C "$WT" push -q origin HEAD:refs/heads/develop
+	_stub_gh
+	_github_origin
+	export GH_STUB_DEFAULT=develop
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" != *"stale_existing.txt"* ]]
+}
+
+@test "a forge read failure falls back to the local default, never to unknown (#576 review)" {
+	_stub_gh
+	_github_origin
+	export GH_STUB_STATE=FAIL
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+}
+
 @test "a default branch that is neither main nor master resolves via the forge (#576 review)" {
 	# No origin/HEAD and no main/master: the planner used to ask GitHub for the default branch
 	# itself, so delegating to this gate must not lose that answer for e.g. a `develop` repo.
@@ -343,6 +371,12 @@ _stub_gh() {
 	cat >"$TEST_TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GH_STUB_LOG"
+# `gh api repos/... --jq .default_branch` — the forge's answer; GH_STUB_DEFAULT overrides it.
+if [ "$1" = api ]; then
+	[ "${GH_STUB_STATE:-}" = FAIL ] && exit 1
+	printf '%s\n' "${GH_STUB_DEFAULT:-master}"
+	exit 0
+fi
 case "${GH_STUB_STATE:-NONE}" in
 FAIL) exit 1 ;;
 NONE) printf '[]\n' ;;
@@ -513,7 +547,10 @@ _pushed_worktree() {
 
 	gate_live_agent_surface "$REPO"
 	[ "$LIVE_AGENT_STATUS" = "ok" ]
-	[ "$(wc -l <"$GH_STUB_LOG")" -eq 1 ]
+	# the dead-PR index is read once however many worktrees there are; the default-branch lookup
+	# is its own single `gh api` call, so the total stays flat at 2 rather than growing per worktree
+	[ "$(grep -c '^pr list' "$GH_STUB_LOG")" -eq 1 ]
+	[ "$(wc -l <"$GH_STUB_LOG")" -eq 2 ]
 }
 
 @test "551: a MERGED branch with UNCOMMITTED work is still held — never prune before rescue" {
