@@ -354,7 +354,10 @@ ROADMAP_BOARDS=(
 reconcile_roadmap_boards() {
 	RECONCILE_BOARDS_STATUS="ok"
 	RECONCILE_BOARDS_REPORT=""
-	local lines="" entry owner project repo extra rc detail
+	local lines="" entry owner project repo rc detail
+	# Whole-entry shape, never per-field: `read` drops a trailing `|`, so
+	# `owner|17|repo|` would split cleanly and pass a field-by-field check.
+	local entry_shape='^[^|]+\|[0-9]+\|[^|]+$'
 	if ((${#ROADMAP_BOARDS[@]} == 0)); then
 		# shellcheck disable=SC2034 # read by callers
 		RECONCILE_BOARDS_STATUS="unknown"
@@ -363,12 +366,12 @@ reconcile_roadmap_boards() {
 		return 1
 	fi
 	for entry in "${ROADMAP_BOARDS[@]}"; do
-		IFS='|' read -r owner project repo extra <<<"$entry"
-		if [[ -z "$owner" || ! "$project" =~ ^[0-9]+$ || -z "$repo" || -n "$extra" ]]; then
+		if [[ ! "$entry" =~ $entry_shape ]]; then
 			RECONCILE_BOARDS_STATUS="unknown"
 			lines+="board ${entry:-<empty>}: UNKNOWN — malformed registry entry (want owner|project|repo)"$'\n'
 			continue
 		fi
+		IFS='|' read -r owner project repo <<<"$entry"
 		rc=0
 		reconcile_roadmap_unblock "$owner" "$project" || rc=$?
 		if ((rc != 0)); then

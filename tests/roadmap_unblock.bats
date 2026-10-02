@@ -569,3 +569,12 @@ run_boards() {
     [[ "$output" == *"malformed registry entry"* ]]
     [[ "$output" == *"board owner/17 (alpha): ok — nothing to change"* ]]
 }
+
+@test "registry sweep: a trailing delimiter is malformed, not silently trimmed" {
+    echo '{"items": []}' > "$TEST_TMP/items.json"
+    write_fake_gh
+    run_boards "owner|16|beta|" "owner|17|alpha"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"board owner|16|beta|: UNKNOWN — malformed registry entry"* ]]
+    [[ "$output" == *"board owner/17 (alpha): ok — nothing to change"* ]]
+}
