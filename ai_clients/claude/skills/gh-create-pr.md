@@ -179,6 +179,31 @@ EOF
   [--reviewer <handle1,handle2,...>] # include only when reviewers is non-empty
 ```
 
+### 5a. Verify the issue link
+
+A `Closes #N` line in the body is not a link until GitHub says so: in
+renutri, PRs #26 and #28 both carried it, targeted `main`, and returned
+`closingIssuesReferences: []` — #25 stayed open and its card never reached
+Done, with no error. Right after creating the PR, read back what GitHub
+parsed:
+
+```bash
+gh pr view <n> --json closingIssuesReferences --jq '.closingIssuesReferences | length'
+```
+
+If the body carries a closing keyword (`Closes`/`Fixes`/`Resolves #N`) and
+the count is `0`, **warn the user now**, naming the PR and the issue —
+not after the merge. Do not edit the body on your own; the fix (re-link
+from the PR sidebar, or rely on the repo's branch-name `close-linked-issues`
+workflow) is the user's call.
+
+If `gh pr create` itself fails on a GraphQL rate limit, the REST form
+(`gh api -X POST repos/<o>/<r>/pulls`) works but **bypasses
+`pr_template_guard.sh`**, which matches only `gh pr create|edit` — a
+deliberate scope (its body parsing reads `--body`/`--body-file`, not REST
+`-f body=`). Fill every `.github/PULL_REQUEST_TEMPLATE.md` section by hand
+before using it.
+
 Report the result:
 
 > "PR opened: <url>  
