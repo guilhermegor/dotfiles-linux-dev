@@ -533,7 +533,6 @@ gate_live_agent_surface() {
 			fi
 		done
 	fi
-	[ -n "$default_branch" ] || return 1
 
 	# Best-effort only (dotfiles-dev#551): a local-path or non-GitHub origin (every fixture in
 	# tests/live_agent_surface.bats included) leaves owner/repo empty, which disables the
@@ -541,6 +540,17 @@ gate_live_agent_surface() {
 	# fail-closed contract — parse failure here is never a reason to return unknown.
 	local owner="" repo="" owner_repo
 	owner_repo="$(_origin_owner_repo "$cwd")" && read -r owner repo <<<"$owner_repo"
+
+	# Last resort for a default branch that is neither main nor master (e.g. `develop`): ask the
+	# forge, as dispatch_plan.py did itself before it delegated here (#576 review). REST, and the
+	# answer is still verified locally — a branch we have no origin ref for cannot scope a diff.
+	if [ -z "$default_branch" ] && [ -n "$owner" ] && [ -n "$repo" ]; then
+		cand="$(gh api "repos/$owner/$repo" --jq '.default_branch' 2>/dev/null)" || cand=""
+		if [ -n "$cand" ] && git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$cand" >/dev/null 2>&1; then
+			default_branch="$cand"
+		fi
+	fi
+	[ -n "$default_branch" ] || return 1
 
 	held="$(_live_agent_held_paths "$cwd" "$default_branch" "$owner" "$repo")" || return 1
 

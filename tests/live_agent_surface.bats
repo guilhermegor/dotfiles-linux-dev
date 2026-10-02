@@ -157,6 +157,32 @@ teardown() {
 	[[ "$LIVE_AGENT_PATHS" == *"stale_head.txt"* ]]
 }
 
+@test "a default branch that is neither main nor master resolves via the forge (#576 review)" {
+	# No origin/HEAD and no main/master: the planner used to ask GitHub for the default branch
+	# itself, so delegating to this gate must not lose that answer for e.g. a `develop` repo.
+	git -C "$REPO" update-ref refs/remotes/origin/develop master
+	git -C "$REPO" symbolic-ref --delete refs/remotes/origin/HEAD
+	git -C "$REPO" update-ref -d refs/remotes/origin/master
+	git -C "$REPO" remote set-url origin git@github.com:acme/widget.git
+	mkdir -p "$TEST_TMP/bin"
+	cat >"$TEST_TMP/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+api) printf 'develop\n' ;;
+*) printf '[]\n' ;;
+esac
+STUB
+	chmod +x "$TEST_TMP/bin/gh"
+	PATH="$TEST_TMP/bin:$PATH"
+	WT="$TEST_TMP/wt-develop"
+	git -C "$REPO" worktree add -q -b feature/develop "$WT" master
+	echo held >"$WT/develop_held.txt"
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"develop_held.txt"* ]]
+}
+
 # --- the pin: dev-loop.md's stated rule must name THIS implementation (dotfiles-dev#501) -----
 # The issue's own words: "One test that fails if the three ever disagree again — ideally
 # asserting the skill's stated rule against the gate's actual behaviour, so prose drift is
