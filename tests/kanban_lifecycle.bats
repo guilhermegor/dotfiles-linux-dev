@@ -216,3 +216,33 @@ write_fake_gh_two_cards() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"issue #131"* ]]
 }
+
+# --- #594 review: `--head` text inside a quoted argument is data, not the flag ------------------
+
+@test "gh pr create with '--head <b>' inside --body still uses HEAD's issue" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --title x --body 'mention --head fix/564-other'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #131"* ]]
+}
+
+@test "gh pr create with '-H <b>' inside --title still uses HEAD's issue" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --title \"see -H fix/564-other\" --body y"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #131"* ]]
+}
+
+@test "gh pr create --head quoted is still honoured" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --head 'fix/564-other' --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create with an unbalanced quote moves nothing (fail open)" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --title 'x --head fix/564-other"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}

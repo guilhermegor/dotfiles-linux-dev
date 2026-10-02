@@ -105,13 +105,16 @@ target_column() {
 }
 
 head_from_command() {
-    # The branch named by `--head <b>`, `--head=<b>` or `-H <b>`, with any `owner:` prefix
-    # stripped; returns 1 when the command carries no such flag.
-    # ponytail: regex over the raw string, so `--head x` quoted inside a --body would match too;
-    # swap for argv tokenizing (hooks/lib/gh_cmd_match.py) if that ever shows up.
-    local re='(^|[[:space:]])(--head|-H)(=|[[:space:]]+)["'"'"']?([^[:space:]"'"'"']+)'
-    [[ "$1" =~ $re ]] || return 1
-    printf '%s' "${BASH_REMATCH[4]##*:}"
+    # The branch named by `--head <b>`, `--head=<b>` or `-H <b>` on the `gh pr create` in $1, with
+    # any `owner:` prefix stripped, read off the real argv so `--head x` quoted inside a --title
+    # or --body is not mistaken for the flag. Returns 1 when the command carries no such flag, and
+    # 2 when it cannot be tokenized (unbalanced quote) — the caller must not guess a branch then.
+    local json head
+    json="$(printf '%s' "$1" \
+        | python3 "$(dirname "${BASH_SOURCE[0]}")/lib/gh_cmd_match.py" pr 2>/dev/null)" || return 2
+    head="$(jq -r '.head // empty' <<<"$json" 2>/dev/null)" || return 2
+    [[ -n "$head" ]] || return 1
+    printf '%s' "${head##*:}"
 }
 
 issue_for_command() {
@@ -119,10 +122,13 @@ issue_for_command() {
     # `<type>/<N>-<slug>` convention. The target is `--head`'s branch when the command names one,
     # else HEAD. An explicit `--head` with no number fails (never falls back to HEAD — that
     # fallback is the wrong-card bug).
-    local branch
-    if ! branch="$(head_from_command "$1")"; then
-        branch="$(git symbolic-ref --short HEAD 2>/dev/null)" || return 1
-    fi
+    local branch rc=0
+    branch="$(head_from_command "$1")" || rc=$?
+    case "$rc" in
+        0) ;;
+        1) branch="$(git symbolic-ref --short HEAD 2>/dev/null)" || return 1 ;;
+        *) return 1 ;;   # unparseable command: fail open, never guess a card
+    esac
     [[ "$branch" =~ (^|[^0-9])([0-9]+)([^0-9]|$) ]] || return 1
     printf '%s' "${BASH_REMATCH[2]}"
 }
