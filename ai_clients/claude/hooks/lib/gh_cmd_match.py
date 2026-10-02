@@ -145,6 +145,10 @@ def scan_flags(argv):
         elif tok.startswith("--head="):
             head = tok.split("=", 1)[1]
             i += 1
+        elif tok.startswith("-H") and len(tok) > 2:
+            # pflag also takes `-H=<b>` and the attached `-H<b>`; `=` is stripped, as in pflag
+            head = tok[3:] if tok[2] == "=" and len(tok) > 3 else tok[2:]
+            i += 1
         elif tok in ("--body", "-b") and i + 1 < n:
             has_body, body = True, argv[i + 1]
             i += 2

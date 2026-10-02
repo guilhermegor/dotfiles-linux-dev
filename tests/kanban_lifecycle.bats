@@ -246,3 +246,19 @@ write_fake_gh_two_cards() {
     [ "$status" -eq 0 ]
     [[ "$output" != *"moved issue"* ]]
 }
+
+# --- #594 re-review: pflag also accepts `-H=<b>` and `-H<b>` (spf13/pflag parseSingleShortArg) ---
+
+@test "gh pr create -H=<b> moves the card of <b>" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create -H=fix/564-other --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create -H<b> (attached) moves the card of <b>" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create -Hfix/564-other --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
