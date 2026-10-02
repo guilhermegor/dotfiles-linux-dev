@@ -199,18 +199,22 @@ had **2**. Being behind decides *which version of the rule the PR is judged by* 
 A roadmap board's `Blocked` items do not follow the native issue-dependency relationship on their
 own: GitHub resolves `repos/<o>/<r>/issues/<n>/dependencies/blocked_by` the moment the blocking
 issue closes, but the board's own Status, the `state:blocked` label, and any "Blocked by" text
-field all sit still until something re-reads them. Call the gate for every project this operator
-tracks — never re-derive the unblock logic by hand:
+field all sit still until something re-reads them. Sweep the boards declared in `ROADMAP_BOARDS`
+(`hooks/lib/roadmap_unblock.sh`, dotfiles-dev#531) — never a project number remembered or typed by
+hand, and never re-derive the unblock logic. `subagent_stop_sweep.sh`'s item `[8]` already runs
+it; standalone:
 
 ```bash
 source ai_clients/claude/hooks/lib/roadmap_unblock.sh
-reconcile_roadmap_unblock <owner> <project-number> || echo "roadmap board UNREADABLE — nothing touched"
-printf '%s\n' "$RECONCILE_REPORT"
+reconcile_roadmap_boards || echo "a roadmap board was UNREADABLE — that board untouched, the rest swept"
+printf '%s\n' "$RECONCILE_BOARDS_REPORT"
 ```
 
-Report **one line per item that changed or needs a look** — `$RECONCILE_REPORT` already carries
-exactly that shape (unblocked, still blocked, decision blocker, blocked by nothing, UNKNOWN). If it
-is empty, say "no roadmap items changed" and move on.
+Report **one line per declared board**, clean or not — `$RECONCILE_BOARDS_REPORT` carries it
+(`board <owner>/<n> (<repo>): ok — nothing to change`, or `ok — N item line(s)` followed by that
+board's indented item lines: unblocked, still blocked, decision blocker, blocked by nothing,
+UNKNOWN). A board that reconciled clean and a board nobody swept must never look the same. Add or
+drop a board by editing `ROADMAP_BOARDS`, not this prose.
 
 Every determinate line also carries a `[blocker-kind: internal|external|decision]` tag
 (dotfiles-dev#528) — `internal` (same repo as the item), `external` (a different repo, which can
