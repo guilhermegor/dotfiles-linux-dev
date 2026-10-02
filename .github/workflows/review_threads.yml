@@ -164,7 +164,15 @@ jobs:
             # not depend on how much the reviewer had to say.
             first_line=${COMMENT_BODY%%$'\n'*}
             ladder_marker_re='^Fallback review — runtime: (qwen|codex), model: .+ \(selected by: .+\)$'
+            # dotfiles-dev#564: the marker's own SECOND line must name this head, the
+            # same test ladder_already_covered and the thread gate apply. Otherwise a
+            # review of an older commit that lands after a push credits the new head.
+            # No second line (a pre-#564 marker) fails closed, as in every other reader.
+            rest=${COMMENT_BODY#*$'\n'}
+            second_line=${rest%%$'\n'*}
             if [[ "$first_line" =~ $ladder_marker_re ]] \
+              && [ "$rest" != "$COMMENT_BODY" ] \
+              && [ "$second_line" = "Reviewed head: $HEAD_SHA" ] \
               && [[ "$COMMENT_AUTHOR_ASSOCIATION" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]]; then
               reviewer_reported=1
             fi
@@ -268,12 +276,16 @@ jobs:
               # existed. First-line-anchored, same as the event branch, so a
               # marker mentioned mid-body by an unrelated reply cannot count.
               if [ "$reviewer_reported" -eq 0 ]; then
-                ladder_marker_count="$(printf '%s' "$comments_json" | jq --arg since "$head_seen_at" '[
+                # dotfiles-dev#564: head_seen_at scopes out a marker posted before this
+                # head existed, but not one for an OLDER commit posted just after it
+                # (an in-flight review) — the marker's second line must also name HEAD_SHA.
+                ladder_marker_count="$(printf '%s' "$comments_json" | jq --arg since "$head_seen_at" --arg head_sha "$HEAD_SHA" '[
                     .[]
                     | select(.created_at > $since)
                     | select((.author_association // "") | test("^(OWNER|MEMBER|COLLABORATOR)$"))
                     | select(((.body // "") | split("\n")[0])
                         | test("^Fallback review — runtime: (qwen|codex), model: .+ \\(selected by: .+\\)$"))
+                    | select(((((.body // "") | split("\n"))[1] // "") == ("Reviewed head: " + $head_sha)))
                   ] | length')"
                 if [ "${ladder_marker_count:-0}" -gt 0 ]; then
                   reviewer_reported=1
