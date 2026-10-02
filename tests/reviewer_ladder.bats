@@ -18,7 +18,18 @@ setup() {
     _default_fake_head_date() { echo "1970-01-01T00:00:00Z"; }
     export -f _default_fake_head_date
     export REVIEWER_LADDER_HEAD_DATE_CMD=_default_fake_head_date
+
+    # dotfiles-dev#564: it also resolves the head SHA up front, and a marker is
+    # credited only when its "Reviewed head:" line names that SHA. Stubbed to
+    # HEAD_SHA (below) for the same no-network reason as the date above.
+    _default_fake_head_sha() { echo "$HEAD_SHA"; }
+    export -f _default_fake_head_sha
+    export HEAD_SHA
+    export REVIEWER_LADDER_HEAD_SHA_CMD=_default_fake_head_sha
 }
+
+# The head every already-covered fixture below reviewed (dotfiles-dev#564).
+HEAD_SHA='4117bcf7aa00'
 
 # --- codex resolver ----------------------------------------------------------
 
@@ -206,11 +217,18 @@ setup() {
 # --- attribution, blast radius --------------------------------------------
 
 @test "attribution line names the runtime, model, and selection signal" {
-    run ladder_attribution_line "codex" "codex-auto-review" "review-specialized-slug"
-    [[ "$output" == "Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)" ]]
+    run ladder_attribution_line "codex" "codex-auto-review" "review-specialized-slug" "$HEAD_SHA"
+    [ "${lines[0]}" = "Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)" ]
+}
+
+@test "attribution line carries the reviewed head SHA on its own second line (#564)" {
+    run ladder_attribution_line "codex" "codex-auto-review" "review-specialized-slug" "$HEAD_SHA"
+    [ "${lines[1]}" = "Reviewed head: $HEAD_SHA" ]
 }
 
 ATTRIBUTION='Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)'
+# What the ladder actually posts: the first line plus the "Reviewed head:" line.
+MARKER_BODY="$ATTRIBUTION"$'\nReviewed head: '"$HEAD_SHA"
 
 # HEAD_DATE anchors the freshness tests below to the same measured shape as
 # #546 (dotfiles-dev#555): a real PR head's committed date. Tests that are not
@@ -224,10 +242,10 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
 
 @test "already-covered: the ladder's own attribution comment blocks a re-review" {
     export REVIEWER_LADDER_POSTER=ladder-bot
-    run ladder_already_covered "$(jq -cn --arg a "$ATTRIBUTION" --arg c "$FRESH_CREATED_AT" \
+    run ladder_already_covered "$(jq -cn --arg a "$MARKER_BODY" --arg c "$FRESH_CREATED_AT" \
         '[{user:{login:"someone"},body:"some comment"},
           {user:{login:"ladder-bot"},body:$a,created_at:$c}]')" \
-        "$HEAD_DATE"
+        "$HEAD_DATE" "$HEAD_SHA"
     [ "$status" -eq 0 ]
 }
 
@@ -282,10 +300,43 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
 @test "already-covered: a marker NEWER than the head still blocks a re-review" {
     export REVIEWER_LADDER_POSTER=ladder-bot
     run ladder_already_covered \
+        "$(jq -cn --arg a "$MARKER_BODY" --arg c "$FRESH_CREATED_AT" \
+            '[{user:{login:"ladder-bot"},body:$a,created_at:$c}]')" \
+        "$HEAD_DATE" "$HEAD_SHA"
+    [ "$status" -eq 0 ]
+}
+
+# --- dotfiles-dev#564: a marker is credited only for the commit it names -------------------------
+#
+# HEAD_DATE is the commit's own committer.date, which whoever pushes controls, so a backdated push
+# can make a new head look OLDER than an existing marker. The SHA clause closes that: a marker
+# NEWER than the head is still not credited unless it names this exact head.
+
+@test "already-covered: a NEWER marker naming a DIFFERENT head SHA is not covered (#564)" {
+    export REVIEWER_LADDER_POSTER=ladder-bot
+    run ladder_already_covered \
+        "$(jq -cn --arg a "$ATTRIBUTION"$'\nReviewed head: deadbeef0000' --arg c "$FRESH_CREATED_AT" \
+            '[{user:{login:"ladder-bot"},body:$a,created_at:$c}]')" \
+        "$HEAD_DATE" "$HEAD_SHA"
+    [ "$status" -eq 1 ]
+}
+
+@test "already-covered: a NEWER marker with NO head SHA line fails closed (#564)" {
+    export REVIEWER_LADDER_POSTER=ladder-bot
+    run ladder_already_covered \
         "$(jq -cn --arg a "$ATTRIBUTION" --arg c "$FRESH_CREATED_AT" \
             '[{user:{login:"ladder-bot"},body:$a,created_at:$c}]')" \
-        "$HEAD_DATE"
-    [ "$status" -eq 0 ]
+        "$HEAD_DATE" "$HEAD_SHA"
+    [ "$status" -eq 1 ]
+}
+
+@test "already-covered: an unresolvable head SHA fails closed into not covered (#564)" {
+    export REVIEWER_LADDER_POSTER=ladder-bot
+    run ladder_already_covered \
+        "$(jq -cn --arg a "$MARKER_BODY" --arg c "$FRESH_CREATED_AT" \
+            '[{user:{login:"ladder-bot"},body:$a,created_at:$c}]')" \
+        "$HEAD_DATE" ""
+    [ "$status" -eq 1 ]
 }
 
 @test "already-covered: an unresolvable head date fails closed into not covered" {
@@ -351,7 +402,7 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
     # created_at postdates setup()'s stubbed (ancient) head date -- this is the
     # ordinary "ladder already reviewed the current head" shape, not #555's bug.
     run run_fallback_review o r 42 BLOCKED "" 5000 \
-        "$(jq -cn --arg a "$ATTRIBUTION" --arg c "$FRESH_CREATED_AT" \
+        "$(jq -cn --arg a "$MARKER_BODY" --arg c "$FRESH_CREATED_AT" \
             '[{user:{login:"ladder-bot"},body:$a,created_at:$c}]')"
     [ "$status" -eq 0 ]
     [[ "$output" != *"SHOULD NOT RESOLVE"* ]]
