@@ -68,6 +68,7 @@ classify_worktree_diff() {
 fanout_worktrees() {
 	local cwd="$1" github_ok="$2" json="$3"
 	local pr_branches="" default_branch path="" branch="" name uncommitted ahead pushed
+	local has_upstream never_pushed
 	local -a interrupted_names=()
 
 	[ "$github_ok" = "1" ] && pr_branches="$(printf '%s' "$json" | jq -r '.[].headRefName' 2>/dev/null)"
@@ -90,7 +91,9 @@ fanout_worktrees() {
 				[ -n "$uncommitted" ] || uncommitted=0
 				ahead=0
 				pushed=0
+				has_upstream=0
 				if git -C "$path" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+					has_upstream=1
 					ahead="$(git -C "$path" rev-list --count '@{upstream}..HEAD' 2>/dev/null)"
 					[ -n "$ahead" ] || ahead=0
 				fi
@@ -105,6 +108,24 @@ fanout_worktrees() {
 				fi
 
 				[ "$ahead" -gt 0 ] && printf '[fan-out] worktree %s: %s commit(s) not pushed\n' "$name" "$ahead"
+
+				# Neither `@{upstream}` nor a remote ref of its own: a branch that was NEVER
+				# pushed (dotfiles-dev#571 — the most common thing a killed agent leaves
+				# behind: it committed, then died before `git push -u`). Count only commits
+				# whose patch isn't already on origin/<default> (`git cherry`, "+" = not yet
+				# applied there) so a squash-merged branch — real commits, zero new patches —
+				# is not reported.
+				if [ "$has_upstream" = "0" ] && [ "$pushed" = "0" ] && [ -n "$branch" ] \
+					&& [ -n "$default_branch" ] && [ "$branch" != "$default_branch" ]; then
+					never_pushed="$(git -C "$path" cherry "origin/$default_branch" HEAD 2>/dev/null \
+						| grep -c '^+')"
+					[ -n "$never_pushed" ] || never_pushed=0
+					if [ "$never_pushed" -gt 0 ]; then
+						printf '[fan-out] worktree %s: %s commit(s) never pushed — no upstream\n' \
+							"$name" "$never_pushed"
+						interrupted_names+=("$name")
+					fi
+				fi
 
 				if [ "$uncommitted" -gt 0 ]; then
 					local verdict ins del anon_note=""

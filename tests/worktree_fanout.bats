@@ -37,6 +37,32 @@ setup() {
     wtB="$BATS_TEST_TMPDIR/wtB"
     git -C "$work" worktree add --quiet -b branchB "$wtB" origin/master
     git -C "$wtB" push --quiet -u origin branchB
+
+    # branchC: created from a LOCAL branch (never remote-tracking), so it has NO
+    # `@{upstream}` at all — the dotfiles-dev#571 gap. One real commit, never pushed
+    # anywhere.
+    wtC="$BATS_TEST_TMPDIR/wtC"
+    git -C "$work" worktree add --quiet -b branchC "$wtC" master
+    echo two >"$wtC/file2.txt"
+    git -C "$wtC" add file2.txt
+    git -C "$wtC" commit --quiet -m 'feat: add file2'
+
+    # branchD: same no-upstream shape as branchC, but its patch already landed on
+    # origin/master under a different commit (a squash merge) — must NOT be reported.
+    wtD="$BATS_TEST_TMPDIR/wtD"
+    git -C "$work" worktree add --quiet -b branchD "$wtD" master
+    echo three >"$wtD/file3.txt"
+    git -C "$wtD" add file3.txt
+    git -C "$wtD" commit --quiet -m 'feat: add file3'
+    echo three >"$work/file3.txt"
+    git -C "$work" add file3.txt
+    git -C "$work" commit --quiet -m 'feat: add file3 (squash)'
+    git -C "$work" push --quiet origin master
+
+    # branchE: created from a local branch, no upstream, but zero commits ahead of
+    # the default branch — must not be reported either.
+    wtE="$BATS_TEST_TMPDIR/wtE"
+    git -C "$work" worktree add --quiet -b branchE "$wtE" master
 }
 
 @test "branch tracking origin/master with no remote ref of its own is not reported pushed" {
@@ -49,4 +75,28 @@ setup() {
     run fanout_worktrees "$work" 1 '[]'
     [ "$status" -eq 0 ]
     [[ "$output" == *"branch branchB pushed with NO PR"* ]]
+}
+
+@test "branch with commits and no upstream at all is reported never pushed" {
+    run fanout_worktrees "$work" 1 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtC: 1 commit(s) never pushed"* ]]
+}
+
+@test "never-pushed worktree is included in the RESUME summary line" {
+    run fanout_worktrees "$work" 1 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RESUME"*"wtC"* ]]
+}
+
+@test "no-upstream branch already squash-merged onto default is not reported" {
+    run fanout_worktrees "$work" 1 '[]'
+    [ "$status" -eq 0 ]
+    [[ ! "$output" == *"worktree wtD: "*"never pushed"* ]]
+}
+
+@test "no-upstream branch sitting exactly at default is not reported" {
+    run fanout_worktrees "$work" 1 '[]'
+    [ "$status" -eq 0 ]
+    [[ ! "$output" == *"worktree wtE: "*"never pushed"* ]]
 }

@@ -33,6 +33,7 @@ setup() {
     cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile_done.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/gh_budget.sh" "$REPO/lib/"
+    cp "$(dirname "$SWEEP_SRC")/lib/roadmap_unblock.sh" "$REPO/lib/"
     source "$FUNCS"
 
     # Every gh_budget_gate test below sets its own GH_BUDGET_LATCH_FILE to stay isolated from
@@ -671,4 +672,37 @@ STUB
     run bash "$SWEEP_SRC" <<<"{\"cwd\":\"$REPO\"}"
     [ "$status" -eq 0 ]
     [[ "$output" == *"hookSpecificOutput"* ]]
+}
+
+# --- dotfiles-dev#531: item [8], the declared roadmap-board registry --------------------------
+
+@test "sweep_roadmap_boards: one line per declared board, an unreadable one reads UNKNOWN" {
+    cat > "$BIN/gh" <<'STUB'
+#!/bin/bash
+case "$1 $2 $3" in
+"project item-list 9") exit 1 ;;
+"project item-list "*) echo '{"items": []}' ;;
+*) exit 1 ;;
+esac
+STUB
+    chmod +x "$BIN/gh"
+    ROADMAP_BOARDS=("o|9|broken" "o|17|clean")
+    run sweep_roadmap_boards
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"board o/9 (broken): UNKNOWN"* ]]
+    [[ "$output" == *"board o/17 (clean): ok — nothing to change"* ]]
+}
+
+@test "sweep_roadmap_boards: an empty registry reads UNKNOWN, never silence" {
+    ROADMAP_BOARDS=()
+    run sweep_roadmap_boards
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"UNKNOWN: ROADMAP_BOARDS is empty"* ]]
+}
+
+@test "main() wires item [8] into the report (main needs a live origin, so pin the wiring)" {
+    run grep -c 'echo "\[8\] roadmap boards' "$SWEEP_SRC"
+    [ "$output" = "1" ]
+    run awk '/echo "\[8\] roadmap boards/{getline; print}' "$SWEEP_SRC"
+    [[ "$output" == *"sweep_roadmap_boards"* ]]
 }
