@@ -164,3 +164,55 @@ EOF
     [[ "$output" == *"moved issue"* ]]
     [[ "$output" == *"In progress"* ]]
 }
+
+# --- #591: `gh pr create --head <b>` moves <b>'s card, never HEAD's -----------------------------
+# HEAD is feat/131-fix (setup); the board holds cards for #131 and #564, so a wrong pick is visible
+# in the announced issue number rather than as a silent no-op.
+
+write_fake_gh_two_cards() {
+    write_fake_gh "OPEN"
+    sed -i 's|"items":\[{"id":"ITEM_1","content":{"type":"Issue","number":131}}\]|"items":[{"id":"ITEM_1","content":{"type":"Issue","number":131}},{"id":"ITEM_2","content":{"type":"Issue","number":564}}]|' \
+        "$FAKE_BIN/gh"
+}
+
+@test "gh pr create --head <b> moves the card of <b>, not HEAD's" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --head fix/564-other --title x --body y"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create --head=<b> moves the card of <b>" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --head=fix/564-other --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create -H <b> moves the card of <b>" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create -H fix/564-other --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create --head owner:<b> strips the owner prefix" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --head guilhermegor:fix/564-other --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create --head with no issue number moves nothing (no fallback to HEAD)" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --head chore/no-number --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create without --head still uses HEAD's issue" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --title x --body y"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #131"* ]]
+}
