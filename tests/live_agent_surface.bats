@@ -144,6 +144,19 @@ teardown() {
 	[ "$LIVE_AGENT_STATUS" = "unknown" ]
 }
 
+@test "a stale origin/HEAD (target branch gone) falls back to a verified main/master (#576 review)" {
+	# A default-branch rename leaves refs/remotes/origin/HEAD pointing at a ref that no longer
+	# exists; `symbolic-ref` still prints it, so it must be verified before use.
+	git -C "$REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/renamed-away
+	WT="$TEST_TMP/wt-stale-head"
+	git -C "$REPO" worktree add -q -b feature/stale-head "$WT" master
+	echo held >"$WT/stale_head.txt"
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"stale_head.txt"* ]]
+}
+
 # --- the pin: dev-loop.md's stated rule must name THIS implementation (dotfiles-dev#501) -----
 # The issue's own words: "One test that fails if the three ever disagree again — ideally
 # asserting the skill's stated rule against the gate's actual behaviour, so prose drift is

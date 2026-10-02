@@ -512,6 +512,13 @@ gate_live_agent_surface() {
 	# "always returns unknown" — the fallback added below is unreachable without this.
 	default_branch="$(git -C "$cwd" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
 	default_branch="${default_branch#origin/}"
+	# `symbolic-ref` does not check its target: after a default-branch rename it still prints the
+	# gone branch, and every `origin/<it>` diff below then dies with "unknown revision" and the
+	# gate fails closed for good (#576 review). Drop an unverifiable name so the fallback runs.
+	if [ -n "$default_branch" ] \
+		&& ! git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$default_branch" >/dev/null 2>&1; then
+		default_branch=""
+	fi
 	# A missing local refs/remotes/origin/HEAD is NOT a read failure — it is simply absent in any
 	# clone made with `git remote add`, and in clones whose remote never advertised a HEAD.
 	# Treating it as unreadable returned `unknown` and blocked dispatch forever in a perfectly
