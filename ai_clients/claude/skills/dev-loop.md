@@ -412,9 +412,12 @@ week of real gap-vs-expired-notice data is the prerequisite for deciding whether
 notice-and-report external timer is worth building; one 3-hour sample is not that.
 
 1. **Classify the slot, three states plus an escape hatch — never a binary busy/free.** Pipe the
-   comment page into `hooks/lib/slot_classify.py`, which prints one token (`FREE|<reason>`,
-   `BUSY|<reason>`, `UNKNOWN`); **never re-derive this by hand** (dotfiles-dev#433) — reading the
-   newest notice by eye re-commits all three defects its fixtures pin down. Read the
+   REST comment page — `gh api repos/{owner}/{repo}/issues/comments`, never a hand-rolled
+   GraphQL query, whose `author`/`createdAt` field names the classifier can't read
+   (dotfiles-dev#544) — into `hooks/lib/slot_classify.py`, which prints one token
+   (`FREE|<reason>`, `BUSY|<reason>`, `UNKNOWN`); **never re-derive this by hand**
+   (dotfiles-dev#433) — reading the newest notice by eye re-commits all three defects its
+   fixtures pin down. Read the
    newest roster notice, querying `is:pr` **without** `is:open`: a PR that merged since its last
    notice still spent the same account-level quota, and scoping to open PRs alone makes that spend
    invisible.
