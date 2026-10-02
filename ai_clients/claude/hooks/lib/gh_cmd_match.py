@@ -56,6 +56,10 @@ def split_segments(command):
         c = command[i]
         if quote:
             buf.append(c)
+            if c == "\\" and quote == '"' and i + 1 < n:
+                buf.append(command[i + 1])  # `\"` inside double quotes does not close them
+                i += 2
+                continue
             if c == quote:
                 quote = None
             i += 1
@@ -144,6 +148,9 @@ def scan_flags(argv):
             i += 2
         elif tok.startswith("--head="):
             head = tok.split("=", 1)[1]
+            i += 1
+        elif tok in ("--head", "-H"):
+            head = ""  # flag with no value: gh rejects it; "" tells the caller not to guess HEAD
             i += 1
         elif tok.startswith("-H") and len(tok) > 2:
             # pflag also takes `-H=<b>` and the attached `-H<b>`; `=` is stripped, as in pflag

@@ -262,3 +262,33 @@ write_fake_gh_two_cards() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"issue #564"* ]]
 }
+
+# --- #594 round 3: escaped quotes tokenize; a --head with no value never falls back to HEAD -----
+
+@test "gh pr create with escaped quotes in --title still honours --head" {
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --title "say \"hi\"" --head fix/564-other'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create ending in a bare --head moves nothing (no fallback to HEAD)" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --title x --head"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create --head= with an empty value moves nothing (no fallback to HEAD)" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --head= --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create ending in a bare -H moves nothing (no fallback to HEAD)" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --title x -H"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
