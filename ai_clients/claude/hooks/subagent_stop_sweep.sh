@@ -72,6 +72,8 @@ source "$HOOK_DIR/lib/review_thread_gate.sh"
 source "$HOOK_DIR/lib/free_surface.sh"
 # shellcheck source=lib/kanban_reconcile.sh
 source "$HOOK_DIR/lib/kanban_reconcile.sh"
+# shellcheck source=lib/dispatch_claims.sh
+source "$HOOK_DIR/lib/dispatch_claims.sh"
 # shellcheck source=lib/kanban_reconcile_done.sh
 source "$HOOK_DIR/lib/kanban_reconcile_done.sh"
 # shellcheck source=lib/gh_budget.sh

@@ -78,13 +78,16 @@ _krd_branch_refs_issue() {
 		grep -qE "(^|[^0-9])$number([^0-9]|$)"
 }
 
-# _krd_claimed_issue NUMBER
-# True if lib/dispatch_claims.sh's registry (sourced by the caller when available) holds a live
-# claim for NUMBER. File-based, no gh call either.
+# _krd_claimed_issue CWD NUMBER
+# True if lib/dispatch_claims.sh's registry holds a live claim for NUMBER. File-based, no gh
+# call either. The CALLER must source lib/dispatch_claims.sh (subagent_stop_sweep.sh does) —
+# with it unsourced this is always false, so a claimed No-Status issue reads as Ready and looks
+# free to dispatch twice. CWD is passed through because the registry lives in the git common
+# dir of the repo being swept, which is not necessarily the process's $PWD.
 _krd_claimed_issue() {
-	local number="$1"
+	local cwd="$1" number="$2"
 	command -v dispatch_claimed_issues >/dev/null 2>&1 || return 1
-	dispatch_claimed_issues 2>/dev/null | grep -qxF "$number"
+	dispatch_claimed_issues "$cwd" 2>/dev/null | grep -qxF "$number"
 }
 
 # _krd_rank ORDER_LIST NAME
@@ -105,7 +108,7 @@ _krd_target_column() {
 		return
 		;;
 	esac
-	if _krd_branch_refs_issue "$cwd" "$number" || _krd_claimed_issue "$number"; then
+	if _krd_branch_refs_issue "$cwd" "$number" || _krd_claimed_issue "$cwd" "$number"; then
 		echo "In progress"
 		return
 	fi

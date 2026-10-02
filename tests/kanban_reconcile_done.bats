@@ -117,7 +117,7 @@ refute_gh() {
 }
 
 run_reconcile() {
-    run bash -c "source '$KANBAN_LIB'; source '$LIB'; \
+    run bash -c "source '$KANBAN_LIB'; source '$LIB_DIR/dispatch_claims.sh'; source '$LIB'; \
         reconcile_kanban_done owner repo '$REPO_DIR'; \
         echo \"rc=\$?\"; echo \"STATUS=\$RECONCILE_DONE_STATUS\"; \
         echo \"REPORT_START\"; printf '%s\n' \"\$RECONCILE_DONE_REPORT\"; echo \"REPORT_END\""
@@ -179,6 +179,19 @@ run_reconcile() {
 
 @test "a No-Status open issue with a pushed branch is moved to In progress" {
     git -C "$REPO_DIR" branch fix/42-board-thing
+    write_issues "$(issue 42 open)"
+    write_items "$(item ITEM_42 "" 42)"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"moved issue #42 from No Status to In progress"* ]]
+    grep -q -- '--single-select-option-id OPT_PROGRESS' "$GH_LOG"
+}
+
+@test "a No-Status open issue with a live dispatch claim is moved to In progress, not Ready" {
+    # The claim lives in REPO_DIR's git common dir, never the test's own $PWD — the lookup must
+    # follow the CWD argument, and the caller (subagent_stop_sweep.sh) must have sourced the lib.
+    (cd "$REPO_DIR" && source "$LIB_DIR/dispatch_claims.sh" && printf '' > "$(dispatch_state_dir)/pr-held-paths.tsv" &&
+        [ "$(claim_files 42 some/path.sh)" = "CLAIMED" ])
     write_issues "$(issue 42 open)"
     write_items "$(item ITEM_42 "" 42)"
     write_fake_gh

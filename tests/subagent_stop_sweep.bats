@@ -23,7 +23,7 @@ setup() {
     # Functions only — main() is never invoked by sourcing this. HOOK_DIR resolves relative to
     # wherever this gets sourced from, so its `source "$HOOK_DIR/lib/review_thread_gate.sh"`,
     # `source "$HOOK_DIR/lib/free_surface.sh"`, `source "$HOOK_DIR/lib/kanban_reconcile.sh"`,
-    # `source "$HOOK_DIR/lib/kanban_reconcile_done.sh"`, and `source "$HOOK_DIR/lib/gh_budget.sh"`
+    # `source "$HOOK_DIR/lib/kanban_reconcile_done.sh"`, `source "$HOOK_DIR/lib/dispatch_claims.sh"`, and `source "$HOOK_DIR/lib/gh_budget.sh"`
     # lines each need a real copy sitting next to it.
     FUNCS="$REPO/sweep_funcs.sh"
     head -n -1 "$SWEEP_SRC" > "$FUNCS"
@@ -32,6 +32,7 @@ setup() {
     cp "$(dirname "$SWEEP_SRC")/lib/free_surface.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile_done.sh" "$REPO/lib/"
+    cp "$(dirname "$SWEEP_SRC")/lib/dispatch_claims.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/gh_budget.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/roadmap_unblock.sh" "$REPO/lib/"
     source "$FUNCS"
@@ -705,4 +706,10 @@ STUB
     [ "$output" = "1" ]
     run awk '/echo "\[8\] roadmap boards/{getline; print}' "$SWEEP_SRC"
     [[ "$output" == *"sweep_roadmap_boards"* ]]
+}
+
+# kanban_reconcile_done.sh's _krd_claimed_issue is silently false when dispatch_claimed_issues is
+# undefined, so a claimed No-Status issue reads as Ready. Unsourced, nothing else would notice.
+@test "sweep sources the dispatch claims registry kanban_reconcile_done depends on" {
+    declare -F dispatch_claimed_issues >/dev/null
 }

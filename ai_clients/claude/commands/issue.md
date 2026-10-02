@@ -420,7 +420,7 @@ these three toggles as options; do not proceed on a silent assumption:
 > *In progress*, racing the hook and dragging the card backwards (the #131 rule).
 
 If the user reports #7 or #8 off, that is expected on a board this command does not fully
-control — say so and continue. `subagent_stop_sweep.sh`'s kanban reconcile (steps [7]/[8])
+control — say so and continue. `subagent_stop_sweep.sh`'s kanban reconcile (steps [7]/[9])
 makes the board eventually correct regardless of whether a human ever flips these; it does
 not replace them, and a card can sit stale until the next sweep either way.
 
