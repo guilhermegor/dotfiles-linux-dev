@@ -440,6 +440,19 @@ EOF
     [ "$status" -ne 0 ]
 }
 
+# dotfiles-dev#559 follow-up: `gh pr list` raising CalledProcessError used to propagate
+# uncaught -- the guard's own fail-closed contract above still held (empty/unparseable
+# stdout, non-zero exit), but an agent running this planner DIRECTLY during s:dev-loop step
+# 4b saw a raw Python stack trace instead of a one-line, actionable message. This asserts the
+# failure is caught and reported cleanly, never as an uncaught traceback.
+@test "a failing gh read reports the failure cleanly, never as an uncaught traceback" {
+    stub_gh_failing
+    run python3 "$PLANNER"
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"Traceback"* ]]
+    [[ "$output" == *"review_fanout_plan: could not read the board"* ]]
+}
+
 @test "an empty open-PR list is a valid, complete, empty plan" {
     stub_gh_prs <<'EOF'
 []

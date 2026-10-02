@@ -463,8 +463,21 @@ def build_plan() -> dict:
 
 
 def main() -> int:
-	"""Print the review fan-out plan as one JSON object and return 0."""
-	print(json.dumps(build_plan()))
+	"""Print the review fan-out plan as one JSON object and return 0.
+
+	A `gh` failure (a real API refusal, including a secondary GraphQL rate limit -- measured
+	live, dotfiles-dev#559 follow-up) or a timeout must read as an actionable UNKNOWN, never
+	an uncaught traceback. `review_fanout_guard.sh` already fails closed on this either way
+	(empty/unparseable stdout plus a non-zero exit is its own UNREADABLE contract,
+	dotfiles-dev#480's `block_unreadable`) -- this is about what an agent running the planner
+	DIRECTLY during s:dev-loop step 4b sees on its own screen: one line naming the failure,
+	not a raw Python stack trace with no bearing on what to do next.
+	"""
+	try:
+		print(json.dumps(build_plan()))
+	except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+		print(f"review_fanout_plan: could not read the board -- {exc}", file=sys.stderr)
+		return 1
 	return 0
 
 
