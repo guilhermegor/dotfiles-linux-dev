@@ -163,12 +163,12 @@ _board_throttled() {
 # Organization without knowing which up front) — the porcelain command's own "unknown owner type"
 # failure is exactly the resolution step this sidesteps.
 #
-# ponytail: single page (first: 100), no cursor loop. A board past that many items comes back with
-# `hasNextPage`, and this returns 1 (unreadable) rather than a silently partial list — add real
-# pagination if a board ever grows past 100 items.
+# ponytail: single page (first: 100 items, first: 100 field values per item), no cursor loop. A board
+# or item past that comes back with `hasNextPage`, and this returns 1 (unreadable) rather than a
+# silently partial list — add real pagination if a board ever grows past either.
 _board_item_list_graphql() {
 	local owner="$1" project="$2" query result
-	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){items(first:100){pageInfo{hasNextPage}nodes{id content{__typename ... on Issue{number url body repository{nameWithOwner}}}fieldValues(first:20){nodes{__typename ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}}'
+	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){items(first:100){pageInfo{hasNextPage}nodes{id content{__typename ... on Issue{number url body repository{nameWithOwner}}}fieldValues(first:100){pageInfo{hasNextPage}nodes{__typename ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}}'
 	result="$(gh api graphql -f query="$query" -f login="$owner" -F num="$project" 2>/dev/null)" || return 1
 	printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
 	printf '%s' "$result" \
@@ -176,6 +176,11 @@ _board_item_list_graphql() {
 		|| return 1
 	printf '%s' "$result" \
 		| jq -e '.data.repositoryOwner.projectV2.items.pageInfo.hasNextPage == true' \
+		>/dev/null 2>&1 && return 1
+	# An item whose field values overflow one page may be missing its Status / "Blocked by" value,
+	# which downstream reads as "no status" (a Done card moves back to In review) — unreadable too.
+	printf '%s' "$result" \
+		| jq -e '[.data.repositoryOwner.projectV2.items.nodes[].fieldValues.pageInfo.hasNextPage] | any' \
 		>/dev/null 2>&1 && return 1
 	printf '%s' "$result" | jq -c '
 		.data.repositoryOwner.projectV2.items.nodes | {

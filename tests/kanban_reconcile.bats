@@ -112,10 +112,11 @@ write_throttled() {
 # One `repositoryOwner.projectV2.items.nodes[]` entry, shaped like the real GraphQL response
 # `_board_item_list_graphql` translates into the porcelain's own `{"items":[...]}` JSON.
 graphql_node() {
-    jq -nc --arg id "$1" --argjson number "$2" --arg repo "$3" --arg status "$4" '
+    jq -nc --arg id "$1" --argjson number "$2" --arg repo "$3" --arg status "$4" \
+        --argjson fvNext "${FIELD_VALUES_HAS_NEXT:-false}" '
         {id: $id, content: {__typename: "Issue", number: $number, url: "", body: "",
             repository: {nameWithOwner: $repo}},
-         fieldValues: {nodes: [{__typename: "ProjectV2ItemFieldSingleSelectValue",
+         fieldValues: {pageInfo: {hasNextPage: $fvNext}, nodes: [{__typename: "ProjectV2ItemFieldSingleSelectValue",
             name: $status, field: {name: "Status"}}]}}
     '
 }
@@ -504,6 +505,20 @@ run_reconcile() {
     [[ "$output" == *"rc=1"* ]]
     [[ "$output" == *"STATUS=unknown"* ]]
     [[ "$output" == *"UNKNOWN (throttled)"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "project items read: an item with truncated field values is unreadable, never a backward move" {
+    write_board_cache
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    # Done card whose Status value fell off the field-values page: reading it as "no status"
+    # would move it back to In review.
+    write_item_list_graphql "$(FIELD_VALUES_HAS_NEXT=true graphql_node ITEM_42 42 owner/repo Done)"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run_reconcile
+    [[ "$output" == *"STATUS=unknown"* ]]
     refute_gh 'item-edit'
 }
 
