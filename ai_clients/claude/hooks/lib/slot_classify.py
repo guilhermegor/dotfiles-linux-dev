@@ -3,8 +3,13 @@
 Prints exactly one token: ``FREE|<reason>``, ``BUSY|<reason>`` or ``UNKNOWN``.
 
 ⚠️ ``UNKNOWN`` is the fail-closed answer and must never be read as free — it means
-the page could not be classified (unparseable body, a forge error page, a 403),
+the page could not be classified (unparseable body, a forge error page, a 403,
+or a GraphQL-shaped page with none of the REST field names this module reads),
 not that the slot is idle. s:dev-loop step 4b spends the slot on that verdict.
+
+Input contract: a REST comment-listing page (`gh api
+repos/{owner}/{repo}/issues/comments`), never a hand-rolled GraphQL query — see
+``is_rest_shaped()`` below for what happens when that contract is violated.
 
 Reviewer-agnostic by construction: every vendor-specific phrase lives in the
 constants below, so pointing this at a different review bot is an edit to those
@@ -29,6 +34,30 @@ LIMIT_PHRASES = ("rate limit", "review limit reached")
 CHAT_QUOTA_PHRASE = "chat message"
 REVIEW_DONE_PHRASE = "review finished"
 RE_STATED_WAIT = re.compile(r"available in (\d+) minutes?")
+
+
+def is_rest_shaped(list_comments: list) -> bool:
+	"""Return whether any record carries the REST field names this module reads.
+
+	This module is written against GitHub's REST comment shape (``user.login``,
+	``created_at``). A GraphQL-shaped page uses different names (``author.login``,
+	``createdAt``) and silently yields zero matches from every filter below — not
+	because no reviewer commented, but because the field names don't exist on any
+	record. That produced a false ``FREE`` (dotfiles-dev#544): a real BUSY slot
+	read as free because the caller queried the wrong endpoint shape.
+
+	Parameters
+	----------
+	list_comments : list
+		Comment records as returned by the forge's comment listing.
+
+	Returns
+	-------
+	bool
+		True when at least one record carries a REST-shaped ``user`` or
+		``created_at`` key. False for a page shaped some other way.
+	"""
+	return any(isinstance(c, dict) and ("user" in c or "created_at" in c) for c in list_comments)
 
 
 def body_of(dict_comment: dict) -> str:
@@ -60,6 +89,17 @@ def classify(list_comments: list) -> str:
 	str
 		``FREE|<reason>``, ``BUSY|<reason>`` or ``UNKNOWN``.
 	"""
+	# ⚠️ A non-empty page where NOT ONE record carries a REST field name is a shape
+	# mismatch, not an empty roster — fail closed rather than read the silent zero
+	# matches below as FREE. An empty list is still a legitimate FREE: a repo with
+	# no comments really has no notice. dotfiles-dev#544; deliberately does NOT
+	# accept the GraphQL shape as a fallback (the issue's own explicit scope) —
+	# absorbing it would hide which projection the caller used instead of telling
+	# them to fix the query. Bare ``UNKNOWN``, like every other fail-closed path:
+	# the token set is a contract callers may compare literally.
+	if list_comments and not is_rest_shaped(list_comments):
+		return "UNKNOWN"
+
 	list_bot = [
 		c
 		for c in list_comments
