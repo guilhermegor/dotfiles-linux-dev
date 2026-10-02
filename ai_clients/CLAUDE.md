@@ -316,14 +316,14 @@ per-head, across **both** publication channels, because the two rungs write to
 different places and neither sees the other:
 
 1. a submitted review whose `commit.oid` equals `headRefOid` (the primary rung);
-2. a comment carrying `ladder_attribution_line`'s text, posted strictly after the
-   head commit's `committedDate` (the fallback rung, which creates no review object).
+2. a comment carrying `ladder_attribution_line`'s text whose second line
+   (`Reviewed head: <sha>`) names `headRefOid`, posted strictly after the head
+   commit's `committedDate` (the fallback rung, which creates no review object).
 
-⚠️ Channel 2 is time-scoped because `ladder_attribution_line` (`lib/reviewer_ladder.sh`)
-carries runtime/model/signal but **no head SHA**. Exact in the direction that matters — a
-comment written before the head existed provably did not review it — and loose by the
-seconds between a push and a comment already in flight. Adding the head SHA to that line
-would make it as exact as channel 1.
+⚠️ Channel 2 is head-scoped by SHA **and** time (#564). The time clause alone is defeated
+by a backdated head (committer date is the pusher's to set); a marker with no
+`Reviewed head:` line fails closed into "needs a review". The time clause still earns its
+place: a comment written before the head existed provably did not review it.
 
 **2. `statusCheckRollup` has no single answer keyed by name.** A head can carry two
 `CheckRun`s with the SAME name and opposite conclusions (measured on #520: `Review

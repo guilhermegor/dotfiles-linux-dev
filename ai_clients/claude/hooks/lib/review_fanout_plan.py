@@ -38,19 +38,20 @@ the two rungs publish to different places and neither channel alone sees the oth
 
 1. a submitted review whose ``commit.oid`` equals ``headRefOid`` — the primary rung's
    channel, exact, no timestamp reasoning needed;
-2. **or** a comment carrying the ladder's attribution line whose ``createdAt`` is strictly
-   after the head commit's ``committedDate`` — the fallback rung's channel, which produces
-   no review object at all.
+2. **or** a comment carrying the ladder's attribution line whose second line
+   (``Reviewed head: <sha>``) names ``headRefOid`` AND whose ``createdAt`` is strictly after
+   the head commit's ``committedDate`` — the fallback rung's channel, which produces no
+   review object at all.
 
 ``needs_review`` is the negation of that union. A PR whose head commit is not resolvable at
 all is UNKNOWN, never "needs a review" and never "covered" — it is excluded by name.
 
-⚠️ ``ladder_attribution_line`` (reviewer_ladder.sh) carries runtime/model/signal but **no
-head SHA**, so channel 2 can only be head-scoped by TIME. That is exact in the direction
-that matters — a comment posted before the head existed provably did not review it — and
-loose by the few seconds between a push and a comment already in flight. Embedding the head
-SHA in the attribution line would make channel 2 as exact as channel 1; that is a change to
-``reviewer_ladder.sh``, filed as a follow-up rather than made here.
+⚠️ Channel 2 is head-scoped by SHA *and* by time (dotfiles-dev#564). The time clause alone
+is defeated by a backdated head: committer date is whoever-pushes-controlled, so a new head
+can look older than an existing marker for a different commit and inherit its coverage. The
+SHA clause answers "was it the same commit"; the time clause still catches a marker written
+before the head existed. A marker with no ``Reviewed head:`` line (written before #564)
+fails closed into "needs a review" — one extra review, never a permanent skip.
 
 🔴 THE STEP-4 REVIEW-GATE CHECK WAS EVALUATED AS A PREDICATE AND REJECTED. #480 offers it as
 a third candidate ("authoritative for threads"). It is not resolvable by name: measured the
@@ -368,15 +369,30 @@ def reviewed_at_head(pr: dict) -> bool:
 	)
 
 
-def ladder_covered_at_head(pr: dict, head_time: datetime.datetime) -> bool:
-	"""True when a ladder attribution comment postdates the head commit — channel 2.
+def names_head(body: str, head: str) -> bool:
+	"""True when the marker's own SECOND line is ``Reviewed head: <head>``.
 
-	Strictly after, so a comment written before the head existed can never count. See the
-	module docstring for why this channel is time-scoped rather than SHA-scoped, and for the
-	follow-up that would make it exact.
+	Same test as ``ladder_already_covered`` / the thread gate (dotfiles-dev#564), so the
+	three readers of a marker cannot disagree about which commit it reviewed. A marker with
+	no second line (written before #564) or an unresolved ``head`` is False — fail closed.
 	"""
+	lines = body.split("\n")
+	return bool(head) and len(lines) > 1 and lines[1] == f"Reviewed head: {head}"
+
+
+def ladder_covered_at_head(pr: dict, head_time: datetime.datetime) -> bool:
+	"""True when a ladder attribution comment reviewed THIS head — channel 2.
+
+	Two independent AND clauses, neither subsuming the other: the marker's own
+	``Reviewed head:`` line names ``headRefOid`` (which commit), and it was posted strictly
+	after the head commit (a comment written before the head existed provably did not
+	review it). A time-only check is defeated by a backdated head whose committer date
+	predates an existing marker for a different commit (dotfiles-dev#564).
+	"""
+	head = pr.get("headRefOid") or ""
 	for comment in pr.get("comments") or []:
-		if not LADDER_ATTRIBUTION_RE.search(comment.get("body") or ""):
+		body = comment.get("body") or ""
+		if not LADDER_ATTRIBUTION_RE.search(body) or not names_head(body, head):
 			continue
 		posted = parse_ts(comment.get("createdAt"))
 		if posted is not None and posted > head_time:
