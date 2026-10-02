@@ -7,6 +7,13 @@
 # (pgrep, rclone, sudo, apt, dpkg, insync); no real process is inspected, no
 # real package is removed, and nothing under a real $HOME is ever touched.
 #
+# Issue #577: step 2's rclone check ran with the remote as SOURCE
+# (`rclone check "$remote:" "$account_dir" --one-way --dry-run`), which only
+# proves remote files exist locally — the wrong guarantee before rm -rf
+# "$account_dir". The tests below assert the corrected call: local dir
+# first (source), remote second (destination), --one-way --size-only, no
+# --dry-run, and a refusal on any non-empty --missing-on-dst/--differ list.
+#
 # Run locally: bats tests/
 
 setup() {
@@ -35,11 +42,38 @@ STUB
     chmod +x "$TMP/bin/pgrep"
 
     # rclone: check/lsjson controllable via env; never a real network call.
+    # For `check`, honours RCLONE_CHECK_FAIL (generic non-zero exit),
+    # RCLONE_CHECK_MISSING and RCLONE_CHECK_DIFFER (write one path into the
+    # --missing-on-dst / --differ file rclone was given, then exit 1) so
+    # tests can simulate a non-empty list without a real remote.
     cat > "$TMP/bin/rclone" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$RCLONE_LOG"
 case "$1" in
-    check)  [ "${RCLONE_CHECK_FAIL:-0}" = "1" ] && exit 1; echo "0 differences found"; exit 0 ;;
+    check)
+        missing_file=""
+        differ_file=""
+        prev=""
+        for arg in "$@"; do
+            [ "$prev" = "--missing-on-dst" ] && missing_file="$arg"
+            [ "$prev" = "--differ" ] && differ_file="$arg"
+            prev="$arg"
+        done
+        [ -n "$missing_file" ] && : > "$missing_file"
+        [ -n "$differ_file" ] && : > "$differ_file"
+        if [ "${RCLONE_CHECK_MISSING:-0}" = "1" ]; then
+            echo "local-only-file.txt" >> "$missing_file"
+        fi
+        if [ "${RCLONE_CHECK_DIFFER:-0}" = "1" ]; then
+            echo "differs.txt" >> "$differ_file"
+        fi
+        if [ "${RCLONE_CHECK_FAIL:-0}" = "1" ] || [ "${RCLONE_CHECK_MISSING:-0}" = "1" ] \
+            || [ "${RCLONE_CHECK_DIFFER:-0}" = "1" ]; then
+            exit 1
+        fi
+        echo "0 differences found"
+        exit 0
+        ;;
     lsjson) echo "[]"; exit 0 ;;
     *) exit 0 ;;
 esac
@@ -133,7 +167,8 @@ teardown() {
     export RCLONE_CHECK_FAIL=1
     run uninstall_insync gdrive "$ACCOUNT_DIR"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"remote verification failed"* ]]
+    [[ "$output" == *"not fully backed up to the remote"* ]]
+    [[ "$output" == *"refusing to delete anything"* ]]
     # Package removal must not have been attempted past this precondition.
     [ ! -f "$APT_LOG" ]
     [ -d "$ACCOUNT_DIR" ]
@@ -147,6 +182,43 @@ teardown() {
 @test "uninstall_insync refuses when the local account directory does not exist" {
     run uninstall_insync gdrive "$HOME/Insync/does-not-exist"
     [ "$status" -eq 1 ]
+}
+
+# --- issue #577: check direction, flags, and non-empty-list refusal --------
+
+@test "uninstall_insync's rclone check has local dir as source, remote as destination" {
+    run uninstall_insync gdrive "$ACCOUNT_DIR"
+    [ "$status" -eq 0 ]
+    grep -qF "check $ACCOUNT_DIR gdrive: --one-way --size-only" "$RCLONE_LOG"
+}
+
+@test "uninstall_insync's rclone check never passes --dry-run" {
+    run uninstall_insync gdrive "$ACCOUNT_DIR"
+    [ "$status" -eq 0 ]
+    run grep -q -- "--dry-run" "$RCLONE_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "uninstall_insync refuses and deletes nothing when a file is missing on the remote" {
+    export RCLONE_CHECK_MISSING=1
+    run uninstall_insync gdrive "$ACCOUNT_DIR"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"refusing to delete anything"* ]]
+    [[ "$output" == *"Files missing on remote:"* ]]
+    [[ "$output" == *"Files that differ:"* ]]
+    [ ! -f "$APT_LOG" ]
+    [ -d "$ACCOUNT_DIR" ]
+    [ -f "$ACCOUNT_DIR/file.txt" ]
+}
+
+@test "uninstall_insync refuses and deletes nothing when a file differs from the remote" {
+    export RCLONE_CHECK_DIFFER=1
+    run uninstall_insync gdrive "$ACCOUNT_DIR"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"refusing to delete anything"* ]]
+    [ ! -f "$APT_LOG" ]
+    [ -d "$ACCOUNT_DIR" ]
+    [ -f "$ACCOUNT_DIR/file.txt" ]
 }
 
 # --- step 4: local deletion requires the explicit opt-in --------------------
