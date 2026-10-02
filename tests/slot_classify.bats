@@ -25,7 +25,13 @@
 #      timestamp) prints UNKNOWN, never a silent FREE default.
 #  11. an ineligible repo stays ASK-ONLY past any older limit notice that is expired,
 #      superseded by a completed review, or chat-only (dotfiles-dev#538 review, 3 cases).
-# ⚠️ Cases 5, 6 and 10 must print UNKNOWN. UNKNOWN must never read as free.
+#  12. a non-empty GraphQL-shaped page (author/createdAt) — pins dotfiles-dev#544: a real
+#      BUSY page read as FREE because none of its field names are the REST ones this
+#      module reads. Must print UNKNOWN, never FREE.
+#  13. an empty page — a repo with no comments legitimately has no notice and must still
+#      print FREE, not UNKNOWN; a shape check that fired on "no records match" as much as
+#      on "no records are readable" would break this case.
+# ⚠️ Cases 5, 6, 10 and 12 must print UNKNOWN. UNKNOWN must never read as free.
 #
 # Run locally: bats tests/slot_classify.bats
 
@@ -200,4 +206,23 @@ JSON"
 JSON"
     [ "$status" -eq 0 ]
     [ "$output" = "UNKNOWN" ]
+}
+
+@test "a non-empty GraphQL-shaped page is UNKNOWN, never a false free" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY'
+[
+  {\"author\": {\"login\": \"coderabbitai\"}, \"createdAt\": \"$(ts 2)\",
+   \"body\": \"Rate limit exceeded. Reviews will be available in 90 minutes.\"},
+  {\"author\": {\"login\": \"coderabbitai\"}, \"createdAt\": \"$(ts 1)\",
+   \"body\": \"Action not completed.\"}
+]
+JSON"
+    [ "$status" -eq 0 ]
+    [ "$output" = "UNKNOWN" ]
+}
+
+@test "an empty page is FREE, not UNKNOWN" {
+    run bash -c "printf '[]' | python3 '$CLASSIFY'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "FREE|no-notice-on-this-page" ]
 }

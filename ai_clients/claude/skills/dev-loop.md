@@ -67,7 +67,17 @@ An agent killed mid-flight leaves work in its worktree. A worktree is torn down;
   if /usr/bin/git -C "$p" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
     u=$(/usr/bin/git -C "$p" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
   else
-    u=NO-REMOTE
+    # No upstream at all: still check for commits never pushed anywhere
+    # (dotfiles-dev#571), counting only patches not already on origin/<default>
+    # so a squash-merged branch isn't misreported.
+    def=$(/usr/bin/git -C "$p" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+    def="${def#origin/}"
+    if [ -n "$def" ] && [ "$b" != "$def" ]; then
+      u=$(/usr/bin/git -C "$p" cherry "origin/$def" HEAD 2>/dev/null | grep -c '^+')
+      [ "$u" != "0" ] && u="${u}-NO-UPSTREAM"
+    else
+      u=NO-REMOTE
+    fi
   fi
   [ "$d" != "0" ] || { [ "$u" != "0" ] && [ "$u" != "NO-REMOTE" ]; } && echo "$b dirty=$d unpushed=$u"
 done
@@ -199,18 +209,22 @@ had **2**. Being behind decides *which version of the rule the PR is judged by* 
 A roadmap board's `Blocked` items do not follow the native issue-dependency relationship on their
 own: GitHub resolves `repos/<o>/<r>/issues/<n>/dependencies/blocked_by` the moment the blocking
 issue closes, but the board's own Status, the `state:blocked` label, and any "Blocked by" text
-field all sit still until something re-reads them. Call the gate for every project this operator
-tracks — never re-derive the unblock logic by hand:
+field all sit still until something re-reads them. Sweep the boards declared in `ROADMAP_BOARDS`
+(`hooks/lib/roadmap_unblock.sh`, dotfiles-dev#531) — never a project number remembered or typed by
+hand, and never re-derive the unblock logic. `subagent_stop_sweep.sh`'s item `[8]` already runs
+it; standalone:
 
 ```bash
 source ai_clients/claude/hooks/lib/roadmap_unblock.sh
-reconcile_roadmap_unblock <owner> <project-number> || echo "roadmap board UNREADABLE — nothing touched"
-printf '%s\n' "$RECONCILE_REPORT"
+reconcile_roadmap_boards || echo "a roadmap board was UNREADABLE — that board untouched, the rest swept"
+printf '%s\n' "$RECONCILE_BOARDS_REPORT"
 ```
 
-Report **one line per item that changed or needs a look** — `$RECONCILE_REPORT` already carries
-exactly that shape (unblocked, still blocked, decision blocker, blocked by nothing, UNKNOWN). If it
-is empty, say "no roadmap items changed" and move on.
+Report **one line per declared board**, clean or not — `$RECONCILE_BOARDS_REPORT` carries it
+(`board <owner>/<n> (<repo>): ok — nothing to change`, or `ok — N item line(s)` followed by that
+board's indented item lines: unblocked, still blocked, decision blocker, blocked by nothing,
+UNKNOWN). A board that reconciled clean and a board nobody swept must never look the same. Add or
+drop a board by editing `ROADMAP_BOARDS`, not this prose.
 
 Every determinate line also carries a `[blocker-kind: internal|external|decision]` tag
 (dotfiles-dev#528) — `internal` (same repo as the item), `external` (a different repo, which can
@@ -398,10 +412,12 @@ week of real gap-vs-expired-notice data is the prerequisite for deciding whether
 notice-and-report external timer is worth building; one 3-hour sample is not that.
 
 1. **Classify the slot, four states plus an escape hatch — never a binary busy/free.** Pipe the
-   comment page into `hooks/lib/slot_classify.py`, which prints one token (`FREE|<reason>`,
-   `BUSY|<reason>`, `ASK-ONLY|<reason>`, `UNKNOWN`); **never re-derive this by hand**
-   (dotfiles-dev#433) — reading the
-   newest notice by eye re-commits all the defects its fixtures pin down. Read the
+   REST comment page — `gh api repos/{owner}/{repo}/issues/comments`, never a hand-rolled
+   GraphQL query, whose `author`/`createdAt` field names the classifier can't read
+   (dotfiles-dev#544) — into `hooks/lib/slot_classify.py`, which prints one token
+   (`FREE|<reason>`, `BUSY|<reason>`, `ASK-ONLY|<reason>`, `UNKNOWN`); **never re-derive this
+   by hand** (dotfiles-dev#433) — reading the newest notice by eye re-commits all the defects
+   its fixtures pin down. Read the
    newest roster notice, querying `is:pr` **without** `is:open`: a PR that merged since its last
    notice still spent the same account-level quota, and scoping to open PRs alone makes that spend
    invisible.

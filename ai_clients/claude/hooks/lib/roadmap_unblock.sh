@@ -65,12 +65,20 @@
 # "cross-repo native blocker" bats case below is a defensive path — this file tolerates whatever
 # repo a native entry happens to name — not a claim that GitHub's own UI offers cross-repo native
 # linking.)
+# dotfiles-dev#567: `reconcile_roadmap_unblock`'s own project item read shared the same
+# single-channel `gh project item-list` dependency as kanban_reconcile.sh's — two independent
+# call sites, same defect. `_board_item_list` (throttle-confirm + one `gh api graphql` fallback)
+# now lives in kanban_reconcile.sh, which already serves as this repo's shared board-helpers
+# file (see its own header), and is sourced below rather than duplicated here.
 set -u
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	echo "roadmap_unblock.sh is meant to be sourced, not executed." >&2
 	exit 1
 fi
+
+# shellcheck source=kanban_reconcile.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/kanban_reconcile.sh"
 
 _ru_is_decision() {
 	# Case-insensitive "decision:" anywhere in the text — checked against both the project's
@@ -294,18 +302,25 @@ reconcile_roadmap_unblock() {
 	RECONCILE_STATUS="unknown"
 	RECONCILE_REPORT=""
 
-	local items_json blocked
-	items_json="$(gh project item-list "$project" --owner "$owner" --format json --limit 500 2>/dev/null)" \
-		|| { RECONCILE_REPORT="UNKNOWN: could not read project $owner/$project"; return 1; }
+	local items_json blocked rc
+	items_json="$(_board_item_list "$owner" "$project" 500)"; rc=$?
+	if (( rc != 0 )); then
+		if (( rc == 2 )); then
+			RECONCILE_REPORT="UNKNOWN (throttled): GitHub GraphQL rate limit — retry next round"
+		else
+			RECONCILE_REPORT="UNKNOWN (board unreadable): could not read project $owner/$project"
+		fi
+		return 1
+	fi
 	# Shape-check before filtering: `.items[]?` exits 0 on `{}` and on `{"items": null}`, so
 	# without this an unusable response would report ok having silently processed nothing —
 	# indistinguishable from a board with no blocked items (PR #376 review).
 	printf '%s' "$items_json" | jq -e 'type == "object" and (.items | type == "array")' \
 		>/dev/null 2>&1 \
-		|| { RECONCILE_REPORT="UNKNOWN: could not parse project $owner/$project"; return 1; }
+		|| { RECONCILE_REPORT="UNKNOWN (board unreadable): could not parse project $owner/$project"; return 1; }
 	blocked="$(printf '%s' "$items_json" \
 		| jq -c '.items[] | select(.status == "Blocked" and .content.type == "Issue")' 2>/dev/null)" \
-		|| { RECONCILE_REPORT="UNKNOWN: could not parse project $owner/$project"; return 1; }
+		|| { RECONCILE_REPORT="UNKNOWN (board unreadable): could not parse project $owner/$project"; return 1; }
 
 	local item line report=""
 	while IFS= read -r item; do
@@ -319,4 +334,74 @@ reconcile_roadmap_unblock() {
 	# shellcheck disable=SC2034 # read by callers after this returns, not within this file
 	RECONCILE_REPORT="$(printf '%s\n' "$report" | sed '/^$/d')"
 	return 0
+}
+
+# dotfiles-dev#531: the declared set of boards the reconciler sweeps — "owner|project|repo" per
+# entry, the same shape as LESSON_STORES (lib/lesson_mirrors.sh). Before this, "every project this
+# operator tracks" was session memory: a board nobody passed was indistinguishable from a board
+# with nothing to unblock, since both report nothing.
+#
+# A board is absent BY DECLARATION, never by omission: stpstone (project 2) is excluded because
+# its repo is no longer maintained. To add a board, add a row; to drop one, delete the row and say
+# why here. `repo` is the board's own repo, used only to label its report line.
+# shellcheck disable=SC2034 # read by reconcile_roadmap_boards below and by its callers' tests
+ROADMAP_BOARDS=(
+	"guilhermegor|17|greenfield"
+	"guilhermegor|16|wwdates"
+	"guilhermegor|15|filings-b3"
+	"guilhermegor|13|dotfiles-linux-dev"
+	"guilhermegor|9|filings-cvm"
+	"guilhermegor|8|blueprintx"
+)
+
+# reconcile_roadmap_boards
+#   Runs reconcile_roadmap_unblock over every ROADMAP_BOARDS entry. Sets:
+#     RECONCILE_BOARDS_STATUS = ok | unknown   (unknown when ANY board — or the registry — is unreadable)
+#     RECONCILE_BOARDS_REPORT = one "board OWNER/N (repo): ..." line per board, ALWAYS, plus that
+#                               board's own item lines indented beneath it. A board that reconciled
+#                               clean ("nothing to change") and one nobody swept (no line) must not
+#                               look alike.
+#   Returns 1 when RECONCILE_BOARDS_STATUS is unknown.
+#
+# ⚠️ Fail closed PER BOARD, never across the sweep: one unreadable board is reported UNKNOWN and the
+# loop continues. An early `return 1` here would let a single permissions error silently cancel
+# every other board's sweep. A malformed or empty registry is UNKNOWN too, never "nothing to do".
+reconcile_roadmap_boards() {
+	RECONCILE_BOARDS_STATUS="ok"
+	RECONCILE_BOARDS_REPORT=""
+	local lines="" entry owner project repo rc detail
+	# Whole-entry shape, never per-field: `read` drops a trailing `|`, so
+	# `owner|17|repo|` would split cleanly and pass a field-by-field check.
+	local entry_shape='^[^|]+\|[0-9]+\|[^|]+$'
+	if ((${#ROADMAP_BOARDS[@]} == 0)); then
+		# shellcheck disable=SC2034 # read by callers
+		RECONCILE_BOARDS_STATUS="unknown"
+		# shellcheck disable=SC2034 # read by callers
+		RECONCILE_BOARDS_REPORT="UNKNOWN: ROADMAP_BOARDS is empty — no board was swept"
+		return 1
+	fi
+	for entry in "${ROADMAP_BOARDS[@]}"; do
+		if [[ ! "$entry" =~ $entry_shape ]]; then
+			RECONCILE_BOARDS_STATUS="unknown"
+			lines+="board ${entry:-<empty>}: UNKNOWN — malformed registry entry (want owner|project|repo)"$'\n'
+			continue
+		fi
+		IFS='|' read -r owner project repo <<<"$entry"
+		rc=0
+		reconcile_roadmap_unblock "$owner" "$project" || rc=$?
+		if ((rc != 0)); then
+			RECONCILE_BOARDS_STATUS="unknown"
+			lines+="board $owner/$project ($repo): UNKNOWN — $RECONCILE_REPORT"$'\n'
+		elif [[ -z "$RECONCILE_REPORT" ]]; then
+			lines+="board $owner/$project ($repo): ok — nothing to change"$'\n'
+		else
+			lines+="board $owner/$project ($repo): ok — $(printf '%s\n' "$RECONCILE_REPORT" | wc -l) item line(s)"$'\n'
+			while IFS= read -r detail; do
+				lines+="  $detail"$'\n'
+			done <<<"$RECONCILE_REPORT"
+		fi
+	done
+	# shellcheck disable=SC2034 # read by callers
+	RECONCILE_BOARDS_REPORT="$(printf '%s' "$lines" | sed '/^$/d')"
+	[[ "$RECONCILE_BOARDS_STATUS" == "ok" ]]
 }
