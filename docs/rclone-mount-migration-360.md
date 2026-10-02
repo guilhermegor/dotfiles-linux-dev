@@ -71,9 +71,20 @@ precondition fails.
 1. **Quit Insync and disable it from starting.** `uninstall_insync` calls `insync quit`, then
    requires `pgrep -a insync` to print nothing, and removes `~/.config/autostart/insync.desktop`
    if present. Refuses (exit 1) if any insync process survives.
-2. **Verify remote-side integrity while the local copy still exists.** With the daemon stopped,
-   `uninstall_insync` runs `rclone check <remote>: <account-dir> --one-way --dry-run` and logs the
-   result. Refuses if this check fails — resolve the discrepancy before re-running.
+2. **Verify local-to-remote integrity while the local copy still exists.** With the daemon
+   stopped, `uninstall_insync` runs
+   `rclone check <account-dir> <remote>: --one-way --size-only --missing-on-dst <file> --differ <file>`
+   and logs the result. The local directory is deliberately the SOURCE argument and the remote
+   the destination: `--one-way` means "source files must exist on destination" (`rclone check
+   --help`), so the check must prove every **local** file exists on the **remote** — the
+   guarantee `rm -rf <account-dir>` actually needs. Checking it the other way round (remote as
+   source, as an earlier version of this function did — issue #577) only proves the opposite,
+   that every remote file exists locally, which lets a file Insync never uploaded (a pending
+   upload, an excluded path, a conflict copy) pass silently and then get deleted. `--size-only`
+   skips hashing the full tree (hours of disk I/O for 1.3 T with no progress output otherwise).
+   Refuses — exit 1, before any deletion — on a non-zero exit **or** a non-empty
+   `--missing-on-dst` / `--differ` file, naming both files so the discrepancy can be inspected
+   before re-running.
 3. **Uninstall the package.** `sudo apt remove --purge insync`, verified against
    `dpkg -l | grep insync` being empty. Touches only the local machine — OneDrive keeps
    everything regardless of which client is installed.
