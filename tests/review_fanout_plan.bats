@@ -73,7 +73,9 @@ ago() {
 # cursor fail like a gateway 502. `api repos/{owner}/{repo}/commits/<oid>` (dotfiles-dev#537)
 # looks the oid up in the fixture's per-PR `commits` array and prints its `committedDate` —
 # simulating the REST read head_commit_time() makes. Every invocation is appended to $GH_LOG so a
-# test can assert the planner issues no mutation and how many pages it asked for.
+# test can assert the planner issues no mutation and how many pages it asked for. A fixture may
+# set `reviewsTotal`/`commentsTotal` above its node count to simulate a connection the 100-node
+# window truncated (the API's `totalCount` exceeds the nodes it returned).
 stub_gh_prs() {
     cat >"$TEST_TMP/prs.json"
     cat >"$BIN/gh" <<'STUB'
@@ -98,8 +100,10 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
             pageInfo: {hasNextPage: (($after + $first) < ($all | length)),
                        endCursor: (($after + $first) | tostring)},
             nodes: [$page[] | {number, headRefOid, mergeStateStatus, isDraft,
-                reviews: {nodes: (.reviews // [])},
-                comments: {nodes: (.comments // [])},
+                reviews: {totalCount: (.reviewsTotal // ((.reviews // []) | length)),
+                          nodes: (.reviews // [])},
+                comments: {totalCount: (.commentsTotal // ((.comments // []) | length)),
+                           nodes: (.comments // [])},
                 commits: {nodes: [{commit: {statusCheckRollup:
                     {contexts: {nodes: (.statusCheckRollup // [])}}}}]}}]}}}}' "$FIXTURE"
 elif [ "$1" = "api" ]; then
@@ -602,4 +606,67 @@ EOF
     [ "$status" -eq 0 ]
     # 120s old, window 30s — outside it, so the push no longer excuses the missing review.
     [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+}
+
+# --- a truncated reviews/comments window is undecidable, never "not covered" ---------
+
+@test "a truncated comment window with no coverage in view is excluded by name, not dispatched" {
+    # comments(last:100) of 150: the attribution comment covering this head could be among
+    # the 50 the window dropped. "Not covered" is unprovable, so the PR must not be offered
+    # a reviewer on a guess (the duplicate assignment the codex review of #605 predicted).
+    stub_gh_prs <<EOF
+[{"number":610,"headRefOid":"dddd4444","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],
+  "comments":[{"body":"unrelated","createdAt":"$(ago 900)"}],
+  "commentsTotal":150,
+  "commits":[{"oid":"dddd4444","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 610)" == *"comments truncated"* ]]
+}
+
+@test "a truncated review window with no coverage in view is excluded by name" {
+    stub_gh_prs <<EOF
+[{"number":611,"headRefOid":"eeee5555","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"ffff6666"}}],
+  "reviewsTotal":101,
+  "comments":[],
+  "commits":[{"oid":"eeee5555","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 611)" == *"reviews truncated"* ]]
+}
+
+@test "coverage found inside a truncated window still counts as covered" {
+    # A positive hit is valid however much history was dropped; only the negative is not.
+    stub_gh_prs <<EOF
+[{"number":612,"headRefOid":"aaaa7777","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa7777"}}],
+  "reviewsTotal":300,
+  "comments":[],
+  "commits":[{"oid":"aaaa7777","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [[ "$(reason_for 612)" == *"already reviewed at the current head"* ]]
+}
+
+@test "windows that hold their whole totalCount are not truncated" {
+    stub_gh_prs <<EOF
+[{"number":613,"headRefOid":"bbbb8888","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"cccc9999"}}],
+  "comments":[],
+  "commits":[{"oid":"bbbb8888","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "613" ]
 }

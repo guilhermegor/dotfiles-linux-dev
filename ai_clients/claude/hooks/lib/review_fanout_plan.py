@@ -126,11 +126,13 @@ OPEN_PR_LIST_CAP = 200
 
 # Every connection is bounded explicitly (open_pr_pages.py, dotfiles-dev#600). `commits` is
 # `last:1` and carries only the rollup -- never the unbounded commit list #537 was rejected for.
-# `last:` on reviews/comments keeps the NEWEST 100, which is what head coverage reads.
+# `last:` on reviews/comments keeps the NEWEST 100, which is what head coverage reads; their
+# `totalCount` is requested so a window that dropped older entries is known, not assumed whole
+# (see `truncated_window`).
 PR_SELECTION = (
 	"number headRefOid mergeStateStatus isDraft "
-	"reviews(last:100){nodes{commit{oid}}} "
-	"comments(last:100){nodes{body createdAt}} "
+	"reviews(last:100){totalCount nodes{commit{oid}}} "
+	"comments(last:100){totalCount nodes{body createdAt}} "
 	"commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{"
 	"__typename ... on CheckRun{name status conclusion} "
 	"... on StatusContext{context state}}}}}}}"
@@ -214,6 +216,11 @@ def _flatten(node: dict) -> dict:
 		**{k: node[k] for k in ("number", "headRefOid", "mergeStateStatus", "isDraft")},
 		"reviews": node["reviews"]["nodes"],
 		"comments": node["comments"]["nodes"],
+		"truncated": [
+			name
+			for name in ("reviews", "comments")
+			if (node[name].get("totalCount") or 0) > len(node[name]["nodes"])
+		],
 		"statusCheckRollup": rollup,
 	}
 
@@ -403,6 +410,17 @@ def ladder_covered_at_head(pr: dict, head_time: datetime.datetime) -> bool:
 	return False
 
 
+def truncated_window(pr: dict) -> str | None:
+	"""Return the names of the connections whose 100-node window dropped older entries.
+
+	A positive coverage hit inside the window is valid however much was dropped, but "no
+	coverage in view" is only a verdict when the window held everything -- otherwise the
+	review or attribution comment covering this head may be in the part that was not read,
+	and offering a reviewer would be a duplicate assignment on a guess.
+	"""
+	return " and ".join(pr.get("truncated") or []) or None
+
+
 def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None:
 	"""Return why this PR gets no reviewer this round, or None when it is dispatchable.
 
@@ -443,6 +461,12 @@ def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None
 		return (
 			"already covered at the current head by a fallback review (a ladder "
 			"attribution comment postdates the head commit)"
+		)
+	dropped = truncated_window(pr)
+	if dropped:
+		return (
+			f"{dropped} truncated (more than 100 entries; the read window dropped older "
+			"ones) — head coverage is undecidable, so no reviewer is assigned"
 		)
 	return None
 
