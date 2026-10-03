@@ -164,3 +164,177 @@ EOF
     [[ "$output" == *"moved issue"* ]]
     [[ "$output" == *"In progress"* ]]
 }
+
+# --- #591: `gh pr create --head <b>` moves <b>'s card, never HEAD's -----------------------------
+# HEAD is feat/131-fix (setup); the board holds cards for #131 and #564, so a wrong pick is visible
+# in the announced issue number rather than as a silent no-op.
+
+write_fake_gh_two_cards() {
+    write_fake_gh "OPEN"
+    sed -i 's|"items":\[{"id":"ITEM_1","content":{"type":"Issue","number":131}}\]|"items":[{"id":"ITEM_1","content":{"type":"Issue","number":131}},{"id":"ITEM_2","content":{"type":"Issue","number":564}}]|' \
+        "$FAKE_BIN/gh"
+}
+
+@test "gh pr create --head <b> moves the card of <b>, not HEAD's" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --head fix/564-other --title x --body y"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create --head=<b> moves the card of <b>" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --head=fix/564-other --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create -H <b> moves the card of <b>" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create -H fix/564-other --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create --head owner:<b> strips the owner prefix" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --head guilhermegor:fix/564-other --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create --head with no issue number moves nothing (no fallback to HEAD)" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --head chore/no-number --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create without --head still uses HEAD's issue" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --title x --body y"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #131"* ]]
+}
+
+# --- #594 review: `--head` text inside a quoted argument is data, not the flag ------------------
+
+@test "gh pr create with '--head <b>' inside --body still uses HEAD's issue" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --title x --body 'mention --head fix/564-other'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #131"* ]]
+}
+
+@test "gh pr create with '-H <b>' inside --title still uses HEAD's issue" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --title \"see -H fix/564-other\" --body y"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #131"* ]]
+}
+
+@test "gh pr create --head quoted is still honoured" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --head 'fix/564-other' --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create with an unbalanced quote moves nothing (fail open)" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --title 'x --head fix/564-other"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+# --- #594 re-review: pflag also accepts `-H=<b>` and `-H<b>` (spf13/pflag parseSingleShortArg) ---
+
+@test "gh pr create -H=<b> moves the card of <b>" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create -H=fix/564-other --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create -H<b> (attached) moves the card of <b>" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create -Hfix/564-other --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+# --- #594 round 3: escaped quotes tokenize; a --head with no value never falls back to HEAD -----
+
+@test "gh pr create with escaped quotes in --title still honours --head" {
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --title "say \"hi\"" --head fix/564-other'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+}
+
+@test "gh pr create ending in a bare --head moves nothing (no fallback to HEAD)" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --title x --head"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create --head= with an empty value moves nothing (no fallback to HEAD)" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --head= --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create ending in a bare -H moves nothing (no fallback to HEAD)" {
+    write_fake_gh_two_cards
+    run run_hook "gh pr create --title x -H"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+# --- #594 round 4: the matcher sees raw text, never Bash's expansion of it -----------------------
+# `--head "${BRANCH:-fix/564}"` may expand to ANY branch, so the `564` inside is not the card.
+
+@test "gh pr create --head with a \${VAR:-default} expansion moves nothing" {
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --head "${BRANCH:-fix/564}" --title x'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create --head with a bare \$VAR moves nothing" {
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --head fix/564-$SUFFIX --title x'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create --head with a command substitution moves nothing" {
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --head "$(echo fix/564-x)" --title x'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create --head with a backtick substitution moves nothing" {
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --head "`echo fix/564-x`" --title x'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create --head with a brace expansion moves nothing" {
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --head fix/{564,131}-x --title x'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create --head -H <b> takes -H as the head value and moves nothing" {
+    # pflag consumes the next argv as the value even when it looks like a flag
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --head -H fix/564-other --title x'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}

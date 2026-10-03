@@ -62,9 +62,11 @@ main() {
     read -r owner repo < <(owner_repo) || exit 0
     [[ -n "$owner" && -n "$repo" ]] || exit 0
 
-    # Both verbs run while HEAD is the feature branch (`checkout -b` checks it out; `gh pr create`
-    # runs from it), and issue.md names branches `<type>/<N>-<slug>`, so the branch carries the ref.
-    issue="$(issue_from_head)" || exit 0
+    # issue.md names branches `<type>/<N>-<slug>`, so the branch carries the ref. `checkout -b`
+    # checks the branch out, but `gh pr create --head <b>` may target a branch that is NOT HEAD
+    # (dev-loop RESCUE opens PRs for other worktrees' branches from the main checkout) — then the
+    # card to move is <b>'s, and HEAD is the wrong answer (#591).
+    issue="$(issue_for_command "$command")" || exit 0
     [[ -n "$issue" ]] || exit 0
 
     [[ "$(issue_state "$owner" "$repo" "$issue")" != "CLOSED" ]] || exit 0
@@ -102,11 +104,39 @@ target_column() {
     return 1
 }
 
-issue_from_head() {
-    # Leftmost number run in the current branch name (feat/46-slug → 46), matching issue.md's
-    # `<type>/<N>-<slug>` convention.
-    local branch
-    branch="$(git symbolic-ref --short HEAD 2>/dev/null)" || return 1
+head_from_command() {
+    # The branch named by `--head <b>`, `--head=<b>` or `-H <b>` on the `gh pr create` in $1, with
+    # any `owner:` prefix stripped, read off the real argv so `--head x` quoted inside a --title
+    # or --body is not mistaken for the flag. Returns 1 when the command carries no such flag, and
+    # 2 when it cannot be tokenized (unbalanced quote), names `--head` with no value (gh rejects
+    # it), or carries a value Bash expands before gh sees it (`$VAR`, `$(…)`, backticks, `{a,b}`)
+    # — the caller must not guess a branch then: this hook reads the raw text, so a number inside
+    # `"${BRANCH:-fix/564}"` is not the branch that was actually created.
+    local json out
+    json="$(printf '%s' "$1" \
+        | python3 "$(dirname "${BASH_SOURCE[0]}")/lib/gh_cmd_match.py" pr 2>/dev/null)" || return 2
+    out="$(jq -r 'if .head == null then "n" else "h" + .head end' <<<"$json" 2>/dev/null)" || return 2
+    case "$out" in
+        n) return 1 ;;
+        h) return 2 ;;
+        *'$'* | *'`'* | *'{'*) return 2 ;;
+    esac
+    out="${out#h}"
+    printf '%s' "${out##*:}"
+}
+
+issue_for_command() {
+    # Leftmost number run in the target branch name (feat/46-slug → 46), matching issue.md's
+    # `<type>/<N>-<slug>` convention. The target is `--head`'s branch when the command names one,
+    # else HEAD. An explicit `--head` with no number fails (never falls back to HEAD — that
+    # fallback is the wrong-card bug).
+    local branch rc=0
+    branch="$(head_from_command "$1")" || rc=$?
+    case "$rc" in
+        0) ;;
+        1) branch="$(git symbolic-ref --short HEAD 2>/dev/null)" || return 1 ;;
+        *) return 1 ;;   # unparseable command: fail open, never guess a card
+    esac
     [[ "$branch" =~ (^|[^0-9])([0-9]+)([^0-9]|$) ]] || return 1
     printf '%s' "${BASH_REMATCH[2]}"
 }

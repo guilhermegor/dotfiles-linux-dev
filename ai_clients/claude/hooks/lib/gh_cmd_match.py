@@ -19,7 +19,8 @@ one line of JSON to stdout:
 
     {"matched": false}
     {"matched": true, "repo": "...", "has_body": true, "body": "...",
-     "has_body_file": false, "body_file": null, "labels": ["state:blocked"], "auto": false}
+     "has_body_file": false, "body_file": null, "labels": ["state:blocked"], "auto": false,
+     "head": null}
 
 Exit code 0 on success (matched or not — "not matched" is a normal, common outcome, not a
 failure). Exit code 1 if the command could not be tokenized at all (an unbalanced quote or an
@@ -55,6 +56,10 @@ def split_segments(command):
         c = command[i]
         if quote:
             buf.append(c)
+            if c == "\\" and quote == '"' and i + 1 < n:
+                buf.append(command[i + 1])  # `\"` inside double quotes does not close them
+                i += 2
+                continue
             if c == quote:
                 quote = None
             i += 1
@@ -118,12 +123,14 @@ def matching_argv(segments, noun):
 
 
 def scan_flags(argv):
-    """Read --repo/-R, --body/-b, --body-file/-F and --label/-l/--add-label out of a real argv.
+    """Read --repo/-R, --head/-H, --body/-b, --body-file/-F and --label/-l/--add-label out of a
+    real argv.
     A later occurrence of a single-value flag overwrites an earlier one, matching how real CLI
     flag parsers behave — there is no more "first readable candidate" heuristic to fall back on
     once the input is real argv instead of scraped text.
     """
     repo = None
+    head = None
     has_body, body = False, None
     has_body_file, body_file = False, None
     labels = []
@@ -135,6 +142,19 @@ def scan_flags(argv):
             i += 2
         elif tok.startswith("--repo="):
             repo = tok.split("=", 1)[1]
+            i += 1
+        elif tok in ("--head", "-H") and i + 1 < n:
+            head = argv[i + 1]
+            i += 2
+        elif tok.startswith("--head="):
+            head = tok.split("=", 1)[1]
+            i += 1
+        elif tok in ("--head", "-H"):
+            head = ""  # flag with no value: gh rejects it; "" tells the caller not to guess HEAD
+            i += 1
+        elif tok.startswith("-H") and len(tok) > 2:
+            # pflag also takes `-H=<b>` and the attached `-H<b>`; `=` is stripped, as in pflag
+            head = tok[3:] if tok[2] == "=" and len(tok) > 3 else tok[2:]
             i += 1
         elif tok in ("--body", "-b") and i + 1 < n:
             has_body, body = True, argv[i + 1]
@@ -156,7 +176,7 @@ def scan_flags(argv):
             i += 1
         else:
             i += 1
-    return repo, has_body, body, has_body_file, body_file, labels
+    return repo, head, has_body, body, has_body_file, body_file, labels
 
 
 def main():
@@ -176,10 +196,11 @@ def main():
         print(json.dumps({"matched": False}))
         return 0
 
-    repo, has_body, body, has_body_file, body_file, labels = scan_flags(argv)
+    repo, head, has_body, body, has_body_file, body_file, labels = scan_flags(argv)
     print(json.dumps({
         "matched": True,
         "repo": repo,
+        "head": head,
         "has_body": has_body,
         "body": body,
         "has_body_file": has_body_file,
