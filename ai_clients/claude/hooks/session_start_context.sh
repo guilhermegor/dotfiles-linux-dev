@@ -129,11 +129,17 @@ emit_fanout_status() {
 		if ! command -v gh >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
 			printf '%s\n' "[fan-out] gh/jq not available — could not reach GitHub for PR/review status"
 		else
+			# gh pr list returns 30 PRs when --limit is omitted. The worktree walk matches
+			# local branches against this list (merged heads, branches without a PR), and a
+			# live agent worktree can belong to a PR further back than 30 (dotfiles-dev#606).
+			# A branch the list misses is still reported, so a short list adds noise, never a
+			# missed rescue.
+			local pr_limit="${FANOUT_PR_LIMIT:-100}"
 			if command -v timeout >/dev/null 2>&1; then
-				json="$(timeout 8 gh pr list --repo "$slug" --state all \
+				json="$(timeout 8 gh pr list --repo "$slug" --state all --limit "$pr_limit" \
 					--json number,url,state,headRefName,headRefOid,reviews,createdAt 2>/dev/null)"
 			else
-				json="$(gh pr list --repo "$slug" --state all \
+				json="$(gh pr list --repo "$slug" --state all --limit "$pr_limit" \
 					--json number,url,state,headRefName,headRefOid,reviews,createdAt 2>/dev/null)"
 			fi
 			if printf '%s' "$json" | jq -e 'type=="array"' >/dev/null 2>&1; then
