@@ -521,7 +521,11 @@ gate_live_agent_surface() {
 	# is still verified against a local origin ref: a branch we cannot diff against is no answer.
 	if [ -n "$owner" ] && [ -n "$repo" ]; then
 		cand="$(gh api "repos/$owner/$repo" --jq '.default_branch' 2>/dev/null)" || cand=""
-		if [ -n "$cand" ] && git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$cand" >/dev/null 2>&1; then
+		# An answered-but-unfetched branch fails closed: the forge just said the local fallbacks
+		# below are the wrong base, so they must not be tried (#576 review). An UNREADABLE forge
+		# (cand empty) is a different case and still falls through to them.
+		if [ -n "$cand" ]; then
+			git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$cand" >/dev/null 2>&1 || return 1
 			default_branch="$cand"
 		fi
 	fi

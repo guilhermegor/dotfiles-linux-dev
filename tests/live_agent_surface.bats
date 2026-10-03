@@ -185,6 +185,25 @@ teardown() {
 	[ "$LIVE_AGENT_STATUS" = "ok" ]
 }
 
+@test "a forge default branch with no local ref fails closed, never a stale base (#576 review)" {
+	# The forge says `develop` but this clone never fetched origin/develop, while origin/HEAD and
+	# master still resolve (the stale-but-existing rename shape). Falling back to them would scope
+	# every diff against a base the forge just said is wrong; unlike an UNREADABLE forge, an
+	# answered-but-unverifiable one is a known disagreement.
+	WT="$TEST_TMP/wt-forge-unfetched"
+	git -C "$REPO" worktree add -q -b feature/forge-unfetched "$WT" master
+	echo held >"$WT/forge_unfetched.txt"
+	_stub_gh
+	_github_origin
+	export GH_STUB_DEFAULT=develop
+
+	local rc=0
+	gate_live_agent_surface "$REPO" || rc=$?
+	[ "$rc" -eq 1 ]
+	[ "$LIVE_AGENT_STATUS" = "unknown" ]
+	[ -z "$LIVE_AGENT_PATHS" ]
+}
+
 @test "a default branch that is neither main nor master resolves via the forge (#576 review)" {
 	# No origin/HEAD and no main/master: the planner used to ask GitHub for the default branch
 	# itself, so delegating to this gate must not lose that answer for e.g. a `develop` repo.
