@@ -93,13 +93,80 @@ write_ref_state() {
     [ "$state" = "FAIL" ] || printf '%s' "$state" > "$TEST_TMP/refstate-$key.json"
 }
 
+# write_throttled
+# Makes the `_board_throttled` probe (`gh api graphql -f query='query{rateLimit{remaining}}'`)
+# fail with rate-limit-shaped text, confirming a throttle (dotfiles-dev#567). Absent (the
+# default): the probe succeeds, i.e. GraphQL itself is healthy.
+write_throttled() {
+    touch "$TEST_TMP/throttled"
+}
+
+# graphql_item REPO NUMBER STATUS BLOCKED_BY_TEXT BODY
+# One `repositoryOwner.projectV2.items.nodes[]` entry, shaped like the real GraphQL response
+# `_board_item_list_graphql` (kanban_reconcile.sh, sourced by this file) translates into the
+# porcelain's own `{"items":[...]}` JSON — same fields `item()` above emits via the porcelain
+# fixture, so a fallback-read test can reuse every existing assertion.
+graphql_item() {
+    local repo="$1" number="$2" status="$3" blocked_by="$4" body="$5"
+    jq -nc --arg repo "$repo" --argjson number "$number" --arg status "$status" \
+        --arg blocked_by "$blocked_by" --arg body "$body" \
+        --arg url "https://github.com/$repo/issues/$number" '
+        {id: ("ITEM_" + ($number|tostring)),
+         content: {__typename: "Issue", number: $number, url: $url, body: $body,
+                   repository: {nameWithOwner: $repo}},
+         fieldValues: {nodes: (
+            [{__typename: "ProjectV2ItemFieldSingleSelectValue", name: $status,
+              field: {name: "Status"}}]
+            + (if $blocked_by == "" then [] else
+                [{__typename: "ProjectV2ItemFieldTextValue", text: $blocked_by,
+                  field: {name: "Blocked by"}}]
+              end)
+         )}}
+    '
+}
+
+# write_item_list_graphql NODE_JSON... | FAIL
+# Registers the `gh api graphql` fallback response read when `project item-list` has failed and
+# no throttle was confirmed.
+write_item_list_graphql() {
+    if [ "$1" = "FAIL" ]; then
+        echo FAIL > "$TEST_TMP/item-fallback.json"
+        return
+    fi
+    printf '%s\n' "$@" | jq -sc \
+        '{data: {repositoryOwner: {projectV2: {items: {pageInfo: {hasNextPage: false}, nodes: .}}}}}' \
+        > "$TEST_TMP/item-fallback.json"
+}
+
 write_fake_gh() {
     cat > "$FAKE_BIN/gh" <<EOF
 #!/bin/bash
 echo "\$*" >> "$GH_LOG"
 case "\$1 \$2" in
     "project item-list")
+        [ -f "$TEST_TMP/fail-item-list" ] && exit 1
+        # Per-board overrides (dotfiles-dev#531): a fail-board-<n> marker makes board <n>
+        # unreadable; items-<n>.json gives it its own items. Neither = the shared fixture.
+        [ -f "$TEST_TMP/fail-board-\$3" ] && exit 1
+        if [ -f "$TEST_TMP/items-\$3.json" ]; then cat "$TEST_TMP/items-\$3.json"; exit 0; fi
         cat "$TEST_TMP/items.json"
+        ;;
+    "api graphql")
+        full="\$*"
+        if printf '%s' "\$full" | grep -q 'rateLimit'; then
+            if [ -f "$TEST_TMP/throttled" ]; then
+                echo 'gh: API rate limit exceeded (RATE_LIMIT)' >&2
+                exit 1
+            fi
+            echo '{"data":{"rateLimit":{"remaining":4999}}}'
+        elif printf '%s' "\$full" | grep -q 'items(first'; then
+            f="$TEST_TMP/item-fallback.json"
+            [ -f "\$f" ] || exit 1
+            [ "\$(cat "\$f")" = "FAIL" ] && exit 1
+            cat "\$f"
+        else
+            exit 1
+        fi
         ;;
     "api "*)
         path="\$2"
@@ -501,4 +568,112 @@ run_reconcile() {
     run_reconcile
     [[ "$output" == *"blocked by nothing owner/repo#13"* ]]
     [[ "$output" != *"blocker-kind"* ]]
+}
+
+# --- dotfiles-dev#567: gh project throttle vs a genuinely unreadable board ------------------------
+
+@test "project items read: item-list fails but GraphQL is healthy, falls back and succeeds" {
+    write_item_list_graphql "$(graphql_item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" == *"unblocked owner/repo#3"* ]]
+}
+
+@test "project items read: item-list fails, GraphQL fallback also fails: UNKNOWN board unreadable" {
+    write_item_list_graphql FAIL
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run bash -c "source '$LIB'; reconcile_roadmap_unblock owner 17; echo \"rc=\$?\"; \
+        echo \"STATUS=\$RECONCILE_STATUS\"; echo \"REPORT=\$RECONCILE_REPORT\""
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"UNKNOWN (board unreadable): could not read project owner/17"* ]]
+    refute_gh 'issue edit'
+}
+
+@test "project items read: item-list fails, GraphQL confirms a throttle: UNKNOWN throttled" {
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    write_throttled
+    run bash -c "source '$LIB'; reconcile_roadmap_unblock owner 17; echo \"rc=\$?\"; \
+        echo \"STATUS=\$RECONCILE_STATUS\"; echo \"REPORT=\$RECONCILE_REPORT\""
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"UNKNOWN (throttled)"* ]]
+    refute_gh 'issue edit'
+}
+
+# --- dotfiles-dev#531: the declared board registry ------------------------------------------------
+
+# run_boards ENTRY...
+# Overrides ROADMAP_BOARDS with ENTRY... (none = an empty registry) and runs the registry sweep.
+run_boards() {
+    run bash -c "source '$LIB'; ROADMAP_BOARDS=(\"\$@\"); reconcile_roadmap_boards; \
+        echo \"rc=\$?\"; echo \"STATUS=\$RECONCILE_BOARDS_STATUS\"; echo REPORT_START; \
+        printf '%s\n' \"\$RECONCILE_BOARDS_REPORT\"; echo REPORT_END" _ "$@"
+}
+
+@test "registry: declares the six maintained boards and excludes stpstone (2) by declaration" {
+    run bash -c "source '$LIB'; printf '%s\n' \"\${ROADMAP_BOARDS[@]}\""
+    [ "$status" -eq 0 ]
+    for n in 8 9 13 15 16 17; do
+        [[ "$output" == *"guilhermegor|$n|"* ]]
+    done
+    [[ "$output" != *"guilhermegor|2|"* ]]
+}
+
+@test "registry sweep: one line per board, clean boards included, every board visited" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    echo '{"items": []}' > "$TEST_TMP/items-16.json"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_boards "owner|17|alpha" "owner|16|beta"
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" == *"board owner/17 (alpha): ok — 1 item line(s)"* ]]
+    [[ "$output" == *"  unblocked owner/repo#3"* ]]
+    [[ "$output" == *"board owner/16 (beta): ok — nothing to change"* ]]
+}
+
+@test "registry sweep: an unreadable board is UNKNOWN and the other boards still reconcile" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    : > "$TEST_TMP/fail-board-9"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_boards "owner|9|broken" "owner|17|alpha"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"board owner/9 (broken): UNKNOWN"* ]]
+    [[ "$output" == *"board owner/17 (alpha): ok"* ]]
+    [[ "$output" == *"unblocked owner/repo#3"* ]]
+}
+
+@test "registry sweep: an empty registry is UNKNOWN, never 'nothing to unblock'" {
+    write_fake_gh
+    run_boards
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"UNKNOWN: ROADMAP_BOARDS is empty"* ]]
+    refute_gh "project item-list"
+}
+
+@test "registry sweep: a malformed entry is UNKNOWN and the next entry is still swept" {
+    echo '{"items": []}' > "$TEST_TMP/items.json"
+    write_fake_gh
+    run_boards "owner|notanumber|bad" "owner|17|alpha"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"malformed registry entry"* ]]
+    [[ "$output" == *"board owner/17 (alpha): ok — nothing to change"* ]]
+}
+
+@test "registry sweep: a trailing delimiter is malformed, not silently trimmed" {
+    echo '{"items": []}' > "$TEST_TMP/items.json"
+    write_fake_gh
+    run_boards "owner|16|beta|" "owner|17|alpha"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"board owner|16|beta|: UNKNOWN — malformed registry entry"* ]]
+    [[ "$output" == *"board owner/17 (alpha): ok — nothing to change"* ]]
 }

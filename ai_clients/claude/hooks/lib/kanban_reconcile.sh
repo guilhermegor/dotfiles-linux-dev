@@ -37,6 +37,18 @@
 #     A single PR's own closingIssuesReferences read failure does not abort the round — it is
 #     reported as an "UNKNOWN PR #N" line and the next PR is still processed (same
 #     fail-closed-per-item shape as roadmap_unblock.sh).
+#
+# dotfiles-dev#567: the Status-order read (`_kr_status_names`) and the project item read
+# (`_board_item_list`, shared with roadmap_unblock.sh) both go through `gh project` porcelain
+# ONLY — no second channel. A throttle there can surface as a plain-looking error ("unknown owner
+# type") that reads as a config fault rather than a rate limit, and neither call had a fallback
+# once it failed. Both now: (1) confirm a throttle with a FRESH `gh api graphql` probe rather than
+# trusting the porcelain failure's own text (`_board_throttled`), and (2) make exactly one
+# `gh api graphql` fallback read when the failure is NOT a confirmed throttle. A confirmed
+# throttle is reported as "UNKNOWN (throttled)" (try next round); an unreadable board after the
+# fallback also fails is "UNKNOWN (board unreadable)" (the board is misconfigured) — the two want
+# different responses from a reader. Never a retry loop: one porcelain attempt, one fallback
+# attempt, then report.
 set -u
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
@@ -128,15 +140,115 @@ move_card() {
 		--field-id "$field" --single-select-option-id "$option" >/dev/null 2>&1
 }
 
+# _board_throttled
+# True (exit 0) only when a FRESH, minimal `gh api graphql` probe itself comes back naming a rate
+# limit — never inferred from a `gh project` porcelain failure's own text, which can read
+# "unknown owner type" during the exact same throttle (dotfiles-dev#567). False (the probe
+# succeeds, or fails for any other reason) is the safe default: an unconfirmed guess falls
+# through to the GraphQL fallback read instead of halting on a maybe.
+_board_throttled() {
+	local probe
+	probe="$(gh api graphql -f query='query{rateLimit{remaining}}' 2>&1)" && return 1
+	printf '%s' "$probe" | grep -qiE 'rate.?limit'
+}
+
+# _board_item_list_graphql OWNER PROJECT
+# One-shot `gh api graphql` read of a project's items, translated into the same `{"items": [...]}`
+# shape `gh project item-list --format json` prints — id, content.{type,number,repository,url,body},
+# and every other field (Status, "Blocked by", ...) as a top-level key named by lowercasing the
+# field's own display name, exactly like the porcelain command already does. Downstream jq
+# consumers in this file and roadmap_unblock.sh never need to know which channel answered.
+#
+# `repositoryOwner` is the schema's owner-TYPE-agnostic interface (works for a User or an
+# Organization without knowing which up front) — the porcelain command's own "unknown owner type"
+# failure is exactly the resolution step this sidesteps.
+#
+# ponytail: single page (first: 100 items, first: 100 field values per item), no cursor loop. A board
+# or item past that comes back with `hasNextPage`, and this returns 1 (unreadable) rather than a
+# silently partial list — add real pagination if a board ever grows past either.
+_board_item_list_graphql() {
+	local owner="$1" project="$2" query result
+	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){items(first:100){pageInfo{hasNextPage}nodes{id content{__typename ... on Issue{number url body repository{nameWithOwner}}}fieldValues(first:100){pageInfo{hasNextPage}nodes{__typename ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}}'
+	result="$(gh api graphql -f query="$query" -f login="$owner" -F num="$project" 2>/dev/null)" || return 1
+	printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
+	printf '%s' "$result" \
+		| jq -e '.data.repositoryOwner.projectV2.items.nodes | type == "array"' >/dev/null 2>&1 \
+		|| return 1
+	printf '%s' "$result" \
+		| jq -e '.data.repositoryOwner.projectV2.items.pageInfo.hasNextPage == true' \
+		>/dev/null 2>&1 && return 1
+	# An item whose field values overflow one page may be missing its Status / "Blocked by" value,
+	# which downstream reads as "no status" (a Done card moves back to In review) — unreadable too.
+	printf '%s' "$result" \
+		| jq -e '[.data.repositoryOwner.projectV2.items.nodes[].fieldValues.pageInfo.hasNextPage] | any' \
+		>/dev/null 2>&1 && return 1
+	printf '%s' "$result" | jq -c '
+		.data.repositoryOwner.projectV2.items.nodes | {
+			items: [.[] | {
+				id: .id,
+				content: (
+					if .content.__typename == "Issue" then {
+						type: "Issue", number: .content.number, url: .content.url,
+						body: .content.body, repository: .content.repository.nameWithOwner
+					} else { type: .content.__typename }
+					end
+				)
+			} + (
+				[.fieldValues.nodes[] | select(.field.name != null) |
+					{(.field.name | ascii_downcase): (.name // .text)}] | add // {}
+			)]
+		}'
+}
+
+# _board_item_list OWNER PROJECT LIMIT
+# Prints the `{"items": [...]}` JSON `gh project item-list` would, trying that porcelain command
+# first. On failure, confirms whether GitHub's GraphQL API is presently throttled before deciding
+# what to do next — a `gh project` failure whose text does not name a rate limit is not evidence
+# that it is not one (dotfiles-dev#567) — and makes exactly ONE fallback attempt, never a retry
+# loop.
+# Returns 0 with JSON on stdout (either channel), 2 with nothing on stdout when throttling is
+# CONFIRMED (report this distinctly — "try next round", not "the board is misconfigured"), or 1
+# with nothing on stdout when neither channel can read the board.
+_board_item_list() {
+	local owner="$1" project="$2" limit="$3" json
+	json="$(gh project item-list "$project" --owner "$owner" --format json --limit "$limit" 2>/dev/null)" \
+		&& { printf '%s' "$json"; return 0; }
+
+	_board_throttled && return 2
+
+	json="$(_board_item_list_graphql "$owner" "$project")" || return 1
+	printf '%s' "$json"
+}
+
 # _kr_status_names OWNER PROJECT
 # Ordered list of Status column names, one per line, straight from the ARRAY `gh project
 # field-list` returns. Arrays preserve order; this deliberately does not reconstruct order from
 # an object (board_config's cached `.options` map), whose key order this file does not want to
 # depend on.
+#
+# dotfiles-dev#567: on a porcelain failure that is NOT a confirmed throttle, falls back to one
+# `gh api graphql` read of the same field/options (via the owner-agnostic `repositoryOwner`
+# interface — see `_board_item_list_graphql`'s own comment).
+# Returns 0 with the list on stdout, 2 (nothing on stdout) when a throttle is CONFIRMED, or 1
+# (nothing on stdout) when neither channel can read the Status field.
 _kr_status_names() {
-	local owner="$1" project="$2"
-	gh project field-list "$project" --owner "$owner" --format json 2>/dev/null \
-		| jq -r '.fields[] | select(.name=="Status") | .options[].name' 2>/dev/null
+	local owner="$1" project="$2" out query result
+	out="$(gh project field-list "$project" --owner "$owner" --format json 2>/dev/null \
+		| jq -r '.fields[] | select(.name=="Status") | .options[].name' 2>/dev/null)"
+	if [[ -n "$out" ]]; then
+		printf '%s\n' "$out"
+		return 0
+	fi
+
+	_board_throttled && return 2
+
+	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){fields(first:50){nodes{... on ProjectV2SingleSelectField{name options{name}}}}}}}}'
+	result="$(gh api graphql -f query="$query" -f login="$owner" -F num="$project" 2>/dev/null)" || return 1
+	printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
+	out="$(printf '%s' "$result" \
+		| jq -r '.data.repositoryOwner.projectV2.fields.nodes[] | select(.name=="Status") | .options[].name' 2>/dev/null)"
+	[[ -n "$out" ]] || return 1
+	printf '%s\n' "$out"
 }
 
 # _kr_closing_issues OWNER REPO NUMBER
@@ -184,10 +296,14 @@ reconcile_kanban() {
 		return 1
 	fi
 
-	local order_list target_rank
-	order_list="$(_kr_status_names "$owner" "$project_number")"
+	local order_list target_rank rc
+	order_list="$(_kr_status_names "$owner" "$project_number")"; rc=$?
 	if [[ -z "$order_list" ]]; then
-		RECONCILE_KANBAN_REPORT="UNKNOWN: could not read Status column order for $owner/$repo"
+		if (( rc == 2 )); then
+			RECONCILE_KANBAN_REPORT="UNKNOWN (throttled): GitHub GraphQL rate limit — retry next round"
+		else
+			RECONCILE_KANBAN_REPORT="UNKNOWN (board unreadable): could not read Status column order for $owner/$repo"
+		fi
 		return 1
 	fi
 	target_rank="$(printf '%s\n' "$order_list" | grep -nxF "In review" | head -n1 | cut -d: -f1)"
@@ -215,16 +331,21 @@ reconcile_kanban() {
 	fi
 
 	local items_json item_count
-	items_json="$(gh project item-list "$project_number" --owner "$owner" --format json --limit "$item_limit" 2>/dev/null)" || {
-		RECONCILE_KANBAN_REPORT="UNKNOWN: could not read project items for $owner/$repo"
+	items_json="$(_board_item_list "$owner" "$project_number" "$item_limit")"; rc=$?
+	if (( rc != 0 )); then
+		if (( rc == 2 )); then
+			RECONCILE_KANBAN_REPORT="UNKNOWN (throttled): GitHub GraphQL rate limit — retry next round"
+		else
+			RECONCILE_KANBAN_REPORT="UNKNOWN (board unreadable): could not read project items for $owner/$repo"
+		fi
 		return 1
-	}
+	fi
 	# Shape-check before use: `.items[]?` exits 0 on `{}`/`{"items": null}` too, which would
 	# otherwise report ok having silently processed nothing (same trap PR #376 caught in
 	# roadmap_unblock.sh).
 	printf '%s' "$items_json" | jq -e 'type=="object" and (.items | type == "array")' \
 		>/dev/null 2>&1 || {
-		RECONCILE_KANBAN_REPORT="UNKNOWN: could not parse project items for $owner/$repo"
+		RECONCILE_KANBAN_REPORT="UNKNOWN (board unreadable): could not parse project items for $owner/$repo"
 		return 1
 	}
 	item_count="$(printf '%s' "$items_json" | jq '.items | length' 2>/dev/null)"

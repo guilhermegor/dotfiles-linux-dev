@@ -67,7 +67,17 @@ An agent killed mid-flight leaves work in its worktree. A worktree is torn down;
   if /usr/bin/git -C "$p" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
     u=$(/usr/bin/git -C "$p" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
   else
-    u=NO-REMOTE
+    # No upstream at all: still check for commits never pushed anywhere
+    # (dotfiles-dev#571), counting only patches not already on origin/<default>
+    # so a squash-merged branch isn't misreported.
+    def=$(/usr/bin/git -C "$p" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+    def="${def#origin/}"
+    if [ -n "$def" ] && [ "$b" != "$def" ]; then
+      u=$(/usr/bin/git -C "$p" cherry "origin/$def" HEAD 2>/dev/null | grep -c '^+')
+      [ "$u" != "0" ] && u="${u}-NO-UPSTREAM"
+    else
+      u=NO-REMOTE
+    fi
   fi
   [ "$d" != "0" ] || { [ "$u" != "0" ] && [ "$u" != "NO-REMOTE" ]; } && echo "$b dirty=$d unpushed=$u"
 done
@@ -199,18 +209,22 @@ had **2**. Being behind decides *which version of the rule the PR is judged by* 
 A roadmap board's `Blocked` items do not follow the native issue-dependency relationship on their
 own: GitHub resolves `repos/<o>/<r>/issues/<n>/dependencies/blocked_by` the moment the blocking
 issue closes, but the board's own Status, the `state:blocked` label, and any "Blocked by" text
-field all sit still until something re-reads them. Call the gate for every project this operator
-tracks — never re-derive the unblock logic by hand:
+field all sit still until something re-reads them. Sweep the boards declared in `ROADMAP_BOARDS`
+(`hooks/lib/roadmap_unblock.sh`, dotfiles-dev#531) — never a project number remembered or typed by
+hand, and never re-derive the unblock logic. `subagent_stop_sweep.sh`'s item `[8]` already runs
+it; standalone:
 
 ```bash
 source ai_clients/claude/hooks/lib/roadmap_unblock.sh
-reconcile_roadmap_unblock <owner> <project-number> || echo "roadmap board UNREADABLE — nothing touched"
-printf '%s\n' "$RECONCILE_REPORT"
+reconcile_roadmap_boards || echo "a roadmap board was UNREADABLE — that board untouched, the rest swept"
+printf '%s\n' "$RECONCILE_BOARDS_REPORT"
 ```
 
-Report **one line per item that changed or needs a look** — `$RECONCILE_REPORT` already carries
-exactly that shape (unblocked, still blocked, decision blocker, blocked by nothing, UNKNOWN). If it
-is empty, say "no roadmap items changed" and move on.
+Report **one line per declared board**, clean or not — `$RECONCILE_BOARDS_REPORT` carries it
+(`board <owner>/<n> (<repo>): ok — nothing to change`, or `ok — N item line(s)` followed by that
+board's indented item lines: unblocked, still blocked, decision blocker, blocked by nothing,
+UNKNOWN). A board that reconciled clean and a board nobody swept must never look the same. Add or
+drop a board by editing `ROADMAP_BOARDS`, not this prose.
 
 Every determinate line also carries a `[blocker-kind: internal|external|decision]` tag
 (dotfiles-dev#528) — `internal` (same repo as the item), `external` (a different repo, which can
@@ -397,10 +411,13 @@ so this issue closes on **instrumentation** (step 0's resume diff) rather than a
 week of real gap-vs-expired-notice data is the prerequisite for deciding whether even a
 notice-and-report external timer is worth building; one 3-hour sample is not that.
 
-1. **Classify the slot, three states plus an escape hatch — never a binary busy/free.** Pipe the
-   comment page into `hooks/lib/slot_classify.py`, which prints one token (`FREE|<reason>`,
-   `BUSY|<reason>`, `UNKNOWN`); **never re-derive this by hand** (dotfiles-dev#433) — reading the
-   newest notice by eye re-commits all three defects its fixtures pin down. Read the
+1. **Classify the slot, four states plus an escape hatch — never a binary busy/free.** Pipe the
+   REST comment page — `gh api repos/{owner}/{repo}/issues/comments`, never a hand-rolled
+   GraphQL query, whose `author`/`createdAt` field names the classifier can't read
+   (dotfiles-dev#544) — into `hooks/lib/slot_classify.py`, which prints one token
+   (`FREE|<reason>`, `BUSY|<reason>`, `ASK-ONLY|<reason>`, `UNKNOWN`); **never re-derive this
+   by hand** (dotfiles-dev#433) — reading the newest notice by eye re-commits all the defects
+   its fixtures pin down. Read the
    newest roster notice, querying `is:pr` **without** `is:open`: a PR that merged since its last
    notice still spent the same account-level quota, and scoping to open PRs alone makes that spend
    invisible.
@@ -409,26 +426,43 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    |---|---|---|
    | `REVIEW-LIMITED` | body matches `rate limit`, no `chat message` | busy — honour the stated wait ("Please wait 4 minutes and 37 seconds") when the notice carries one; fixed-window only when it doesn't |
    | `CHAT-LIMITED` | body contains `chat message` | a **different** quota was hit — review slot untouched, treat as free |
+   | `ASK-ONLY` | body carries the eligibility notice ("fewer than 10 stars"), no rate-limit notice on top | free, but permanently so for a different reason — this repo never gets an automatic review, so an explicit ask is the only way anything ever uses this slot (dotfiles-dev#538) |
    | `OK` | no rate-limit notice newer than the last completed review | free |
    | `UNKNOWN` | matches `rate limit` but neither phrase is conclusive | **not** free — treat as busy and say so; an unrecognised notice must never default to OK |
 
-   🔴 Measured on blueprintx, 562 notices over 7 days: 89.5% REVIEW, 10.5% CHAT — and the *newest*
-   notice decides, so one CHAT notice landing last must not read as an hour-long block when the real
-   wait was 4m37s (blueprintx#363, 2026-08-30 18:44:28Z).
+   🔴 **What step 4b does differently on `ASK-ONLY` (decided here, dotfiles-dev#538): nothing beyond
+   what `OK` already does.** Item 4 below already spends an explicit bot ask on every free slot it
+   acts on — an `ASK-ONLY` slot reaching that item gets the same "spend the ask" action `OK` gets,
+   because an ask is already the only mechanism this step ever uses to trigger a review; there is no
+   *more* to spend. The distinction earns its own token so the round can REPORT "this repo never
+   auto-reviews, an ask is mandatory every time" instead of the state silently reading as an ordinary
+   idle slot — reporting it is the certain half; cadence does not change, because there was never a
+   passive path to lose here in the first place. What DOES change: the push-contention paragraph and
+   its notice-rate statistics below do not apply on an `ASK-ONLY` repo, for the reason stated where
+   each is scoped.
 
-   ⚠️ **A push this round is an ask too, even with no notice.** CodeRabbit re-reviews on push, and a
-   push-triggered re-review posts no roster comment — the notice can read `OK` while the quota is
-   already spent. If RESCUE or THREADS pushed to any open PR earlier **this round**, treat the slot
-   as already contended and **re-read the roster note immediately before step 3 below**, not from a
-   read taken at the top of the round. Measured 2026-09-03: pushes at 12:25 and 12:32 (thread fixes)
-   each triggered a silent re-review, and the deliberate ask at 12:33 was refused with "next included
-   review will be available in 49 minutes" — a window that had grown from 8 minutes an hour earlier,
-   priced by pushes nobody counted. ⚠️ Do not fix this with a `sleep`: the window is an account-level
-   quota, not elapsed-time-since-last-ask, and sleeping into it stops the loop doing the other six
-   things. 🎯 Whether THREADS should run *after* this step is a real question — a deliberate ask
-   beats a push to the quota if issued first — but **measure before reordering**: THREADS unblocks
-   merges directly and may be worth more than one ask. Keep the current order until that trade-off
-   has a number behind it.
+   🔴 Measured on blueprintx (an **eligible** repo — 10+ stars, autoreviewed on open and on push),
+   562 notices over 7 days: 89.5% REVIEW, 10.5% CHAT — and the *newest*
+   notice decides, so one CHAT notice landing last must not read as an hour-long block when the real
+   wait was 4m37s (blueprintx#363, 2026-08-30 18:44:28Z). **Scoped to eligible repos**: an `ASK-ONLY`
+   repo never auto-reviews at all, so it never produces a REVIEW or a CHAT notice from a push, and
+   this ratio has no meaning there.
+
+   ⚠️ **A push this round is an ask too, even with no notice — on an ELIGIBLE repo.** CodeRabbit
+   re-reviews on push, and a push-triggered re-review posts no roster comment — the notice can read
+   `OK` while the quota is already spent. If RESCUE or THREADS pushed to any open PR earlier **this
+   round**, treat the slot as already contended and **re-read the roster note immediately before
+   step 3 below**, not from a read taken at the top of the round. Measured 2026-09-03: pushes at
+   12:25 and 12:32 (thread fixes) each triggered a silent re-review, and the deliberate ask at 12:33
+   was refused with "next included review will be available in 49 minutes" — a window that had grown
+   from 8 minutes an hour earlier, priced by pushes nobody counted. ⚠️ Do not fix this with a
+   `sleep`: the window is an account-level quota, not elapsed-time-since-last-ask, and sleeping into
+   it stops the loop doing the other six things. 🎯 Whether THREADS should run *after* this step is a
+   real question — a deliberate ask beats a push to the quota if issued first — but **measure before
+   reordering**: THREADS unblocks merges directly and may be worth more than one ask. Keep the
+   current order until that trade-off has a number behind it. **This paragraph is scoped to eligible
+   repos** — an `ASK-ONLY` repo has no auto-review-on-push to contend, so a push there never spends
+   any part of this quota.
 2. **Pick the candidate — blast radius first, age second.**
    - **Filter to PRs whose ONLY blocker is the review gate: `red ∩ required == {the review
      check}`, never "the review check is the sole red."** Those are different sets, and treating
@@ -492,10 +526,13 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
      roster config so a different reviewer's limit can be set without touching this filter's logic,
      and do not attempt to auto-split an oversized PR: deciding the seam needs judgement the loop
      does not have; its job is to stop wasting windows on it and say so.
-   - ⚠️ **Skip any PR whose head was pushed in the last ~10 minutes.** A push already triggers a
-     re-review (the item-1 note above), so an ask on top of it spends the window on a review that
-     was already coming — `gh pr view <n> --json commits --jq '.commits[-1].committedDate'` against
-     the current time is enough; when in doubt, treat it as recently pushed and skip.
+   - ⚠️ **On an eligible repo, skip any PR whose head was pushed in the last ~10 minutes.** A push
+     already triggers a re-review there (the item-1 note above), so an ask on top of it spends the
+     window on a review that was already coming — `gh pr view <n> --json commits --jq
+     '.commits[-1].committedDate'` against the current time is enough; when in doubt, treat it as
+     recently pushed and skip. **Does not apply on an `ASK-ONLY` repo** — a push triggers no
+     re-review there, so a recent push is not evidence the window is already spent; skipping it
+     would waste the only path a review ever arrives by.
    - **Rank by MEASURED contention, not by commit type.** Build the contended-file set and count
      how many *blocked issues* each PR's files hold hostage:
 
