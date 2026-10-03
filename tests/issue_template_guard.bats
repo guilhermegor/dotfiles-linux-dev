@@ -255,3 +255,84 @@ EOF"
     [ "$status" -eq 0 ]
     rm -rf "$fake_home"
 }
+
+# --- pflag also accepts attached short flags: `-bX` and `-b=X` (dotfiles-dev#604) --------------
+#
+# scan_flags() used to read short flags only in the separated form, so an attached `-b`/`-F`/
+# `-l`/`-R` was never seen and the guard passed the command unread (fail-open).
+
+@test "blocks an attached -b<body> missing Definition of done" {
+    run bash -c "payload 'gh issue create --title x -b\"$NO_DOD_BODY\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Missing required sections"* ]]
+}
+
+@test "blocks an -b=<body> missing Definition of done" {
+    run bash -c "payload 'gh issue create --title x -b=\"$NO_DOD_BODY\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Missing required sections"* ]]
+}
+
+@test "passes a compliant -b=<body> (the = is stripped, so the bold first line still matches)" {
+    run bash -c "payload 'gh issue create --title x -b=\"$COMPLIANT_BODY\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "fails loud on an attached -F<missing path>" {
+    run bash -c "payload 'gh issue create --title x -F$REPO/nope.md' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"could not be read"* ]]
+}
+
+@test "fails loud on an -F=<missing path>" {
+    run bash -c "payload 'gh issue create --title x -F=$REPO/nope.md' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"could not be read"* ]]
+}
+
+@test "enforces Blocked by for an attached -l<label>" {
+    run bash -c "payload 'gh issue create -lstate:blocked --title x --body \"$COMPLIANT_BODY\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Blocked by"* ]]
+}
+
+@test "enforces Blocked by for an -l=<label>" {
+    run bash -c "payload 'gh issue create -l=state:blocked --title x --body \"$COMPLIANT_BODY\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Blocked by"* ]]
+}
+
+@test "enforces Blocked by when a comma list in an attached -l<a,b> carries state:blocked" {
+    run bash -c "payload 'gh issue create -lbug,state:blocked --title x --body \"$COMPLIANT_BODY\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Blocked by"* ]]
+}
+
+@test "judges an attached -R<TARGET> against TARGET's template, not the session cwd's" {
+    local fake_home target
+    fake_home="$(mktemp -d)"
+    target="$fake_home/github/other-repo"
+    mkdir -p "$target/.github/ISSUE_TEMPLATE"
+    git init -q "$target"
+    printf -- '### Sign-off\n' > "$target/.github/ISSUE_TEMPLATE/other.md"
+
+    # $REPO's own template is satisfied by this body; only the target's Sign-off is not.
+    run env HOME="$fake_home" bash -c "payload 'gh issue create -Rsomeowner/other-repo --title x --body \"$COMPLIANT_BODY\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Sign-off"* ]]
+    rm -rf "$fake_home"
+}
+
+@test "judges an -R=<TARGET> against TARGET's template, not the session cwd's" {
+    local fake_home target
+    fake_home="$(mktemp -d)"
+    target="$fake_home/github/other-repo"
+    mkdir -p "$target/.github/ISSUE_TEMPLATE"
+    git init -q "$target"
+    printf -- '### Sign-off\n' > "$target/.github/ISSUE_TEMPLATE/other.md"
+
+    run env HOME="$fake_home" bash -c "payload 'gh issue create -R=someowner/other-repo --title x --body \"$COMPLIANT_BODY\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Sign-off"* ]]
+    rm -rf "$fake_home"
+}

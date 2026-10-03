@@ -233,3 +233,87 @@ EOF"
     [ "$status" -eq 0 ]
     rm -rf "$fake_home"
 }
+
+# --- pflag also accepts attached short flags: `-bX` and `-b=X` (dotfiles-dev#604) --------------
+#
+# scan_flags() used to read short flags only in the separated form, so `gh pr create -b"…"` or
+# `-F<path>` was never seen and the guard passed it unread (fail-open).
+
+@test "blocks an attached -b<body> missing sections" {
+    run bash -c "payload 'gh pr create --title x -b\"nothing useful\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Missing required sections"* ]]
+}
+
+@test "blocks an -b=<body> missing sections" {
+    run bash -c "payload 'gh pr create --title x -b=\"nothing useful\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Missing required sections"* ]]
+}
+
+@test "passes an attached -b<body> that has every section" {
+    run bash -c "payload 'gh pr create --title x -b\"## Description\\nx\\n## Testing\\ny\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "fails loud on an attached -F<missing path>" {
+    run bash -c "payload 'gh pr create --title x -F$REPO/nope.md' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"could not be read"* ]]
+}
+
+@test "fails loud on an -F=<missing path>" {
+    run bash -c "payload 'gh pr create --title x -F=$REPO/nope.md' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"could not be read"* ]]
+}
+
+@test "blocks a readable non-compliant attached -F<path>" {
+    printf 'just some text, no headers\n' > "$REPO/body.md"
+    run bash -c "payload 'gh pr create --title x -F$REPO/body.md' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Missing required sections"* ]]
+}
+
+@test "passes a readable compliant -F=<path>" {
+    printf '## Description\nx\n## Testing\ny\n' > "$REPO/body.md"
+    run bash -c "payload 'gh pr create --title x -F=$REPO/body.md' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "judges an attached -R<TARGET> against TARGET's template, not the session cwd's" {
+    local fake_home target
+    fake_home="$(mktemp -d)"
+    target="$fake_home/github/other-repo"
+    mkdir -p "$target/.github"
+    git init -q "$target"
+    printf '## Sign-off\n' > "$target/.github/PULL_REQUEST_TEMPLATE.md"
+
+    # $REPO's own template is satisfied by this body; only the target's Sign-off is not.
+    run env HOME="$fake_home" bash -c "payload 'gh pr create -Rsomeowner/other-repo --title x --body \"## Description\\n## Testing\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Sign-off"* ]]
+    rm -rf "$fake_home"
+}
+
+@test "judges an -R=<TARGET> against TARGET's template, not the session cwd's" {
+    local fake_home target
+    fake_home="$(mktemp -d)"
+    target="$fake_home/github/other-repo"
+    mkdir -p "$target/.github"
+    git init -q "$target"
+    printf '## Sign-off\n' > "$target/.github/PULL_REQUEST_TEMPLATE.md"
+
+    run env HOME="$fake_home" bash -c "payload 'gh pr create -R=someowner/other-repo --title x --body \"## Description\\n## Testing\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Sign-off"* ]]
+    rm -rf "$fake_home"
+}
+
+@test "a separated -b value that looks like an attached flag is taken whole (pflag #594)" {
+    # `-b -Fx` is body "-Fx", not a body-file: the separated value is consumed first.
+    run bash -c "payload 'gh pr create --title x -b -F$REPO/nope.md' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Missing required sections"* ]]
+    [[ "$output" != *"could not be read"* ]]
+}

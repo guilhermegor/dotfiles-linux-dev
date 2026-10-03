@@ -122,6 +122,21 @@ def matching_argv(segments, noun):
     return None
 
 
+SHORT_VALUE_FLAGS = "RHbFl"
+
+
+def attached_short(tok):
+    """Split an attached short value flag (`-bX`, `-b=X`) into `(letter, value)`, else None.
+
+    gh uses spf13/pflag, whose parseSingleShortArg takes everything after the letter as the
+    value, stripping one leading `=` (`-b=X` -> `X`) unless nothing follows it (`-b=` -> `=`).
+    The separated form (`-b X`) is handled by the callers, which consume the next token.
+    """
+    if len(tok) < 3 or tok[0] != "-" or tok[1] not in SHORT_VALUE_FLAGS:
+        return None
+    return tok[1], tok[3:] if tok[2] == "=" and len(tok) > 3 else tok[2:]
+
+
 def scan_flags(argv):
     """Read --repo/-R, --head/-H, --body/-b, --body-file/-F and --label/-l/--add-label out of a
     real argv.
@@ -152,9 +167,18 @@ def scan_flags(argv):
         elif tok in ("--head", "-H"):
             head = ""  # flag with no value: gh rejects it; "" tells the caller not to guess HEAD
             i += 1
-        elif tok.startswith("-H") and len(tok) > 2:
-            # pflag also takes `-H=<b>` and the attached `-H<b>`; `=` is stripped, as in pflag
-            head = tok[3:] if tok[2] == "=" and len(tok) > 3 else tok[2:]
+        elif (attached := attached_short(tok)) is not None:
+            letter, value = attached
+            if letter == "R":
+                repo = value
+            elif letter == "H":
+                head = value
+            elif letter == "b":
+                has_body, body = True, value
+            elif letter == "F":
+                has_body_file, body_file = True, value
+            else:
+                labels.extend(p for p in value.split(",") if p)
             i += 1
         elif tok in ("--body", "-b") and i + 1 < n:
             has_body, body = True, argv[i + 1]
