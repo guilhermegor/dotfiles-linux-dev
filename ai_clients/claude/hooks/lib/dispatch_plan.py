@@ -8,17 +8,21 @@ on (it never ``cd``s anywhere first). Prints exactly one JSON object to stdout::
      "excluded":     [{"issue": 426, "reason": "..."}]}
 
 Collision is agent-vs-agent, never agent-vs-open-PR (dotfiles-dev#433; review findings on PR
-#476). The held set fed to ``free_classify_files`` (``lib/free_surface.sh``, #340) is built
-here from ``git worktree list`` — the same "which branches are live agents" notion
-``hooks/lib/worktree_fanout.sh`` already owns for session_start_context.sh and
-quota_gap_rescue.sh — never from ``gate_free_surface``'s own ``FREE_HELD_PATHS``, which unions
-every open PR's files regardless of whether an agent is still live on it (a frozen/idle open PR
-would otherwise suppress dispatch of an unrelated candidate). ``gate_free_surface`` is still
-called for its OTHER answer: the claimed-issue check (``FREE_UNCLAIMED_ISSUES``) is
-deliberately agent-vs-{open,merged}-PR, a different question ("is this issue already being
-delivered") that this script leaves untouched. Collapsing ``would-need-a-held-file`` into
-``held`` was the specific bug that hid 97% of a free directory behind a directory-level summary
-(#340); the mapping below keeps all three classify states apart on purpose.
+#476). The held set fed to ``free_classify_files`` (``lib/free_surface.sh``, #340) is built by
+``gate_live_agent_surface`` (same file, dotfiles-dev#572) — called via a subprocess, the same way
+``run_gate()`` below shells out to ``gate_free_surface`` — never from ``gate_free_surface``'s own
+``FREE_HELD_PATHS``, which unions every open PR's files regardless of whether an agent is still
+live on it (a frozen/idle open PR would otherwise suppress dispatch of an unrelated candidate).
+Before #572 this script re-walked ``git worktree list`` itself, a second, independently-drifting
+copy of the same "which branches are live agents" notion ``hooks/lib/worktree_fanout.sh`` and
+``free_surface.sh`` both already owned — and one that never gained #551's forge-confirmed
+dead-worktree exclusion, so a merged/closed PR's worktree kept suppressing dispatch here long
+after ``free_surface.sh`` learned better. ``gate_free_surface`` is still called for its OTHER
+answer: the claimed-issue check (``FREE_UNCLAIMED_ISSUES``) is deliberately
+agent-vs-{open,merged}-PR, a different question ("is this issue already being delivered") that
+this script leaves untouched. Collapsing ``would-need-a-held-file`` into ``held`` was the specific
+bug that hid 97% of a free directory behind a directory-level summary (#340); the mapping below
+keeps all three classify states apart on purpose.
 
 An issue's file surface is declared as a fenced ```surface block in its body — the
 convention dotfiles-dev#426 formalises with an issue-template requirement; here it is
@@ -224,64 +228,59 @@ def repo_root() -> Path:
 	return Path(_run(["git", "rev-parse", "--show-toplevel"]))
 
 
-def default_branch(slug: str) -> str | None:
-	"""Return ``slug``'s default branch name, or None on any failure (never raises).
+# dotfiles-dev#572: calls gate_live_agent_surface (free_surface.sh) via a subprocess, the same
+# way run_gate() above already shells out to gate_free_surface — ONE liveness notion shared by
+# both callers, rather than a second walk in Python that can (and did) drift from the shell
+# gate's own dead-worktree exclusion (dotfiles-dev#551/#572). The gate resolves its own default
+# branch from the local repo's `origin` remote, so this script no longer needs a separate
+# `gh api repos/{slug} --jq .default_branch` call of its own.
+_LIVE_AGENT_GATE_SCRIPT = r"""
+set -eu
+root="$1"; free_surface_sh="$2"
+# shellcheck source=/dev/null
+source "$free_surface_sh"
 
-	Same source ``_free_held_paths`` (free_surface.sh) reads its own default branch from — kept
-	as a second, independent call rather than threading the value out of that sourced function,
-	which is out of scope to edit for this change.
-	"""
-	try:
-		branch = _run(["gh", "api", f"repos/{slug}", "--jq", ".default_branch"])
-	except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-		return None
-	return branch or None
+# Same per-call timeout run_gate() already wraps gh in.
+gh() { timeout "${DISPATCH_PLAN_GH_TIMEOUT:-15}" gh "$@"; }
+
+if ! gate_live_agent_surface "$root"; then
+	echo "LIVE_AGENT_STATUS:unknown"
+	exit 0
+fi
+echo "LIVE_AGENT_STATUS:ok"
+printf '%s\n' "$LIVE_AGENT_PATHS"
+"""
 
 
-def live_agent_held_paths(root: Path, default: str) -> tuple[bool, list[str]]:
+def live_agent_held_paths(root: Path) -> tuple[bool, list[str]]:
 	"""Return ``(ok, held_paths)`` — files any OTHER live-agent worktree's branch has changed
-	relative to ``default`` (dotfiles-dev#433 finding 1).
+	relative to the repo's default branch (dotfiles-dev#433 finding 1), via
+	``gate_live_agent_surface`` (``hooks/lib/free_surface.sh``, dotfiles-dev#572).
 
-	A "live agent" is a git worktree of this checkout — the same notion
-	``hooks/lib/worktree_fanout.sh`` already walks via ``git worktree list --porcelain`` for
-	session_start_context.sh and quota_gap_rescue.sh. That file exposes no standalone accessor
-	for just the branch list (only printed alerts) and is out of scope to edit here, so this
-	mirrors its own porcelain walk rather than inventing a different liveness signal (a pushed-
-	branch scan, a naming convention, ...).
+	Delegating here — instead of this script re-walking ``git worktree list --porcelain``
+	itself — is what gives this planner the same dead-worktree exclusion
+	``gate_live_agent_surface`` already has (dotfiles-dev#551, and the ancestor extension added
+	for dotfiles-dev#572): one shared, tested implementation of "is this worktree a live writer",
+	never a second one that can independently drift.
 
-	``ok=False`` on anything that leaves liveness undetermined — a ``git worktree list``/``git
-	diff`` failure that is not a plain "unrelated histories" orphan branch — never silently read
-	as zero held paths, i.e. free.
+	``ok=False`` on anything that leaves liveness undetermined (``gate_live_agent_surface``
+	itself returning non-zero, a timeout, or a malformed reply) — never silently read as zero
+	held paths, i.e. free.
 	"""
 	try:
-		porcelain = _run(["git", "-C", str(root), "worktree", "list", "--porcelain"])
-	except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
+			["bash", "-c", _LIVE_AGENT_GATE_SCRIPT, "dispatch_plan", str(root), str(FREE_SURFACE_SH)],
+			capture_output=True,
+			text=True,
+			timeout=GATE_TIMEOUT,
+		)
+	except subprocess.TimeoutExpired:
 		return False, []
 
-	held: set[str] = set()
-	branch = ""
-	prefix = "branch refs/heads/"
-	for line in [*porcelain.splitlines(), ""]:
-		if line.startswith(prefix):
-			branch = line[len(prefix) :]
-			continue
-		if line != "":
-			continue
-		if branch and branch != default:
-			diff = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
-				["git", "-C", str(root), "diff", "--name-only", f"{default}...{branch}"],
-				capture_output=True,
-				text=True,
-				timeout=GH_TIMEOUT,
-			)
-			if diff.returncode != 0:
-				stderr = diff.stderr.lower()
-				if "merge base" not in stderr and "unknown revision" not in stderr:
-					return False, []
-			else:
-				held.update(p for p in diff.stdout.splitlines() if p)
-		branch = ""
-	return True, sorted(held)
+	lines = proc.stdout.splitlines()
+	if proc.returncode != 0 or not lines or lines[0] != "LIVE_AGENT_STATUS:ok":
+		return False, []
+	return True, sorted(p for p in lines[1:] if p)
 
 
 def _label_names(record: dict) -> list[str]:
@@ -674,8 +673,7 @@ def build_plan() -> dict:
 		)
 	mention_reasons = mentioned_without_closing(issue_numbers, prs, slug) if issue_numbers else {}
 
-	default = default_branch(slug)
-	live_ok, live_held = live_agent_held_paths(root, default) if default else (False, [])
+	live_ok, live_held = live_agent_held_paths(root)
 
 	surfaces: dict[int, list[str]] = {}
 	expanded: dict[int, list[str]] = {}
