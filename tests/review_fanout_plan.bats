@@ -149,7 +149,7 @@ EOF
     stub_gh_prs <<EOF
 [{"number":601,"headRefOid":"cccc3333","mergeStateStatus":"BLOCKED","isDraft":false,
   "reviews":[],
-  "comments":[{"body":"Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)","createdAt":"$(ago 1800)"}],
+  "comments":[{"body":"Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)\nReviewed head: cccc3333","createdAt":"$(ago 1800)"}],
   "commits":[{"oid":"cccc3333","committedDate":"$(ago 3600)"}],
   "statusCheckRollup":[]}]
 EOF
@@ -177,6 +177,36 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
     [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "453" ]
+}
+
+@test "a fresh ladder comment naming a DIFFERENT head is not coverage (#564, backdated head)" {
+    # The finding on #588: the marker postdates the head commit's (backdated) committer date,
+    # so a time-only check calls the PR covered — but the marker's own Reviewed head: line
+    # names another commit, so no reviewer has seen this head.
+    stub_gh_prs <<EOF
+[{"number":605,"headRefOid":"aaaa5555","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],
+  "comments":[{"body":"Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)\nReviewed head: bbbb6666","createdAt":"$(ago 60)"}],
+  "commits":[{"oid":"aaaa5555","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "605" ]
+}
+
+@test "a legacy ladder comment with no Reviewed head line is not coverage (#564, fail closed)" {
+    stub_gh_prs <<EOF
+[{"number":606,"headRefOid":"aaaa7777","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],
+  "comments":[{"body":"Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)","createdAt":"$(ago 60)"}],
+  "commits":[{"oid":"aaaa7777","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
 }
 
 @test "a comment merely quoting the attribution line mid-body is not coverage" {

@@ -105,6 +105,9 @@ print((step.get('with') or {}).get('ref',''))
 # the fix: an earlier ladder marker, now resolved from history, survives a later non-marker reply
 # triggering the run.
 
+# The head the gh stub below reports for /pulls/N, and the one a creditable marker must name.
+STUB_HEAD=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+
 # run_ladder_step COMMENT_BODY COMMENTS_JSON
 # Stubs every `gh` call the script makes and a minimal gate_pr_thread_state() (this test is scoped
 # to the reviewer_reported logic in review_threads.yml, not a review_thread_gate.sh integration --
@@ -145,7 +148,7 @@ GATE
 }
 
 @test "#550: a marker earned in HISTORY is not revoked by a later non-marker reply" {
-    marker_body=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\n\nNo issues found.'
+    marker_body=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\nReviewed head: '"$STUB_HEAD"$'\n\nNo issues found.'
     second_body='Thanks, fixed in abc123.'
     comments_json="$(jq -nc --arg m "$marker_body" --arg s "$second_body" '[
       {user:{login:"guilhermegor",type:"User"}, author_association:"OWNER",
@@ -170,7 +173,7 @@ GATE
 }
 
 @test "#550: a forged marker from a NONE-association commenter is ignored (CWE-345 survives history)" {
-    marker_body=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\n\nNo issues found.'
+    marker_body=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\nReviewed head: '"$STUB_HEAD"$'\n\nNo issues found.'
     comments_json="$(jq -nc --arg m "$marker_body" '[
       {user:{login:"randomuser",type:"User"}, author_association:"NONE",
        body:$m, created_at:"2026-09-27T12:38:40Z"}
@@ -183,7 +186,7 @@ GATE
 }
 
 @test "#550: a marker posted BEFORE the current head does not validate it" {
-    marker_body=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\n\nNo issues found.'
+    marker_body=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\nReviewed head: '"$STUB_HEAD"$'\n\nNo issues found.'
     comments_json="$(jq -nc --arg m "$marker_body" '[
       {user:{login:"guilhermegor",type:"User"}, author_association:"OWNER",
        body:$m, created_at:"2026-09-27T11:00:00Z"}
@@ -193,4 +196,45 @@ GATE
 
     [ "$status" -eq 0 ]
     [ "$(jq -r '.conclusion' "$CHECK_RUN_OUT")" = "failure" ]
+}
+
+@test "#564: a fresh marker naming a DIFFERENT head is not credited from history" {
+    marker_body=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\nReviewed head: 0123456789abcdef\n\nNo issues found.'
+    comments_json="$(jq -nc --arg m "$marker_body" '[
+      {user:{login:"guilhermegor",type:"User"}, author_association:"OWNER",
+       body:$m, created_at:"2026-09-27T12:38:40Z"}
+    ]')"
+
+    run_ladder_step "unrelated reply" "$comments_json"
+
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.conclusion' "$CHECK_RUN_OUT")" = "failure" ]
+}
+
+@test "#564: a legacy marker with no Reviewed head line is not credited from history" {
+    marker_body=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\n\nNo issues found.'
+    comments_json="$(jq -nc --arg m "$marker_body" '[
+      {user:{login:"guilhermegor",type:"User"}, author_association:"OWNER",
+       body:$m, created_at:"2026-09-27T12:38:40Z"}
+    ]')"
+
+    run_ladder_step "unrelated reply" "$comments_json"
+
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.conclusion' "$CHECK_RUN_OUT")" = "failure" ]
+}
+
+@test "#564: the triggering comment is credited only when it names the current head" {
+    good=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\nReviewed head: '"$STUB_HEAD"$'\n\nOK.'
+    stale=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\nReviewed head: 0123456789abcdef\n\nOK.'
+    legacy=$'Fallback review — runtime: qwen, model: gpt-x (selected by: probe)\n\nOK.'
+    oneline='Fallback review — runtime: qwen, model: gpt-x (selected by: probe)'
+
+    run_ladder_step "$good" '[]'
+    [ "$(jq -r '.conclusion' "$CHECK_RUN_OUT")" = "success" ]
+    local body
+    for body in "$stale" "$legacy" "$oneline"; do
+        run_ladder_step "$body" '[]'
+        [ "$(jq -r '.conclusion' "$CHECK_RUN_OUT")" = "failure" ]
+    done
 }

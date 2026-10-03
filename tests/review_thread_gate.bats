@@ -456,7 +456,9 @@ JSON
     # No createdAt on the comment/commit here: reviewed_fixture() defaults both to HEAD_DATE, so
     # the marker satisfies the #555 freshness constraint (>=, equal counts as fresh) without this
     # test having to restate head identity -- it is exercising the author check, not staleness.
-    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\n\nNo issues found.'
+    # dotfiles-dev#564: the marker's second line must name the head SHA -- HEAD_OID is the oid
+    # reviewed_fixture() puts on the head commit.
+    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\nReviewed head: '"$HEAD_OID"$'\n\nNo issues found.'
     fixture="$(reviewed_fixture '[]' \
         "$(jq -cn --arg b "$body" '[{author:{login:"guilhermegor"},authorAssociation:"MEMBER",body:$b}]')")"
     run_reported_filter "$fixture" "coderabbitai"
@@ -489,9 +491,11 @@ JSON
     [ "$output" = "false" ]
 }
 
-@test "_gate_reported_filter: a ladder marker NEWER than the head still counts as reported" {
-    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\n\nNo issues found.'
-    fixture="$(jq -nc --arg body "$body" '
+# marker_newer_fixture <marker-body>
+# A marker NEWER than the head (13:40 vs 13:28:42) whose body the caller controls, so the
+# dotfiles-dev#564 tests vary only the "Reviewed head:" line.
+marker_newer_fixture() {
+    jq -nc --arg body "$1" '
       { data: { repository: { pullRequest: {
           reviews: { totalCount: 0, nodes: [] },
           comments: { totalCount: 1, nodes: [
@@ -500,10 +504,30 @@ JSON
           ] },
           commits: { nodes: [ { commit: { oid: "4117bcf7",
                                            committedDate: "2026-09-27T13:28:42Z" } } ] } } } } }
-    ')"
-    run_reported_filter "$fixture" "coderabbitai"
+    '
+}
+
+@test "_gate_reported_filter: a ladder marker NEWER than the head still counts as reported" {
+    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\nReviewed head: 4117bcf7\n\nNo issues found.'
+    run_reported_filter "$(marker_newer_fixture "$body")" "coderabbitai"
     [ "$status" -eq 0 ]
     [ "$output" = "true" ]
+}
+
+# --- dotfiles-dev#564: a marker is credited only for the commit it names ------------------------
+
+@test "_gate_reported_filter: a newer marker naming a DIFFERENT head SHA is not a report" {
+    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\nReviewed head: deadbeef\n\nNo issues found.'
+    run_reported_filter "$(marker_newer_fixture "$body")" "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ "$output" = "false" ]
+}
+
+@test "_gate_reported_filter: a newer marker with NO head SHA line fails closed" {
+    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\n\nNo issues found.'
+    run_reported_filter "$(marker_newer_fixture "$body")" "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ "$output" = "false" ]
 }
 
 @test "_gate_reported_filter: __NO_ROSTER__ falls back to any Bot account" {
