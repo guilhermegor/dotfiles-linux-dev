@@ -69,8 +69,8 @@ that is still running as failed. ``check_states`` splits running from failing on
 (``CheckRun``) / ``state`` (``StatusContext``) first, and only then reads ``conclusion``.
 
 Fails CLOSED AS ONE UNIT, never partially: anything that breaks the read itself (``gh``
-missing, not authenticated, a malformed response, an open-PR count at the ``--limit`` cap)
-raises, printing a traceback to stderr and nothing parseable to stdout — which is exactly
+missing, not authenticated, a malformed response, an open-PR count at the read ceiling, any one
+page of the paged board read) raises, printing a traceback to stderr and nothing parseable to stdout — which is exactly
 what the guard's shape check reads as UNREADABLE and blocks on. A *recoverable* failure is
 different: an unresolvable reviewer rung is surfaced as ``rung.status`` plus a named
 exclusion reason on every PR — still a valid, still complete JSON object, never a partial
@@ -79,17 +79,18 @@ plan that reads as "only these three qualify".
 The rung itself comes from #479's shipped probe (``resolve_fallback_reviewer``,
 reviewer_ladder.sh), called once per plan and never re-implemented here.
 
-``commits`` IS NOT A ``PR_FIELDS`` ENTRY (dotfiles-dev#537)
-------------------------------------------------------------
+``commits`` IS NEVER REQUESTED UNBOUNDED (dotfiles-dev#537)
+-----------------------------------------------------------
 It was, until this planner's very first live run: ``gh pr list --json …,commits,…`` at
 ``--limit 200`` is rejected UNCONDITIONALLY by GitHub — "requesting up to 1,000,000 possible
 nodes which exceeds the maximum limit of 500,000" — because ``commits`` multiplies 200 PRs by
 up to 100 commits each by that commit's own ``authors`` connection. No ``--limit`` this
-planner could use rescues it (bisected down to the field on 2026-09-27: the full ``PR_FIELDS``
+planner could use rescues it (bisected down to the field on 2026-09-27: the full field
 list only clears the cap at ``--limit 20``, one tenth of ``OPEN_PR_LIST_CAP``). The guard read
 every resulting traceback as ``UNREADABLE`` and blocked every round since #527 merged — the
 plan had never once succeeded, on an empty repo or a busy one, because the cap is computed
-from the REQUESTED limits, not the actual data volume.
+from the REQUESTED limits, not the actual data volume. (The same cost model is why the whole
+board read is now paged -- dotfiles-dev#600, ``open_pr_pages.py``.)
 
 ``commits`` fed exactly one value: ``head_commit_time()`` now fetches that one datum from
 REST instead — ``repos/{owner}/{repo}/commits/{oid}`` → ``.commit.committer.date`` — a
@@ -111,18 +112,32 @@ import subprocess
 import sys
 from pathlib import Path
 
+from open_pr_pages import read_open_prs
+
 LIB_DIR = Path(__file__).resolve().parent
 REVIEWER_LADDER_SH = LIB_DIR / "reviewer_ladder.sh"
 
 GH_TIMEOUT = 30
 
-# open_prs()'s own `--limit`, and the truncation cap `build_plan` checks its read against:
+# open_prs()'s own read ceiling, and the truncation cap `build_plan` checks its read against:
 # same contract dispatch_plan.py's OPEN_PR_LIST_CAP documents (PR #506 review) — a truncated
 # read silently drops open PRs, and a PR missing from the plan is indistinguishable from one
 # that needed no reviewer.
 OPEN_PR_LIST_CAP = 200
 
-PR_FIELDS = "number,headRefOid,mergeStateStatus,isDraft,reviews,comments,statusCheckRollup"
+# Every connection is bounded explicitly (open_pr_pages.py, dotfiles-dev#600). `commits` is
+# `last:1` and carries only the rollup -- never the unbounded commit list #537 was rejected for.
+# `last:` on reviews/comments keeps the NEWEST 100, which is what head coverage reads; their
+# `totalCount` is requested so a window that dropped older entries is known, not assumed whole
+# (see `truncated_window`).
+PR_SELECTION = (
+	"number headRefOid mergeStateStatus isDraft "
+	"reviews(last:100){totalCount nodes{commit{oid}}} "
+	"comments(last:100){totalCount nodes{body createdAt}} "
+	"commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{"
+	"__typename ... on CheckRun{name status conclusion} "
+	"... on StatusContext{context state}}}}}}}"
+)
 
 # The literal ladder_attribution_line() prefix (reviewer_ladder.sh). Matched per-line and
 # anchored, the same shape ladder_already_covered's own `test("^Fallback review — runtime:";
@@ -188,30 +203,41 @@ def parse_ts(value: str | None) -> datetime.datetime | None:
 		return None
 
 
+def _flatten(node: dict) -> dict:
+	"""Reshape one GraphQL PR node into the flat ``gh pr list --json`` shape every reader uses."""
+	rollup = [
+		context
+		for commit in node["commits"]["nodes"]
+		for context in (
+			((commit["commit"].get("statusCheckRollup") or {}).get("contexts") or {}).get("nodes")
+			or []
+		)
+	]
+	return {
+		**{k: node[k] for k in ("number", "headRefOid", "mergeStateStatus", "isDraft")},
+		"reviews": node["reviews"]["nodes"],
+		"comments": node["comments"]["nodes"],
+		"truncated": [
+			name
+			for name in ("reviews", "comments")
+			if (node[name].get("totalCount") or 0) > len(node[name]["nodes"])
+		],
+		"statusCheckRollup": rollup,
+	}
+
+
 def open_prs() -> list[dict]:
 	"""Return every open PR with the fields the predicate and the eligibility rules need.
 
-	One ``gh pr list`` call for the whole plan — ``reviews``, ``comments`` and
-	``statusCheckRollup`` are all available on the list endpoint, so a per-PR ``gh pr view``
-	fan-out (N calls, the shape that drained both REST and GraphQL buckets in #445) is not
-	needed to build this plan. ``commits`` is deliberately NOT requested here — see the module
-	docstring's dotfiles-dev#537 section; ``head_commit_time()`` fetches that one datum from
-	REST instead.
+	Paged through ``open_pr_pages.read_open_prs`` -- one 200-PR ``gh pr list`` request 502s
+	above ~20 PRs (dotfiles-dev#600) -- and still one read for the whole plan: ``reviews``,
+	``comments`` and the rollup all arrive on the PR node, so a per-PR ``gh pr view`` fan-out
+	(N calls, the shape that drained both REST and GraphQL buckets in #445) is not needed. A
+	failing page raises and discards the pages before it. ``commits`` is requested only as
+	``last:1`` for the rollup -- see the module docstring's dotfiles-dev#537 section;
+	``head_commit_time()`` fetches the head's own commit date from REST instead.
 	"""
-	raw = _run(
-		[
-			"gh",
-			"pr",
-			"list",
-			"--state",
-			"open",
-			"--limit",
-			str(OPEN_PR_LIST_CAP),
-			"--json",
-			PR_FIELDS,
-		]
-	)
-	return json.loads(raw) if raw else []
+	return [_flatten(n) for n in read_open_prs(PR_SELECTION, _run, OPEN_PR_LIST_CAP)]
 
 
 def resolve_rung() -> dict:
@@ -323,7 +349,7 @@ def head_commit_time(pr: dict) -> datetime.datetime | None:
 
 	Fetched from REST (``repos/{owner}/{repo}/commits/{oid}``) rather than read off the
 	``gh pr list`` response — see the module docstring's dotfiles-dev#537 section for why
-	``commits`` cannot be a ``PR_FIELDS`` entry at all. ``{owner}``/``{repo}`` are resolved by
+	``commits`` cannot be requested unbounded at all. ``{owner}``/``{repo}`` are resolved by
 	``gh`` itself from the working directory, the same way ``gh pr list`` resolves its repo.
 
 	None on an unreadable read (no ``gh``, no auth, an unknown oid, a timeout) — never guessed.
@@ -400,6 +426,17 @@ def ladder_covered_at_head(pr: dict, head_time: datetime.datetime) -> bool:
 	return False
 
 
+def truncated_window(pr: dict) -> str | None:
+	"""Return the names of the connections whose 100-node window dropped older entries.
+
+	A positive coverage hit inside the window is valid however much was dropped, but "no
+	coverage in view" is only a verdict when the window held everything -- otherwise the
+	review or attribution comment covering this head may be in the part that was not read,
+	and offering a reviewer would be a duplicate assignment on a guess.
+	"""
+	return " and ".join(pr.get("truncated") or []) or None
+
+
 def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None:
 	"""Return why this PR gets no reviewer this round, or None when it is dispatchable.
 
@@ -441,6 +478,12 @@ def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None
 			"already covered at the current head by a fallback review (a ladder "
 			"attribution comment postdates the head commit)"
 		)
+	dropped = truncated_window(pr)
+	if dropped:
+		return (
+			f"{dropped} truncated (more than 100 entries; the read window dropped older "
+			"ones) — head coverage is undecidable, so no reviewer is assigned"
+		)
 	return None
 
 
@@ -450,7 +493,7 @@ def build_plan() -> dict:
 	if len(prs) >= OPEN_PR_LIST_CAP:
 		raise RuntimeError(
 			f"open PR count ({len(prs)}) is at or past the {OPEN_PR_LIST_CAP}-PR cap this "
-			"read shares with its own --limit — a truncated read drops open PRs, and a PR "
+			"read shares with its own ceiling — a truncated read drops open PRs, and a PR "
 			"missing from the plan is indistinguishable from one that needed no reviewer; "
 			"refusing to print a plan rather than a possibly incomplete one"
 		)

@@ -65,20 +65,47 @@ ago() {
     date -u -d "@$(($(date -u +%s) - $1))" +%Y-%m-%dT%H:%M:%SZ
 }
 
-# stub_gh_prs — reads a `gh pr list --json` fixture on stdin and puts a gh stub on PATH that
-# serves TWO calls the planner now makes (dotfiles-dev#537): `pr list` returns the fixture
-# verbatim, and `api repos/{owner}/{repo}/commits/<oid>` looks the oid up in the SAME fixture's
-# per-PR `commits` array and prints its `committedDate` — simulating the REST read
-# head_commit_time() makes now that `commits` is no longer a PR_FIELDS entry, without changing
-# any existing fixture. Every invocation is appended to $GH_LOG so a test can assert the
-# planner issues no mutation.
+# stub_gh_prs — reads a flat PR-array fixture on stdin and puts a gh stub on PATH that serves
+# TWO calls the planner makes. `api graphql` serves the board one page at a time (dotfiles-dev#600):
+# it honours the planner's own `first=` and `after=` variables, re-shapes the SAME flat fixture
+# into the GraphQL page the real API returns (so every fixture below stays in its flat form), and
+# uses the offset as the cursor. `GH_FAIL_AFTER=<cursor>` makes the page requested after that
+# cursor fail like a gateway 502. `api repos/{owner}/{repo}/commits/<oid>` (dotfiles-dev#537)
+# looks the oid up in the fixture's per-PR `commits` array and prints its `committedDate` —
+# simulating the REST read head_commit_time() makes. Every invocation is appended to $GH_LOG so a
+# test can assert the planner issues no mutation and how many pages it asked for. A fixture may
+# set `reviewsTotal`/`commentsTotal` above its node count to simulate a connection the 100-node
+# window truncated (the API's `totalCount` exceeds the nodes it returned).
 stub_gh_prs() {
     cat >"$TEST_TMP/prs.json"
     cat >"$BIN/gh" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >>"$GH_LOG"
-if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-    cat "$FIXTURE"
+if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
+    after=0
+    first=20
+    for arg in "$@"; do
+        case "$arg" in
+            after=*) after="${arg#after=}" ;;
+            first=*) first="${arg#first=}" ;;
+        esac
+    done
+    if [ "$after" = "${GH_FAIL_AFTER:-none}" ]; then
+        echo "gh: HTTP 502" >&2
+        exit 1
+    fi
+    jq --argjson after "$after" --argjson first "$first" '
+        . as $all | .[$after:$after + $first] as $page
+        | {data: {repository: {pullRequests: {
+            pageInfo: {hasNextPage: (($after + $first) < ($all | length)),
+                       endCursor: (($after + $first) | tostring)},
+            nodes: [$page[] | {number, headRefOid, mergeStateStatus, isDraft,
+                reviews: {totalCount: (.reviewsTotal // ((.reviews // []) | length)),
+                          nodes: (.reviews // [])},
+                comments: {totalCount: (.commentsTotal // ((.comments // []) | length)),
+                           nodes: (.comments // [])},
+                commits: {nodes: [{commit: {statusCheckRollup:
+                    {contexts: {nodes: (.statusCheckRollup // [])}}}}]}}]}}}}' "$FIXTURE"
 elif [ "$1" = "api" ]; then
     oid="${2##*/}"
     jq -r --arg oid "$oid" \
@@ -454,9 +481,9 @@ EOF
     [ "$status" -eq 0 ]
     # Scheduling is deterministic; accepting a finding is not. Nothing here may comment,
     # review, resolve or merge (#480's boundary).
-    run grep -Eq 'pr (comment|review|merge|edit)|api .*-X|--method' "$GH_LOG"
+    run grep -Eq 'pr (comment|review|merge|edit)|api .*-X|--method|mutation' "$GH_LOG"
     [ "$status" -ne 0 ]
-    run grep -q 'pr list' "$GH_LOG"
+    run grep -q 'api graphql' "$GH_LOG"
     [ "$status" -eq 0 ]
 }
 
@@ -495,21 +522,88 @@ EOF
 
 # --- dotfiles-dev#537: the request shape itself, not just the parse -----------------
 
-@test "PR_FIELDS never requests commits — GitHub rejects it unconditionally at any usable limit" {
+@test "PR_SELECTION bounds every connection — GitHub rejects an unbounded commits one (#537, #600)" {
     # THE test that would have caught #537: every test above stubs `gh`, so it passes
     # regardless of what the real query asks for — this is the one assertion pinned against
-    # the REQUEST, not the response. Measured against the live repo 2026-09-27: `--json
-    # …,commits,…` is rejected at --limit 200, 100, 60 and even the full PR_FIELDS list at 50
-    # ("requesting up to 1,000,000 possible nodes which exceeds the maximum limit of
-    # 500,000") — commits multiplies PRs x commits x each commit's own authors connection.
+    # the REQUEST, not the response. Measured against the live repo 2026-09-27: an unbounded
+    # `commits` is rejected at --limit 200, 100, 60 and even at 50 ("requesting up to 1,000,000
+    # possible nodes which exceeds the maximum limit of 500,000") — commits multiplies PRs x
+    # commits x each commit's own authors connection. #600 moved the read to GraphQL pages, so
+    # the same guarantee is now stated as "every connection carries first:/last:", and
+    # `commits` may only be the one-commit rollup carrier.
     run python3 -c "
-import sys
+import re, sys
 sys.path.insert(0, '$(dirname "$PLANNER")')
-from review_fanout_plan import PR_FIELDS
-print(PR_FIELDS)
-assert 'commits' not in PR_FIELDS.split(','), PR_FIELDS
+from review_fanout_plan import PR_SELECTION
+print(PR_SELECTION)
+for name in ('reviews', 'comments', 'commits', 'contexts'):
+    mentioned = len(re.findall(r'\\b' + name + r'\\b', PR_SELECTION))
+    bounded = len(re.findall(name + r'\\((first|last):\\d+\\)', PR_SELECTION))
+    assert mentioned == bounded >= 1, (name, mentioned, bounded)
+assert 'commits(last:1)' in PR_SELECTION
 "
     [ "$status" -eq 0 ]
+}
+
+# --- dotfiles-dev#600: the board is read in small pages, whole or not at all --------
+
+# board_of N — a flat fixture of N open PRs, each unreviewed at a head an hour old, so every
+# one of them is dispatchable and a page dropped on the way shows up as a missing number.
+board_of() {
+    jq -n --argjson n "$1" --arg when "$(ago 3600)" '[range(1; $n + 1) | {
+        number: ., headRefOid: "head\(.)", mergeStateStatus: "BLOCKED", isDraft: false,
+        reviews: [], comments: [],
+        commits: [{oid: "head\(.)", committedDate: $when}],
+        statusCheckRollup: [{__typename: "CheckRun", name: "lint", status: "COMPLETED",
+                             conclusion: "SUCCESS"}]}]'
+}
+
+@test "a board larger than one page returns the UNION of every page (#600)" {
+    stub_gh_prs <<<"$(board_of 45)"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    # 45 PRs at 20 per page: three requests, and every PR from every page in the answer.
+    [ "$(grep -c 'api graphql' "$GH_LOG")" -eq 3 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 45 ]
+    [ "$(jq -r '[.dispatchable[].pr] | sort == [range(1; 46)]' <<<"$output")" = "true" ]
+    # The rollup survived the re-shape on a PR from the LAST page, not just the first.
+    [ "$(jq -r '.dispatchable[] | select(.pr == 45) | .checks.failing | length' <<<"$output")" -eq 0 ]
+}
+
+@test "the paged read asks for small pages with a cursor, never one big request (#600)" {
+    stub_gh_prs <<<"$(board_of 45)"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    run grep -c 'first=20' "$GH_LOG"
+    [ "$output" -eq 3 ]
+    run grep -c 'after=20' "$GH_LOG"
+    [ "$output" -eq 1 ]
+    run grep -c 'after=40' "$GH_LOG"
+    [ "$output" -eq 1 ]
+}
+
+@test "a page that fails mid-pagination is UNREADABLE for the whole board, no partial plan (#600)" {
+    stub_gh_prs <<<"$(board_of 45)"
+    # Page one (PRs 1-20) answers; the page after cursor 20 returns a gateway 502.
+    export GH_FAIL_AFTER=20
+    run python3 "$PLANNER"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"review_fanout_plan: could not read the board"* ]]
+    # The 20 PRs page one DID read must not leak out as a plan that reads as the whole board.
+    [[ "$output" != *"dispatchable"* ]]
+    [[ "$output" != *"Traceback"* ]]
+    [ "$(grep -c 'api graphql' "$GH_LOG")" -eq 2 ]
+}
+
+@test "a malformed page is UNREADABLE, never read as an empty or final page (#600)" {
+    cat >"$BIN/gh" <<'STUB'
+#!/bin/bash
+echo '{"data":{"repository":null}}'
+STUB
+    chmod +x "$BIN/gh"
+    run python3 "$PLANNER"
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"dispatchable"* ]]
 }
 
 @test "the stub path still yields a head time after commits left PR_FIELDS" {
@@ -542,4 +636,67 @@ EOF
     [ "$status" -eq 0 ]
     # 120s old, window 30s — outside it, so the push no longer excuses the missing review.
     [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+}
+
+# --- a truncated reviews/comments window is undecidable, never "not covered" ---------
+
+@test "a truncated comment window with no coverage in view is excluded by name, not dispatched" {
+    # comments(last:100) of 150: the attribution comment covering this head could be among
+    # the 50 the window dropped. "Not covered" is unprovable, so the PR must not be offered
+    # a reviewer on a guess (the duplicate assignment the codex review of #605 predicted).
+    stub_gh_prs <<EOF
+[{"number":610,"headRefOid":"dddd4444","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],
+  "comments":[{"body":"unrelated","createdAt":"$(ago 900)"}],
+  "commentsTotal":150,
+  "commits":[{"oid":"dddd4444","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 610)" == *"comments truncated"* ]]
+}
+
+@test "a truncated review window with no coverage in view is excluded by name" {
+    stub_gh_prs <<EOF
+[{"number":611,"headRefOid":"eeee5555","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"ffff6666"}}],
+  "reviewsTotal":101,
+  "comments":[],
+  "commits":[{"oid":"eeee5555","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 611)" == *"reviews truncated"* ]]
+}
+
+@test "coverage found inside a truncated window still counts as covered" {
+    # A positive hit is valid however much history was dropped; only the negative is not.
+    stub_gh_prs <<EOF
+[{"number":612,"headRefOid":"aaaa7777","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa7777"}}],
+  "reviewsTotal":300,
+  "comments":[],
+  "commits":[{"oid":"aaaa7777","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [[ "$(reason_for 612)" == *"already reviewed at the current head"* ]]
+}
+
+@test "windows that hold their whole totalCount are not truncated" {
+    stub_gh_prs <<EOF
+[{"number":613,"headRefOid":"bbbb8888","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"cccc9999"}}],
+  "comments":[],
+  "commits":[{"oid":"bbbb8888","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "613" ]
 }

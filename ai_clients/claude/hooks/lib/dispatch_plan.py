@@ -84,6 +84,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from open_pr_pages import read_open_prs
+
 LIB_DIR = Path(__file__).resolve().parent
 FREE_SURFACE_SH = LIB_DIR / "free_surface.sh"
 ROADMAP_UNBLOCK_SH = LIB_DIR / "roadmap_unblock.sh"
@@ -102,7 +104,7 @@ BLOCKED_LABEL = "state:blocked"
 # editable from here (dotfiles-dev#433 finding 2, see module docstring).
 FREE_SURFACE_ISSUE_CAP = 500
 
-# open_prs()'s own `--limit`, and the truncation-detection cap `build_plan` checks its read
+# open_prs()'s own read ceiling, and the truncation-detection cap `build_plan` checks its read
 # against (PR #506 review): a truncated read can miss an open PR that mentions a later issue,
 # reading that issue as unmentioned rather than held — the same failure shape #433 finding 2
 # names for the issue read above, so it gets the same fix (fail loud at the cap, never silently
@@ -338,6 +340,11 @@ def open_issues(slug: str) -> list[dict]:
 	return issues[:FREE_SURFACE_ISSUE_CAP]
 
 
+# Bounded like every connection read through open_pr_pages.py (dotfiles-dev#600); 100 is far
+# past any PR's real closing-reference count, so the bound never truncates in practice.
+PR_SELECTION = "number title body closingIssuesReferences(first:100){nodes{number}}"
+
+
 def open_prs(slug: str) -> list[dict]:
 	"""Return every open PR's number, title, body, and closing issue references for ``slug``.
 
@@ -349,23 +356,15 @@ def open_prs(slug: str) -> list[dict]:
 	plan when the result hits that cap, same contract as ``open_issues``/
 	``FREE_SURFACE_ISSUE_CAP`` (PR #506 review: a truncated read can miss a PR that mentions a
 	later issue, reading that issue as unmentioned rather than held).
+
+	Paged (``open_pr_pages.py``, dotfiles-dev#600), so a large board is never one oversized
+	request; a failing page raises and discards the pages before it, which ``build_plan``
+	turns into the by-name UNREADABLE exclusion rather than a partial list.
 	"""
-	raw = _run(
-		[
-			"gh",
-			"pr",
-			"list",
-			"--repo",
-			slug,
-			"--state",
-			"open",
-			"--json",
-			"number,title,body,closingIssuesReferences",
-			"--limit",
-			str(OPEN_PR_LIST_CAP),
-		]
-	)
-	return json.loads(raw) if raw else []
+	return [
+		{**node, "closingIssuesReferences": node["closingIssuesReferences"]["nodes"]}
+		for node in read_open_prs(PR_SELECTION, _run, OPEN_PR_LIST_CAP, slug)
+	]
 
 
 def mentioned_without_closing(issue_numbers: set[int], prs: list[dict], slug: str) -> dict[int, str]:
@@ -667,7 +666,7 @@ def build_plan() -> dict:
 	if len(prs) >= OPEN_PR_LIST_CAP:
 		raise RuntimeError(
 			f"open PR count ({len(prs)}) is at or past the {OPEN_PR_LIST_CAP}-PR cap this "
-			"read shares with its own --limit (PR #506 review) — a truncated read can miss "
+			"read shares with its own ceiling (PR #506 review) — a truncated read can miss "
 			"a PR that mentions a later issue, misclassifying it as unmentioned; refusing to "
 			"print a plan rather than a possibly wrong one"
 		)

@@ -139,8 +139,8 @@ issue_json_labeled() {
 # already claimed. FAIL_BRANCH=1 makes the default-branch lookup fail, exercising
 # gate_free_surface's own fail-closed path. FROZEN_PR_FILE, if given, is a file an OPEN PR (no
 # live agent behind it — no matching worktree) touches, for finding 1's own test. MENTION_PRS_JSON,
-# if given, is the full `gh pr list --json number,title,body,closingIssuesReferences` array the
-# planner's OWN mention-without-closing read (dotfiles-dev#413) returns — default `[]` (no PRs
+# if given, is the flat `number,title,body,closingIssuesReferences` PR array the stub serves, re-shaped
+# into GraphQL pages, to the planner's OWN mention-without-closing read (dotfiles-dev#413) returns — default `[]` (no PRs
 # mention anything). NATIVE_BLOCK_ISSUE/NATIVE_BLOCK_JSON, if given, make the
 # `issues/<n>/dependencies/blocked_by` read for that one issue return NATIVE_BLOCK_JSON (a
 # `_ru_native_blockers`-shaped array) instead of the default `[]` (no native blockers).
@@ -199,8 +199,30 @@ JSON
     echo main
     ;;
 "pr list --repo acme/widgets --state open --json number,headRefName --limit 200") echo '$pr_list' ;;
-"pr list --repo acme/widgets --state open --json number,title,body,closingIssuesReferences --limit 200")
-    cat <<'JSON'
+"api graphql -f owner="*)
+    # open_prs() pages the board (dotfiles-dev#600): honour the planner's own \`first=\` and
+    # \`after=\` variables and re-shape the flat MENTION_PRS_JSON fixture into the GraphQL page
+    # the real API returns, with the offset as the cursor. GH_FAIL_AFTER=<cursor> makes the page
+    # requested after that cursor fail like a gateway 502.
+    after=0
+    first=20
+    for arg in "\$@"; do
+        case "\$arg" in
+            after=*) after="\${arg#after=}" ;;
+            first=*) first="\${arg#first=}" ;;
+        esac
+    done
+    if [ "\$after" = "\${GH_FAIL_AFTER:-none}" ]; then
+        echo "gh: HTTP 502" >&2
+        exit 1
+    fi
+    jq --argjson after "\$after" --argjson first "\$first" '
+        . as \$all | .[\$after:\$after + \$first] as \$page
+        | {data: {repository: {pullRequests: {
+            pageInfo: {hasNextPage: ((\$after + \$first) < (\$all | length)),
+                       endCursor: ((\$after + \$first) | tostring)},
+            nodes: [\$page[] | {number, title, body,
+                closingIssuesReferences: {nodes: (.closingIssuesReferences // [])}}]}}}}' <<'JSON'
 $mention_prs
 JSON
     ;;
@@ -585,6 +607,52 @@ PY
     [[ "$output" != *'"dispatchable"'* ]]
 }
 
+# --- dotfiles-dev#600: the PR board is read in small pages, whole or not at all --------------
+
+# mention_board N MENTIONER — a flat board of N PRs naming nothing, except PR number MENTIONER,
+# whose body names issue #361 without a closing keyword. Putting it on the LAST page means it
+# is only seen if every page before it was read and kept.
+mention_board() {
+    jq -nc --argjson n "$1" --argjson m "$2" '[range(1; $n + 1) | {
+        number: ., title: "", closingIssuesReferences: [],
+        body: (if . == $m then "relates to #361" else "" end)}]'
+}
+
+@test "a PR board larger than one page is read to the end: a mention on page 3 still counts" {
+    stub_gh "[$(issue_json 361 free/a.sh)]" "" "" 0 "" "$(mention_board 45 45)"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [[ "$(field '.excluded[0].reason')" == *"PR #45"* ]]
+}
+
+@test "a page that fails mid-pagination is UNREADABLE for the whole board, never a partial one" {
+    # Page one (PRs 1-20) answers and names nothing; the page after cursor 20 returns a 502. A
+    # partial board here would read #361 as unmentioned and DISPATCH it despite the open PR on
+    # page three — so every candidate must be excluded by name instead.
+    export GH_FAIL_AFTER=20
+    stub_gh "[$(issue_json 361 free/a.sh)]" "" "" 0 "" "$(mention_board 45 45)"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [ "$(field '.excluded[0].issue')" = "361" ]
+    [[ "$(field '.excluded[0].reason')" == *"UNREADABLE"* ]]
+}
+
+@test "open_prs asks for small pages and returns every PR of every page" {
+    stub_gh "[]" "" "" 0 "" "$(mention_board 45 0)"
+    cd "$BATS_TEST_TMPDIR"
+    run python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+prs = dispatch_plan.open_prs("acme/widgets")
+print(len(prs), sorted(p["number"] for p in prs) == list(range(1, 46)), prs[0]["closingIssuesReferences"])
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+    [ "$status" -eq 0 ]
+    [ "$output" = "45 True []" ]
+}
+
 # --- fail-closed half of the gate contract (dotfiles-dev#398) --------------------------------
 
 @test "a gate failure excludes every issue as UNKNOWN, never a partial free answer" {
@@ -703,7 +771,7 @@ print([i["number"] for i in dispatch_plan.open_issues("o/r")])
 	cat >bin4/gh <<'STUB'
 #!/bin/sh
 case "$*" in
-  *"pr list"*) exit 1 ;;                                   # the GraphQL-only read, refused
+  *"api graphql"*) exit 1 ;;                               # the GraphQL-only read, refused
   *"issues?state=open"*) printf '[{"number":77,"body":"no surface"}]\n' ;;
   *) printf 'master\n' ;;                                   # default_branch et al
 esac
