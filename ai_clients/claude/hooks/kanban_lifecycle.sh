@@ -108,8 +108,10 @@ head_from_command() {
     # The branch named by `--head <b>`, `--head=<b>` or `-H <b>` on the `gh pr create` in $1, with
     # any `owner:` prefix stripped, read off the real argv so `--head x` quoted inside a --title
     # or --body is not mistaken for the flag. Returns 1 when the command carries no such flag, and
-    # 2 when it cannot be tokenized (unbalanced quote) or names `--head` with no value (gh rejects
-    # it) — the caller must not guess a branch then.
+    # 2 when it cannot be tokenized (unbalanced quote), names `--head` with no value (gh rejects
+    # it), or carries a value Bash expands before gh sees it (`$VAR`, `$(…)`, backticks, `{a,b}`)
+    # — the caller must not guess a branch then: this hook reads the raw text, so a number inside
+    # `"${BRANCH:-fix/564}"` is not the branch that was actually created.
     local json out
     json="$(printf '%s' "$1" \
         | python3 "$(dirname "${BASH_SOURCE[0]}")/lib/gh_cmd_match.py" pr 2>/dev/null)" || return 2
@@ -117,6 +119,7 @@ head_from_command() {
     case "$out" in
         n) return 1 ;;
         h) return 2 ;;
+        *'$'* | *'`'* | *'{'*) return 2 ;;
     esac
     out="${out#h}"
     printf '%s' "${out##*:}"

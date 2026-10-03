@@ -292,3 +292,49 @@ write_fake_gh_two_cards() {
     [ "$status" -eq 0 ]
     [[ "$output" != *"moved issue"* ]]
 }
+
+# --- #594 round 4: the matcher sees raw text, never Bash's expansion of it -----------------------
+# `--head "${BRANCH:-fix/564}"` may expand to ANY branch, so the `564` inside is not the card.
+
+@test "gh pr create --head with a \${VAR:-default} expansion moves nothing" {
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --head "${BRANCH:-fix/564}" --title x'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create --head with a bare \$VAR moves nothing" {
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --head fix/564-$SUFFIX --title x'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create --head with a command substitution moves nothing" {
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --head "$(echo fix/564-x)" --title x'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create --head with a backtick substitution moves nothing" {
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --head "`echo fix/564-x`" --title x'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create --head with a brace expansion moves nothing" {
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --head fix/{564,131}-x --title x'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create --head -H <b> takes -H as the head value and moves nothing" {
+    # pflag consumes the next argv as the value even when it looks like a flag
+    write_fake_gh_two_cards
+    run run_hook 'gh pr create --head -H fix/564-other --title x'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
