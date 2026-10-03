@@ -12,6 +12,14 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     exit 1
 fi
 
+# The orchestrator has already sourced _common.sh. Sourcing this file on its
+# own (the documented uninstall_insync invocation) would otherwise leave
+# print_status/command_exists undefined and make step 1 skip `insync quit`.
+if ! declare -F print_status > /dev/null; then
+    # shellcheck source=_common.sh
+    source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
+fi
+
 # ============================================================================
 # LOCALSEND
 # ============================================================================
@@ -386,7 +394,7 @@ install_rustdesk() {
 }
 
 # ============================================================================
-# INSYNC (Google Drive client)
+# INSYNC (cloud-drive sync client)
 # ============================================================================
 
 install_insync() {
@@ -496,7 +504,7 @@ install_insync() {
         fi
     fi
 
-    print_status "info" "Insync: Google Drive sync client for Linux"
+    print_status "info" "Insync: cloud-drive sync client for Linux"
     print_status "config" "Launch with: insync start"
     print_status "config" "Configure with: insync show"
 
@@ -671,8 +679,8 @@ install_rclone_mount_unit() {
 # UNINSTALL INSYNC (replaced by rclone mount, see issue #360)
 # ============================================================================
 # ⚠️ Deleting ~/Insync while Insync is running propagates the deletion to
-# Google Drive — that is exactly what a sync client is for, and it is the one
-# way this could destroy remote data. These 5 steps are mandatory and
+# the remote account — that is exactly what a sync client is for, and it is the
+# one way this could destroy remote data. These 5 steps are mandatory and
 # ordered; each refuses to continue when its precondition fails rather than
 # pressing on. Never registered in INSTALL_REGISTRY (#342 — a registry entry
 # runs during Full Installation too, which would fight install_insync). Call
@@ -682,6 +690,39 @@ install_rclone_mount_unit() {
 # Step 4 (deleting ~/Insync and ~/.config/Insync) additionally requires the
 # explicit opt-in INSYNC_CONFIRM_DELETE=1 env var — it is the one step that
 # destroys local data, and it must never run just because steps 1-3 passed.
+
+# Poll until no insync process is left; return 1 after <seconds> one-second polls.
+_insync_wait_for_exit() {
+    local seconds="$1"
+    local waited=0
+    while pgrep insync > /dev/null 2>&1; do
+        [ "$waited" -ge "$seconds" ] && return 1
+        sleep 1
+        waited=$((waited + 1))
+    done
+    return 0
+}
+
+# `insync quit` returns 0 yet can be ignored while the daemon is busy (measured:
+# still alive 2 minutes later with millions of watched files), so wait, then
+# SIGTERM, then wait again. Never SIGKILL: killing mid-sync can corrupt the
+# state the daemon was about to flush.
+_insync_stop() {
+    local quit_timeout="${INSYNC_QUIT_TIMEOUT:-30}"
+    local term_timeout="${INSYNC_TERM_TIMEOUT:-60}"
+    local pids
+
+    if command_exists insync; then
+        insync quit &>> "$LOG_FILE" || true
+    fi
+    _insync_wait_for_exit "$quit_timeout" && return 0
+
+    print_status "warning" "Step 1/5: insync ignored 'quit' for ${quit_timeout}s — sending SIGTERM"
+    mapfile -t pids < <(pgrep insync)
+    kill -TERM "${pids[@]}" &>> "$LOG_FILE" || true
+    _insync_wait_for_exit "$term_timeout"
+}
+
 uninstall_insync() {
     local remote="$1"
     local account_dir="${2:-$HOME/Insync}"
@@ -690,11 +731,7 @@ uninstall_insync() {
 
     # Step 1: quit Insync, verify no process survives, no autostart entry remains.
     print_status "info" "Step 1/5: quitting Insync and checking for a surviving process..."
-    if command_exists insync; then
-        insync quit &>> "$LOG_FILE" || true
-        sleep 2
-    fi
-    if pgrep -a insync > /dev/null 2>&1; then
+    if ! _insync_stop; then
         print_status "error" "Step 1/5: an insync process is still running — refusing to continue"
         pgrep -a insync | tee -a "$LOG_FILE"
         return 1
@@ -744,8 +781,8 @@ uninstall_insync() {
     fi
     print_status "success" "Step 2/5: every local file exists on the remote — comparison recorded in $LOG_FILE"
 
-    # Step 3: uninstall the package. Touches only the local machine; Google
-    # Drive keeps everything regardless of which client is installed.
+    # Step 3: uninstall the package. Touches only the local machine; the
+    # remote keeps everything regardless of which client is installed.
     print_status "info" "Step 3/5: removing the insync package..."
     run_or_echo sudo apt remove --purge -y insync
     if dpkg -l 2>/dev/null | grep -q '^ii  insync'; then
