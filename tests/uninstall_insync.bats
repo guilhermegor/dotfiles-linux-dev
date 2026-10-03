@@ -3,7 +3,7 @@
 # Unit tests for uninstall_insync (issue #360: replace Insync with an
 # on-demand rclone mount). The 5-step ordered removal is the whole safety
 # story here — deleting ~/Insync while the daemon is still running
-# propagates the deletion to Google Drive. Every precondition is stubbed
+# propagates the deletion to the remote account. Every precondition is stubbed
 # (pgrep, rclone, sudo, apt, dpkg, insync); no real process is inspected, no
 # real package is removed, and nothing under a real $HOME is ever touched.
 #
@@ -30,16 +30,43 @@ setup() {
     mkdir -p "$ACCOUNT_DIR"
     echo "remote-backed file" > "$ACCOUNT_DIR/file.txt"
 
-    # No live process by default.
+    # No live process by default. Three ways to keep one "alive":
+    #   PGREP_INSYNC_RUNNING=1   never exits
+    #   PGREP_EXIT_AFTER_POLLS=n exits once pgrep has been called n times
+    #   PGREP_EXIT_ON_TERM=1     ignores `insync quit`, exits once kill -TERM ran
+    # `-a` prints "pid name" like the real pgrep; without it, just the pid.
+    export KILL_LOG="$TMP/kill_invocations.log"
+    export PGREP_COUNT_FILE="$TMP/pgrep_count"
     cat > "$TMP/bin/pgrep" <<'STUB'
 #!/bin/bash
-if [ "${PGREP_INSYNC_RUNNING:-0}" = "1" ]; then
-    echo "12345 insync"
-    exit 0
+running=0
+[ "${PGREP_INSYNC_RUNNING:-0}" = "1" ] && running=1
+if [ "${PGREP_EXIT_AFTER_POLLS:-0}" -gt 0 ]; then
+    n=$(cat "$PGREP_COUNT_FILE" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    echo "$n" > "$PGREP_COUNT_FILE"
+    [ "$n" -le "$PGREP_EXIT_AFTER_POLLS" ] && running=1
 fi
-exit 1
+if [ "${PGREP_EXIT_ON_TERM:-0}" = "1" ] && ! grep -q -- '-TERM' "$KILL_LOG" 2>/dev/null; then
+    running=1
+fi
+[ "$running" = "1" ] || exit 1
+if [ "$1" = "-a" ]; then echo "12345 insync"; else echo "12345"; fi
+exit 0
 STUB
     chmod +x "$TMP/bin/pgrep"
+
+    # sleep: record only, so the bounded poll loop never really waits.
+    export SLEEP_LOG="$TMP/sleep_invocations.log"
+    cat > "$TMP/bin/sleep" <<'STUB'
+#!/bin/bash
+echo "sleep $*" >> "$SLEEP_LOG"
+STUB
+    chmod +x "$TMP/bin/sleep"
+
+    # kill is a shell builtin, so a PATH stub would never be reached — shadow
+    # it with a function. Records the call; never signals a real process.
+    kill() { echo "kill $*" >> "$KILL_LOG"; }
 
     # rclone: check/lsjson controllable via env; never a real network call.
     # For `check`, honours RCLONE_CHECK_FAIL (generic non-zero exit),
@@ -252,4 +279,67 @@ teardown() {
     run uninstall_insync gdrive "$ACCOUNT_DIR"
     [ -f "$INSYNC_LOG" ]
     grep -qF 'insync quit' "$INSYNC_LOG"
+}
+
+# --- issue #599: sharing.sh sourced directly must be self-sufficient --------
+
+@test "sharing.sh sourced on its own defines print_status and command_exists" {
+    run bash -c 'source "$1/distro_config/install_lib/sharing.sh"
+        declare -F print_status command_exists uninstall_insync' _ "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"print_status"* ]]
+    [[ "$output" == *"command_exists"* ]]
+}
+
+@test "documented invocation quits insync when sharing.sh is the only file sourced" {
+    run bash -c 'source "$1/distro_config/install_lib/sharing.sh"
+        uninstall_insync gdrive "$2"' _ "$REPO_ROOT" "$ACCOUNT_DIR"
+    [ "$status" -eq 0 ]
+    grep -qF 'insync quit' "$INSYNC_LOG"
+}
+
+# --- issue #599: step 1 polls, escalates to SIGTERM, never SIGKILL ----------
+
+@test "step 1 waits for a slow insync to exit and sends no signal" {
+    export PGREP_EXIT_AFTER_POLLS=5
+    run uninstall_insync gdrive "$ACCOUNT_DIR"
+    [ "$status" -eq 0 ]
+    [ ! -f "$KILL_LOG" ]
+    [ "$(wc -l < "$SLEEP_LOG")" -ge 3 ]
+}
+
+@test "step 1 sends SIGTERM when insync quit is ignored, then continues" {
+    export PGREP_EXIT_ON_TERM=1
+    run uninstall_insync gdrive "$ACCOUNT_DIR"
+    [ "$status" -eq 0 ]
+    grep -qF 'kill -TERM 12345' "$KILL_LOG"
+}
+
+@test "step 1 never sends SIGKILL, and refuses when SIGTERM is ignored too" {
+    export PGREP_INSYNC_RUNNING=1
+    run uninstall_insync gdrive "$ACCOUNT_DIR"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"still running"* ]]
+    grep -qF 'kill -TERM' "$KILL_LOG"
+    run grep -qE -- '-9|-KILL|SIGKILL' "$KILL_LOG"
+    [ "$status" -ne 0 ]
+    [ -d "$ACCOUNT_DIR" ]
+    [ ! -f "$APT_LOG" ]
+}
+
+@test "step 1 wait is bounded by INSYNC_QUIT_TIMEOUT plus INSYNC_TERM_TIMEOUT" {
+    export PGREP_INSYNC_RUNNING=1 INSYNC_QUIT_TIMEOUT=3 INSYNC_TERM_TIMEOUT=2
+    run uninstall_insync gdrive "$ACCOUNT_DIR"
+    [ "$status" -eq 1 ]
+    [ "$(wc -l < "$SLEEP_LOG")" -eq 5 ]
+}
+
+# --- issue #599: provider is named generically ------------------------------
+
+@test "uninstall_insync's own comments do not name a specific cloud provider" {
+    local body
+    body=$(sed -n '/^# UNINSTALL INSYNC/,/^# CLAMAV ANTIVIRUS/p' \
+        "$REPO_ROOT/distro_config/install_lib/sharing.sh")
+    [ -n "$body" ]
+    [[ "$body" != *"Google Drive"* ]]
 }

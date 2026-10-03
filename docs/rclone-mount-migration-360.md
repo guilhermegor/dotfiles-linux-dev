@@ -50,6 +50,10 @@ cache ceiling replaces a 1.3 T mirror.
   bash -c 'source distro_config/install_lib/sharing.sh; uninstall_insync <remote> <account-dir>'
   ```
 
+  `sharing.sh` sources its sibling `_common.sh` itself when `print_status` is not already
+  defined, so this one-file form works (#599). Before that, `command_exists` was undefined,
+  `insync quit` was never called, and step 1 refused because Insync was still running.
+
 ### Where the operator is asked (issue #365)
 
 `install_lib/sharing.sh` never prompts (#339 — an `install_*` function must run unattended).
@@ -68,9 +72,27 @@ functions just fall back to `onedrive` / `onedrive` / `global` / `~/OneDrive`.
 order below is mandatory; `uninstall_insync` enforces it by refusing to continue when a
 precondition fails.
 
+0. **Pre-check with Insync's own tools, before running anything.** While Insync is still up:
+
+   ```bash
+   insync status
+   insync error list
+   insync conflict list
+   ```
+
+   These are the fastest way to learn what step 2 will trip over. On this machine they showed
+   207 symlink upload errors (`rclone check` skips symlinks without `-L`/`-l`, so those are
+   not a real gap) and 106 local-only conflicts ("edited locally, deleted in cloud"), which
+   `rclone check` lists as missing on the remote. Decide about the conflicts in Insync's UI
+   first — they are the files most likely to be the only copy.
 1. **Quit Insync and disable it from starting.** `uninstall_insync` calls `insync quit`, then
-   requires `pgrep -a insync` to print nothing, and removes `~/.config/autostart/insync.desktop`
-   if present. Refuses (exit 1) if any insync process survives.
+   polls `pgrep insync` once a second for up to `INSYNC_QUIT_TIMEOUT` seconds (default 30).
+   `insync quit` returns 0 yet can be ignored while the daemon is busy — measured: the main
+   process (`insync start --no-daemon`, watching 3.87 M files) was still alive 2 minutes
+   later. If it survives, `uninstall_insync` sends SIGTERM (never SIGKILL) and polls for up
+   to `INSYNC_TERM_TIMEOUT` seconds (default 60) more. It then removes
+   `~/.config/autostart/insync.desktop` if present. Refuses (exit 1) only if an insync
+   process still survives after both waits.
 2. **Verify local-to-remote integrity while the local copy still exists.** With the daemon
    stopped, `uninstall_insync` runs
    `rclone check <account-dir> <remote>: --one-way --size-only --missing-on-dst <file> --differ <file>`
@@ -85,6 +107,20 @@ precondition fails.
    Refuses — exit 1, before any deletion — on a non-zero exit **or** a non-empty
    `--missing-on-dst` / `--differ` file, naming both files so the discrepancy can be inspected
    before re-running.
+
+   **Resolving a refusal.** Files in `uninstall_insync_missing_on_dst.txt` exist only locally
+   (typically the "edited locally, deleted in cloud" conflicts above). Upload exactly those,
+   then re-check with hashes — `--size-only` can pass a same-size file whose content differs:
+
+   ```bash
+   rclone copy <account-dir> <remote>: --files-from <log-dir>/uninstall_insync_missing_on_dst.txt
+   rclone check <account-dir> <remote>: --one-way \
+       --missing-on-dst /tmp/missing.txt --differ /tmp/differ.txt
+   ```
+
+   Drop `--size-only` on that re-check so content is compared by hash; both output files must
+   come back empty. Then re-run `uninstall_insync` (which repeats its own check). Entries in
+   `uninstall_insync_differ.txt` need a human decision on which side wins before copying.
 3. **Uninstall the package.** `sudo apt remove --purge insync`, verified against
    `dpkg -l | grep insync` being empty. Touches only the local machine — OneDrive keeps
    everything regardless of which client is installed.
