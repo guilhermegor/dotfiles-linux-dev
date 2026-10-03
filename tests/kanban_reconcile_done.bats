@@ -98,7 +98,19 @@ case "\$1 \$2" in
                 case "\$2" in
                     repos/*/issues\?*)
                         [ -f "$TEST_TMP/fail-issues" ] && exit 1
-                        cat "$TEST_TMP/issues.json" 2>/dev/null
+                        # Honour the state= filter like the real endpoint: a state=open read
+                        # must not return closed issues, or the board-scoped read goes untested.
+                        case "\$2" in
+                            *state=open*) jq -c 'map(select(.state == "open"))' "$TEST_TMP/issues.json" ;;
+                            *) cat "$TEST_TMP/issues.json" 2>/dev/null ;;
+                        esac
+                        ;;
+                    repos/*/issues/[0-9]*)
+                        [ -f "$TEST_TMP/fail-confirm" ] && exit 1
+                        n="\${2##*/}"
+                        # A missing issue is a 404 — non-zero exit, like the real endpoint.
+                        jq -ce --argjson n "\$n" 'map(select(.number == \$n)) | first // empty' \\
+                            "$TEST_TMP/issues.json" | grep . || exit 1
                         ;;
                     *) exit 1 ;;
                 esac
@@ -253,14 +265,65 @@ run_reconcile() {
 
 # --- per-card fail-closed: one bad card doesn't abort the round -------------------------------
 
-@test "an issue missing from the REST listing is reported UNKNOWN and the round continues" {
+@test "an issue that cannot be confirmed is reported UNKNOWN and the round continues" {
     write_issues "$(issue 43 closed)"
     write_items "$(item ITEM_42 "In review" 42)" "$(item ITEM_43 "In review" 43)"
     write_fake_gh
     run_reconcile
     [[ "$output" == *"STATUS=ok"* ]]
-    [[ "$output" == *"UNKNOWN issue #42: not found in issue listing"* ]]
+    [[ "$output" == *"UNKNOWN issue #42: could not confirm its state"* ]]
     [[ "$output" == *"moved issue #43 to Done"* ]]
+}
+
+# --- board-scoped read (CodeRabbit, PR #589): cost follows the board, not the repo's history ----
+
+@test "the listing is never read with state=all" {
+    write_issues "$(issue 42 closed)" "$(issue 43 open)"
+    write_items "$(item ITEM_42 "In review" 42)" "$(item ITEM_43 "In review" 43)"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    refute_gh 'state=all'
+    grep -q -- 'state=open' "$GH_LOG"
+}
+
+@test "a card absent from the open listing is confirmed per card and moved when closed" {
+    write_issues "$(issue 42 closed)"
+    write_items "$(item ITEM_42 "In review" 42)"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"moved issue #42 to Done (was: In review)"* ]]
+    grep -q -- 'repos/owner/repo/issues/42' "$GH_LOG"
+}
+
+@test "a card already in Done costs no confirmation read" {
+    write_issues "$(issue 42 closed)"
+    write_items "$(item ITEM_42 Done 42)"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    refute_gh 'repos/owner/repo/issues/42'
+}
+
+@test "an open card is answered by the listing, no confirmation read" {
+    write_issues "$(issue 42 open)"
+    write_items "$(item ITEM_42 "" 42)"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"moved issue #42 from No Status to Ready"* ]]
+    refute_gh 'repos/owner/repo/issues/42'
+}
+
+@test "a failed confirmation read is UNKNOWN for that card, never closed, nothing moved" {
+    touch "$TEST_TMP/fail-confirm"
+    write_issues "$(issue 42 closed)"
+    write_items "$(item ITEM_42 "In review" 42)"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" == *"UNKNOWN issue #42: could not confirm its state"* ]]
+    [[ "$output" != *"moved issue"* ]]
+    refute_gh 'item-edit'
 }
 
 # --- item-list cap: truncated read is unknown, never a partial ok -----------------------------

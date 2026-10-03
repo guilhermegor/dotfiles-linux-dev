@@ -22,8 +22,10 @@
 #
 # Budget (GraphQL is burst-limited across ~10 concurrent agents right now): ONE
 # `gh project item-list` read for the whole board, plus REST-only reads — one paginated
-# `repos/<o>/<r>/issues` listing for issue state + labels, and `git ls-remote` for pushed
-# branches (git, not gh, so it doesn't touch either API budget). No per-card GraphQL call, ever.
+# `repos/<o>/<r>/issues?state=open` listing (bounded by the OPEN count, not the repo's history),
+# one `repos/<o>/<r>/issues/<N>` read per board card the listing did not name and that is not
+# already Done, and `git ls-remote` for pushed branches (git, not gh, so it doesn't touch either
+# API budget). No per-card GraphQL call, ever.
 # Native `blocked_by` detection (GitHub's issue-dependency graph) would need a call PER CARD to
 # read — skipped for exactly that reason.
 # ponytail: label-only Blocked detection; add native blocked_by if a per-card budget opens up.
@@ -36,10 +38,10 @@
 #                               nothing needed to move. An empty report on STATUS=ok is a real,
 #                               ordinary answer, never treated as a failure.
 #     Returns 1 and sets RECONCILE_DONE_STATUS=unknown (REPORT holding one explanatory line)
-#     only when the board itself, the project item list, or the repo's issue list can't be read.
-#     A single card's own issue lookup failing does not abort the round — it is reported as an
-#     "UNKNOWN issue #N" line and the next card is still processed (same fail-closed-per-item
-#     shape as kanban_reconcile.sh and roadmap_unblock.sh).
+#     only when the board itself, the project item list, or the repo's open-issue list can't be
+#     read. A single card's own confirmation read failing does not abort the round — it is
+#     reported as an "UNKNOWN issue #N" line and the next card is still processed (same
+#     fail-closed-per-item shape as kanban_reconcile.sh and roadmap_unblock.sh).
 #
 #     Never moves a card backwards: a closed issue whose card is already at or past Done (by the
 #     board's own Status option order) is left alone — the #131 rule. A No-Status derivation
@@ -53,16 +55,31 @@ fi
 
 _KRD_GIT=/usr/bin/git
 
-# _krd_issue_facts OWNER REPO
-# Prints "<number>\t<state>\t<labels,comma,separated>" for every ISSUE (never a PR — the same
-# endpoint lists both) in the repo, from ONE paginated REST call. Returns 1 on any read/parse
-# failure — the caller's fail-closed signal for the whole round.
-_krd_issue_facts() {
+# _krd_open_issue_facts OWNER REPO
+# Prints "<number>\t<state>\t<labels,comma,separated>" for every OPEN ISSUE (never a PR — the
+# same endpoint lists both), from a paginated REST read bounded by the open count, not the
+# repo's whole history (state=all paged through every issue and PR ever filed).
+# Closed issues are confirmed per board card by _krd_confirm_issue instead. Returns 1 on any
+# read/parse failure — the caller's fail-closed signal for the whole round.
+_krd_open_issue_facts() {
 	local owner="$1" repo="$2" json
-	json="$(gh api "repos/$owner/$repo/issues?state=all&per_page=100" --paginate 2>/dev/null)" || return 1
+	json="$(gh api "repos/$owner/$repo/issues?state=open&per_page=100" --paginate 2>/dev/null)" || return 1
 	# -s: --paginate emits one array per page, so slurp before validating or reading.
 	printf '%s' "$json" | jq -se 'length > 0 and all(type == "array")' >/dev/null 2>&1 || return 1
 	printf '%s' "$json" | jq -sr '.[][] | select(has("pull_request") | not) |
+		"\(.number)\t\(.state)\t\([.labels[].name] | join(","))"' 2>/dev/null
+}
+
+# _krd_confirm_issue OWNER REPO NUMBER
+# Same output line as _krd_open_issue_facts, for ONE issue, from one REST read. Called only for a
+# board card the open listing did not name — absence from that listing means "not open", and
+# whether that is closed, transferred, or unreadable is exactly what this read decides. Returns 1
+# on any read/parse failure: UNKNOWN for that card, never "closed".
+_krd_confirm_issue() {
+	local owner="$1" repo="$2" number="$3" json
+	json="$(gh api "repos/$owner/$repo/issues/$number" 2>/dev/null)" || return 1
+	printf '%s' "$json" | jq -re 'select(type == "object" and (.state | type == "string") and
+		(has("pull_request") | not)) |
 		"\(.number)\t\(.state)\t\([.labels[].name] | join(","))"' 2>/dev/null
 }
 
@@ -166,9 +183,9 @@ reconcile_kanban_done() {
 		return 1
 	fi
 
-	local issue_facts
-	issue_facts="$(_krd_issue_facts "$owner" "$repo")" || {
-		RECONCILE_DONE_REPORT="UNKNOWN: could not read issue states for $owner/$repo"
+	local open_facts
+	open_facts="$(_krd_open_issue_facts "$owner" "$repo")" || {
+		RECONCILE_DONE_REPORT="UNKNOWN: could not read open issues for $owner/$repo"
 		return 1
 	}
 
@@ -184,9 +201,14 @@ reconcile_kanban_done() {
 		[[ "$content_repo" == "$owner/$repo" ]] || continue
 
 		local fact state labels
-		fact="$(printf '%s\n' "$issue_facts" | awk -F'\t' -v n="$content_number" '$1 == n')"
+		fact="$(printf '%s\n' "$open_facts" | awk -F'\t' -v n="$content_number" '$1 == n')"
 		if [[ -z "$fact" ]]; then
-			report="$(printf '%s\nUNKNOWN issue #%s: not found in issue listing' "$report" "$content_number")"
+			# Not open. A card already in Done needs nothing either way — skip the read.
+			[[ "$status" != "Done" ]] || continue
+			fact="$(_krd_confirm_issue "$owner" "$repo" "$content_number")" || fact=""
+		fi
+		if [[ -z "$fact" ]]; then
+			report="$(printf '%s\nUNKNOWN issue #%s: could not confirm its state' "$report" "$content_number")"
 			continue
 		fi
 		state="$(printf '%s' "$fact" | cut -f2)"
