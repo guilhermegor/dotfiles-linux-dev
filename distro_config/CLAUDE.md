@@ -191,4 +191,11 @@ Bindings are managed through three layers:
    a `create_<name>_script` function, following the `create_copy_path_script` pattern.
 5. Update the summary block at the bottom of `set_all_keybindings`.
 
+### Removing a shortcut
+
+Renumber the later slots down so the array stays gap-free, and `dconf reset -f` the old
+highest `custom<N>/` path in `set_all_keybindings` — shrinking the array only orphans the
+path, which stays bound on machines that already ran the script.
+`tests/custom_shortcuts_slots.bats` enforces array/call parity.
+
 Binding syntax (GDK format): `<Super>`, `<Ctrl>`, `<Shift>`, `<Alt>` + key.

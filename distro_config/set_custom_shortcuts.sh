@@ -70,8 +70,7 @@ set_keybindings_array() {
     '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom11/', \
     '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom12/', \
     '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom13/', \
-    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom14/', \
-    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom15/']"
+    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom14/']"
 }
 
 # function to set individual keybindings
@@ -426,12 +425,12 @@ EOF
     print_status success "claudestatus-dashboard.sh created successfully!"
 }
 
-# Modified main function to set up all keybindings including Insync kill
+# Modified main function to set up all keybindings 
 set_all_keybindings() {
     print_status success "Configuring GNOME custom keybindings..."
     
     # Define the keybindings we'll be using
-    local bindings=("<Super>e" "<Super>r" "<Super>t" "<Super><Ctrl>s" "<Ctrl><Shift>c" "<Ctrl><Shift>v" "<Super>k" "<Ctrl><Shift>Escape" "<Super>c" "<Super>b" "<Super>j" "<Super><Shift>e" "<Super><Shift>m" "<Super><Alt>e" "<Super><Alt>m" "<Super><Shift>u")
+    local bindings=("<Super>e" "<Super>r" "<Super>t" "<Super><Ctrl>s" "<Ctrl><Shift>c" "<Ctrl><Shift>v" "<Ctrl><Shift>Escape" "<Super>c" "<Super>b" "<Super>j" "<Super><Shift>e" "<Super><Shift>m" "<Super><Alt>e" "<Super><Alt>m" "<Super><Shift>u")
     
     # Ask user if they want to verify conflicts
     read -p "Do you want to verify for shortcut conflicts before proceeding? [Y/n] " -r
@@ -455,7 +454,10 @@ set_all_keybindings() {
     create_restore_memory_script
     create_show_shortcuts_script
 
-    # Increase the array size to accommodate the new keybindings (now 15 items)
+    # custom15 was the last slot before the Super+K Kill Insync binding was removed
+    # and 7..15 renumbered down; an earlier run left it bound in dconf, so reset it.
+    dconf reset -f /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom15/
+
     set_keybindings_array
     
     # Set individual keybindings
@@ -465,22 +467,20 @@ set_all_keybindings() {
     set_individual_keybinding 3 "Open Settings" "gnome-control-center" "<Super><Ctrl>s"
     set_individual_keybinding 4 "Copy File Path" "$HOME/.local/bin/copy-path.sh" "<Ctrl><Shift>c"
     set_individual_keybinding 5 "Paste File Path" "$HOME/.local/bin/copy-path.sh --paste" "<Ctrl><Shift>v"
-    set_individual_keybinding 6 "Kill Insync" "pkill -f insync" "<Super>k"
-    set_individual_keybinding 7 "Gerenciador de Tarefas" "flatpak run io.missioncenter.MissionCenter" "<Ctrl><Shift>Escape"
-    set_individual_keybinding 8 "Open Characters" "gnome-characters" "<Super>c"
-    set_individual_keybinding 9 "Backup External SSDs" "$HOME/.local/bin/backup-external-ssd.sh" "<Super>b"
-    set_individual_keybinding 10 "Show All Shortcuts" "$HOME/.local/bin/show-shortcuts.sh" "<Super>j"
-    set_individual_keybinding 11 "Backup Env Files" "$HOME/.local/bin/backup-env.sh" "<Super><Shift>e"
-    set_individual_keybinding 12 "Export Claude Memory" "$HOME/.local/bin/export-memory.sh" "<Super><Shift>m"
-    set_individual_keybinding 13 "Restore Env Files" "$HOME/.local/bin/restore-env.sh" "<Super><Alt>e"
-    set_individual_keybinding 14 "Restore Claude Memory" "$HOME/.local/bin/restore-memory.sh" "<Super><Alt>m"
-    set_individual_keybinding 15 "Claude Usage Dashboard" "$HOME/.local/bin/claudestatus-dashboard.sh" "<Super><Shift>u"
+    set_individual_keybinding 6 "Gerenciador de Tarefas" "flatpak run io.missioncenter.MissionCenter" "<Ctrl><Shift>Escape"
+    set_individual_keybinding 7 "Open Characters" "gnome-characters" "<Super>c"
+    set_individual_keybinding 8 "Backup External SSDs" "$HOME/.local/bin/backup-external-ssd.sh" "<Super>b"
+    set_individual_keybinding 9 "Show All Shortcuts" "$HOME/.local/bin/show-shortcuts.sh" "<Super>j"
+    set_individual_keybinding 10 "Backup Env Files" "$HOME/.local/bin/backup-env.sh" "<Super><Shift>e"
+    set_individual_keybinding 11 "Export Claude Memory" "$HOME/.local/bin/export-memory.sh" "<Super><Shift>m"
+    set_individual_keybinding 12 "Restore Env Files" "$HOME/.local/bin/restore-env.sh" "<Super><Alt>e"
+    set_individual_keybinding 13 "Restore Claude Memory" "$HOME/.local/bin/restore-memory.sh" "<Super><Alt>m"
+    set_individual_keybinding 14 "Claude Usage Dashboard" "$HOME/.local/bin/claudestatus-dashboard.sh" "<Super><Shift>u"
 
     print_status success "All keybindings have been configured successfully!"
     print_status warning "You can now use:"
     print_status warning "  - Ctrl+Shift+C in Nautilus to copy file paths"
     print_status warning "  - Ctrl+Shift+V anywhere to paste the paths"
-    print_status warning "  - Super+K to kill Insync processes"
     print_status warning "  - Ctrl+Shift+Esc to open Task Manager"
     print_status warning "  - Super+C to open GNOME Characters"
     print_status warning "  - Super+B to back up external SSDs to the BKP cloud-sync drive"
