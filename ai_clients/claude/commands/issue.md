@@ -13,8 +13,11 @@ authoring half of a Linear-style flow. This command only sets the card's *starti
   `kanban_lifecycle.sh` PostToolUse hook — GitHub Projects' native workflows cannot trigger
   on those events.
 - **Done** is driven by GitHub Projects' own "item closed / PR merged → Done" workflow (the
-  `Closes #N` link in step 9 feeds it). GitHub can silently drop that link
-  (`closingIssuesReferences: []`), so after `gh pr create` run
+  `Closes #N` link in step 9 feeds it) — those two toggles are OFF by default and the API
+  cannot enable them, so step 7 below verifies them every run. `subagent_stop_sweep.sh`'s
+  kanban reconcile is the deterministic fallback when a human never flips them, or a card
+  lands in No Status with nothing to advance it (dotfiles-dev#556). GitHub can silently
+  drop the link (`closingIssuesReferences: []`), so after `gh pr create` run
   `gh pr view <n> --json closingIssuesReferences` and warn when empty. A repo-level
   `close-linked-issues` workflow (guilhermegor/blueprintx#604) closes the issue from the
   branch name and complements — never replaces — this native workflow.
@@ -390,21 +393,36 @@ and match the project titled exactly **`<repo> kanban`** (e.g. `filings-cvm kanb
   rtk gh project field-create <project-number> --owner <owner> --name "Points" --data-type NUMBER
   ```
 
-  **Then tell the user to enable the Done workflows — the API cannot.** A `gh`-created board
-  ships its built-in workflows **disabled**, and the GraphQL API exposes no mutation to enable
-  them (only `deleteProjectV2Workflow`). So the "card → Done on merge" automation this command
-  relies on is **off until a human flips it**. Print this and wait for confirmation:
+  A `gh`-created board ships its built-in workflows **disabled**, and the GraphQL API exposes
+  no mutation to enable them (only `deleteProjectV2Workflow`) — the "card → Done on merge"
+  automation this command relies on needs a human to flip it. See the workflow-verification
+  step below, which runs for this board whether it was just created here or already existed.
 
-  > Open `https://github.com/users/<owner>/projects/<number>/workflows` and enable, each with
-  > **Set value → Status → Done**:
-  > - **Item closed**
-  > - **Pull request merged**
-  >
-  > Do **not** enable **Pull request linked to issue** — the `kanban_lifecycle` hook already
-  > moves the card to *In review* when the PR opens, and enabling this native workflow would
-  > fire at the same moment and race it (it defaults to *In progress*, dragging the card
-  > backwards). This is the same defect class the hook itself guards against (#131): a card
-  > must never move backwards once its issue's real state has passed that point.
+**Verify the Done workflows every run — new board or existing.** A board created before today
+may have shipped with #7/#8 already off, and a human can turn either off again later; nothing
+else in this command or in the sweep's kanban reconcile ever re-checks the toggle itself
+(dotfiles-dev#556 — board 13 sat with both disabled for weeks, unnoticed, because the only
+warning ever printed was at board-creation time, and never again). GitHub exposes no GraphQL
+read for a workflow's *enabled* state, so "verify" here means **ask, every run, and record
+the answer** — never print static instructions once and move on. Use AskUserQuestion with
+these three toggles as options; do not proceed on a silent assumption:
+
+> Open `https://github.com/users/<owner>/projects/<number>/workflows` and confirm:
+> - **Item closed** → Set value → Status → Done — **ON**?
+> - **Pull request merged** → Set value → Status → Done — **ON**?
+> - **Item added to project** → stays **OFF**. Enabling it sets a Status the instant an item
+>   is added — before this command's own step 7 derives and sets the real one — and races
+>   `subagent_stop_sweep.sh`'s No-Status reconcile (dotfiles-dev#556's scope extension) the
+>   same way.
+>
+> Do **not** enable **Pull request linked to issue** either — `kanban_lifecycle.sh` already
+> moves the card to *In review* when the PR opens, and this native workflow defaults to
+> *In progress*, racing the hook and dragging the card backwards (the #131 rule).
+
+If the user reports #7 or #8 off, that is expected on a board this command does not fully
+control — say so and continue. `subagent_stop_sweep.sh`'s kanban reconcile (steps [7]/[9])
+makes the board eventually correct regardless of whether a human ever flips these; it does
+not replace them, and a card can sit stale until the next sweep either way.
 
 Add the card (parents and children both):
 `rtk gh project item-add <project-number> --owner <owner> --url <issue-url>`

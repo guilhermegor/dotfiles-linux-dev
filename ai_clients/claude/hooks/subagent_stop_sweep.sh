@@ -72,6 +72,10 @@ source "$HOOK_DIR/lib/review_thread_gate.sh"
 source "$HOOK_DIR/lib/free_surface.sh"
 # shellcheck source=lib/kanban_reconcile.sh
 source "$HOOK_DIR/lib/kanban_reconcile.sh"
+# shellcheck source=lib/dispatch_claims.sh
+source "$HOOK_DIR/lib/dispatch_claims.sh"
+# shellcheck source=lib/kanban_reconcile_done.sh
+source "$HOOK_DIR/lib/kanban_reconcile_done.sh"
 # shellcheck source=lib/gh_budget.sh
 source "$HOOK_DIR/lib/gh_budget.sh"
 # shellcheck source=lib/roadmap_unblock.sh
@@ -563,6 +567,16 @@ dispatch: UNKNOWN — $BUDGET_GATE_REASON"
 		fi
 		echo "[8] roadmap boards (declared registry: ROADMAP_BOARDS in lib/roadmap_unblock.sh)"
 		sweep_roadmap_boards
+		echo "[9] kanban reconcile (closed issues -> Done, No Status -> placed)"
+		if reconcile_kanban_done "$owner" "$name" "$cwd"; then
+			if [ -n "$RECONCILE_DONE_REPORT" ]; then
+				printf '%s\n' "$RECONCILE_DONE_REPORT"
+			else
+				echo "no kanban cards changed"
+			fi
+		else
+			echo "kanban reconcile (Done/No Status): UNKNOWN — $RECONCILE_DONE_REPORT"
+		fi
 	)"
 
 	emit "$report"
