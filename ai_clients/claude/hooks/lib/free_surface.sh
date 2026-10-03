@@ -84,6 +84,25 @@
 #     PR at all is UNEXAMINED, never dead — this gate does not content-diff against the default
 #     branch to guess "superseded"; that call needs a human or a follow-up issue, not a guess here.
 #
+#     ⚠️ dotfiles-dev#572: an EXACT HEAD match against the dead PR's `headRefOid` (the #566 case
+#     above) misses a worktree whose branch was advanced on the forge AFTER this worktree's last
+#     fetch — GitHub's "Update branch" button merges the default branch into an open PR, and once
+#     that PR is later merged/closed the local worktree's HEAD is an ANCESTOR of the real dead
+#     head, never equal to it. Measured 2026-09-28: 28 of 62 dead worktrees needed this. So
+#     `_dead_branch_reaches` also accepts "HEAD is an ancestor of a dead PR head for this SAME
+#     branch name", but only when that head commit is ALREADY PRESENT in the worktree's local
+#     object database (`git cat-file -e`, never a network fetch — every other forge read in this
+#     file is a `gh` call, not a raw git fetch). An unfetchable sha is treated as "not dead", same
+#     fail-closed direction as everything else here — a guess that prunes a live worktree loses
+#     real work, which is strictly worse than one round of over-holding.
+#
+#   dispatch_plan.py's `live_agent_held_paths()` (dotfiles-dev#572) calls THIS gate via a
+#   subprocess, the same way `run_gate()` in that file already shells out to `gate_free_surface`
+#   — one liveness notion shared by both callers, never a second, independently-drifting walk in
+#   Python. Before #572, dispatch_plan.py re-implemented the local worktree walk from scratch and
+#   never gained the #566/#572 dead-worktree exclusion, so a merged/closed PR's worktree still
+#   suppressed dispatch there even after this file learned better.
+#
 #   live_agent_classify_files FILE...
 #     Same free/held/would-need-a-held-file trichotomy as free_classify_files, against
 #     LIVE_AGENT_STATUS/LIVE_AGENT_PATHS instead — this is the verdict that actually blocks
@@ -309,23 +328,43 @@ _dead_branch_index() {
 		| "\(.headRefOid)\t\(.headRefName)"' 2>/dev/null
 }
 
+# _dead_branch_reaches INDEX BRANCH HEAD PATH
+# True (0) when INDEX carries a MERGED/CLOSED PR for BRANCH whose head commit either EQUALS HEAD
+# (the #566 case) or is a commit HEAD is an ancestor of (dotfiles-dev#572: the branch was advanced
+# on the forge — e.g. GitHub's "Update branch" button — after PATH's last fetch). The ancestor
+# check only trusts a commit object PATH's local database already has (`git cat-file -e`, never a
+# network fetch): a candidate sha this worktree has not fetched is skipped, never guessed at, so
+# an unfetchable head fails closed to "does not reach" (see the file header for why). See file
+# header for the fail-closed contract this leaves to its caller.
+_dead_branch_reaches() {
+	local index="$1" branch="$2" head="$3" path="$4" row oid oid_branch
+	row="$(printf '%s\t%s' "$head" "$branch")"
+	printf '%s\n' "$index" | grep -qxF -- "$row" && return 0
+
+	while IFS=$'\t' read -r oid oid_branch; do
+		[ "$oid_branch" = "$branch" ] || continue
+		git -C "$path" cat-file -e "$oid" 2>/dev/null || continue
+		git -C "$path" merge-base --is-ancestor "$head" "$oid" 2>/dev/null && return 0
+	done <<<"$index"
+	return 1
+}
+
 # _worktree_dead_and_clean INDEX BRANCH PATH
-# True (0) only when ALL of these hold: INDEX carries a MERGED/CLOSED PR of this repository whose
-# head commit IS this worktree's current HEAD, AND PATH's tree is clean, AND nothing is ahead of
-# its upstream. This is the RESCUE-safety boundary the issue asks for verbatim — "never prune
-# before the RESCUE check" — applied here to mean "never exclude a worktree that still holds work
-# the merged PR does not account for". Fails closed to "not dead" (1) on any read failure, an
-# unreadable HEAD, an empty index, or a missing upstream (an unpushed branch's local commits
-# cannot be verified as already-shipped) — this only ever narrows LIVE_AGENT_PATHS, never on a
-# guess (dotfiles-dev#551).
+# True (0) only when ALL of these hold: INDEX's dead-branch reach reports BRANCH's forge PR as
+# MERGED/CLOSED and reaching this worktree's current HEAD (see _dead_branch_reaches), AND PATH's
+# tree is clean, AND nothing is ahead of its upstream. This is the RESCUE-safety boundary the issue
+# asks for verbatim — "never prune before the RESCUE check" — applied here to mean "never exclude
+# a worktree that still holds work the merged PR does not account for". Fails closed to "not dead"
+# (1) on any read failure, an unreadable HEAD, an empty index, or a missing upstream (an unpushed
+# branch's local commits cannot be verified as already-shipped) — this only ever narrows
+# LIVE_AGENT_PATHS, never on a guess (dotfiles-dev#551).
 _worktree_dead_and_clean() {
-	local index="$1" branch="$2" path="$3" head row porcelain ahead
+	local index="$1" branch="$2" path="$3" head porcelain ahead
 	[ -n "$index" ] && [ -n "$branch" ] || return 1
 
 	head="$(git -C "$path" rev-parse HEAD 2>/dev/null)" || return 1
 	[ -n "$head" ] || return 1
-	row="$(printf '%s\t%s' "$head" "$branch")"
-	printf '%s\n' "$index" | grep -qxF -- "$row" || return 1
+	_dead_branch_reaches "$index" "$branch" "$head" "$path" || return 1
 
 	porcelain="$(git -C "$path" status --porcelain 2>/dev/null)" || return 1
 	[ -z "$porcelain" ] || return 1
@@ -466,13 +505,47 @@ gate_live_agent_surface() {
 	[ -d "$cwd" ] || return 1
 	git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
 
-	local default_branch held cand
+	local default_branch="" held cand
+
+	# Best-effort only (dotfiles-dev#551): a local-path or non-GitHub origin (every fixture in
+	# tests/live_agent_surface.bats included) leaves owner/repo empty, which disables the
+	# forge-exclusion enhancement in _live_agent_held_paths without affecting this gate's own
+	# fail-closed contract — parse failure here is never a reason to return unknown.
+	local owner="" repo="" owner_repo
+	owner_repo="$(_origin_owner_repo "$cwd")" && read -r owner repo <<<"$owner_repo"
+
+	# The forge is the authority on the default branch whenever origin resolves to GitHub — it is
+	# what dispatch_plan.py read before it delegated here, and what _free_held_paths still reads.
+	# A local origin/HEAD can be stale yet resolvable (a rename that left the old branch on the
+	# remote), which would scope every diff below against the wrong base (#576 review). The answer
+	# is still verified against a local origin ref: a branch we cannot diff against is no answer.
+	if [ -n "$owner" ] && [ -n "$repo" ]; then
+		cand="$(gh api "repos/$owner/$repo" --jq '.default_branch' 2>/dev/null)" || cand=""
+		# An answered-but-unfetched branch fails closed: the forge just said the local fallbacks
+		# below are the wrong base, so they must not be tried (#576 review). An UNREADABLE forge
+		# (cand empty) is a different case and still falls through to them.
+		if [ -n "$cand" ]; then
+			git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$cand" >/dev/null 2>&1 || return 1
+			default_branch="$cand"
+		fi
+	fi
+
+	# Local fallback when the forge is unavailable or unresolvable (fail closed below if none).
 	# `|| true` is load-bearing, not defensive noise: `symbolic-ref --quiet` EXITS NON-ZERO when
 	# the ref is absent, so under `set -e` this assignment aborted the whole function one line
 	# before the guard below ever ran. That is the actual mechanism behind the #523 review's
 	# "always returns unknown" — the fallback added below is unreachable without this.
-	default_branch="$(git -C "$cwd" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-	default_branch="${default_branch#origin/}"
+	if [ -z "$default_branch" ]; then
+		default_branch="$(git -C "$cwd" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+		default_branch="${default_branch#origin/}"
+	fi
+	# `symbolic-ref` does not check its target: after a default-branch rename it still prints the
+	# gone branch, and every `origin/<it>` diff below then dies with "unknown revision" and the
+	# gate fails closed for good (#576 review). Drop an unverifiable name so the fallback runs.
+	if [ -n "$default_branch" ] \
+		&& ! git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$default_branch" >/dev/null 2>&1; then
+		default_branch=""
+	fi
 	# A missing local refs/remotes/origin/HEAD is NOT a read failure — it is simply absent in any
 	# clone made with `git remote add`, and in clones whose remote never advertised a HEAD.
 	# Treating it as unreadable returned `unknown` and blocked dispatch forever in a perfectly
@@ -488,13 +561,6 @@ gate_live_agent_surface() {
 		done
 	fi
 	[ -n "$default_branch" ] || return 1
-
-	# Best-effort only (dotfiles-dev#551): a local-path or non-GitHub origin (every fixture in
-	# tests/live_agent_surface.bats included) leaves owner/repo empty, which disables the
-	# forge-exclusion enhancement in _live_agent_held_paths without affecting this gate's own
-	# fail-closed contract — parse failure here is never a reason to return unknown.
-	local owner="" repo="" owner_repo
-	owner_repo="$(_origin_owner_repo "$cwd")" && read -r owner repo <<<"$owner_repo"
 
 	held="$(_live_agent_held_paths "$cwd" "$default_branch" "$owner" "$repo")" || return 1
 

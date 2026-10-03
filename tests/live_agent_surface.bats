@@ -144,6 +144,92 @@ teardown() {
 	[ "$LIVE_AGENT_STATUS" = "unknown" ]
 }
 
+@test "a stale origin/HEAD (target branch gone) falls back to a verified main/master (#576 review)" {
+	# A default-branch rename leaves refs/remotes/origin/HEAD pointing at a ref that no longer
+	# exists; `symbolic-ref` still prints it, so it must be verified before use.
+	git -C "$REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/renamed-away
+	WT="$TEST_TMP/wt-stale-head"
+	git -C "$REPO" worktree add -q -b feature/stale-head "$WT" master
+	echo held >"$WT/stale_head.txt"
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"stale_head.txt"* ]]
+}
+
+@test "a stale-but-existing origin/HEAD loses to the forge's default branch (#576 review)" {
+	# A rename that left the OLD branch (master) on the remote: origin/HEAD still resolves, to the
+	# wrong base. The forge says `develop`, which already holds the worktree's commit, so the
+	# worktree diverges from nothing real; diffed against stale master it would read held.
+	WT="$TEST_TMP/wt-stale-existing"
+	git -C "$REPO" worktree add -q -b feature/stale-existing "$WT" master
+	echo work >"$WT/stale_existing.txt"
+	git -C "$WT" add stale_existing.txt
+	git -C "$WT" commit -q -m "add stale_existing.txt"
+	git -C "$WT" push -q origin HEAD:refs/heads/develop
+	_stub_gh
+	_github_origin
+	export GH_STUB_DEFAULT=develop
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" != *"stale_existing.txt"* ]]
+}
+
+@test "a forge read failure falls back to the local default, never to unknown (#576 review)" {
+	_stub_gh
+	_github_origin
+	export GH_STUB_STATE=FAIL
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+}
+
+@test "a forge default branch with no local ref fails closed, never a stale base (#576 review)" {
+	# The forge says `develop` but this clone never fetched origin/develop, while origin/HEAD and
+	# master still resolve (the stale-but-existing rename shape). Falling back to them would scope
+	# every diff against a base the forge just said is wrong; unlike an UNREADABLE forge, an
+	# answered-but-unverifiable one is a known disagreement.
+	WT="$TEST_TMP/wt-forge-unfetched"
+	git -C "$REPO" worktree add -q -b feature/forge-unfetched "$WT" master
+	echo held >"$WT/forge_unfetched.txt"
+	_stub_gh
+	_github_origin
+	export GH_STUB_DEFAULT=develop
+
+	local rc=0
+	gate_live_agent_surface "$REPO" || rc=$?
+	[ "$rc" -eq 1 ]
+	[ "$LIVE_AGENT_STATUS" = "unknown" ]
+	[ -z "$LIVE_AGENT_PATHS" ]
+}
+
+@test "a default branch that is neither main nor master resolves via the forge (#576 review)" {
+	# No origin/HEAD and no main/master: the planner used to ask GitHub for the default branch
+	# itself, so delegating to this gate must not lose that answer for e.g. a `develop` repo.
+	git -C "$REPO" update-ref refs/remotes/origin/develop master
+	git -C "$REPO" symbolic-ref --delete refs/remotes/origin/HEAD
+	git -C "$REPO" update-ref -d refs/remotes/origin/master
+	git -C "$REPO" remote set-url origin git@github.com:acme/widget.git
+	mkdir -p "$TEST_TMP/bin"
+	cat >"$TEST_TMP/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+api) printf 'develop\n' ;;
+*) printf '[]\n' ;;
+esac
+STUB
+	chmod +x "$TEST_TMP/bin/gh"
+	PATH="$TEST_TMP/bin:$PATH"
+	WT="$TEST_TMP/wt-develop"
+	git -C "$REPO" worktree add -q -b feature/develop "$WT" master
+	echo held >"$WT/develop_held.txt"
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"develop_held.txt"* ]]
+}
+
 # --- the pin: dev-loop.md's stated rule must name THIS implementation (dotfiles-dev#501) -----
 # The issue's own words: "One test that fails if the three ever disagree again — ideally
 # asserting the skill's stated rule against the gate's actual behaviour, so prose drift is
@@ -304,6 +390,12 @@ _stub_gh() {
 	cat >"$TEST_TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GH_STUB_LOG"
+# `gh api repos/... --jq .default_branch` — the forge's answer; GH_STUB_DEFAULT overrides it.
+if [ "$1" = api ]; then
+	[ "${GH_STUB_STATE:-}" = FAIL ] && exit 1
+	printf '%s\n' "${GH_STUB_DEFAULT:-master}"
+	exit 0
+fi
 case "${GH_STUB_STATE:-NONE}" in
 FAIL) exit 1 ;;
 NONE) printf '[]\n' ;;
@@ -424,6 +516,46 @@ _pushed_worktree() {
 	[[ "$LIVE_AGENT_PATHS" == *"reused_work.txt"* ]]
 }
 
+# --- dotfiles-dev#572: HEAD an ANCESTOR of the dead PR's head, not only an exact match --------
+#
+# GitHub's "Update branch" button merges the default branch into an open PR; once that PR is
+# later merged/closed, a worktree that never re-fetched has a HEAD strictly BEHIND the real dead
+# head, never equal to it. 28 of 62 dead worktrees measured needed this (dotfiles-dev#572).
+
+@test "551: HEAD an ancestor of the dead PR's head is dead too, not just an exact match" {
+	_stub_gh
+	WT="$(_pushed_worktree ancestor ancestor_work.txt)"
+	local head new_oid
+	head="$(git -C "$WT" rev-parse HEAD)"
+	# Fabricate the commit GitHub's "Update branch" would have created: a real object in the
+	# SHARED object store (any worktree of $REPO can create one without checking anything
+	# out), parented on this worktree's own HEAD, with no ref pointing to it — the worktree's
+	# HEAD never moves, so it is an ancestor of, never equal to, the dead PR's real head.
+	new_oid="$(git -C "$REPO" commit-tree "$head^{tree}" -p "$head" -m "simulated update-branch merge")"
+	_github_origin
+	export GH_STUB_STATE=MERGED GH_STUB_OID="$new_oid"
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" != *"ancestor_work.txt"* ]]
+
+	run live_agent_classify_files ancestor_work.txt
+	[ "$output" = "free" ]
+}
+
+@test "551: an unfetchable dead-PR head fails closed — HEAD stays held, never guessed dead" {
+	_stub_gh
+	_pushed_worktree unfetchable unfetchable_work.txt >/dev/null
+	_github_origin
+	# A syntactically valid sha this repo has never seen: _dead_branch_reaches must not guess
+	# ancestry for a commit it cannot inspect locally (never a network fetch).
+	export GH_STUB_STATE=MERGED GH_STUB_OID=1111111111111111111111111111111111111111
+
+	gate_live_agent_surface "$REPO"
+	[ "$LIVE_AGENT_STATUS" = "ok" ]
+	[[ "$LIVE_AGENT_PATHS" == *"unfetchable_work.txt"* ]]
+}
+
 @test "551: the forge is asked ONCE per gate call, however many worktrees there are" {
 	_stub_gh
 	_pushed_worktree one one_work.txt >/dev/null
@@ -434,7 +566,10 @@ _pushed_worktree() {
 
 	gate_live_agent_surface "$REPO"
 	[ "$LIVE_AGENT_STATUS" = "ok" ]
-	[ "$(wc -l <"$GH_STUB_LOG")" -eq 1 ]
+	# the dead-PR index is read once however many worktrees there are; the default-branch lookup
+	# is its own single `gh api` call, so the total stays flat at 2 rather than growing per worktree
+	[ "$(grep -c '^pr list' "$GH_STUB_LOG")" -eq 1 ]
+	[ "$(wc -l <"$GH_STUB_LOG")" -eq 2 ]
 }
 
 @test "551: a MERGED branch with UNCOMMITTED work is still held — never prune before rescue" {
@@ -531,5 +666,37 @@ _pushed_worktree() {
 
 	export GH_STUB_STATE=FAIL
 	run _dead_branch_index acme widget
+	[ "$status" -ne 0 ]
+}
+
+@test "572: _dead_branch_reaches — exact match, ancestor match, and the fail-closed misses" {
+	WT="$TEST_TMP/wt-reaches"
+	git -C "$REPO" worktree add -q -b feature/reaches "$WT" master
+	echo work >"$WT/reaches.txt"
+	git -C "$WT" add reaches.txt
+	git -C "$WT" commit -q -m "add reaches.txt"
+	local head new_oid index
+	head="$(git -C "$WT" rev-parse HEAD)"
+	new_oid="$(git -C "$REPO" commit-tree "$head^{tree}" -p "$head" -m "simulated update")"
+
+	# exact match (the #566 case)
+	index="$(printf '%s\t%s' "$head" "feature/reaches")"
+	run _dead_branch_reaches "$index" "feature/reaches" "$head" "$WT"
+	[ "$status" -eq 0 ]
+
+	# ancestor match (dotfiles-dev#572): the index carries a LATER commit for the same branch,
+	# and HEAD is reachable from it.
+	index="$(printf '%s\t%s' "$new_oid" "feature/reaches")"
+	run _dead_branch_reaches "$index" "feature/reaches" "$head" "$WT"
+	[ "$status" -eq 0 ]
+
+	# fail-closed: a syntactically valid sha this repo has never seen must not be guessed at
+	index="$(printf '%s\t%s' "1111111111111111111111111111111111111111" "feature/reaches")"
+	run _dead_branch_reaches "$index" "feature/reaches" "$head" "$WT"
+	[ "$status" -ne 0 ]
+
+	# a real, fetchable commit for a DIFFERENT branch name never reaches this one
+	index="$(printf '%s\t%s' "$new_oid" "feature/other")"
+	run _dead_branch_reaches "$index" "feature/reaches" "$head" "$WT"
 	[ "$status" -ne 0 ]
 }
