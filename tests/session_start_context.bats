@@ -103,6 +103,24 @@ run_hook() {
 	[[ "$output" == *"INTERRUPTED WORK, resume it"*"[anonymous branch, no issue reference]"* ]]
 }
 
+# --- the PR listing reaches past gh's default 30 (dotfiles-dev#606) ---------------------------
+
+@test "the fan-out PR listing passes an explicit --limit above gh's default of 30" {
+	FAKE_BIN="$TEST_TMP/bin"
+	mkdir -p "$FAKE_BIN"
+	GH_LOG="$TEST_TMP/gh.log"
+	printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"%s"\necho "[]"\n' "$GH_LOG" >"$FAKE_BIN/gh"
+	chmod +x "$FAKE_BIN/gh"
+	git -C "$REPO" remote set-url origin https://github.com/example/repo.git
+
+	run bash -c "CLAUDE_PROJECT_DIR='$REPO' PATH='$FAKE_BIN:$PATH' bash '$HOOK' </dev/null"
+	[ "$status" -eq 0 ]
+	run grep -E -- 'pr list .*--limit [0-9]+' "$GH_LOG"
+	[ "$status" -eq 0 ]
+	limit="$(grep -oE -- '--limit [0-9]+' "$GH_LOG" | head -1 | awk '{print $2}')"
+	[ "$limit" -gt 30 ]
+}
+
 # --- non-vacuousness: prove the classifier can say "stale", not just always "interrupted" ----
 
 @test "non-vacuous control: classify_worktree_diff itself returns stale for a pure deletion" {

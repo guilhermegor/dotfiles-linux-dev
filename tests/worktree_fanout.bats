@@ -63,6 +63,33 @@ setup() {
     # the default branch — must not be reported either.
     wtE="$BATS_TEST_TMPDIR/wtE"
     git -C "$work" worktree add --quiet -b branchE "$wtE" master
+
+    # branchF / branchG: TWO commits each, no upstream, then squash-merged into master as ONE
+    # commit — the dotfiles-dev#606 shape. The squashed commit's patch-id equals neither branch
+    # commit, so `git cherry` marks both "+" and only the forge can say the work shipped.
+    wtF="$BATS_TEST_TMPDIR/wtF"
+    wtG="$BATS_TEST_TMPDIR/wtG"
+    git -C "$work" worktree add --quiet -b branchF "$wtF" master
+    git -C "$work" worktree add --quiet -b branchG "$wtG" master
+    for pair in "$wtF:f" "$wtG:g"; do
+        for n in 1 2; do
+            echo "${pair#*:}$n" >"${pair%%:*}/${pair#*:}$n.txt"
+            git -C "${pair%%:*}" add "${pair#*:}$n.txt"
+            git -C "${pair%%:*}" commit --quiet -m "feat: add ${pair#*:}$n"
+        done
+        echo "${pair#*:}1" >"$work/${pair#*:}1.txt"
+        echo "${pair#*:}2" >"$work/${pair#*:}2.txt"
+        git -C "$work" add "${pair#*:}1.txt" "${pair#*:}2.txt"
+        git -C "$work" commit --quiet -m "feat: add ${pair#*:}1 and ${pair#*:}2 (squash)"
+    done
+    git -C "$work" push --quiet origin master
+    headF="$(git -C "$wtF" rev-parse HEAD)"
+    headG="$(git -C "$wtG" rev-parse HEAD)"
+}
+
+# One `gh pr list --json ...` row, as session_start_context.sh fetches them.
+pr_row() {
+    printf '[{"number":9,"state":"%s","headRefName":"%s","headRefOid":"%s"}]' "$1" "$2" "$3"
 }
 
 @test "branch tracking origin/master with no remote ref of its own is not reported pushed" {
@@ -99,4 +126,35 @@ setup() {
     run fanout_worktrees "$work" 1 '[]'
     [ "$status" -eq 0 ]
     [[ ! "$output" == *"worktree wtE: "*"never pushed"* ]]
+}
+
+@test "multi-commit branch squash-merged on the forge is not reported never pushed" {
+    run fanout_worktrees "$work" 1 "$(pr_row MERGED branchF "$headF")"
+    [ "$status" -eq 0 ]
+    [[ ! "$output" == *"worktree wtF: "*"never pushed"* ]]
+    [[ ! "$output" == *"RESUME"*"wtF"* ]]
+}
+
+@test "multi-commit squash-merged branch is still reported when the forge is unreadable" {
+    run fanout_worktrees "$work" 0 ""
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtF: 2 commit(s) never pushed"* ]]
+}
+
+@test "merged PR whose headRefOid is not the local HEAD does not suppress the report" {
+    run fanout_worktrees "$work" 1 "$(pr_row MERGED branchG "$headF")"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtG: 2 commit(s) never pushed"* ]]
+}
+
+@test "open PR with a matching headRefOid does not suppress the report" {
+    run fanout_worktrees "$work" 1 "$(pr_row OPEN branchG "$headG")"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtG: 2 commit(s) never pushed"* ]]
+}
+
+@test "a merged PR for another branch does not suppress a real never-pushed branch" {
+    run fanout_worktrees "$work" 1 "$(pr_row MERGED branchF "$headF")"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtC: 1 commit(s) never pushed"* ]]
 }

@@ -67,11 +67,16 @@ classify_worktree_diff() {
 # pushed but never got a PR. One walk, no per-branch `gh` calls.
 fanout_worktrees() {
 	local cwd="$1" github_ok="$2" json="$3"
-	local pr_branches="" default_branch path="" branch="" name uncommitted ahead pushed
+	local pr_branches="" merged_heads="" default_branch path="" branch="" name uncommitted ahead pushed
 	local has_upstream never_pushed
 	local -a interrupted_names=()
 
-	[ "$github_ok" = "1" ] && pr_branches="$(printf '%s' "$json" | jq -r '.[].headRefName' 2>/dev/null)"
+	if [ "$github_ok" = "1" ]; then
+		pr_branches="$(printf '%s' "$json" | jq -r '.[].headRefName' 2>/dev/null)"
+		# "<branch>\t<headRefOid>" of every merged PR, from the same query — no per-branch call.
+		merged_heads="$(printf '%s' "$json" \
+			| jq -r '.[] | select(.state=="MERGED") | "\(.headRefName)\t\(.headRefOid)"' 2>/dev/null)"
+	fi
 	default_branch="$(git -C "$cwd" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"
 	default_branch="${default_branch#origin/}"
 
@@ -113,10 +118,15 @@ fanout_worktrees() {
 				# pushed (dotfiles-dev#571 — the most common thing a killed agent leaves
 				# behind: it committed, then died before `git push -u`). Count only commits
 				# whose patch isn't already on origin/<default> (`git cherry`, "+" = not yet
-				# applied there) so a squash-merged branch — real commits, zero new patches —
-				# is not reported.
+				# applied there). That drops a ONE-commit squash merge only: squashing several
+				# commits yields a patch-id equal to none of them, so every one stays "+"
+				# (dotfiles-dev#606). The forge settles that case — a MERGED PR for this branch
+				# whose headRefOid is the local HEAD shipped exactly what is here. With the
+				# forge unreadable (github_ok=0) merged_heads is empty, so it keeps reporting.
 				if [ "$has_upstream" = "0" ] && [ "$pushed" = "0" ] && [ -n "$branch" ] \
-					&& [ -n "$default_branch" ] && [ "$branch" != "$default_branch" ]; then
+					&& [ -n "$default_branch" ] && [ "$branch" != "$default_branch" ] \
+					&& ! printf '%s\n' "$merged_heads" \
+						| grep -qxF "$branch"$'\t'"$(git -C "$path" rev-parse HEAD 2>/dev/null)"; then
 					never_pushed="$(git -C "$path" cherry "origin/$default_branch" HEAD 2>/dev/null \
 						| grep -c '^+')"
 					[ -n "$never_pushed" ] || never_pushed=0
