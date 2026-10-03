@@ -228,3 +228,77 @@ teardown() {
         return 1
     fi
 }
+
+# Issue #596: monitoring apps moved out of System into a Monitoring folder, and
+# CoolerControl installs through the registry instead of by hand.
+
+@test "install_coolercontrol is registered in Monitoring with the real installed launcher id" {
+    local entry fn _label folder desktop found=""
+    for entry in "${INSTALL_REGISTRY[@]}"; do
+        IFS=':' read -r fn _label folder desktop <<< "$entry"
+        [ "$fn" = "install_coolercontrol" ] || continue
+        found="$folder:$desktop"
+        break
+    done
+    [ "$found" = "Monitoring:org.coolercontrol.CoolerControl.desktop" ]
+}
+
+@test "Monitoring is a historical app-folder id, so its orphan can be reset later" {
+    [[ " ${_HISTORICAL_APP_FOLDER_IDS[*]} " == *" Monitoring "* ]]
+}
+
+@test "the monitoring apps land in Monitoring and System no longer holds them" {
+    mkdir -p "$HOME/.local/share/applications"
+    local id
+    for id in org.coolercontrol.CoolerControl.desktop io.missioncenter.MissionCenter.desktop \
+              gnome-system-monitor.desktop org.gnome.PowerStats.desktop cpu-x.desktop htop.desktop \
+              nvidia-settings.desktop; do
+        : > "$HOME/.local/share/applications/$id"
+    done
+
+    run organize_app_folders
+    [ "$status" -eq 0 ]
+
+    local monitoring system
+    monitoring=$(grep -oE "folders/Monitoring/ apps \[[^]]*\]" <<< "$output")
+    system=$(grep -oE "folders/Sistema/ apps \[[^]]*\]" <<< "$output")
+    for id in org.coolercontrol.CoolerControl.desktop io.missioncenter.MissionCenter.desktop \
+              gnome-system-monitor.desktop org.gnome.PowerStats.desktop cpu-x.desktop htop.desktop; do
+        [[ "$monitoring" == *"'$id'"* ]]
+        [[ "$system" != *"'$id'"* ]]
+    done
+    [[ "$system" == *"'nvidia-settings.desktop'"* ]]
+}
+
+# The apt route must write the one fixed sources file (never append a second
+# repo line) and must never pipe a remote script into a shell.
+@test "install_coolercontrol on apt previews one keyring+sources setup and enables the daemon" {
+    PACKAGE_MANAGER=apt
+    INSTALL_CMD="run_or_echo sudo apt-get install -y"
+    command_exists() { return 1; }
+    refresh_apt_keyring() { echo "[stub] keyring $2"; }
+
+    run install_coolercontrol
+    [ "$status" -eq 0 ]
+
+    [[ "$output" == *"[stub] keyring /usr/share/keyrings/coolercontrol-archive-keyring.gpg"* ]]
+    [[ "$output" == *"[dry-run] sudo tee /etc/apt/sources.list.d/coolercontrol.sources"* ]]
+    [[ "$output" == *"[dry-run] sudo apt-get install -y coolercontrol"* ]]
+    [[ "$output" == *"[dry-run] sudo systemctl enable --now coolercontrold"* ]]
+
+    local body
+    body="$(declare -f install_coolercontrol _coolercontrol_install_apt)"
+    [[ "$body" != *"| sudo sh"* && "$body" != *"| sh"* && "$body" != *"| bash"* ]]
+}
+
+@test "install_coolercontrol when already installed adds no source" {
+    PACKAGE_MANAGER=apt
+    command_exists() { return 0; }
+
+    run install_coolercontrol
+    [ "$status" -eq 0 ]
+
+    [[ "$output" == *"already installed"* ]]
+    [[ "$output" != *"sources.list.d"* ]]
+    [[ "$output" == *"[dry-run] sudo systemctl enable --now coolercontrold"* ]]
+}

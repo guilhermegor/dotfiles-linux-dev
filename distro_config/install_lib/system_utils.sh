@@ -1132,6 +1132,125 @@ install_utilities() {
 }
 
 # ============================================================================
+# COOLERCONTROL (fan/pump/AIO control + temperature dashboard)
+# ============================================================================
+# Routes follow https://docs.coolercontrol.org/installation/. Upstream warns that two active
+# sources for one distro (Copr + Terra, distro package + OBS) cause version conflicts, so every
+# route that ADDS a source first checks no CoolerControl source is already configured.
+# Board-specific extras (liquidctl, it87-dkms, nct6687d-dkms) are deliberately not installed.
+
+COOLERCONTROL_APT_URL="https://apt.coolercontrol.org"
+COOLERCONTROL_KEYRING="/usr/share/keyrings/coolercontrol-archive-keyring.gpg"
+COOLERCONTROL_APT_SOURCES="/etc/apt/sources.list.d/coolercontrol.sources"
+
+# Same tree choice as upstream's setup.sh: Ubuntu-based ids/ID_LIKE → ubuntu, plain Debian →
+# debian, anything unknown → ubuntu. Kali and Mint report ID_LIKE=debian but belong on ubuntu.
+_coolercontrol_apt_tree() {
+    local id="" id_like=""
+    if [ -r /etc/os-release ]; then
+        id=$(. /etc/os-release && echo "${ID-}")
+        id_like=$(. /etc/os-release && echo "${ID_LIKE-}")
+    fi
+    case " $id " in
+        " ubuntu "|" pop "|" elementary "|" neon "|" zorin "|" kali ") echo ubuntu; return ;;
+        " debian ") echo debian; return ;;
+    esac
+    case " $id_like " in
+        *" ubuntu "*) echo ubuntu ;;
+        *" debian "*) echo debian ;;
+        *)            echo ubuntu ;;
+    esac
+}
+
+# Match on content, not file name: the old Cloudsmith entry (and hand-written variants) would
+# otherwise stay active beside apt.coolercontrol.org. Mirrors upstream's setup.sh.
+_coolercontrol_disable_cloudsmith_sources() {
+    local file
+    for file in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [ -f "$file" ] || continue
+        [ "$file" = "$COOLERCONTROL_APT_SOURCES" ] && continue
+        grep -qi 'coolercontrol' "$file" 2>/dev/null || continue
+        grep -q 'dl\.cloudsmith\.io' "$file" 2>/dev/null || continue
+        print_status "info" "Disabling old CoolerControl source: $file"
+        run_or_echo sudo mv "$file" "$file.disabled"
+    done
+}
+
+_coolercontrol_install_apt() {
+    local tree
+    tree=$(_coolercontrol_apt_tree)
+    refresh_apt_keyring "$COOLERCONTROL_APT_URL/coolercontrol-archive-keyring.gpg" \
+        "$COOLERCONTROL_KEYRING" || return 1
+    # Fixed file name, rewritten each run: re-running can never stack a second repo line.
+    printf 'Types: deb\nURIs: %s/%s\nSuites: stable\nComponents: main\nSigned-By: %s\n' \
+        "$COOLERCONTROL_APT_URL" "$tree" "$COOLERCONTROL_KEYRING" \
+        | run_or_echo sudo tee "$COOLERCONTROL_APT_SOURCES"
+    _coolercontrol_disable_cloudsmith_sources
+    run_or_echo sudo apt-get update -y
+    $INSTALL_CMD coolercontrol
+}
+
+_coolercontrol_install_dnf() {
+    if ! grep -qis coolercontrol /etc/yum.repos.d/*.repo; then
+        $INSTALL_CMD dnf-plugins-core
+        run_or_echo sudo dnf copr enable -y codifryed/CoolerControl
+    fi
+    $INSTALL_CMD coolercontrol
+}
+
+_coolercontrol_install_pacman() {
+    local helper
+    for helper in yay paru; do
+        if command_exists "$helper"; then
+            run_or_echo "$helper" -S --noconfirm coolercontrol-bin
+            return
+        fi
+    done
+    print_status "warning" "CoolerControl is AUR-only on Arch: install yay or paru, then re-run"
+}
+
+# Distro package first (Tumbleweed); the project's OBS repo only when that fails and no
+# CoolerControl repo is configured yet.
+_coolercontrol_install_zypper() {
+    $INSTALL_CMD coolercontrol && return
+    if zypper lr -u 2>/dev/null | grep -qi coolercontrol; then
+        return 1
+    fi
+    run_or_echo sudo zypper addrepo \
+        https://download.opensuse.org/repositories/home:codifryed/openSUSE_Tumbleweed/home:codifryed.repo
+    run_or_echo sudo zypper refresh
+    $INSTALL_CMD coolercontrol
+}
+
+install_coolercontrol() {
+    print_status "section" "COOLERCONTROL"
+
+    if command_exists coolercontrol; then
+        print_status "info" "CoolerControl already installed"
+    else
+        case "$PACKAGE_MANAGER" in
+            apt)    _coolercontrol_install_apt    || return 1 ;;
+            dnf)    _coolercontrol_install_dnf    || return 1 ;;
+            pacman) _coolercontrol_install_pacman || return 1 ;;
+            zypper) _coolercontrol_install_zypper || return 1 ;;
+            *)
+                print_status "warning" "No CoolerControl route for '$PACKAGE_MANAGER' — see https://docs.coolercontrol.org/installation/appimage.html"
+                return 0
+                ;;
+        esac
+    fi
+
+    # The daemon does the hardware control; enable --now is idempotent.
+    run_or_echo sudo systemctl enable --now coolercontrold
+
+    if [ "${DRY_RUN:-0}" != "1" ] && ! command_exists coolercontrol; then
+        print_status "warning" "CoolerControl installation could not be verified"
+        return 1
+    fi
+    print_status "success" "CoolerControl ready"
+}
+
+# ============================================================================
 # REGISTRY
 # ============================================================================
 # Entry order = run order. uninstall_dim_calendar_events is NOT registered
@@ -1158,6 +1277,7 @@ INSTALL_REGISTRY+=(
     "install_snap_apps:Snap Applications::"
     "install_flatpak_apps:Flatpak Applications::"
     "install_vitals:Vitals System Monitor::"
+    "install_coolercontrol:CoolerControl:Monitoring:org.coolercontrol.CoolerControl.desktop"
     "install_dim_calendar_events:Calendar Events Enhancement::"
     "configure_gsconnect:GSConnect::"
 )
