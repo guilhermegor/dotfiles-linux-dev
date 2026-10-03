@@ -85,7 +85,8 @@ REAL ARGV, not by scanning raw command text: `hooks/lib/gh_cmd_match.py`
 splits the command into simple commands on `;`/`&&`/`||`/`|`/`&`/newlines
 (skipping heredoc bodies), tokenizes the matching one with `shlex`, and
 reads `--repo`/`-R`, `--body`/`-b`, `--body-file`/`-F`, and
-`--label`/`-l`/`--add-label` off that real argv — never off a regex over
+`--label`/`-l`/`--add-label` off that real argv — short flags in all three
+pflag spellings (`-b X`, `-bX`, `-b=X`, dotfiles-dev#604) — never off a regex over
 the whole string, which could be fooled by that same flag text appearing
 inside an unrelated quoted argument (e.g. inside `--title`), or miss an
 invocation chained after a shell operator entirely (dotfiles-dev, PR #371
