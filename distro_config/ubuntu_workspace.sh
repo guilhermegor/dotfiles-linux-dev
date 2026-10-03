@@ -6,7 +6,7 @@
 #
 # App-folder organisation (`organize_app_folders` below) draws from THREE sources:
 #   1. Static `<folder>_app_names` arrays inside this script — covers pre-installed
-#      system apps (gnome-control-center, mission-center, etc.) that no installer
+#      system apps (gnome-control-center, gnome-system-monitor, etc.) that no installer
 #      script manages.
 #   2. INSTALL_REGISTRY — sourced from install_lib/ and install_coding_lib/ so any
 #      app declared with a `gnome_folder` field automatically gets placed.
@@ -400,7 +400,7 @@ apply_additional_tweaks() {
 # an id drops out of the live set precisely when it becomes the thing to clean.
 _HISTORICAL_APP_FOLDER_IDS=(
     AmbienteVirtual Browsers Code Data Design DEV Ereader Infra IRPF Media
-    Newsletter Office OrgPessoal Planning Reading Seguranca Sharing Sistema
+    Monitoring Newsletter Office OrgPessoal Planning Reading Seguranca Sharing Sistema
     Social Utilitarios
 )
 
@@ -547,13 +547,7 @@ organize_app_folders() {
         # System Settings & Configuration
         'gnome-control-center.desktop' 'unity-control-center.desktop' 'org.gnome.Settings.desktop'
         'gnome-session-properties.desktop' 'gnome-startup-applications.desktop'
-        'org.gnome.PowerStats.desktop' 'gnome-power-statistics.desktop' 'power-statistics.desktop'
-        
-        # System Monitoring
-        'gnome-system-monitor.desktop' 'org.gnome.SystemMonitor.desktop'
-        'htop.desktop' 'cpu-x.desktop' 'cpux.desktop'
-        'io.github.thetumultuousunicornofdarkness.cpu-x.desktop'
-        
+
         # Hardware & Drivers
         'nvidia-settings.desktop' 'software-properties-drivers.desktop'
         'gnome-firmware-panel.desktop' 'gnome-firmware.desktop' 'firmware-updater.desktop'
@@ -572,9 +566,6 @@ organize_app_folders() {
         # Firmware Updater - Snap package versions
         'firmware-updater_firmware-updater.desktop' 'firmware-updater_firmware-updater-app.desktop'
 
-        # Mission Center (Central de Missões)
-        'mission-center.desktop' 'io.missioncenter.MissionCenter.desktop'
-        
         # GNOME Network Displays (Tela via Rede)
         'org.gnome.NetworkDisplays.desktop' 'gnome-network-displays.desktop'
         'org.gnome.Connections.desktop' 'gnome-connections.desktop' 'gnome-remote-desktop.desktop'
@@ -601,16 +592,12 @@ organize_app_folders() {
                         /var/lib/snapd/desktop/applications/*firmware*.desktop \
                         /var/lib/snapd/desktop/applications/*system*.desktop \
                         /var/lib/snapd/desktop/applications/*update*.desktop \
-                        /var/lib/flatpak/exports/share/applications/*missioncenter*.desktop \
-                        /var/lib/flatpak/exports/share/applications/*cpu-x*.desktop \
                         /var/lib/flatpak/exports/share/applications/*NetworkDisplays*.desktop \
                         /var/lib/flatpak/exports/share/applications/*connections*.desktop \
                         "$HOME/.local/share/applications"/*system*.desktop \
                         "$HOME/.local/share/applications"/*settings*.desktop \
                         "$HOME/.local/share/applications"/*config*.desktop \
                         "$HOME/.local/share/applications"/*firmware*.desktop \
-                        "$HOME/.local/share/applications"/*missioncenter*.desktop \
-                        "$HOME/.local/share/applications"/*cpu-x*.desktop \
                         "$HOME/.local/share/applications"/*NetworkDisplays*.desktop; do
         if [ -f "$desktop_file" ]; then
             local basename
@@ -622,9 +609,12 @@ organize_app_folders() {
             # firewall-config.desktop, which Security already claims.
             # system-log excluded: *system* would otherwise catch
             # gnome-system-log.desktop, which Utilities already claims.
+            # system-monitor excluded: same glob would catch
+            # gnome-system-monitor.desktop, which Monitoring owns.
             if [[ ! "$basename" =~ "game" ]] && [[ ! "$basename" =~ "sound" ]] && \
                [[ ! "$basename" =~ "color" ]] && [[ ! "$basename" =~ "kdeconnect" ]] && \
                [[ ! "$basename" =~ "firewall" ]] && [[ ! "$basename" =~ "system-log" ]] && \
+               [[ ! "$basename" =~ "system-monitor" ]] && \
                [[ ! " ${sistema_apps[*]} " == *" '$basename' "* ]]; then
                 sistema_apps+=("'$basename'")
             fi
@@ -766,7 +756,8 @@ organize_app_folders() {
     # Screenshot, Weather, Maps, Evolution, Geary, MultiWriter, SimpleScan,
     # baobab, DiskUtility, FileShredder, seahorse.Application) is already in
     # utility_app_names above. A blanket org.gnome.* glob catches every OTHER
-    # org.gnome app too — Settings/Software/SystemMonitor/PowerStats (System),
+    # org.gnome app too — Settings/Software (System), SystemMonitor/PowerStats
+    # (Monitoring),
     # Boxes/Vinagre (Infra), Cheese/Music/Rhythmbox3/SoundRecorder/Totem
     # (Media), Connections/NetworkDisplays/Yelp/Firmware (System), DejaDup
     # (Security) — silently duplicating whichever folder already claims it.
@@ -843,6 +834,56 @@ organize_app_folders() {
         print_status "config" "  Apps: ${design_apps_str}"
     else
         print_status "warning" "No Design apps found"
+    fi
+
+    # ==================== MONITORING FOLDER ====================
+    # Read-only dashboards for hardware and load. System keeps settings, updates,
+    # drivers and firmware. Vitals is a top-bar Shell extension with no launcher,
+    # so it cannot live in a folder.
+    print_status "info" "Creating Monitoring folder..."
+    local monitoring_apps=()
+
+    local monitoring_app_names=(
+        'io.missioncenter.MissionCenter.desktop' 'mission-center.desktop'
+        'gnome-system-monitor.desktop' 'org.gnome.SystemMonitor.desktop'
+        'org.gnome.PowerStats.desktop' 'gnome-power-statistics.desktop' 'power-statistics.desktop'
+        'cpu-x.desktop' 'cpux.desktop' 'io.github.thetumultuousunicornofdarkness.cpu-x.desktop'
+        'htop.desktop'
+    )
+
+    for app in "${monitoring_app_names[@]}"; do
+        if result=$(find_app_desktop_file "$app"); then
+            monitoring_apps+=("'$result'")
+        fi
+    done
+
+    shopt -s nullglob
+    for desktop_file in /var/lib/flatpak/exports/share/applications/*missioncenter*.desktop \
+                        /var/lib/flatpak/exports/share/applications/*cpu-x*.desktop \
+                        "$HOME/.local/share/applications"/*missioncenter*.desktop \
+                        "$HOME/.local/share/applications"/*cpu-x*.desktop; do
+        if [ -f "$desktop_file" ]; then
+            local basename
+            basename=$(basename "$desktop_file")
+            if [[ ! " ${monitoring_apps[*]} " == *" '$basename' "* ]]; then
+                monitoring_apps+=("'$basename'")
+            fi
+        fi
+    done
+    shopt -u nullglob
+
+    _merge_registry_into_folder "Monitoring" monitoring_apps
+    mapfile -t monitoring_apps < <(printf '%s\n' "${monitoring_apps[@]}" | sort -u)
+    if [ ${#monitoring_apps[@]} -gt 0 ]; then
+        local monitoring_apps_str
+        monitoring_apps_str=$(IFS=,; echo "${monitoring_apps[*]}")
+        run_or_echo gsettings set org.gnome.desktop.app-folders.folder:/org/gnome/desktop/app-folders/folders/Monitoring/ name 'Monitoring'
+        run_or_echo gsettings set org.gnome.desktop.app-folders.folder:/org/gnome/desktop/app-folders/folders/Monitoring/ apps "[${monitoring_apps_str}]"
+        folder_ids+=("'Monitoring'")
+        print_status "success" "Monitoring folder created with ${#monitoring_apps[@]} apps"
+        print_status "config" "  Apps: ${monitoring_apps_str}"
+    else
+        print_status "warning" "No Monitoring apps found"
     fi
 
     # ==================== MEDIA FOLDER ====================

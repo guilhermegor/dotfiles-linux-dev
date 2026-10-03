@@ -1,11 +1,18 @@
 """Classify the review slot from a page of reviewer roster notices on stdin.
 
-Prints exactly one token: ``FREE|<reason>``, ``BUSY|<reason>`` or ``UNKNOWN``.
+Prints exactly one token: ``FREE|<reason>``, ``BUSY|<reason>``, ``ASK-ONLY|<reason>``
+or ``UNKNOWN``.
 
 ⚠️ ``UNKNOWN`` is the fail-closed answer and must never be read as free — it means
 the page could not be classified (unparseable body, a forge error page, a 403,
 or a GraphQL-shaped page with none of the REST field names this module reads),
 not that the slot is idle. s:dev-loop step 4b spends the slot on that verdict.
+
+⚠️ ``ASK-ONLY`` is also free, but for a different reason than ``FREE``: the repo
+carries the reviewer's "fewer than 10 stars" eligibility notice, so no automatic
+review will EVER arrive here — an explicit ask is the only path in, permanently,
+not just right now. Losing that distinction reads a permanently-manual repo as an
+ordinary idle slot (dotfiles-dev#538).
 
 Input contract: a REST comment-listing page (`gh api
 repos/{owner}/{repo}/issues/comments`), never a hand-rolled GraphQL query — see
@@ -13,7 +20,7 @@ repos/{owner}/{repo}/issues/comments`), never a hand-rolled GraphQL query — se
 
 Reviewer-agnostic by construction: every vendor-specific phrase lives in the
 constants below, so pointing this at a different review bot is an edit to those
-five strings and nothing else.
+six strings and nothing else.
 
 Lives in its own file rather than inline in the watcher: the first version embedded
 this in ``python3 -c '...'`` inside a shell script, where the f-string's escaped
@@ -33,6 +40,7 @@ REVIEWER_LOGIN_SUBSTRING = "coderabbit"
 LIMIT_PHRASES = ("rate limit", "review limit reached")
 CHAT_QUOTA_PHRASE = "chat message"
 REVIEW_DONE_PHRASE = "review finished"
+ELIGIBILITY_PHRASE = "fewer than 10 stars"
 RE_STATED_WAIT = re.compile(r"available in (\d+) minutes?")
 
 
@@ -76,8 +84,25 @@ def body_of(dict_comment: dict) -> str:
 	return (dict_comment.get("body") or "").lower()
 
 
-def classify(list_comments: list) -> str:
-	"""Return the slot verdict for one page of roster comments.
+def is_reviewer(dict_comment: dict) -> bool:
+	"""Return whether a comment was posted by the roster reviewer.
+
+	Parameters
+	----------
+	dict_comment : dict
+		One comment record from the roster page.
+
+	Returns
+	-------
+	bool
+		True when the author login names the reviewer.
+	"""
+	str_login = (dict_comment.get("user") or {}).get("login") or ""
+	return REVIEWER_LOGIN_SUBSTRING in str_login.lower()
+
+
+def rate_limit_verdict(list_comments: list) -> str:
+	"""Return the rate-limit verdict for one page, blind to repository eligibility.
 
 	Parameters
 	----------
@@ -87,7 +112,7 @@ def classify(list_comments: list) -> str:
 	Returns
 	-------
 	str
-		``FREE|<reason>``, ``BUSY|<reason>`` or ``UNKNOWN``.
+		``FREE|<reason>`` or ``BUSY|<reason>``.
 	"""
 	# ⚠️ A non-empty page where NOT ONE record carries a REST field name is a shape
 	# mismatch, not an empty roster — fail closed rather than read the silent zero
@@ -100,11 +125,7 @@ def classify(list_comments: list) -> str:
 	if list_comments and not is_rest_shaped(list_comments):
 		return "UNKNOWN"
 
-	list_bot = [
-		c
-		for c in list_comments
-		if REVIEWER_LOGIN_SUBSTRING in ((c.get("user") or {}).get("login") or "").lower()
-	]
+	list_bot = [c for c in list_comments if is_reviewer(c)]
 	if not list_bot:
 		return "FREE|no-notice-on-this-page"
 
@@ -163,6 +184,32 @@ def classify(list_comments: list) -> str:
 	if dt_now >= dt_reset:
 		return f"FREE|wait-expired-at-{str_reset}Z"
 	return f"BUSY|until-{str_reset}Z"
+
+
+def classify(list_comments: list) -> str:
+	"""Return the slot verdict for one page of roster comments.
+
+	Parameters
+	----------
+	list_comments : list
+		Comment records as returned by the forge's comment listing.
+
+	Returns
+	-------
+	str
+		``FREE|<reason>``, ``BUSY|<reason>``, ``ASK-ONLY|<reason>`` or ``UNKNOWN``.
+	"""
+	str_verdict = rate_limit_verdict(list_comments)
+	# ⚠️ Eligibility is permanent, rate limits are not: an ineligible repo's slot is
+	# ASK-ONLY whenever it is otherwise free, however the "free" was reached — no limit
+	# notice, an expired wait, a completed review, or a chat-only quota. Deciding it only
+	# when NO limit notice existed let any old notice demote the repo to plain FREE
+	# (dotfiles-dev#538 review). BUSY is left alone: a live limit is the more urgent fact.
+	if not str_verdict.startswith("FREE|"):
+		return str_verdict
+	if any(ELIGIBILITY_PHRASE in body_of(c) for c in list_comments if is_reviewer(c)):
+		return "ASK-ONLY|no-automatic-review-fewer-than-10-stars"
+	return str_verdict
 
 
 def main() -> int:

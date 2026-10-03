@@ -46,7 +46,7 @@ Each category file (e.g. `install_lib/browsers.sh`, `install_coding_lib/editors.
 |-------|----------|---------|
 | `func` | yes | The `install_<name>` function defined above in the same file |
 | `label` | yes | Human-readable menu label |
-| `gnome_folder` | no | One of `Sistema`, `Seguranca`, `Utilitarios`, `Media`, `Sharing`, `IRPF`, `Code`, `Data`, `Infra`, `Design`, `Planning`, `Reading`, `Ereader`, `Office`, `Social`, or empty (no folder) |
+| `gnome_folder` | no | One of `Sistema`, `Seguranca`, `Utilitarios`, `Monitoring`, `Media`, `Sharing`, `IRPF`, `Code`, `Data`, `Infra`, `Design`, `Planning`, `Reading`, `Ereader`, `Office`, `Social`, or empty (no folder) |
 | `desktop_file` | no | Explicit `.desktop` filename. If empty, derived as `${func#install_}.desktop` |
 
 `ubuntu_workspace.sh` reads the registry at startup and merges the `desktop_file` of every entry whose `gnome_folder` matches into the corresponding folder array, so install registrations are the single source of truth for app placement.
@@ -145,7 +145,8 @@ Folders are grouped by **artifact produced**, not by tool category. Existing fol
 
 | dconf key | Display name | Typical contents |
 |-----------|--------------|-----------------|
-| `Sistema` | System | System tools, settings, file manager |
+| `Sistema` | System | System tools, settings, updates, drivers, firmware, file manager |
+| `Monitoring` | Monitoring | Hardware/load dashboards (CoolerControl, Mission Center, GNOME System Monitor, Power Statistics, CPU-X, htop). Vitals is a top-bar extension with no launcher, so it is not a member |
 | `Seguranca` | Security | Security, antivirus, backup |
 | `Utilitarios` | Utilities | General utilities (screenshots, weather, Flameshot, Rofi…) |
 | `Media` | Media | Video players, audio players, media tools |
@@ -161,7 +162,7 @@ Folders are grouped by **artifact produced**, not by tool category. Existing fol
 | `Office` | Office | LibreOffice suite |
 | `Social` | Social | Messaging and email (Slack, Telegram, Thunderbird) |
 
-For **pre-installed system apps** (e.g. `gnome-control-center.desktop`, `mission-center.desktop`) that no install function manages, append them to the static `<id>_app_names` arrays inside `organize_app_folders()`. The registry merge runs alongside the static arrays — both contribute to the same folder.
+For **pre-installed system apps** (e.g. `gnome-control-center.desktop`, `gnome-system-monitor.desktop`) that no install function manages, append them to the static `<id>_app_names` arrays inside `organize_app_folders()`. The registry merge runs alongside the static arrays — both contribute to the same folder.
 
 For **dock pinning**: add the `.desktop` filename to the `favorite-apps` gsettings key in `configure_dock`. The registry does not currently model dock placement.
 
