@@ -1250,6 +1250,35 @@ install_coolercontrol() {
     print_status "success" "CoolerControl ready"
 }
 
+install_gsmartcontrol() {
+    print_status "section" "GSMARTCONTROL (disk SMART health)"
+
+    if command_exists gsmartcontrol; then
+        print_status "info" "GSmartControl already installed"
+        return 0
+    fi
+
+    print_status "info" "Installing GSmartControl (pulls in smartmontools)..."
+    install_package "gsmartcontrol" "gsmartcontrol" "gsmartcontrol" "gsmartcontrol" || return 1
+
+    print_status "success" "GSmartControl installed"
+}
+
+install_nvtop() {
+    print_status "section" "NVTOP (per-process GPU usage)"
+
+    if command_exists nvtop; then
+        print_status "info" "nvtop already installed"
+        return 0
+    fi
+
+    print_status "info" "Installing nvtop..."
+    install_package "nvtop" "nvtop" "nvtop" "nvtop" || return 1
+
+    print_status "success" "nvtop installed"
+    print_status "info" "Usage: nvtop (terminal app; NVIDIA, AMD and Intel GPUs)"
+}
+
 # ============================================================================
 # REGISTRY
 # ============================================================================
@@ -1278,6 +1307,8 @@ INSTALL_REGISTRY+=(
     "install_flatpak_apps:Flatpak Applications::"
     "install_vitals:Vitals System Monitor::"
     "install_coolercontrol:CoolerControl:Monitoring:org.coolercontrol.CoolerControl.desktop"
+    "install_gsmartcontrol:GSmartControl (disk SMART health):Monitoring:gsmartcontrol.desktop"
+    "install_nvtop:nvtop (GPU process monitor):Monitoring:nvtop.desktop"
     "install_dim_calendar_events:Calendar Events Enhancement::"
     "configure_gsconnect:GSConnect::"
 )

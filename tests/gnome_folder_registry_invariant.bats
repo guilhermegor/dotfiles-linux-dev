@@ -302,3 +302,36 @@ teardown() {
     [[ "$output" != *"sources.list.d"* ]]
     [[ "$output" == *"[dry-run] sudo systemctl enable --now coolercontrold"* ]]
 }
+
+# Issue #597: GSmartControl and nvtop fill the disk-health and per-process-GPU
+# gaps. Both ids come from the packages' own file lists (usr/share/applications).
+@test "install_gsmartcontrol and install_nvtop are registered in Monitoring with their shipped launcher ids" {
+    local entry fn _label folder desktop found=""
+    for entry in "${INSTALL_REGISTRY[@]}"; do
+        IFS=':' read -r fn _label folder desktop <<< "$entry"
+        case "$fn" in
+            install_gsmartcontrol|install_nvtop) found+="$fn=$folder:$desktop " ;;
+        esac
+    done
+    [ "$found" = "install_gsmartcontrol=Monitoring:gsmartcontrol.desktop install_nvtop=Monitoring:nvtop.desktop " ]
+}
+
+@test "install_gsmartcontrol and install_nvtop install their package once and skip when present" {
+    # shellcheck source=../distro_config/install_lib/_common.sh
+    source "$REPO_ROOT/distro_config/install_lib/_common.sh"
+    local fn
+    for fn in gsmartcontrol nvtop; do
+        PACKAGE_MANAGER=apt
+        INSTALL_CMD="run_or_echo sudo apt-get install -y"
+        command_exists() { return 1; }
+        run "install_$fn"
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"[dry-run] sudo apt-get install -y $fn"* ]]
+
+        command_exists() { return 0; }
+        run "install_$fn"
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"already installed"* ]]
+        [[ "$output" != *"apt-get install"* ]]
+    done
+}

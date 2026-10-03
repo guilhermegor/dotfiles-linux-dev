@@ -146,7 +146,7 @@ Folders are grouped by **artifact produced**, not by tool category. Existing fol
 | dconf key | Display name | Typical contents |
 |-----------|--------------|-----------------|
 | `Sistema` | System | System tools, settings, updates, drivers, firmware, file manager |
-| `Monitoring` | Monitoring | Hardware/load dashboards (CoolerControl, Mission Center, GNOME System Monitor, Power Statistics, CPU-X, htop). Vitals is a top-bar extension with no launcher, so it is not a member |
+| `Monitoring` | Monitoring | Hardware/load dashboards (CoolerControl, GSmartControl, nvtop, Mission Center, GNOME System Monitor, Power Statistics, CPU-X, htop). Vitals is a top-bar extension with no launcher, so it is not a member |
 | `Seguranca` | Security | Security, antivirus, backup |
 | `Utilitarios` | Utilities | General utilities (screenshots, weather, Flameshot, Rofi…) |
 | `Media` | Media | Video players, audio players, media tools |
