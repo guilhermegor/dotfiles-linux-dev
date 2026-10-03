@@ -272,6 +272,17 @@ JQ
 # 12:43:28Z, head committed 13:28:42Z -- the marker predates the head by 45 minutes and must not
 # satisfy this filter. The CWE-345 author-association check stays exactly as it was; freshness is
 # an additional, independent AND clause, never a replacement for it.
+#
+# ⚠️ dotfiles-dev#564: $head_date alone is the commit's own committer.date/committedDate, which
+# whoever pushes controls -- a backdated push can make a NEW head look OLDER than an EXISTING
+# marker and inherit credit for code that marker never reviewed. The marker branch's third AND
+# clause below closes that: the marker's own SECOND line ("Reviewed head: <sha>", written by
+# ladder_attribution_line in reviewer_ladder.sh) must equal $head_oid -- the same GraphQL-reported
+# oid the review branch above already trusts. Neither clause subsumes the other: the SHA answers
+# "was this the same commit", the date still catches a marker written before the head existed at
+# all. A marker with no second line at all (every marker written before this shipped) fails CLOSED
+# the same as an empty $head_oid -- one extra review is the acceptable cost, never a permanent skip
+# under a new name.
 _gate_reported_filter() {
 	cat <<'JQ'
 ($roster | split("\n") | map(select(length > 0)) | map(ascii_downcase)) as $bots
@@ -298,6 +309,8 @@ _gate_reported_filter() {
         (((.body // "") | split("\n")[0]) | test($marker))
         and ((.authorAssociation // "") | test("^(OWNER|MEMBER|COLLABORATOR)$"))
         and (($head_date != "") and ((.createdAt // "") >= $head_date))
+        and (($head_oid != "")
+             and ((((.body // "") | split("\n"))[1] // "") == ("Reviewed head: " + $head_oid)))
       )))
 JQ
 }

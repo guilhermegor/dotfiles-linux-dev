@@ -203,6 +203,7 @@ run_step() {
 # the ladder" apart from "nobody has reported yet".
 
 LADDER_BODY="Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)
+Reviewed head: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
 
 No findings."
 ZERO_THREADS='{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}'
@@ -279,7 +280,7 @@ $LADDER_BODY"
 # verbose fallback review reaches it. Parameter expansion has no pipe and no length ceiling.
 
 @test "ladder marker is honoured in a 60 KB body (no broken-pipe kill)" {
-    long_body="Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)"$'\n'"$(printf '%*s' 60000 '')"
+    long_body="Fallback review — runtime: codex, model: codex-auto-review (selected by: review-specialized-slug)"$'\n'"Reviewed head: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"$'\n'"$(printf '%*s' 60000 '')"
     run_step "issue_comment" "guilhermegor" "$long_body" \
         0 '{"data":{"repository":{"pullRequest":{"reviewThreads":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"totalCount":0,"nodes":[]}}}}]}}}}}' \
         "OWNER"
