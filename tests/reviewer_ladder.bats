@@ -1021,6 +1021,61 @@ _only_cli_rungs() {
     [[ "$output" == *"no rung available"* ]]
 }
 
+_cli_run_harness() {
+    _only_cli_rungs
+    # copilot's probe checks for "OK" in the output, so its stub must print it
+    probe_ok() { echo OK; }
+    export -f probe_ok
+    export REVIEWER_LADDER_KIMI_PROBE=false REVIEWER_LADDER_CODERABBIT_PROBE=true \
+        REVIEWER_LADDER_COPILOT_PROBE=probe_ok
+    fake_checkout() { echo "$BATS_TEST_TMPDIR"; }
+    export -f fake_checkout
+    export REVIEWER_LADDER_CHECKOUT_CMD=fake_checkout
+    fake_post() { printf 'POSTED:%s\n' "$4"; }
+    export -f fake_post
+    export REVIEWER_LADDER_POST_CMD=fake_post
+}
+
+@test "a rung whose probe passes but whose review fails falls through to the next" {
+    _cli_run_harness
+    fake_run() {
+        [ "$1" = "coderabbit" ] && { echo "Review rate limited" >&2; return 1; }
+        echo "copilot found 1 P2"
+    }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rung coderabbit skipped: review failed"* ]]
+    [[ "$output" == *"POSTED:"*"runtime: copilot"*"copilot found 1 P2"* ]]
+}
+
+@test "an empty review is never posted as a clean one" {
+    _cli_run_harness
+    fake_run() { [ "$1" = "copilot" ] && echo "real finding"; return 0; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rung coderabbit skipped: review failed or returned nothing"* ]]
+    [[ "$output" == *"runtime: copilot"* ]]
+    [[ "$output" != *"runtime: coderabbit"* ]]
+}
+
+@test "every rung failing its review ends in no rung available, posting nothing" {
+    _cli_run_harness
+    fake_run() { return 1; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no rung available"* ]]
+    [[ "$output" != *"POSTED:"* ]]
+}
+
 @test "coderabbit invocation never carries --use-credits or an api key" {
     _fake_cli coderabbit ok
     _fake_cli kimi ok
