@@ -628,12 +628,16 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    to: `ai_clients/claude/hooks/lib/reviewer_ladder.sh` resolves one fallback rung and posts a
    review instead of leaving the window unspent (dotfiles-linux-dev#444).
 
-   **The rungs, in order (dotfiles-linux-dev#626): qwen, codex, kimi, coderabbit CLI, copilot.**
+   **The rungs, in order (dotfiles-linux-dev#626, #628): qwen, codex, kimi, coderabbit CLI, copilot, then `claude` last.**
    Each is gated by a bounded live probe; a rung that fails it (401/403 subscription, quota,
    expired login, timeout) is skipped in one log line and the ladder falls through. When none
    resolves it reports `no rung available` and exits non-zero — wait for the primary. A rung is
    NEVER removed because it is currently paywalled. 🔴 **Never spend money:** no rung may pass a
    paid/credits flag (e.g. `coderabbit review --use-credits`) or use a configured pay-per-use API key.
+   The `claude` rung (headless `claude -p`, read-only `Read,Grep,Glob` tools, posted as `selected by:
+   last-resort`) is the one paid service the owner accepts; it runs only when every cheaper rung failed
+   its probe, is skipped on a session/usage-limit or auth error, and never re-reviews a head that
+   already carries any rung's marker.
 
    🔴 **The ladder also fires on the backlog itself, not only on a BUSY/UNKNOWN slot
    (dotfiles-linux-dev#616).** Measured on blueprintx 2026-10-04: 50 open PRs, 32 with zero

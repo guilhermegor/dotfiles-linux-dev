@@ -231,10 +231,20 @@ _copilot_entitlement_probe() {
 	[[ "$out" == *OK* ]]
 }
 
+# claude (dotfiles-linux-dev#628): the ONE paid service the owner accepts, so the
+# strictly LAST rung. It is only reached when every cheaper rung failed its
+# probe, and the probe itself is a one-word call. A session/usage limit or auth
+# error exits non-zero or prints no OK, so the rung is skipped.
+_claude_entitlement_probe() {
+	local out
+	out="$(_rung_probe claude REVIEWER_LADDER_CLAUDE_PROBE claude -p "reply with the single word OK")" || return 1
+	[[ "$out" == *OK* ]]
+}
+
 # --- the ladder ------------------------------------------------------------
 
 # LADDER_CLI_RUNGS: the single-model CLI rungs below qwen and codex, in order.
-LADDER_CLI_RUNGS="kimi coderabbit copilot"
+LADDER_CLI_RUNGS="kimi coderabbit copilot claude"
 
 # resolve_fallback_reviewer
 # Tries qwen, codex, then kimi, coderabbit, copilot — the rungs below the
@@ -272,6 +282,7 @@ resolve_fallback_reviewer() {
 			LADDER_RUNTIME="$rung"
 			LADDER_MODEL="default"
 			LADDER_SIGNAL="live-probe"
+			[ "$rung" = "claude" ] && LADDER_SIGNAL="last-resort"
 			return 0
 		fi
 		print_status "info" "rung $rung skipped: probe failed (401/403, quota, expired login or timeout)"
@@ -608,7 +619,7 @@ _run_runtime_review() {
 		(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
 			coderabbit review --agent --base "$cr_base")
 		;;
-	kimi | copilot)
+	kimi | copilot | claude)
 		# No review subcommand: hand the verified checkout's diff in the prompt,
 		# so no tool permission (and no --yolo/--allow-all) is ever needed.
 		local rv_base diff prompt
@@ -621,6 +632,10 @@ _run_runtime_review() {
 		prompt="Review PR #$pr_number. Report concrete bugs and risks as a markdown list with file:line. Diff:"$'\n'"$diff"
 		if [ "$runtime" = "kimi" ]; then
 			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" kimi -p "$prompt"
+		elif [ "$runtime" = "claude" ]; then
+			# READ-ONLY allowlist: the review must never edit, commit or push.
+			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" claude -p "$prompt" \
+				--allowedTools "Read,Grep,Glob"
 		else
 			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" copilot -s -p "$prompt"
 		fi
@@ -698,17 +713,19 @@ run_fallback_review() {
 		REVIEWER_LADDER_QWEN_PROBE="${REVIEWER_LADDER_QWEN_PROBE:-}" \
 		REVIEWER_LADDER_KIMI_PROBE="${REVIEWER_LADDER_KIMI_PROBE:-}" \
 		REVIEWER_LADDER_CODERABBIT_PROBE="${REVIEWER_LADDER_CODERABBIT_PROBE:-}" \
-		REVIEWER_LADDER_COPILOT_PROBE="${REVIEWER_LADDER_COPILOT_PROBE:-}"
+		REVIEWER_LADDER_COPILOT_PROBE="${REVIEWER_LADDER_COPILOT_PROBE:-}" \
+		REVIEWER_LADDER_CLAUDE_PROBE="${REVIEWER_LADDER_CLAUDE_PROBE:-}"
 	if [ "$dry_run" = "1" ]; then
 		: "${REVIEWER_LADDER_CODEX_PROBE:=true}"
 		: "${REVIEWER_LADDER_QWEN_PROBE:=true}"
 		: "${REVIEWER_LADDER_KIMI_PROBE:=true}"
 		: "${REVIEWER_LADDER_CODERABBIT_PROBE:=true}"
 		: "${REVIEWER_LADDER_COPILOT_PROBE:=true}"
+		: "${REVIEWER_LADDER_CLAUDE_PROBE:=true}"
 	fi
 
 	if ! resolve_fallback_reviewer; then
-		print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot all unavailable)"
+		print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable)"
 		return 1
 	fi
 

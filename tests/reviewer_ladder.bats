@@ -33,6 +33,7 @@ setup() {
     export REVIEWER_LADDER_KIMI_PROBE=_default_rung_down
     export REVIEWER_LADDER_CODERABBIT_PROBE=_default_rung_down
     export REVIEWER_LADDER_COPILOT_PROBE=_default_rung_down
+    export REVIEWER_LADDER_CLAUDE_PROBE=_default_rung_down
 }
 
 # The head every already-covered fixture below reviewed (dotfiles-linux-dev#564).
@@ -967,7 +968,7 @@ SH
 _only_cli_rungs() {
     export REVIEWER_LADDER_QWEN_SETTINGS=/nonexistent
     export REVIEWER_LADDER_CODEX_CACHE=/nonexistent
-    unset REVIEWER_LADDER_KIMI_PROBE REVIEWER_LADDER_CODERABBIT_PROBE REVIEWER_LADDER_COPILOT_PROBE
+    unset REVIEWER_LADDER_KIMI_PROBE REVIEWER_LADDER_CODERABBIT_PROBE REVIEWER_LADDER_COPILOT_PROBE REVIEWER_LADDER_CLAUDE_PROBE
     export REVIEWER_LADDER_PROBE_TIMEOUT=1
 }
 
@@ -976,8 +977,11 @@ _only_cli_rungs() {
     _fake_cli kimi ok
     _fake_cli coderabbit forbidden
     _fake_cli copilot forbidden
+    _fake_cli claude ok
     resolve_fallback_reviewer
     [ "$LADDER_RUNTIME" = "kimi" ]
+    # a cheaper rung resolved: claude must never have been called
+    [ ! -e "$BATS_TEST_TMPDIR/claude.argv" ]
 }
 
 @test "coderabbit rung is selected when its probe passes and kimi is down" {
@@ -1003,6 +1007,7 @@ _only_cli_rungs() {
     _fake_cli kimi forbidden
     _fake_cli coderabbit quota
     _fake_cli copilot hang
+    _fake_cli claude forbidden
     run resolve_fallback_reviewer
     [ "$status" -eq 1 ]
     [ "$(grep -c 'rung kimi skipped' <<<"$output")" -eq 1 ]
@@ -1015,6 +1020,7 @@ _only_cli_rungs() {
     _fake_cli kimi forbidden
     _fake_cli coderabbit forbidden
     _fake_cli copilot forbidden
+    _fake_cli claude quota
     export REVIEWER_LADDER_HEAD_SHA_CMD=_default_fake_head_sha
     run run_fallback_review o r 1 CLEAN 0 99999 '[]'
     [ "$status" -ne 0 ]
@@ -1036,5 +1042,47 @@ _only_cli_rungs() {
     [ "$status" -ne 0 ]
     # only comments may mention the flag; no code line of the lib may
     run bash -c "grep -v '^[[:space:]]*#' '$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/reviewer_ladder.sh' | grep -e '--use-credits' -e '--api-key'"
+    [ "$status" -ne 0 ]
+}
+
+@test "claude is the last-resort rung: selected only when all earlier rungs fail" {
+    _only_cli_rungs
+    _fake_cli kimi forbidden
+    _fake_cli coderabbit forbidden
+    _fake_cli copilot quota
+    _fake_cli claude ok
+    resolve_fallback_reviewer
+    [ "$LADDER_RUNTIME" = "claude" ]
+    [ "$LADDER_SIGNAL" = "last-resort" ]
+    [[ "$(ladder_attribution_line "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_SIGNAL" abc)" == "Fallback review — runtime: claude, model: default (selected by: last-resort)"* ]]
+}
+
+@test "claude rung is skipped on a session/usage limit error" {
+    _only_cli_rungs
+    _fake_cli kimi forbidden
+    _fake_cli coderabbit forbidden
+    _fake_cli copilot forbidden
+    _fake_cli claude quota
+    run resolve_fallback_reviewer
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"rung claude skipped"* ]]
+}
+
+@test "claude review invocation carries only read-only tools" {
+    _fake_cli claude ok
+    local wd="$BATS_TEST_TMPDIR/wd"
+    git init -q "$wd"
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q --allow-empty -m x
+    git -C "$wd" branch -M master
+    git -C "$wd" branch base
+    echo hi >"$wd/f"
+    git -C "$wd" add f
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q -m y
+    export REVIEWER_LADDER_BASE=base
+    cd "$wd"
+    run _run_runtime_review claude default "" 7 "$wd"
+    [ "$status" -eq 0 ]
+    grep -q -- '--allowedTools Read,Grep,Glob' "$BATS_TEST_TMPDIR/claude.argv"
+    run grep -E 'Edit|Write|Bash|NotebookEdit|--dangerously|bypassPermissions' "$BATS_TEST_TMPDIR/claude.argv"
     [ "$status" -ne 0 ]
 }
