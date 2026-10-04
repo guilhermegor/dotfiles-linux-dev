@@ -2,7 +2,7 @@
 # Stop hook: refuse to end the turn while EVERY dispatchable issue is not
 # either in flight or throttled by the concurrency cap — the deterministic
 # half of s:dev-loop step 6 (DISPATCH), sibling of
-# uncommitted_worktree_guard.sh (dotfiles-dev#396, #405).
+# uncommitted_worktree_guard.sh (dotfiles-linux-dev#396, #405).
 #
 # The owner asked four times why subagents were not dispatched in parallel.
 # Two distinct causes, only one of them the model forgetting:
@@ -14,7 +14,7 @@
 #      proved that a correct, written-down "commit early" rule still gets
 #      skipped without a hook enforcing it — same defect, different step.
 #
-# ⚠️ COVERAGE, NOT PRESENCE (dotfiles-dev#405). Until #405 this hook exited 0
+# ⚠️ COVERAGE, NOT PRESENCE (dotfiles-linux-dev#405). Until #405 this hook exited 0
 # the moment ANY dispatch of this session was unresolved, so it could only
 # ever enforce "at least one agent is working" — the batch SIZE still
 # depended on the model remembering, which is what the owner has now asked
@@ -68,15 +68,15 @@ PLANNER="${DISPATCH_GUARD_PLANNER:-$HOOK_DIR/lib/dispatch_plan.py}"
 # 60s, not 30: dispatch_plan.py measured 39s on 2026-10-03 15:40Z under a GitHub
 # burst (every Stop read UNREADABLE) and 17s at 21:15Z after #605/#576 cut its
 # reads. ~3.5x the quiet runtime absorbs API latency; a real hang still times out
-# and fails closed (dotfiles-dev#607).
+# and fails closed (dotfiles-linux-dev#607).
 PLANNER_TIMEOUT="${DISPATCH_GUARD_PLANNER_TIMEOUT:-60}"
 # A session-long FAILED_BACKGROUND_AGENTS accumulation is unreadable by construction
-# (dotfiles-dev#540, measured: 34 names on every Stop). Only the newest N are ever printed.
+# (dotfiles-linux-dev#540, measured: 34 names on every Stop). Only the newest N are ever printed.
 FAILED_AGENTS_MAX="${DISPATCH_GUARD_FAILED_AGENTS_MAX:-10}"
 
 # dev_loop_invoked TRANSCRIPT
 # Pure data: did this session's transcript ever run s:dev-loop? Three shapes count, all
-# measured off real transcripts (dotfiles-dev#404) — a session that never ran the loop in
+# measured off real transcripts (dotfiles-linux-dev#404) — a session that never ran the loop in
 # ANY of them is not this hook's concern, and must never fire:
 #   1. a Skill tool_use, bare ("dev-loop") — the original, and still correct for a direct
 #      Skill-tool invocation.
@@ -112,7 +112,7 @@ dev_loop_invoked() {
 	# landing after a real match, would flip -e's verdict back to failure. `select` instead
 	# emits NOTHING for a non-matching line, the same "backtrack, don't emit false" contract
 	# shape 1's chain of `select`s already relies on — so only a real match can be the last
-	# (or only) value on the stream (dotfiles-dev#404, caught by this fix's own repro).
+	# (or only) value on the stream (dotfiles-linux-dev#404, caught by this fix's own repro).
 	jq -e 'select(.type == "user" and .message.content != null)
 		| .message.content
 		| if type == "string" then .
@@ -191,7 +191,7 @@ _agent_dispatch_issue() {
 # _sendmessage_resumed TRANSCRIPT ID NAME
 # True when a SendMessage tool_use addresses this agent's name AFTER this dispatch's own failure
 # notification for tool_use ID — the model already picked THIS failure back up, so it is
-# RESOLVED and does not belong on the rescue list (dotfiles-dev#540, candidate signal 2). A
+# RESOLVED and does not belong on the rescue list (dotfiles-linux-dev#540, candidate signal 2). A
 # blank NAME (the dispatch declared none) can never match: fail closed, never assumed resumed
 # on silence.
 #
@@ -224,7 +224,7 @@ _sendmessage_resumed() {
 # FAILED_BACKGROUND_AGENTS (newline-separated "<declared-issue-or-empty><TAB><name>",
 # possibly empty — rescue_note resolves and filters this, it is never printed raw).
 #
-# ⚠️ Per ISSUE, not per session (dotfiles-dev#405). The pre-#405 version of this function
+# ⚠️ Per ISSUE, not per session (dotfiles-linux-dev#405). The pre-#405 version of this function
 # answered the yes/no question "is any subagent running", which made the whole guard a presence
 # check: one live agent excused every other dispatchable issue in the same round. The set of
 # issue numbers is the answer coverage needs.
@@ -235,7 +235,7 @@ _sendmessage_resumed() {
 # a result. Upgrade path: a real running-agent registry, if the harness ever exposes one.
 #
 # A tool_result IS present but is a background dispatch's own launch acknowledgement ("Async
-# agent launched successfully...", measured verbatim off a real transcript, dotfiles-dev#404) —
+# agent launched successfully...", measured verbatim off a real transcript, dotfiles-linux-dev#404) —
 # that text is delivered synchronously on launch, before the agent has done any work, so
 # treating its mere presence as "resolved" is exactly the defect that issue reports: every
 # background dispatch reads as finished the instant it starts. Only a LATER <task-notification>
@@ -272,7 +272,7 @@ inflight_dispatch_issues() {
 						| select(.type == "tool_use" and .id == $id)
 						| (.input.name // "")' "$transcript" 2>/dev/null | head -1)"
 					# RESOLVED: the model already resumed this agent by name, AFTER this
-					# failure — do not re-nag for it (dotfiles-dev#540, signal 2).
+					# failure — do not re-nag for it (dotfiles-linux-dev#540, signal 2).
 					_sendmessage_resumed "$transcript" "$id" "$agent_name" && continue
 					desc="$(jq -r --arg id "$id" 'select(.message.content != null)
 						| .message.content[]?
@@ -331,7 +331,7 @@ gh() {
 # report_unreadable DETAIL
 # The fail-closed exit. Named separately because there are two distinct ways the plan can be
 # unusable and both must block with the SAME loudness — a planner that fails and is then read as
-# routine silence is the defect this hook exists to catch (dotfiles-dev#396).
+# routine silence is the defect this hook exists to catch (dotfiles-linux-dev#396).
 report_unreadable() {
 	{
 		echo "free dispatch surface UNREADABLE ($1) — not the same as empty."
@@ -346,7 +346,7 @@ report_unreadable() {
 # rescue_note REMAINING
 # Printed above every block message while a background dispatch of this session FAILED and
 # nothing has since RESOLVED it: a quota kill is not free capacity, and dispatching a duplicate
-# over it loses the work twice. Before dotfiles-dev#540 this printed the raw accumulation
+# over it loses the work twice. Before dotfiles-linux-dev#540 this printed the raw accumulation
 # forever (measured: 34 names on every single Stop, one of them literally duplicated) — a
 # failed dispatch had no way to become resolved. Three checks, applied here:
 #

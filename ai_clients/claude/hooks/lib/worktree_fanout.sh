@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared worktree rescue fan-out (dotfiles-dev#383): ONE implementation of "walk every worktree
+# Shared worktree rescue fan-out (dotfiles-linux-dev#383): ONE implementation of "walk every worktree
 # of this repo and classify its dirty state", extracted out of session_start_context.sh so a
 # second hook (quota_gap_rescue.sh, a UserPromptSubmit hook re-running the same check after a
 # quota gap) can call it instead of re-deriving the classifier — same shared-lib pattern as
@@ -18,7 +18,7 @@ fi
 
 # Classifies a dirty worktree's diff against HEAD as "interrupted" (net new work worth
 # resuming) or "stale" (a revert of content already shipped on the default branch) — the
-# SIGN of the diff is the signal, not the file count (dotfiles-dev#318; lessons-claude-toolchain:
+# SIGN of the diff is the signal, not the file count (dotfiles-linux-dev#318; lessons-claude-toolchain:
 # a-staged-deletion-set-is-a-stale-revert-not-lost-work.md — four worktrees reporting 42/39/
 # 90/42 dirty files were stale reverts, the one holding real work reported 5). Prints
 # "<verdict>\t<insertions>\t<deletions>". Fails open to "interrupted" on any ambiguity or
@@ -105,7 +105,7 @@ fanout_worktrees() {
 				# "Pushed" means the branch has ITS OWN remote ref, never merely that
 				# `@{upstream}` resolves — a worktree created with
 				# `git worktree add -b <name> origin/master` tracks origin/master as its
-				# upstream from birth, with no ref of its own on the remote (dotfiles-dev#457).
+				# upstream from birth, with no ref of its own on the remote (dotfiles-linux-dev#457).
 				# Same oracle subagent_stop_sweep.sh already uses for this predicate.
 				if [ -n "$branch" ] \
 					&& git -C "$path" rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null 2>&1; then
@@ -115,12 +115,12 @@ fanout_worktrees() {
 				[ "$ahead" -gt 0 ] && printf '[fan-out] worktree %s: %s commit(s) not pushed\n' "$name" "$ahead"
 
 				# Neither `@{upstream}` nor a remote ref of its own: a branch that was NEVER
-				# pushed (dotfiles-dev#571 — the most common thing a killed agent leaves
+				# pushed (dotfiles-linux-dev#571 — the most common thing a killed agent leaves
 				# behind: it committed, then died before `git push -u`). Count only commits
 				# whose patch isn't already on origin/<default> (`git cherry`, "+" = not yet
 				# applied there). That drops a ONE-commit squash merge only: squashing several
 				# commits yields a patch-id equal to none of them, so every one stays "+"
-				# (dotfiles-dev#606). The forge settles that case — a MERGED PR for this branch
+				# (dotfiles-linux-dev#606). The forge settles that case — a MERGED PR for this branch
 				# whose headRefOid is the local HEAD shipped exactly what is here. With the
 				# forge unreadable (github_ok=0) merged_heads is empty, so it keeps reporting.
 				if [ "$has_upstream" = "0" ] && [ "$pushed" = "0" ] && [ -n "$branch" ] \

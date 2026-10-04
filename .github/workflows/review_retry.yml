@@ -26,11 +26,11 @@ jobs:
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
         run: |
           set -euo pipefail
-          # Checked BEFORE the sleep below (dotfiles-dev#250): without the PAT the
+          # Checked BEFORE the sleep below (dotfiles-linux-dev#250): without the PAT the
           # retry cannot post, so sleeping first would burn ~35 minutes of runner
           # time only to fail at the last line.
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::warning::GH_REVIEW_TRIGGER_PAT is not set — cannot re-ask for a review after a rate-limit refusal (see dotfiles-dev#130)."
+            echo "::warning::GH_REVIEW_TRIGGER_PAT is not set — cannot re-ask for a review after a rate-limit refusal (see dotfiles-linux-dev#130)."
             exit 0
           fi
 
@@ -51,7 +51,7 @@ jobs:
           sleep "$((minutes * 60))"
           # REST, not `gh pr comment`: `gh pr comment` issues the GraphQL
           # `addComment` mutation, which 403'd here while REST reads
-          # succeeded with the same token (dotfiles-dev#317).
+          # succeeded with the same token (dotfiles-linux-dev#317).
           gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
             -f body='@coderabbitai full review' \
             --jq '"requested by \(.user.login) [\(.user.type)]"'

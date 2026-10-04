@@ -1,5 +1,5 @@
 #!/bin/bash
-# Reviewer-rung capability probe (dotfiles-dev#479), sourced by session_start_context.sh
+# Reviewer-rung capability probe (dotfiles-linux-dev#479), sourced by session_start_context.sh
 # so it fires once per session, not once per s:dev-loop step-4b round.
 #
 # reviewer_ladder.sh silently skips any rung that resolves nothing — correct ladder

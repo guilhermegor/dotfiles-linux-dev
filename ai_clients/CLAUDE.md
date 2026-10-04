@@ -17,10 +17,10 @@ step's `prune_settings_keys()` (`lib/prune.sh`) explicitly removes it —
 and that function only touches the specific, fully source-owned subtrees
 named in `SETTINGS_PRUNE_KEYS` (`enabledPlugins` today), never a blanket
 diff, so machine-local keys the additive merge exists to protect still
-survive (dotfiles-dev#272).
+survive (dotfiles-linux-dev#272).
 
 `ai_clients/claude/`, `codex/`, `qwen/`, `copilot/`, and `kimi/` are wired up
-today (dotfiles-dev#346). A new client follows the same pattern: add
+today (dotfiles-linux-dev#346). A new client follows the same pattern: add
 `ai_clients/<name>/main.sh` and it is auto-discovered by `ai_clients/main.sh`
 — `claude/main.sh` is the full model (settings, plugins, marketplaces, prune,
 …); `codex/main.sh` is the small model, and `qwen/`, `copilot/`, `kimi/` are
@@ -35,7 +35,7 @@ prompt, `deny` always wins). The buckets follow one rule: read-only / reversible
 `sudo`, installs) → `ask` (harness prompts); secrets + `rm -rf ~|/` + `chmod -R 777`
 → `deny` (hard block). The contents are self-documenting in the file; the three
 non-obvious points below are **not**, and a future audit must not relitigate them
-(dotfiles-dev#68):
+(dotfiles-linux-dev#68):
 
 1. **Dual-list every git/gh entry in bare AND `rtk` form.** The `rtk hook claude`
    PreToolUse hook rewrites `git …` → `rtk git …` at execution, but the model is
@@ -86,7 +86,7 @@ splits the command into simple commands on `;`/`&&`/`||`/`|`/`&`/newlines
 (skipping heredoc bodies), tokenizes the matching one with `shlex`, and
 reads `--repo`/`-R`, `--body`/`-b`, `--body-file`/`-F`, and
 `--label`/`-l`/`--add-label` off that real argv — short flags in all three
-pflag spellings (`-b X`, `-bX`, `-b=X`, dotfiles-dev#604) — never off a regex over
+pflag spellings (`-b X`, `-bX`, `-b=X`, dotfiles-linux-dev#604) — never off a regex over
 the whole string, which could be fooled by that same flag text appearing
 inside an unrelated quoted argument (e.g. inside `--title`), or miss an
 invocation chained after a shell operator entirely (dotfiles-dev, PR #371
@@ -124,14 +124,14 @@ The issue guard derives its requirements straight from each template file:
 A repo with several issue templates passes if the body satisfies **any
 one** of them — an issue follows one template, not all.
 
-### Where a PR body scratch file lives (dotfiles-dev#441)
+### Where a PR body scratch file lives (dotfiles-linux-dev#441)
 
 `pr_template_guard.sh`'s filesystem view is sandboxed to the project
 directory (see `block_unresolved_body_file()`), so a `--body-file` under
 `/tmp` or any other out-of-repo path is rejected outright. The body must
 live inside the repo, but a PR body is not source — it must never be
 committed. The home is a **root-level `$root/.git-pr-<slug>.md`**, already
-git-ignored (`.gitignore`'s `.git-pr-*.md` entry, dotfiles-dev#197) —
+git-ignored (`.gitignore`'s `.git-pr-*.md` entry, dotfiles-linux-dev#197) —
 **not** `$root/.git/`, which the guard used to recommend. `.git/` fails in
 two ways: inside a git worktree it is a plain FILE, not a directory, so a
 write there fails outright (this repo's own agents work almost entirely in
@@ -158,7 +158,7 @@ the matching is trusted, not this cut.
 still `copy_hook_file`'d by `install_hooks()` like every other script under
 `hooks/`, so it actually reaches `~/.claude/hooks/` for a human or skill to
 run. It shipped tested and documented but missing exactly that
-`copy_hook_file` call for a while (dotfiles-dev#532): a bats suite that
+`copy_hook_file` call for a while (dotfiles-linux-dev#532): a bats suite that
 exercises the script directly stays green whether or not it was ever
 installed, so passing tests were never evidence it was reachable.
 `tests/hooks_install_parity.bats` now asserts every script under `hooks/`
@@ -174,7 +174,7 @@ why live, why last) lives in the file's own header, not duplicated here.
 It blocks the merge on **either** of two independent findings:
 
 1. A review thread that is unanswered or unresolved (the original guard).
-2. **(dotfiles-dev#379)** A roster reviewer's check — `CheckRun`/`StatusContext`
+2. **(dotfiles-linux-dev#379)** A roster reviewer's check — `CheckRun`/`StatusContext`
    on the head commit's `statusCheckRollup`, matched against `.review-bots.yaml`
    — still sitting in a non-terminal state. An **empty** `reviewThreads` list is
    the same shape whether the reviewer looked and found nothing or has not
@@ -194,7 +194,7 @@ It blocks the merge on **either** of two independent findings:
 Both findings share the one escape hatch, since standing aside for either is
 the same deliberate call: `ALLOW_UNRESOLVED_THREADS=1 gh pr merge <n>`.
 
-## Stale-local-ref guard: checkout and worktree add (dotfiles-dev#410)
+## Stale-local-ref guard: checkout and worktree add (dotfiles-linux-dev#410)
 
 `hooks/stale_local_ref_guard.sh` (`PreToolUse`, `Bash`) blocks `git
 checkout`/`git switch`/`git worktree add` when the target is a bare **local**
@@ -227,9 +227,9 @@ held by a concurrent PR when the guard was written, and `install_hooks()` shippe
 the file the whole time: a guard present on disk and absent from the array is
 installed, inert, and indistinguishable from a working one by any check that only
 looks for the file. `tests/hooks_install_parity.bats` is what made it visible
-(dotfiles-dev#467) — it asserts the two lists agree, in both directions.
+(dotfiles-linux-dev#467) — it asserts the two lists agree, in both directions.
 
-## Dispatch coverage: the claims registry and the cap (dotfiles-dev#405)
+## Dispatch coverage: the claims registry and the cap (dotfiles-linux-dev#405)
 
 `hooks/dispatch_free_surface_guard.sh` (a `Stop` hook) enforces **coverage**, not
 presence. It blocks while
@@ -284,7 +284,7 @@ check-and-append under `flock` to `$(git rev-parse --git-common-dir)/dispatch-cl
 3. **Claims expire (`DISPATCH_CLAIM_TTL`, default 2h).** `release_claims <issue>`
    is the intended path (a PR opened, or the agent stopped without one), but a
    killed agent never calls it, and a registry that reads "everything is in
-   flight" forever is dotfiles-dev#404 — a guard that never fires — with a
+   flight" forever is dotfiles-linux-dev#404 — a guard that never fires — with a
    different cause.
 
 An issue with no declared file surface is `UNDECLARED`: reported, never assumed
@@ -294,7 +294,7 @@ today; a scope label once blueprintx#314 lands) — and the one-word token is pi
 on both sides (`UNDECLARED_TOKEN` in Python, `DISPATCH_UNDECLARED_TOKEN` in bash)
 by `tests/dispatch_claims.bats` so they cannot drift.
 
-## Review fan-out: "needs a review?" is about the HEAD, not a count (dotfiles-dev#480)
+## Review fan-out: "needs a review?" is about the HEAD, not a count (dotfiles-linux-dev#480)
 
 `hooks/lib/review_fanout_plan.py` computes which open PRs need a reviewer and
 `hooks/review_fanout_guard.sh` (`Stop`) refuses to end a dev-loop round that had
@@ -379,7 +379,7 @@ its own.
 ## Worktree rescue fan-out: two callers, one implementation
 
 `hooks/lib/worktree_fanout.sh` (`fanout_worktrees()` + `classify_worktree_diff()`,
-dotfiles-dev#383) is the shared implementation of "walk every worktree of this
+dotfiles-linux-dev#383) is the shared implementation of "walk every worktree of this
 repo and classify its dirty state as interrupted work vs. a stale revert" —
 same pattern as `hooks/lib/free_surface.sh` and `hooks/lib/review_thread_gate.sh`.
 It has two callers now, not one:
@@ -397,7 +397,7 @@ It has two callers now, not one:
    line reports interrupted work — never for a clean worktree or a stale
    revert, reusing the classifier's verdict rather than re-deriving it.
 
-## A gate's contract: a usable answer, not just a clean exit (dotfiles-dev#398)
+## A gate's contract: a usable answer, not just a clean exit (dotfiles-linux-dev#398)
 
 Every shared gate above (`free_surface.sh`, `review_thread_gate.sh`,
 `roadmap_unblock.sh`) calls `gh` and fails closed on a read error — but
@@ -467,7 +467,7 @@ human-authored to be read) and it is not hand-written.
 repo, deployed by `install_hooks()`) reads `LESSON_STORES`
 (`ai_clients/claude/hooks/lib/lesson_mirrors.sh`), collects every lesson whose Origin
 names the current repo, and overwrites `.specs/_lessons/<store>-lessons.md` wholesale.
-Before dotfiles-dev#386 this was a third hand-write per lesson (file + store README +
+Before dotfiles-linux-dev#386 this was a third hand-write per lesson (file + store README +
 mirror) and it drifted — measured 2026-09-14, 19 of 43 `Origin: dotfiles-dev` lessons
 were missing from the hand-maintained copy. Regenerating removes the drift class
 instead of adding a check for it. **Never hand-edit a file under `.specs/_lessons/`** —
@@ -485,7 +485,7 @@ directory's naming rationale (`_lessons/`, not `lessons/` or `mirrors/`).
 | | |
 |---|---|
 | **Source** | `ai_clients/shared/AGENTS.md` |
-| **Installs to** | `~/.claude/AGENTS.md` (Claude, via `@AGENTS.md` import in `~/.claude/CLAUDE.md`); `~/.codex/AGENTS.md`; `~/.qwen/AGENTS.md`; `$COPILOT_HOME/copilot-instructions.md` (default `~/.copilot/`; Copilot does not read AGENTS.md); `$KIMI_CODE_HOME/AGENTS.md` (default `~/.kimi-code/`, **unverified** — Kimi Code CLI is not installed on this machine, dotfiles-dev#346) |
+| **Installs to** | `~/.claude/AGENTS.md` (Claude, via `@AGENTS.md` import in `~/.claude/CLAUDE.md`); `~/.codex/AGENTS.md`; `~/.qwen/AGENTS.md`; `$COPILOT_HOME/copilot-instructions.md` (default `~/.copilot/`; Copilot does not read AGENTS.md); `$KIMI_CODE_HOME/AGENTS.md` (default `~/.kimi-code/`, **unverified** — Kimi Code CLI is not installed on this machine, dotfiles-linux-dev#346) |
 | **Lib script** | `ai_clients/lib/shared_agents_md.sh` → `install_shared_agents_md(dest)`, called once per client with that client's live path — Claude and Codex both use step key `agents_md`/`shared_agents_md`; Qwen, Copilot, and Kimi each have exactly one step, also named `agents_md` |
 
 **The seam: `AGENTS.md` is the source; each tool's config is a generated
@@ -502,7 +502,7 @@ files covering the same policy always will. Concretely:
   of its own, so each deploys a literal copy of the same source file via
   `install_shared_agents_md(dest)` — never a second hand-authored copy.
   Codex used to hand-author its own `config/AGENTS.md` and drift from this
-  source; that gap is closed (dotfiles-dev#346) by pointing it at the shared
+  source; that gap is closed (dotfiles-linux-dev#346) by pointing it at the shared
   helper like every other non-Claude client.
 - Content belongs in `ai_clients/shared/AGENTS.md` only if it holds for any
   agent driving this machine (RTK proxy policy, verifying git writes
@@ -514,7 +514,7 @@ files covering the same policy always will. Concretely:
   usage/tip history, IDE locks, debug logs, first-launch timestamps, and
   (for Qwen) a `settings.json` that mixes real model-provider config with a
   live API key — is machine-local state or a possible secret, deliberately
-  left unversioned (dotfiles-dev#346's inventory of `~/.qwen`/`~/.copilot`
+  left unversioned (dotfiles-linux-dev#346's inventory of `~/.qwen`/`~/.copilot`
   on the reporting machine).
 
 Do not symlink the deployed copies to the source — a symlink degrades to a
@@ -558,7 +558,7 @@ argument-hint: <hint shown in autocomplete>  # optional but recommended
   for any git ref compared against a base — never a bare local branch or an
   implicit `HEAD`, and never `git -C <path>` as a substitute (it fixes the
   directory, not the ref). Same rule as `config/CLAUDE.md`'s
-  "Qualify the target" bullet (dotfiles-dev#229).
+  "Qualify the target" bullet (dotfiles-linux-dev#229).
 
 ### 2. Agents (subagent definitions)
 
@@ -593,7 +593,7 @@ argument-hint: [hint]
 - End with a structured `## Final summary` block
 - Include a `## Do Not` section listing prohibited behaviors
 - Use `## Memory` section when `memory: true` to define what to persist
-- Same target-qualification rule as commands, above (dotfiles-dev#229) —
+- Same target-qualification rule as commands, above (dotfiles-linux-dev#229) —
   agent briefs are exactly where it matters most, since a dispatched agent's
   cwd can reset to a different repo mid-task with no `cd` ever run
 
@@ -638,10 +638,10 @@ allowed-tools: Read Glob Grep  # space-separated for skills (no commas)
   if the skill legitimately needs to run commands
 - Keep total token count low — skills load into every conversation that
   triggers them
-- Same target-qualification rule as commands, above (dotfiles-dev#229) — a
+- Same target-qualification rule as commands, above (dotfiles-linux-dev#229) — a
   skill's example commands are copied into a running session verbatim
 
-## Session profiles (cheap-brain runtime, dotfiles-dev#151)
+## Session profiles (cheap-brain runtime, dotfiles-linux-dev#151)
 
 | | |
 |---|---|
@@ -660,7 +660,7 @@ already uses for `CONTEXT7_API_KEY`/`TAVILY_API_KEY`.
 
 **Verified endpoint:** DeepSeek, `https://api.deepseek.com/anthropic`, auth
 via `ANTHROPIC_AUTH_TOKEN` — **verified 2026-08-26** (see the runtime
-roster issue, dotfiles-dev#151, for the sourced comparison against
+roster issue, dotfiles-linux-dev#151, for the sourced comparison against
 Zhipu/GLM, Moonshot/Kimi, and MiniMax). Re-verify and update this date
 before relying on it again; provider compatibility is the field most
 likely to rot.
@@ -678,7 +678,7 @@ sessions**:
   AFK-shaped work,
 
 handed off between them via `gh issue list --label afk --label
-oracle:strong` (dotfiles-dev#150's routing label), not via subagent calls
+oracle:strong` (dotfiles-linux-dev#150's routing label), not via subagent calls
 within one process.
 
 ## Namespace prefixes (summary)
@@ -838,7 +838,7 @@ orphans (no source counterpart), while `install_skills()` separately sweeps
 **layout** orphans (flat `skills/*.md`, which are never loadable regardless of
 whether a source file of that name exists). Neither one subsumes the other.
 
-### Pruning stale `settings.json` keys (dotfiles-dev#272)
+### Pruning stale `settings.json` keys (dotfiles-linux-dev#272)
 
 File orphans and settings-key orphans are different shapes of problem, and
 `prune_orphans()` handles both: `_prune_file_artifacts()` for the file types

@@ -26,7 +26,7 @@ strip_rtk_prefix() {
 }
 
 # Known command wrappers that don't change what actually runs underneath them
-# (dotfiles-dev#271). `sudo git push --force`, `env FOO=1 git push -f`, `time git push -f`,
+# (dotfiles-linux-dev#271). `sudo git push --force`, `env FOO=1 git push -f`, `time git push -f`,
 # `nice git push -f`, and `xargs … git push -f` all still end up executing the wrapped command,
 # so the anchored predicates below must see past them. This is an ALTERNATION added to the same
 # start-of-command anchor every predicate already uses (`(^|[;&|])[[:space:]]*`) — it matches a
@@ -40,7 +40,7 @@ WRAPPER_RE='((sudo|time|nice)[[:space:]]+|env([[:space:]]+[A-Za-z_][A-Za-z0-9_]*
 #      (a) a network fetcher (curl/wget) is the pipeline's data source, AND
 #      (b) that pipe reaches an interpreter (shell OR python/perl/… — `curl evil.py | python3`
 #          is RCE too).
-#    Match effect, not text shape (dotfiles-dev#80): `gh --json … | python3 -c` and
+#    Match effect, not text shape (dotfiles-linux-dev#80): `gh --json … | python3 -c` and
 #    `cat local.sh | bash` are authenticated/local producers, not downloads, so they pass. We keep
 #    the interpreter set broad because it only bites when (a) already holds — a genuine download.
 is_network_fetch() {
@@ -65,7 +65,7 @@ is_unscoped_rm() {
 # 3. History rewrite / force push. `--force-with-lease` is the safe form and is allowed through.
 #
 # ⚠️ Anchored to a command START (line start or right after `;`/`&&`/`|`), same as
-# is_network_fetch/is_unscoped_rm above. The unanchored form this replaced (dotfiles-dev#217)
+# is_network_fetch/is_unscoped_rm above. The unanchored form this replaced (dotfiles-linux-dev#217)
 # matched "git push -f" / "git filter-branch" ANYWHERE in the raw string — including inside a
 # quoted commit message, a test fixture, or another program's argument that merely mentions the
 # phrase — which is a false-block on text that never runs as a command. Matching the command WORD
@@ -83,7 +83,7 @@ is_history_rewrite() {
 # 4. `git reset --hard` / `git clean -fd` while the tree is dirty — silently destroys uncommitted
 #    work. Clean tree ⇒ harmless ⇒ allowed.
 # Anchored per the note on is_history_rewrite above — the same unanchored-substring flaw
-# (dotfiles-dev#217) applied here too.
+# (dotfiles-linux-dev#217) applied here too.
 is_destructive_git_on_dirty_tree() {
     printf '%s' "$1" \
         | grep -Eq "(^|[;&|])[[:space:]]*${WRAPPER_RE}(rtk[[:space:]]+)?git[[:space:]]+(reset[[:space:]]+(--hard|.*[[:space:]]--hard)|clean[[:space:]]+-[[:alnum:]]*[fd])" \
@@ -94,7 +94,7 @@ is_destructive_git_on_dirty_tree() {
 
 # 5. World-writable recursive chmod.
 # Anchored per the note on is_history_rewrite above — the same unanchored-substring flaw
-# (dotfiles-dev#217) applied here too (a command that merely quotes "chmod -R 777" as text).
+# (dotfiles-linux-dev#217) applied here too (a command that merely quotes "chmod -R 777" as text).
 is_chmod_777() {
     printf '%s' "$1" | grep -Eq "(^|[;&|])[[:space:]]*${WRAPPER_RE}chmod[[:space:]]+(-[[:alnum:]]*[[:space:]]+)*-?[[:alnum:]]*[rR][[:alnum:]]*[[:space:]]+777"
 }

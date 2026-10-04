@@ -10,7 +10,7 @@ name: review_threads
 # ⚠️ Also fails when NO reviewer has reported at all, not only when a thread
 # is left open (blueprintx#213 merged unreviewed with every check green).
 #
-# ⚠️ dotfiles-dev#431: a CLEAN review fires neither of the two triggers above
+# ⚠️ dotfiles-linux-dev#431: a CLEAN review fires neither of the two triggers above
 # — CodeRabbit posts NO pull_request_review and NO review comment when it
 # finds nothing (measured on #412: `pulls/412/reviews` length 0, mergeStateStatus
 # BLOCKED forever). It DOES always post a plain PR comment either way: "Full
@@ -27,7 +27,7 @@ name: review_threads
 # the SAME live re-check of reviews/threads; the completion marker only ever
 # ADDS a positive "a reviewer has reported" signal, it never skips the check.
 #
-# ⚠️ dotfiles-dev#492: a push moves the PR head and NONE of the three
+# ⚠️ dotfiles-linux-dev#492: a push moves the PR head and NONE of the three
 # triggers above observe that — the required check stays stranded on the old
 # commit and the new head carries no check-run at all, which branch
 # protection reads as BLOCKED exactly like a red one, with nothing to
@@ -106,7 +106,7 @@ jobs:
           # check-run does not land there. For issue_comment (and
           # pull_request_review) GitHub runs the workflow in the DEFAULT
           # BRANCH's context, so Actions attaches the check-run to master's
-          # SHA. Measured 2026-09-23 (dotfiles-dev#481): every issue_comment
+          # SHA. Measured 2026-09-23 (dotfiles-linux-dev#481): every issue_comment
           # run reported head_sha 5491893e = master, the required context was
           # absent from all 22 open PR heads, and every one read BLOCKED —
           # including two carrying three submitted reviews each, with
@@ -149,7 +149,7 @@ jobs:
 
           # The reviewer ladder (#444/#446/#449) posts its fallback review as
           # an issue_comment from the OPERATOR'S OWN account — never a review
-          # object, so review_count can't see it either (dotfiles-dev#451).
+          # object, so review_count can't see it either (dotfiles-linux-dev#451).
           # The attribution marker is PUBLIC TEXT anyone could paste into a
           # comment, so it is a positive signal only paired with the ONE
           # unforgeable part: author_association (same CWE-345 lesson #446's
@@ -164,7 +164,7 @@ jobs:
             # not depend on how much the reviewer had to say.
             first_line=${COMMENT_BODY%%$'\n'*}
             ladder_marker_re='^Fallback review — runtime: (qwen|codex), model: .+ \(selected by: .+\)$'
-            # dotfiles-dev#564: the marker's own SECOND line must name this head, the
+            # dotfiles-linux-dev#564: the marker's own SECOND line must name this head, the
             # same test ladder_already_covered and the thread gate apply. Otherwise a
             # review of an older commit that lands after a push credits the new head.
             # No second line (a pre-#564 marker) fails closed, as in every other reader.
@@ -178,12 +178,12 @@ jobs:
             fi
           fi
 
-          # Selective, not full-parity (dotfiles-dev#157): none of the three
+          # Selective, not full-parity (dotfiles-linux-dev#157): none of the three
           # trigger events above carry a `paths:` filter, so the scope
           # decision is re-checked here at runtime instead. OWNER and REPO
           # come from the env: block above, which actionlint cannot see when
           # it lints this run: script standalone — hence SC2153.
-          # ⚠️ dotfiles-dev#502: this pattern MUST select exactly the same
+          # ⚠️ dotfiles-linux-dev#502: this pattern MUST select exactly the same
           # paths as coderabbit_trigger.yml's `paths:` filter
           # (ai_clients/claude/hooks/** and ai_clients/claude/settings.json
           # only) — a bare `(^|/)settings\.json$` matched ANY settings.json
@@ -204,7 +204,7 @@ jobs:
           # the shared gate reports "clean" on zero threads, which is correct
           # for its own soft-nudge callers but wrong for a required check.
           # A clean CodeRabbit review also submits zero review objects
-          # (dotfiles-dev#431), so `review_count` alone can no longer tell
+          # (dotfiles-linux-dev#431), so `review_count` alone can no longer tell
           # "reviewed, found nothing" apart from "never reviewed" — the
           # verified issue_comment marker above is what makes that call now.
           review_count=$(gh pr view "$PR_NUMBER" --repo "$OWNER/$REPO" \
@@ -243,7 +243,7 @@ jobs:
               # on a deny-by-default gate. REST carries the exact login and
               # the account type; both are required.
               #
-              # One page fetch, two independent filters below (dotfiles-dev#550) —
+              # One page fetch, two independent filters below (dotfiles-linux-dev#550) —
               # CodeRabbit's and the ladder's markers are unrelated signals, but
               # re-fetching per signal would double the API calls this gate makes
               # per run for no benefit.
@@ -262,7 +262,7 @@ jobs:
                 reviewer_reported=1
               fi
 
-              # ⚠️ dotfiles-dev#550: the ladder marker's own history path. Before
+              # ⚠️ dotfiles-linux-dev#550: the ladder marker's own history path. Before
               # this it was credited ONLY from the triggering event's own
               # COMMENT_BODY (the event-triggered branch above, kept as the fast
               # path) — so the reply that ANSWERS a finding, itself an
@@ -276,7 +276,7 @@ jobs:
               # existed. First-line-anchored, same as the event branch, so a
               # marker mentioned mid-body by an unrelated reply cannot count.
               if [ "$reviewer_reported" -eq 0 ]; then
-                # dotfiles-dev#564: head_seen_at scopes out a marker posted before this
+                # dotfiles-linux-dev#564: head_seen_at scopes out a marker posted before this
                 # head existed, but not one for an OLDER commit posted just after it
                 # (an in-flight review) — the marker's second line must also name HEAD_SHA.
                 ladder_marker_count="$(printf '%s' "$comments_json" | jq --arg since "$head_seen_at" --arg head_sha "$HEAD_SHA" '[

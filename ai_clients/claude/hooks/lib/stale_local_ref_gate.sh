@@ -1,7 +1,7 @@
 #!/bin/bash
 # Shared stale-local-ref gate: decides whether a bare local branch name is
 # safe to check out (or add as a worktree), or whether it is STALE against
-# `origin/<branch>` and must be refused (dotfiles-dev#410).
+# `origin/<branch>` and must be refused (dotfiles-linux-dev#410).
 #
 # Why this exists: `git worktree add <path> fix/precommit-ci-parity-384` — a
 # bare local branch name — checked out a ref 3 commits behind the real PR
@@ -9,7 +9,7 @@
 # pass publicly refuted three real CodeRabbit findings (two Major) as "not in
 # this PR" and resolved all three threads on that false premise
 # (blueprintx#512). The wrong answer read as plausible, not an error — the
-# same class of bug as dotfiles-dev#229 (an unref'd `git describe` describing
+# same class of bug as dotfiles-linux-dev#229 (an unref'd `git describe` describing
 # a checkout 16 tags behind `origin/main`). Comparing against a local ref
 # must either name `origin/<base>` or refuse; this gate is the "refuse" half.
 #

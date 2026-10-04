@@ -140,10 +140,10 @@ what was actually measured here.
 
 ## Related
 
-- dotfiles-dev#68 — original rationale audit for the `allow`/`ask`/`deny`
+- dotfiles-linux-dev#68 — original rationale audit for the `allow`/`ask`/`deny`
   buckets; this discovery does not relitigate it, per `ai_clients/CLAUDE.md`.
 - blueprintx#309 — same principle on the CI side: strengthen deterministic
   gates, don't remove checks to remove friction.
-- dotfiles-dev#159 / #162 — subagent lifecycle and worktree isolation, whose
+- dotfiles-linux-dev#159 / #162 — subagent lifecycle and worktree isolation, whose
   own guard (§1 above) already does real, narrower directory-scoping for
   `git` specifically.

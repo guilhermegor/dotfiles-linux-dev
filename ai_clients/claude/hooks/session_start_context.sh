@@ -110,10 +110,10 @@ fanout_pr_summary() {
 }
 
 # classify_worktree_diff() and fanout_worktrees() live in lib/worktree_fanout.sh (sourced
-# above) — dotfiles-dev#383 extracted them so quota_gap_rescue.sh (UserPromptSubmit) can call
+# above) — dotfiles-linux-dev#383 extracted them so quota_gap_rescue.sh (UserPromptSubmit) can call
 # the same implementation instead of re-deriving it.
 
-# Outstanding fan-out state (dotfiles-dev#160): PRs waiting on a review of the current head
+# Outstanding fan-out state (dotfiles-linux-dev#160): PRs waiting on a review of the current head
 # commit, worktrees with unpushed commits or uncommitted files, and branches pushed with no PR.
 # Silent when clean — this is a janitor, never a gate (bin/CLAUDE.md): report and exit 0, never
 # block, never fail the session. A `gh` failure prints an explicit "could not reach GitHub" line
@@ -131,7 +131,7 @@ emit_fanout_status() {
 		else
 			# gh pr list returns 30 PRs when --limit is omitted. The worktree walk matches
 			# local branches against this list (merged heads, branches without a PR), and a
-			# live agent worktree can belong to a PR further back than 30 (dotfiles-dev#606).
+			# live agent worktree can belong to a PR further back than 30 (dotfiles-linux-dev#606).
 			# A branch the list misses is still reported, so a short list adds noise, never a
 			# missed rescue.
 			local pr_limit="${FANOUT_PR_LIMIT:-100}"

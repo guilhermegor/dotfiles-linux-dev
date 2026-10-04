@@ -67,7 +67,7 @@ main() {
 
     # A GitHub-tracked repo whose branch carries a FOREIGN tracker id (Linear hm-848, Jira ABC-12)
     # cannot be verified against GitHub — the id's digits are not an issue number. Fail OPEN rather
-    # than misreading them and blocking on a phantom GitHub issue (dotfiles-dev#77). The right
+    # than misreading them and blocking on a phantom GitHub issue (dotfiles-linux-dev#77). The right
     # long-term fix for such a repo is naming its real tracker in issue-trackers.conf; until then,
     # do not false-block. (Linear/none trackers handle their own ids and never reach here.)
     if [[ "$tracker" == "github" ]] && carries_foreign_tracker_id "$branch"; then
@@ -183,7 +183,7 @@ carries_foreign_tracker_id() {
     #
     # Used only in github mode: such an id's digits are a Linear/Jira number, NOT a GitHub issue
     # number, so extracting them and calling `gh issue view` false-blocks on a phantom issue
-    # (dotfiles-dev#77). A hook cannot reach Linear, so the id is UNKNOWN -> fail OPEN.
+    # (dotfiles-linux-dev#77). A hook cannot reach Linear, so the id is UNKNOWN -> fail OPEN.
     # ponytail: irreducible collision with a real word-number leading slug (oauth-2-x reads as
     # foreign and is allowed) — accepted, because fail-open is this guard's declared safe direction
     # ("better to miss than to false-block"); the alternative (false-close) is the bug being fixed.

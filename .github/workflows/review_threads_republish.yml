@@ -1,6 +1,6 @@
 name: review_threads_republish
 
-# Companion to review_threads.yml (dotfiles-dev#492). That workflow
+# Companion to review_threads.yml (dotfiles-linux-dev#492). That workflow
 # deliberately never triggers on `pull_request` — its own header explains
 # why (blueprintx#180): a verdict computed at push time goes stale the
 # instant a review lands. This file does not compute that verdict. A push
@@ -17,10 +17,10 @@ name: review_threads_republish
 # direction (a stale PASS surviving the very push that invalidated it). The
 # one `success` this file may publish is the same non-review "gate not
 # required" scope skip review_threads.yml already publishes for PRs outside
-# the selective policy (dotfiles-dev#157) — duplicated here in miniature
+# the selective policy (dotfiles-linux-dev#157) — duplicated here in miniature
 # rather than shared, because sharing it would mean checking out and
 # sourcing review_thread_gate.sh here too, reopening the untrusted-PR-ref
-# problem review_threads.yml's own header warns about (dotfiles-dev#481).
+# problem review_threads.yml's own header warns about (dotfiles-linux-dev#481).
 # This job never checks out the repo at all, so that problem cannot recur.
 #
 # The red this job publishes is recovered the normal way: a real review or
@@ -69,7 +69,7 @@ jobs:
             echo "$conclusion: $title"
           }
 
-          # Same selective-policy scope as review_threads.yml (dotfiles-dev#157) —
+          # Same selective-policy scope as review_threads.yml (dotfiles-linux-dev#157) —
           # see the file header for why it is duplicated rather than shared.
           changed=$(gh pr view "$PR_NUMBER" --repo "$OWNER/$REPO" --json files --jq '.files[].path')
           if ! printf '%s\n' "$changed" | grep -qE '^ai_clients/claude/hooks/|(^|/)settings\.json$'; then

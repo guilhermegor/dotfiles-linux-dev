@@ -413,7 +413,7 @@ install_codex() {
 # KIMI CODE CLI (Moonshot AI)
 # ============================================================================
 
-# Channel verified 2026-09-08 (dotfiles-dev#149): official Moonshot AI package
+# Channel verified 2026-09-08 (dotfiles-linux-dev#149): official Moonshot AI package
 # @moonshot-ai/kimi-code on the public npm registry (author "Moonshot AI",
 # https://registry.npmjs.org/@moonshot-ai/kimi-code, latest 0.41.0 at time of
 # writing). Docs: https://platform.kimi.ai/docs/guide/claude-code-kimi and

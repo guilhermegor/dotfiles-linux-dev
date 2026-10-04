@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared kanban board helpers + reconcile (dotfiles-dev#448).
+# Shared kanban board helpers + reconcile (dotfiles-linux-dev#448).
 #
 # owner_repo/cache_file/discover_board/board_config/move_card used to live only in
 # kanban_lifecycle.sh. Moved here so the event hook and the reconcile below share ONE
@@ -9,7 +9,7 @@
 # Why a reconcile, not a better event hook: kanban_lifecycle.sh's PostToolUse hook only fires
 # when the harness observes the EVENT (`gh pr create`) in ITS OWN Bash tool call, in the right
 # cwd. Measured 2026-09-21: 8 of 8 issues with an open PR sat in Backlog because the PR was
-# opened by a dispatched agent (cwd reset mid-session, dotfiles-dev#229), during a `gh` 403
+# opened by a dispatched agent (cwd reset mid-session, dotfiles-linux-dev#229), during a `gh` 403
 # window (#445), or by a rescue committing on someone else's branch — all the same defect: an
 # event-only transition has no recovery when the event is missed. Same seam as
 # hooks/lib/roadmap_unblock.sh (#369): the correct Status is derivable from the forge at any
@@ -38,7 +38,7 @@
 #     reported as an "UNKNOWN PR #N" line and the next PR is still processed (same
 #     fail-closed-per-item shape as roadmap_unblock.sh).
 #
-# dotfiles-dev#567: the Status-order read (`_kr_status_names`) and the project item read
+# dotfiles-linux-dev#567: the Status-order read (`_kr_status_names`) and the project item read
 # (`_board_item_list`, shared with roadmap_unblock.sh) both go through `gh project` porcelain
 # ONLY — no second channel. A throttle there can surface as a plain-looking error ("unknown owner
 # type") that reads as a config fault rather than a rate limit, and neither call had a fallback
@@ -143,7 +143,7 @@ move_card() {
 # _board_throttled
 # True (exit 0) only when a FRESH, minimal `gh api graphql` probe itself comes back naming a rate
 # limit — never inferred from a `gh project` porcelain failure's own text, which can read
-# "unknown owner type" during the exact same throttle (dotfiles-dev#567). False (the probe
+# "unknown owner type" during the exact same throttle (dotfiles-linux-dev#567). False (the probe
 # succeeds, or fails for any other reason) is the safe default: an unconfirmed guess falls
 # through to the GraphQL fallback read instead of halting on a maybe.
 _board_throttled() {
@@ -204,7 +204,7 @@ _board_item_list_graphql() {
 # Prints the `{"items": [...]}` JSON `gh project item-list` would, trying that porcelain command
 # first. On failure, confirms whether GitHub's GraphQL API is presently throttled before deciding
 # what to do next — a `gh project` failure whose text does not name a rate limit is not evidence
-# that it is not one (dotfiles-dev#567) — and makes exactly ONE fallback attempt, never a retry
+# that it is not one (dotfiles-linux-dev#567) — and makes exactly ONE fallback attempt, never a retry
 # loop.
 # Returns 0 with JSON on stdout (either channel), 2 with nothing on stdout when throttling is
 # CONFIRMED (report this distinctly — "try next round", not "the board is misconfigured"), or 1
@@ -226,7 +226,7 @@ _board_item_list() {
 # an object (board_config's cached `.options` map), whose key order this file does not want to
 # depend on.
 #
-# dotfiles-dev#567: on a porcelain failure that is NOT a confirmed throttle, falls back to one
+# dotfiles-linux-dev#567: on a porcelain failure that is NOT a confirmed throttle, falls back to one
 # `gh api graphql` read of the same field/options (via the owner-agnostic `repositoryOwner`
 # interface — see `_board_item_list_graphql`'s own comment).
 # Returns 0 with the list on stdout, 2 (nothing on stdout) when a throttle is CONFIRMED, or 1

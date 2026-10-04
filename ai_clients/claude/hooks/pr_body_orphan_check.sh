@@ -1,5 +1,5 @@
 #!/bin/bash
-# Standalone report (NOT a wired hook) for dotfiles-dev#441: PR-body scratch files that
+# Standalone report (NOT a wired hook) for dotfiles-linux-dev#441: PR-body scratch files that
 # pr_template_guard.sh's own error message tells an author to create — `$root/.git-pr-*.md`,
 # already git-ignored — accumulate with no lifecycle once the PR is opened or the draft is
 # abandoned. This is the "deterministic half" the issue asks for: it finds `.git-pr-*.md`

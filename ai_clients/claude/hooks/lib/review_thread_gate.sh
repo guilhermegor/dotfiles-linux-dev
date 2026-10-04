@@ -1,6 +1,6 @@
 #!/bin/bash
 # Shared review-thread gate: ONE implementation of "is this PR's review done?",
-# extracted from open_review_threads_nudge.sh (dotfiles-dev#167) so a second
+# extracted from open_review_threads_nudge.sh (dotfiles-linux-dev#167) so a second
 # caller (the SubagentStop board sweep) calls the SAME gate instead of
 # re-deriving the verdict. blueprintx measured what re-deriving costs: its
 # sweep re-implemented review-thread logic, inherited the gate's own bug PLUS
@@ -18,7 +18,7 @@
 #   GATE_STATUS = clean | problems | running | unreviewed | unreadable
 #   GATE_DETAIL = human-readable multi-line detail (empty when clean)
 #
-# `unreviewed` (dotfiles-dev#505) is distinct from `clean`: `clean` means "no
+# `unreviewed` (dotfiles-linux-dev#505) is distinct from `clean`: `clean` means "no
 # unanswered thread was found", which is also true of a PR no roster reviewer
 # has ever looked at -- reviewThreads is empty either way, so the original
 # three-state verdict could not tell "reviewed, nothing to answer" apart from
@@ -35,7 +35,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	exit 1
 fi
 
-# gh_budget_classify/is_terminal/latch_write/reset_ttl (dotfiles-dev#559): the retry loop below
+# gh_budget_classify/is_terminal/latch_write/reset_ttl (dotfiles-linux-dev#559): the retry loop below
 # needs to tell a GitHub API budget refusal apart from a transient/unknown failure, and both
 # callers of this file are not guaranteed to have sourced gh_budget.sh themselves --
 # open_review_threads_nudge.sh never does. Sourced here so the classify-and-latch behaviour is
@@ -46,7 +46,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gh_budget.sh"
 _gate_min_reply_chars=100
 
 # The reviewer ladder's attribution marker (#455's exact regex, lifted verbatim from
-# review_threads.yml's `ladder_marker_re` -- dotfiles-dev#490). A text match on this line ALONE
+# review_threads.yml's `ladder_marker_re` -- dotfiles-linux-dev#490). A text match on this line ALONE
 # is the CWE-345 hole #455 closed for the merge gate: any PR commenter can paste this line into a
 # comment they wrote themselves. It is only ever trusted paired with authorAssociation below.
 _gate_ladder_marker_re='^Fallback review — runtime: (qwen|codex), model: .+ \(selected by: .+\)$'
@@ -178,7 +178,7 @@ _gate_truncated_filter() {
 JQ
 }
 
-# The jq program behind the COMMENT-channel half of `problems` (dotfiles-dev#490): the reviewer
+# The jq program behind the COMMENT-channel half of `problems` (dotfiles-linux-dev#490): the reviewer
 # ladder's fallback review posts as a plain PR comment, never a review thread, so it was invisible
 # to every filter above by construction -- the gate read one channel and called it "clean" for both.
 #
@@ -189,13 +189,13 @@ JQ
 # "Carried findings" is read from the body's STRUCTURE -- a "finding" heading or a `[Pn]` severity
 # marker -- never from one runtime's severity vocabulary alone (the issue's own warning: codex and
 # qwen's output shapes differ, and the rung resolved at run time is not fixed). A ladder review
-# with neither is a clean report (dotfiles-dev#490's #438 fixture) and must not fire.
+# with neither is a clean report (dotfiles-linux-dev#490's #438 fixture) and must not fire.
 #
 # "Answered" mirrors the thread path's own rule: a later, substantive (>= $min chars) comment --
 # but the discriminator that stops a finding from being "answered" by ITSELF is comment IDENTITY
 # (this comment's `id` is not the ladder comment's own `id`), never author identity.
 #
-# ⚠️ dotfiles-dev#511 (measured, its own comment ids/timestamps): the ladder posts its fallback
+# ⚠️ dotfiles-linux-dev#511 (measured, its own comment ids/timestamps): the ladder posts its fallback
 # review under the OPERATOR's own token (the only account authorAssociation trusts here), and the
 # operator is also the only account that can reply to it -- so an author-INEQUALITY test made every
 # ladder finding structurally unanswerable: ladder comment 5830451560 (guilhermegor, 09:55:56Z), a
@@ -255,7 +255,7 @@ _gate_running_filter() {
 JQ
 }
 
-# The jq program behind `unreviewed` (dotfiles-dev#505): has ANY roster reviewer reported on this
+# The jq program behind `unreviewed` (dotfiles-linux-dev#505): has ANY roster reviewer reported on this
 # PR at all -- via a submitted review object, a completion comment ("full review finished", the
 # CodeRabbit marker CI's own workflow greps for), or a verified ladder review comment. Prints
 # "true"/"false"; the caller reads it as a plain string, same pattern as the other filters.
@@ -263,9 +263,9 @@ JQ
 # ⚠️ Derived from the ROSTER, never from `reviews | length` -- a human review by the PR's own
 # author, or a bot outside the roster, must not count (the issue's own warning). No roster
 # (__NO_ROSTER__) falls back to "any Bot account", the same fallback _gate_problems_filter already
-# uses, via __typename rather than a forgeable login substring (CWE-345, dotfiles-dev#455).
+# uses, via __typename rather than a forgeable login substring (CWE-345, dotfiles-linux-dev#455).
 #
-# ⚠️ dotfiles-dev#555: ALL THREE branches must carry the same `>= $head_date` freshness
+# ⚠️ dotfiles-linux-dev#555: ALL THREE branches must carry the same `>= $head_date` freshness
 # constraint, not two of three -- the marker branch was missing it while the completion-comment
 # branch directly above already had it, so a fallback review of a superseded commit granted credit
 # FOREVER (mirror image of #550's "credit revoked by a later event"). Measured on #546: marker at
@@ -273,7 +273,7 @@ JQ
 # satisfy this filter. The CWE-345 author-association check stays exactly as it was; freshness is
 # an additional, independent AND clause, never a replacement for it.
 #
-# ⚠️ dotfiles-dev#564: $head_date alone is the commit's own committer.date/committedDate, which
+# ⚠️ dotfiles-linux-dev#564: $head_date alone is the commit's own committer.date/committedDate, which
 # whoever pushes controls -- a backdated push can make a NEW head look OLDER than an EXISTING
 # marker and inherit credit for code that marker never reviewed. The marker branch's third AND
 # clause below closes that: the marker's own SECOND line ("Reviewed head: <sha>", written by
@@ -322,7 +322,7 @@ JQ
 #
 # ⚠️ Returning the status is the entire point. `jq ... 2>/dev/null` with the status discarded
 # turns a program ABORT into empty output, and empty output is exactly what "nothing to report"
-# looks like -- so a crashed filter reaches the `clean` branch (dotfiles-dev#331). Measured on
+# looks like -- so a crashed filter reaches the `clean` branch (dotfiles-linux-dev#331). Measured on
 # the #329 bug: under the workflow's `set -euo pipefail` the step died with a bare `exit code 5`,
 # but called from a hook -- neither hook caller uses `set -e` -- the same broken filter returned
 # GATE_STATUS=clean. The `set -e` was an accident of one caller, never a property of this gate.
@@ -369,7 +369,7 @@ gate_pr_thread_state() {
 			rm -f "$err_file"
 			break
 		fi
-		# dotfiles-dev#559: the OLD code discarded this attempt's response with `2>/dev/null` and
+		# dotfiles-linux-dev#559: the OLD code discarded this attempt's response with `2>/dev/null` and
 		# an unconditional `threads=""`, throwing away the one piece of text that could tell a
 		# GitHub API budget refusal (secondary rate limit, HTTP 200 body with `.errors`) apart from
 		# a transient/unknown failure — the gate exhausted all 3 retries and returned
@@ -418,7 +418,7 @@ gate_pr_thread_state() {
 	}
 	[ -n "$truncated" ] && problems="$(printf '%s\n%s' "$truncated" "$problems")"
 
-	# The COMMENT channel (dotfiles-dev#490) -- the ladder's fallback review lives here, never in
+	# The COMMENT channel (dotfiles-linux-dev#490) -- the ladder's fallback review lives here, never in
 	# reviewThreads above. Run and merged exactly like the thread-problems filter, so an unanswered
 	# ladder finding turns the same GATE_STATUS=problems, naming its own channel in GATE_DETAIL.
 	comment_problems="$(_gate_run_jq "$threads" "$(_gate_comment_findings_filter)" "$jq_err" \
@@ -434,7 +434,7 @@ gate_pr_thread_state() {
 		return 0
 	}
 
-	# Has ANY roster reviewer reported at all (dotfiles-dev#505)? A PR nobody has looked at yet has
+	# Has ANY roster reviewer reported at all (dotfiles-linux-dev#505)? A PR nobody has looked at yet has
 	# no threads and no comment-channel findings either, so it reaches here indistinguishable from
 	# "reviewed, nothing to answer" unless this is checked as its own signal.
 	reported="$(_gate_run_jq "$threads" "$(_gate_reported_filter)" "$jq_err" \

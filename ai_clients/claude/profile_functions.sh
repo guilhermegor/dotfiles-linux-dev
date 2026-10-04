@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Session-profile launcher for Claude Code (dotfiles-dev#151).
+# Session-profile launcher for Claude Code (dotfiles-linux-dev#151).
 #
 # ANTHROPIC_BASE_URL is process-level: it swaps the model for the WHOLE
 # session, subagents included, because a subagent inherits the parent

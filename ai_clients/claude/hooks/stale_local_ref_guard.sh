@@ -1,7 +1,7 @@
 #!/bin/bash
 # PreToolUse (Bash matcher) hook: block `git worktree add`/`git checkout`/
 # `git switch` when the target is a bare local branch name that is STALE
-# against `origin/<branch>` — dotfiles-dev#410.
+# against `origin/<branch>` — dotfiles-linux-dev#410.
 #
 # Measured 2026-09-18 (blueprintx#512): `git worktree add <path>
 # fix/precommit-ci-parity-384` checked out a local ref 3 commits behind the
@@ -19,7 +19,7 @@
 #
 # ⚠️ NOT YET WIRED into ai_clients/claude/settings.json's PreToolUse Bash
 # array: that file was held by a concurrent PR at the time this hook was
-# written (dotfiles-dev#410 scope note). Wiring is a one-line addition, same
+# written (dotfiles-linux-dev#410 scope note). Wiring is a one-line addition, same
 # shape as every other entry in that array — add it the next time
 # settings.json is touched.
 #

@@ -20,7 +20,7 @@ already-dispatchable queue (rescue, sweep, threads, re-run, release, dispatch,
 capture); it must not be the one going looking for unfiled or unscored work —
 the stores this skill reads have nothing to do with a development round.
 
-⚠️ dotfiles-dev#179 measured **14 of 14** by-product issues in one session
+⚠️ dotfiles-linux-dev#179 measured **14 of 14** by-product issues in one session
 bypassing `/issue` via bare `gh issue create` — a command that must be
 remembered is a command that is not run. Composing skills that load on their
 own trigger, rather than a slash command an operator has to type, is the

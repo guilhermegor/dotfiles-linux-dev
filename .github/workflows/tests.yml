@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Reject dead `! <cmd>` negations in @test bodies
-        # dotfiles-dev#380: bash exempts a `!`-inverted command from `set -e`,
+        # dotfiles-linux-dev#380: bash exempts a `!`-inverted command from `set -e`,
         # so `! <cmd>` inside a @test body is not an assertion unless it is
         # the test's last statement — a property that silently breaks the
         # moment someone appends another line below it. Runs before bats so
@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Run spec audit gate
-        # Mechanical verdict (dotfiles-dev#305) on whether each
+        # Mechanical verdict (dotfiles-linux-dev#305) on whether each
         # .specs/features/<name>/design.md is aligned with its tests: exit 0 =
         # aligned, exit 1 = findings, one per file:line. A no-op today (no
         # feature dirs exist yet) but goes live the moment one lands.
@@ -90,8 +90,8 @@ jobs:
 
       - name: Run specs structure gate
         # Enforces the .specs/ top-level allowlist and features/backlog
-        # naming dotfiles-dev#442 settled in .specs/CLAUDE.md
-        # (dotfiles-dev#443: this repo owns the convention and, until now,
+        # naming dotfiles-linux-dev#442 settled in .specs/CLAUDE.md
+        # (dotfiles-linux-dev#443: this repo owns the convention and, until now,
         # had no validator for its own tree).
         run: bash tests/check_specs_structure.sh
 

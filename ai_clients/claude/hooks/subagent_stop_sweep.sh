@@ -1,5 +1,5 @@
 #!/bin/bash
-# SubagentStop hook — board sweep + free dispatch surface (dotfiles-dev#167).
+# SubagentStop hook — board sweep + free dispatch surface (dotfiles-linux-dev#167).
 #
 # The problem this closes: a rule that must fire EVERY cycle cannot live in a
 # document. Measured in one blueprintx session — three corrections, two
@@ -30,7 +30,7 @@
 # below only prints states that need action, and the final line is always
 # explicit — "unclaimed by a PR (N): ..." or "dispatch: free surface empty" —
 # because silence is indistinguishable from the check having been skipped.
-# ⚠️ Item [6]'s label is NOT the dispatch plan (dotfiles-dev#535). It answers
+# ⚠️ Item [6]'s label is NOT the dispatch plan (dotfiles-linux-dev#535). It answers
 # gate_free_surface's question ("not claimed by an open/merged PR"), which is
 # strictly weaker than dispatch_plan.py's ("dispatchable": also excludes an
 # UNDECLARED surface, a live-agent collision, and a bare-#N PR mention).
@@ -43,7 +43,7 @@
 # session sees it without anyone asking. Never blocks: this hook cannot spawn
 # agents, so blocking the stop would accomplish nothing — it only informs.
 #
-# ⚠️ Fires ONLY for dev/implementation agent types (dotfiles-dev#508). This hook used to run
+# ⚠️ Fires ONLY for dev/implementation agent types (dotfiles-linux-dev#508). This hook used to run
 # unconditionally for every stopping subagent — a reviewer, `Explore`, `Plan`, or a skill fork
 # like `code-review` received the board sweep as `additionalContext`, spent its turn reacting to
 # dev-loop chatter, and handed back that instead of its actual result. Measured 2026-09-25: a
@@ -88,7 +88,7 @@ emit() {
 
 # Dev/implementation agent types s:dev-loop dispatches for issue work — the only ones this
 # sweep is useful to. See this file's header comment for the field name and why absent/empty
-# fails open instead of silent (dotfiles-dev#508).
+# fails open instead of silent (dotfiles-linux-dev#508).
 SWEEP_AGENT_ALLOWLIST=(general-purpose claude)
 
 # sweep_agent_type PAYLOAD
@@ -170,7 +170,7 @@ sweep_worktrees() {
 	# Every linked worktree, not just `worktrees/agent-*`. The old filter matched the name the
 	# harness happens to pick, so a worktree created by hand (or by a resumed agent, named
 	# `worktrees/issue-356`) held two uncommitted files while this step printed "none" — the
-	# exact silence the step exists to break (dotfiles-dev#162 is about residue, not naming).
+	# exact silence the step exists to break (dotfiles-linux-dev#162 is about residue, not naming).
 	# The main checkout is still skipped: the operator's own dirty tree is not agent residue.
 	main_wt="$($GIT -C "$cwd" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
 	while read -r wt; do
@@ -219,7 +219,7 @@ sweep_review_gate() {
 	local n
 	while read -r n; do
 		[ -n "$n" ] || continue
-		# dotfiles-dev#559: gate_pr_thread_state() latches on its OWN terminal GitHub API budget
+		# dotfiles-linux-dev#559: gate_pr_thread_state() latches on its OWN terminal GitHub API budget
 		# refusal, but a latch written for PR N does nothing to stop PR N+1's identical call a
 		# moment later unless this loop checks it too — the exact "repeated fan-out attempts" the
 		# finding named. Skip every remaining PR this sweep once the budget is latched.
@@ -248,7 +248,7 @@ sweep_review_gate() {
 # (`WIP on <branch>: ...`, `index on <branch>: ...`, or, for `-u`, `untracked
 # files on <branch>: ...`) — never a title a person or an agent would write.
 # Matching on that title is what tells a real branch missing a PR apart from
-# a stash pushed under a branch name (dotfiles-dev#399).
+# a stash pushed under a branch name (dotfiles-linux-dev#399).
 is_stash_snapshot_title() {
 	case "$1" in
 	"WIP on "* | "index on "* | "untracked files on "*) return 0 ;;
@@ -358,7 +358,7 @@ sweep_orphan_branches() {
 # response body as fake PR numbers instead of failing: `gh api --jq` exits non-zero on an HTTP
 # error WITHOUT ever running the filter, but still writes the unfiltered JSON body to stdout —
 # `{`, `  "message": "API rate limit exceeded...",`, `}` — and each of those lines becomes a
-# bogus "- #{" / "- #\"message\": ..." finding (dotfiles-dev#512, found via the exact #445 latch
+# bogus "- #{" / "- #\"message\": ..." finding (dotfiles-linux-dev#512, found via the exact #445 latch
 # work above). Same fix shape sweep_review_gate() and sweep_orphan_branches() already use.
 sweep_no_automerge() {
 	local repo="$1" prs n any=0
@@ -396,13 +396,13 @@ sweep_behind_base() {
 # Free dispatch surface: calls the shared gate_free_surface (lib/free_surface.sh) instead of
 # re-deriving it — the branch-name `-<issue>` heuristic this used to run is disqualified by
 # measurement (it missed a PR open four days closing the same issue an agent was dispatched
-# for; dotfiles-dev#340). Prints "#N #M ..." (space-separated), "UNKNOWN" on an API failure
+# for; dotfiles-linux-dev#340). Prints "#N #M ..." (space-separated), "UNKNOWN" on an API failure
 # (never an empty string — empty is indistinguishable from "nothing left to dispatch"), or
 # nothing when every open issue is already claimed.
 #
 # ⚠️ This is "unclaimed by a PR", never "dispatchable" — see format_free_surface_report()
 # below, which is the ONLY place that turns this raw list into report prose, and states the
-# distinction in the label every time (dotfiles-dev#535).
+# distinction in the label every time (dotfiles-linux-dev#535).
 free_dispatch_surface() {
 	local repo="$1" owner="${1%%/*}" name="${1##*/}"
 	if ! gate_free_surface "$owner" "$name"; then
@@ -422,7 +422,7 @@ free_dispatch_surface() {
 # stdout: "UNKNOWN", empty, or "#N #M ..."). Named explicitly as "unclaimed by a PR" — never
 # "dispatch"/"dispatchable" — because that word is dispatch_plan.py's own, STRICTER verdict
 # (it also excludes an UNDECLARED surface, a live-agent collision, and a bare-#N PR mention;
-# see dispatch_plan.py's module docstring). Conflating the two is the dotfiles-dev#535 defect:
+# see dispatch_plan.py's module docstring). Conflating the two is the dotfiles-linux-dev#535 defect:
 # this exact line used to read "dispatch these 13: ..." for the 13 issues dispatch_plan.py
 # excluded the same round. Pinned by tests/subagent_stop_sweep.bats so the two labels cannot
 # drift back together.
@@ -445,11 +445,11 @@ format_free_surface_report() {
 # BUDGET_GATE_REASON set (shellcheck disable=SC2034 — read by main() after this returns) when
 # any of: an earlier 403 latch is still fresh, THIS probe just came back 403/429, or the sweep's
 # OTHER budget (GraphQL) is already exhausted per gh_budget_quota_exhausted even though the REST
-# probe itself succeeded — dotfiles-dev#511 review finding: `sweep_review_gate()`'s fan-out is
+# probe itself succeeded — dotfiles-linux-dev#511 review finding: `sweep_review_gate()`'s fan-out is
 # GraphQL (via review_thread_gate.sh), a REST-only probe cannot see that budget going to zero, so
 # a purely-GraphQL exhaustion used to sail through this gate and fail one PR at a time with no
 # latch ever written — exactly the repeated fan-out #445 exists to stop.
-# dotfiles-dev#445: 6 agents x a sweep per SubagentStop x ~6 gh calls each burned the whole
+# dotfiles-linux-dev#445: 6 agents x a sweep per SubagentStop x ~6 gh calls each burned the whole
 # hourly budget on sweeps that read UNKNOWN either way — these cheap calls replace finding that
 # out the expensive way every time.
 # A non-budget failure (bad repo, network blip) still returns 0: this gate only ever stops the
@@ -457,7 +457,7 @@ format_free_surface_report() {
 # _gh_budget_latch_reason WHY
 # Writes the latch with the measured TTL and builds BUDGET_GATE_REASON around WHY — appending an
 # explicit "latch write FAILED" note when gh_budget_latch_write itself couldn't write the marker
-# (dotfiles-dev#511 review: a swallowed write failure left the sweep silently unable to ever
+# (dotfiles-linux-dev#511 review: a swallowed write failure left the sweep silently unable to ever
 # latch, indistinguishable from a healthy latch by anything reading BUDGET_GATE_REASON alone).
 # Always returns 1 — every caller latches (or tries to) only on a path that already means "stop".
 _gh_budget_latch_reason() {
@@ -499,7 +499,7 @@ gh_budget_gate() {
 
 # sweep_roadmap_boards
 # Prints reconcile_roadmap_boards' per-board report (one line per declared board, clean or not),
-# or an UNKNOWN line when the sweep produced no report at all (dotfiles-dev#531).
+# or an UNKNOWN line when the sweep produced no report at all (dotfiles-linux-dev#531).
 sweep_roadmap_boards() {
 	reconcile_roadmap_boards || true
 	if [ -n "$RECONCILE_BOARDS_REPORT" ]; then
@@ -514,7 +514,7 @@ main() {
 	if [ ! -t 0 ]; then payload="$(cat)"; else payload=""; fi
 
 	# Gate on agent type FIRST, before any git/gh call — a silenced stop should cost nothing
-	# beyond parsing the payload (dotfiles-dev#508).
+	# beyond parsing the payload (dotfiles-linux-dev#508).
 	agent_type="$(sweep_agent_type "$payload")"
 	sweep_agent_allowed "$agent_type" || exit 0
 
@@ -535,7 +535,7 @@ dispatch: free surface empty"
 
 	if ! gh_budget_gate "$repo"; then
 		emit "── sweep $(date -u '+%H:%M UTC') — $repo ──
-$BUDGET_GATE_REASON (dotfiles-dev#445) — skipping this sweep, no further gh calls.
+$BUDGET_GATE_REASON (dotfiles-linux-dev#445) — skipping this sweep, no further gh calls.
 dispatch: UNKNOWN — $BUDGET_GATE_REASON"
 		exit 1
 	fi

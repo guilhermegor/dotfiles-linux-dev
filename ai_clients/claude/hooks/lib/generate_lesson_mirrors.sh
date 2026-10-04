@@ -1,6 +1,6 @@
 #!/bin/bash
 # Regenerates the current repo's git-ignored lesson mirrors under .specs/_lessons/
-# from the global lesson stores (dotfiles-dev#386).
+# from the global lesson stores (dotfiles-linux-dev#386).
 #
 # Why this exists: a mirror is a DERIVED, machine-checked index of a lesson store
 # that lives outside the repo — it should never be typed by hand. Before this
@@ -18,10 +18,10 @@
 # shared) and write them, sorted by filename, to that store's mirror file. A store
 # whose registered directory is absent falls back to its declared legacy directory
 # (resolve_store_dir(), lib/lesson_mirrors.sh) before being treated as truly missing
-# (dotfiles-dev#536 review, PR #546) — see generate_store_mirror() for why.
+# (dotfiles-linux-dev#536 review, PR #546) — see generate_store_mirror() for why.
 #
 # Owner-approved (2026-09-14): this MAY create `.specs/` from scratch in a repo
-# that has none — most active repos don't (dotfiles-dev#386). It creates only the
+# that has none — most active repos don't (dotfiles-linux-dev#386). It creates only the
 # `_lessons/` directory the mirror needs via `mkdir -p`, deliberately NOT a
 # `.specs/CLAUDE.md` contract file: that file documents the feature-spec layout
 # (spec.md/design.md/plan.md), which this repo has not adopted just because it
@@ -63,7 +63,7 @@ generate_store_mirror() {
 		# The "-" sentinel (lessons-other) has no repo to name — nothing to explain.
 		# A repo that IS one of the store's declared aliases DOES need explaining: this
 		# is the exact case that used to write an empty, authoritative-looking mirror
-		# (dotfiles-dev#536) — say why nothing was written instead of writing nothing
+		# (dotfiles-linux-dev#536) — say why nothing was written instead of writing nothing
 		# silently.
 		if [ "$target_repo" != "-" ]; then
 			printf 'ℹ %s: no mirror for %s (repo identity resolved via %s; declared as one of this store'"'"'s own repos) — no self-mirror\n' \
@@ -74,7 +74,7 @@ generate_store_mirror() {
 
 	# A mirror IS expected here, so a missing store directory is a CONFIGURATION
 	# ERROR — a registry entry naming a path that isn't there — never "nothing to
-	# generate from" (dotfiles-dev#536): `[ -d "$store" ] || return 0` used to sit
+	# generate from" (dotfiles-linux-dev#536): `[ -d "$store" ] || return 0` used to sit
 	# ahead of the check above and swallow exactly this case silently, indistinguishable
 	# from the legitimate "zero lessons yet" mirror it would otherwise write.
 	#
@@ -135,7 +135,7 @@ generate_store_mirror() {
 		done
 	} >"$mirror"
 
-	# The mirror moved to .specs/_lessons/ in dotfiles-dev#386 and nothing cleaned up behind it,
+	# The mirror moved to .specs/_lessons/ in dotfiles-linux-dev#386 and nothing cleaned up behind it,
 	# so repos still carry a pre-move copy that no longer regenerates -- a stale doc a reader can
 	# open and trust. Warn, never delete: this may run from a hook, and a generator that removes
 	# files would also remove a legitimately hand-written docs/<base>.md that merely collides.
@@ -170,7 +170,7 @@ main() {
 	}
 
 	# repo="$(basename "$cwd")" alone made a DIRECTORY NAME production configuration
-	# (dotfiles-dev#536) — prefer the `origin` remote, basename only as a fallback,
+	# (dotfiles-linux-dev#536) — prefer the `origin` remote, basename only as a fallback,
 	# and say which one was used so a mismatch is visible rather than silent.
 	identity="$(resolve_repo_identity "$cwd")" || {
 		printf 'Could not resolve repo identity for %s (no origin remote, no usable basename) — writing no mirrors, never an empty one.\n' "$cwd" >&2

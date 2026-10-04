@@ -47,10 +47,10 @@ run_plugins() {
 
     promote_plugin_to_user_scope "superpowers@claude-plugins-official"        "superpowers"        "claude-plugins-official"
     promote_plugin_to_user_scope "claude-hud@claude-hud"                      "claude-hud"         "claude-hud"
-    # codex-plugin-cc / copilot-plugin-cc removed (dotfiles-dev#147): no plugin by
+    # codex-plugin-cc / copilot-plugin-cc removed (dotfiles-linux-dev#147): no plugin by
     # that name exists in claude-plugins-official (verified against all 291
     # published plugins) or any other registered marketplace. Codex CLI is
-    # installed as a real binary via ai_clients/codex/ instead (dotfiles-dev#145);
+    # installed as a real binary via ai_clients/codex/ instead (dotfiles-linux-dev#145);
     # no equivalent Copilot or Kimi runtime exists to wire up.
     # LSPs — typescript-lsp covers JS, TS, JSX (.jsx), and TSX (.tsx)
     promote_plugin_to_user_scope "typescript-lsp@claude-plugins-official"     "typescript-lsp"     "claude-plugins-official"

@@ -8,7 +8,7 @@
 # watches for the two Bash tool calls that put a release in the DUE state:
 #
 #   1. A local `main`/`master` sync (`git pull`/`checkout`/`switch`) — the historical trigger.
-#   2. A `gh pr merge` — the NORMAL way work lands (dotfiles-dev#156). It runs server-side and never
+#   2. A `gh pr merge` — the NORMAL way work lands (dotfiles-linux-dev#156). It runs server-side and never
 #      touches local HEAD, so it needed its own detection instead of falling under (1). A merge done
 #      through the GitHub web UI still can't be observed here (not a tool call at all) — that gap is
 #      real but out of scope for a hook.
@@ -167,7 +167,7 @@ shipped_diff_empty() {
 
 semantic_diff_empty() {
     # True only when EVERY changed shipped-path file is a tracked .py file whose AST is identical
-    # across revisions (dotfiles-dev#100). A non-empty byte diff proves "these files were touched",
+    # across revisions (dotfiles-linux-dev#100). A non-empty byte diff proves "these files were touched",
     # never "the artifact changed": a comment/docstring/formatting-only edit is non-empty in bytes
     # and AST-identical under ast.dump(). This check is Python-only by construction — ast.dump()
     # has no equivalent here for any other language — so it FAILS TOWARD "real change" for anything
@@ -226,7 +226,7 @@ PYEOF
 
 highest_signal() {
     # breaking > feat > fix > none, over commit subjects+bodies since the tag — but ONLY commits
-    # that touched a shipped path (dotfiles-dev#99: scanning every commit inflates the bump, e.g. a
+    # that touched a shipped path (dotfiles-linux-dev#99: scanning every commit inflates the bump, e.g. a
     # feat(ci) that never touched the package still proposed a MINOR). Same "$@" paths as
     # shipped_diff_empty() above, passed through to git log's own pathspec filter: `A..B -- <paths>`
     # already restricts to commits whose diff intersects <paths>, so the two checks ("did the

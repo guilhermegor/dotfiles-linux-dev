@@ -15,7 +15,7 @@
 # open threads change. Exit 2 feeds stderr back to the model and makes it continue, so the loop
 # closes without anyone remembering anything.
 #
-# ⚠️ Repo-wide, not branch-scoped (dotfiles-dev#397). The original version resolved the PR
+# ⚠️ Repo-wide, not branch-scoped (dotfiles-linux-dev#397). The original version resolved the PR
 # STRICTLY via `gh pr view` on the current branch, and that lookup fails open exactly where the
 # orchestrator session lives: on a detached HEAD (every `worktree add --detach` used to inspect
 # a PR) or on a branch that carries no PR of its own — which made this hook a structural no-op
@@ -36,7 +36,7 @@
 #     `$CLAUDE_CONFIG_DIR/open-threads-nudge/`, for $OPEN_THREADS_NUDGE_CACHE_TTL seconds
 #     (default 300), so a long session's many Stops don't re-run a full scan on every turn.
 #
-# ⚠️ A cached verdict names a PR whose STATE can change inside the TTL window (dotfiles-dev#423).
+# ⚠️ A cached verdict names a PR whose STATE can change inside the TTL window (dotfiles-linux-dev#423).
 # Measured on blueprintx 2026-09-20: PR #566 merged 61s after the scan that cached "CodeRabbit
 # still running" against it, and the hook replayed that stale verdict on three more Stops over the
 # next four minutes — a snapshot that was true when taken and false every time it was printed
@@ -54,7 +54,7 @@
 # Fails OPEN on everything it cannot resolve (no gh, no jq, no network, no PR anywhere in the
 # repo) — a nudge that fires on its own blindness is noise, and noise gets the hook deleted.
 #
-# ⚠️ dotfiles-dev#491: `statusCheckRollup` mixes two node types that read alike and behave
+# ⚠️ dotfiles-linux-dev#491: `statusCheckRollup` mixes two node types that read alike and behave
 # nothing alike. A `CheckRun` is work a runner is doing — QUEUED/IN_PROGRESS means it WILL reach
 # a conclusion, so waiting is sound. A `StatusContext` is an assertion someone POSTED; its
 # PENDING carries NO completion guarantee. The shared gate's own `running` filter already
@@ -69,7 +69,7 @@
 # does NOT block. A genuinely in-flight CheckRun, or a still-non-terminal REQUIRED context,
 # keeps blocking exactly as before: the wait is bounded by relevance, not removed.
 #
-# ⚠️ dotfiles-dev#490/#497 reconciliation: #497 (the shared gate's comment-channel fix) is no
+# ⚠️ dotfiles-linux-dev#490/#497 reconciliation: #497 (the shared gate's comment-channel fix) is no
 # longer "sibling work" once merged, and its own author suggested folding this file's isRequired
 # split into review_thread_gate.sh's `_gate_running_filter` to retire this second query.
 # Deliberately NOT done: `subagent_stop_sweep.sh`'s `sweep_review_gate()` is a THIRD, unlisted
@@ -95,7 +95,7 @@ ROSTER_FILE='.review-bots.yaml'
 # (_repo_wide_scan) or prunable (_prune_stale_cache_entries), so a zero, negative, non-numeric or
 # absurdly large override does not merely tune the cache -- it makes max_age 0 and deletes the
 # entries the very same run is about to read, turning every repo-wide scan back into a full
-# PR-list + gate fan-out (dotfiles-dev#514 review). A value that is not a positive integer inside
+# PR-list + gate fan-out (dotfiles-linux-dev#514 review). A value that is not a positive integer inside
 # bash's arithmetic range therefore falls back to its default rather than silently disabling the
 # cache. Validated here at the declaration, not at each use: the TTL has a second consumer in
 # _repo_wide_scan's freshness check, and the review named only the multiplier.
@@ -103,7 +103,7 @@ ROSTER_FILE='.review-bots.yaml'
 [[ "$OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER" =~ ^[1-9][0-9]{0,8}$ ]] ||
 	OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER=6
 
-# GraphQL query + classification live in one shared place (dotfiles-dev#167):
+# GraphQL query + classification live in one shared place (dotfiles-linux-dev#167):
 # the SubagentStop board sweep (subagent_stop_sweep.sh) calls the identical
 # gate for every open PR, and a second hand-copy is exactly the risk this
 # file's own header warns about (re-deriving a gate's verdict instead of
@@ -115,7 +115,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/review_thread_gate.sh"
 # A SECOND, narrower GraphQL query than the gate's own -- adds `isRequired` (GitHub's
 # RequirableByPullRequest interface) to both node types so this file can split a genuinely
 # running CheckRun from an unbounded-PENDING StatusContext without touching the shared gate
-# (dotfiles-dev#491 -- review_thread_gate.sh is held by sibling work). Also requests `totalCount`
+# (dotfiles-linux-dev#491 -- review_thread_gate.sh is held by sibling work). Also requests `totalCount`
 # and the same reviewer-identity fields the gate's own `_gate_running_filter` uses
 # (`checkSuite.app.slug` / `creator.login`), caught by CodeRabbit review on PR #498: a page that
 # cannot hold every context is indistinguishable from one that legitimately has nothing left
@@ -254,7 +254,7 @@ _delegate_name_re='^issue-([0-9]+)(-|$)'
 # its Agent `name`, AND issue N's own ```surface block (read live, never cached) covers PATH.
 # Prints nothing on ANY read failure — including no transcript, no matching dispatch, an
 # unreadable issue body, or no covering surface entry. That is the fail-CLOSED default
-# dotfiles-dev#516 requires: "if agent liveness or ownership cannot be read, block."
+# dotfiles-linux-dev#516 requires: "if agent liveness or ownership cannot be read, block."
 #
 # "Live" mirrors dispatch_free_surface_guard.sh's inflight_dispatch_issues(): no tool_result yet
 # (silence reads as running), or a background dispatch whose <task-notification> has not yet
@@ -343,7 +343,7 @@ _REPLIED_SUFFIX=": replied — still needs RESOLVING"
 # _apply_delegation_filter TRANSCRIPT
 # Downgrades a "problems" line to informational when its thread already carries a substantive
 # non-roster reply (the gate's own "replied — still needs RESOLVING" wording) AND a live,
-# same-session agent's declared surface covers that thread's path (dotfiles-dev#516). A thread
+# same-session agent's declared surface covers that thread's path (dotfiles-linux-dev#516). A thread
 # with NO reply yet ("needs a REPLY") is never touched — delegation presumes the orchestrator
 # already verified and handed off, which is exactly the "reply exists" signal the issue warns is
 # NOT enough on its own; requiring the RESOLVING wording keeps liveness+ownership as the deciding
@@ -419,7 +419,7 @@ _emit_verdict() {
 		;;
 	pending_indefinite)
 		# Not a verdict to wait out — a StatusContext PENDING with isRequired=false carries no
-		# completion guarantee at all (dotfiles-dev#491). Reported, never waited on.
+		# completion guarantee at all (dotfiles-linux-dev#491). Reported, never waited on.
 		{
 			echo "${prefix}PR #${number}: pending (no completion expected): ${GATE_DETAIL} —"
 			echo "not a required context, so nothing promises it will ever resolve. Not blocking."
@@ -442,7 +442,7 @@ _emit_verdict() {
 		return 0
 		;;
 	delegated)
-		# dotfiles-dev#516: every remaining finding is answered-but-unresolved AND covered by a
+		# dotfiles-linux-dev#516: every remaining finding is answered-but-unresolved AND covered by a
 		# live, same-session agent's declared surface. The orchestrator cannot resolve these
 		# itself — the branch is checked out in the owning agent's worktree — so this is the
 		# "correct work already happening" case the issue exists to stop re-blocking on.
@@ -475,7 +475,7 @@ _emit_verdict() {
 
 # _prune_stale_cache_entries DIR
 # Deletes every cache file older than OPEN_THREADS_NUDGE_CACHE_TTL *
-# OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER seconds (dotfiles-dev#504). Entries are keyed by
+# OPEN_THREADS_NUDGE_CACHE_PRUNE_MULTIPLIER seconds (dotfiles-linux-dev#504). Entries are keyed by
 # session id and a session never returns, so the deploy-time clear (install_hooks() ->
 # invalidate_hook_caches(), #507) only handles the "logic changed" half -- a long-lived install
 # still accumulates one file per session forever otherwise (measured: 11 entries, 3 repos, 5
@@ -499,7 +499,7 @@ _prune_stale_cache_entries() {
 		# age, which is not "very fresh" -- _repo_wide_scan already refuses such a file as a
 		# cache hit, so keeping it here leaves an entry nothing will ever use and nothing will
 		# ever delete while the clock stays behind it, defeating the growth bound this function
-		# exists to enforce (dotfiles-dev#514 review). Unusable and unprunable is the worst of
+		# exists to enforce (dotfiles-linux-dev#514 review). Unusable and unprunable is the worst of
 		# both, so an age outside [0, max_age) is pruned in either direction.
 		if [ "$age" -lt 0 ] || [ "$age" -ge "$max_age" ]; then
 			rm -f "$f"
@@ -541,7 +541,7 @@ _repo_wide_scan() {
 			GATE_STATUS="$(printf '%s' "$cached" | jq -r '.status // "clean"' 2>/dev/null)"
 			GATE_DETAIL="$(printf '%s' "$cached" | jq -r '.detail // empty' 2>/dev/null)"
 
-			# The cache can outlive the PR's own state (dotfiles-dev#423) -- a merge inside the
+			# The cache can outlive the PR's own state (dotfiles-linux-dev#423) -- a merge inside the
 			# TTL leaves a verdict naming a PR that is no longer open. Pay for exactly one live
 			# re-check, and only when the cache is about to produce a nudge (REPORT_NUMBER set).
 			if [ -n "$REPORT_NUMBER" ]; then
@@ -581,7 +581,7 @@ _repo_wide_scan() {
 		fi
 		# A non-required, indefinitely-PENDING status is not a reason to stop the scan here --
 		# it never blocks, so it must not be mistaken for the one finding this scan is looking
-		# for (dotfiles-dev#491). Keep looking at the rest of the open PRs.
+		# for (dotfiles-linux-dev#491). Keep looking at the rest of the open PRs.
 		if [ "$GATE_STATUS" = "pending_indefinite" ]; then
 			continue
 		fi
@@ -591,7 +591,7 @@ _repo_wide_scan() {
 		if [ "$GATE_STATUS" = "unreviewed" ]; then
 			continue
 		fi
-		# dotfiles-dev#516: every finding on this PR was delegated to a live, same-session agent
+		# dotfiles-linux-dev#516: every finding on this PR was delegated to a live, same-session agent
 		# whose declared surface covers it -- same "not the finding this scan looks for" shape as
 		# pending_indefinite/unreviewed above.
 		if [ "$GATE_STATUS" = "delegated" ]; then
@@ -604,7 +604,7 @@ _repo_wide_scan() {
 		fi
 	done <<<"$prs"
 
-	# dotfiles-dev#516 (CodeRabbit review on PR #574): a "delegated" PR is excused only while its
+	# dotfiles-linux-dev#516 (CodeRabbit review on PR #574): a "delegated" PR is excused only while its
 	# agent is LIVE, and liveness is exactly the kind of fact a cache must not extend past its own
 	# read -- the agent can complete or fail inside the TTL, and the cache-hit path above only
 	# re-verifies PR openness, never re-derives delegation. Skipping the write here forces the
@@ -628,7 +628,7 @@ main() {
 	active="$(printf '%s' "$payload" | jq -r '.stop_hook_active // false' 2>/dev/null)"
 	[[ "$active" == "true" ]] && exit 0
 
-	# dotfiles-dev#516: the transcript is what makes "delegated to a live, same-session agent"
+	# dotfiles-linux-dev#516: the transcript is what makes "delegated to a live, same-session agent"
 	# decidable at all -- empty is fine, _apply_delegation_filter/_delegated_agent_for_path both
 	# fail closed (never delegated) on it.
 	transcript="$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)"

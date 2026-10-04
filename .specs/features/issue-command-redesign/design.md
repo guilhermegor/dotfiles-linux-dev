@@ -147,7 +147,7 @@ Infer from the description, then confirm. Probe issue-type support **once** per 
   (`guilhermegor/*`) may not have them. Never let a mutating command be the probe — `gh issue
   create` creates the issue and resolves `--type` afterwards, so a rejected `--type` exits 1
   with the issue already created, and a retry without the flag files a second one (measured,
-  dotfiles-dev#186). Probe with a read-only `gh api graphql` query against
+  dotfiles-linux-dev#186). Probe with a read-only `gh api graphql` query against
   `repository.issueTypes`, and on an empty/no-match result fall back to a `type:<work-type>`
   label. Linear has no type field either, so it uses the label form too.
 - The HITL/AFK mode is always a label (`hitl` / `afk`) on both trackers.

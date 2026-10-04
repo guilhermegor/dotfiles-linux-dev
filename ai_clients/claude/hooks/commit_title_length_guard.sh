@@ -26,7 +26,7 @@ set -u
 # jq parses the hook payload; without it we cannot inspect the command, so fail open.
 command -v jq >/dev/null 2>&1 || exit 0
 
-# Shared with commit_body_wrap.sh and commit_secret_guard.sh (dotfiles-dev#324) — one
+# Shared with commit_body_wrap.sh and commit_secret_guard.sh (dotfiles-linux-dev#324) — one
 # `git commit` detection regex, not three that can drift apart.
 # shellcheck source=lib/commit_command_matcher.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh"
