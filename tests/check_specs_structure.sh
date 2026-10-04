@@ -2,8 +2,8 @@
 #
 # tests/check_specs_structure.sh
 #
-# CI + pre-commit gate (dotfiles-dev#443): enforces the `.specs/` directory
-# allowlist dotfiles-dev#442 settled in `.specs/CLAUDE.md` -- the ONE place
+# CI + pre-commit gate (dotfiles-linux-dev#443): enforces the `.specs/` directory
+# allowlist dotfiles-linux-dev#442 settled in `.specs/CLAUDE.md` -- the ONE place
 # this convention is authored, and until now the one place it went
 # unenforced. blueprintx has the same tree shape and its own
 # bin/ci/check_specs_structure.sh (blueprintx#447); this is dotfiles-dev's
@@ -16,7 +16,7 @@
 # tests/spec_audit_gate.sh's job, not this gate's:
 #   - .specs/ top level: only CLAUDE.md, features/, backlog/, _lessons/ are
 #     allowed. Anything else -- INCLUDING a type-folder like bugfix/ or
-#     chore/ (dotfiles-dev#442: deliberately rejected, recorded in
+#     chore/ (dotfiles-linux-dev#442: deliberately rejected, recorded in
 #     .specs/CLAUDE.md) -- fails as DISALLOWED_TOP_LEVEL. No special-casing
 #     for type-folders: an allowlist already rejects anything not on it.
 #   - .specs/CLAUDE.md must exist whenever .specs/ exists (#442).
@@ -31,7 +31,7 @@
 #     consistency with features/ -- dotfiles-dev's own .specs/backlog/
 #     starts empty, so there is no existing content to preserve the older
 #     pattern for; see .specs/CLAUDE.md).
-#   - .specs/_lessons/ is exempt entirely (dotfiles-dev#386: a generated,
+#   - .specs/_lessons/ is exempt entirely (dotfiles-linux-dev#386: a generated,
 #     git-ignored mirror, not a work unit).
 #
 # ponytail: top-level discovery globs "$specs_dir"/* which skips dotfiles
@@ -47,7 +47,7 @@
 # Run locally: bash tests/check_specs_structure.sh
 # Wired into CI (.github/workflows/tests.yml, specs_structure job) AND the
 # local pre-commit hook (.githooks/pre-commit) -- both legs, so
-# `--no-verify` does not silently bypass it (dotfiles-dev#443, the defect
+# `--no-verify` does not silently bypass it (dotfiles-linux-dev#443, the defect
 # blueprintx#510 exists for).
 
 set -euo pipefail
@@ -170,7 +170,7 @@ check_top_level_entry() {
             check_backlog_group "$entry"
             ;;
         _lessons)
-            : # exempt -- generated mirror, no naming rules (dotfiles-dev#386)
+            : # exempt -- generated mirror, no naming rules (dotfiles-linux-dev#386)
             ;;
     esac
 }

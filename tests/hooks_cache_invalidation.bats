@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # A cached verdict written by the PREVIOUS version of a hook's logic must not be replayable
-# after a deploy replaces that logic (dotfiles-dev#504). install_hooks() must clear
+# after a deploy replaces that logic (dotfiles-linux-dev#504). install_hooks() must clear
 # $CLAUDE_CONFIG_DIR/open-threads-nudge/ every time it runs, regardless of whether the cache
 # existed before the deploy.
 #

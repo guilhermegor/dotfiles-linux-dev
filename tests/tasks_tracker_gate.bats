@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for ai_clients/claude/hooks/lib/tasks_tracker_gate.sh (dotfiles-dev#485).
+# Unit tests for ai_clients/claude/hooks/lib/tasks_tracker_gate.sh (dotfiles-linux-dev#485).
 # Both halves of the gate contract (ai_clients/CLAUDE.md, "A gate's contract"): success returns
 # a usable, non-empty answer on a fixture that provably has content, and the fail-closed path
 # leaves every global empty. All `gh` calls are stubbed -- never a live token.

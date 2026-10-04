@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for ai_clients/claude/hooks/lib/reviewer_ladder.sh (dotfiles-dev#444).
+# Unit tests for ai_clients/claude/hooks/lib/reviewer_ladder.sh (dotfiles-linux-dev#444).
 # Fixture-driven only: no network, no real `codex`/`qwen` invocation. Every probe
 # and every runtime/post call is stubbed via the lib's own override hooks
 # (REVIEWER_LADDER_*_PROBE, REVIEWER_LADDER_RUN_CMD, REVIEWER_LADDER_POST_CMD).
@@ -9,7 +9,7 @@ setup() {
     source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/reviewer_ladder.sh"
     FIXTURES="$BATS_TEST_DIRNAME/fixtures/reviewer_ladder"
 
-    # dotfiles-dev#555: run_fallback_review now resolves the head's own commit
+    # dotfiles-linux-dev#555: run_fallback_review now resolves the head's own commit
     # date up front (ladder_already_covered's freshness check needs it, and it
     # has no way to fetch one itself). Stub it to a fixed, ancient date by
     # default so calling run_fallback_review never reaches the network just
@@ -19,7 +19,7 @@ setup() {
     export -f _default_fake_head_date
     export REVIEWER_LADDER_HEAD_DATE_CMD=_default_fake_head_date
 
-    # dotfiles-dev#564: it also resolves the head SHA up front, and a marker is
+    # dotfiles-linux-dev#564: it also resolves the head SHA up front, and a marker is
     # credited only when its "Reviewed head:" line names that SHA. Stubbed to
     # HEAD_SHA (below) for the same no-network reason as the date above.
     _default_fake_head_sha() { echo "$HEAD_SHA"; }
@@ -28,7 +28,7 @@ setup() {
     export REVIEWER_LADDER_HEAD_SHA_CMD=_default_fake_head_sha
 }
 
-# The head every already-covered fixture below reviewed (dotfiles-dev#564).
+# The head every already-covered fixture below reviewed (dotfiles-linux-dev#564).
 HEAD_SHA='4117bcf7aa00'
 
 # --- codex resolver ----------------------------------------------------------
@@ -231,7 +231,7 @@ ATTRIBUTION='Fallback review — runtime: codex, model: codex-auto-review (selec
 MARKER_BODY="$ATTRIBUTION"$'\nReviewed head: '"$HEAD_SHA"
 
 # HEAD_DATE anchors the freshness tests below to the same measured shape as
-# #546 (dotfiles-dev#555): a real PR head's committed date. Tests that are not
+# #546 (dotfiles-linux-dev#555): a real PR head's committed date. Tests that are not
 # about freshness at all still have to pass SOME head date now that
 # ladder_already_covered takes one — they use a marker timestamped after it,
 # which is the ordinary "ladder reviewed the current head" shape, not the
@@ -281,7 +281,7 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
     [ "$status" -eq 1 ]
 }
 
-# --- dotfiles-dev#555: a stale marker must not grant credit forever -----------------------------
+# --- dotfiles-linux-dev#555: a stale marker must not grant credit forever -----------------------------
 #
 # Measured on #546: marker at 12:43:28Z, head committed 13:28:42Z. The marker predates the head by
 # 45 minutes and reviewed a commit the head has since moved past -- `ladder_already_covered` used
@@ -306,7 +306,7 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
     [ "$status" -eq 0 ]
 }
 
-# --- dotfiles-dev#564: a marker is credited only for the commit it names -------------------------
+# --- dotfiles-linux-dev#564: a marker is credited only for the commit it names -------------------------
 #
 # HEAD_DATE is the commit's own committer.date, which whoever pushes controls, so a backdated push
 # can make a new head look OLDER than an existing marker. The SHA clause closes that: a marker
@@ -499,7 +499,7 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
     [[ "$output" != *"RUNTIME CALLED"* ]]
 }
 
-# --- PR-head resolution & assertion (dotfiles-dev#487) ----------------------
+# --- PR-head resolution & assertion (dotfiles-linux-dev#487) ----------------------
 #
 # codex review diffs the AMBIENT WORKING TREE, never a PR by number. Measured
 # live 2026-09-23: invoked for PR #474 from the repo root on master, it
@@ -560,7 +560,7 @@ _make_two_commit_repo() {
     [ "$status" -eq 1 ]
 }
 
-# --- ABSENT vs CONTRADICTED forge answer (dotfiles-dev#543) -----------------
+# --- ABSENT vs CONTRADICTED forge answer (dotfiles-linux-dev#543) -----------------
 #
 # assert_worktree_matches_pr is called directly (not via `run`) in these
 # three so ASSERT_WORKTREE_STATUS — a plain global, same pattern as
@@ -624,7 +624,7 @@ _make_two_commit_repo() {
     [ "$output" = "o/r#487" ]
 }
 
-# --- REST over GraphQL for both injectable seams (dotfiles-dev#543) ---------
+# --- REST over GraphQL for both injectable seams (dotfiles-linux-dev#543) ---------
 #
 # Both defaults used to shell out to GraphQL (`gh pr view --json`, `gh pr
 # comment`), which is the surface that stays refused during exactly the
@@ -649,7 +649,7 @@ _make_two_commit_repo() {
     [ "$status" -eq 0 ]
 }
 
-# --- dotfiles-dev#555: the head-date lookup ladder_already_covered anchors on ---------------------
+# --- dotfiles-linux-dev#555: the head-date lookup ladder_already_covered anchors on ---------------------
 
 @test "_pr_head_committed_at: override receives owner, repo, and PR number" {
     fake() { printf '%s/%s#%s\n' "$1" "$2" "$3"; }
@@ -817,7 +817,7 @@ _make_bare_remote_with_pr() {
     [[ "$output" != *"cannot reach the forge"* ]]
 }
 
-@test "_checkout_pr_worktree: real path — an ABSENT forge answer reports 'cannot reach the forge', never 'does not match' (dotfiles-dev#543)" {
+@test "_checkout_pr_worktree: real path — an ABSENT forge answer reports 'cannot reach the forge', never 'does not match' (dotfiles-linux-dev#543)" {
     export TMPDIR="$BATS_TEST_TMPDIR"
     local bare="$BATS_TEST_TMPDIR/remote-557.git"
     _make_bare_remote_with_pr "$bare" 557

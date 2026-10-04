@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # Structural checks for ai_clients/claude/skills/intake.md — the s:intake
-# parent orchestrator (dotfiles-dev#422). It carries no executable logic of
+# parent orchestrator (dotfiles-linux-dev#422). It carries no executable logic of
 # its own (it sequences four already-shipped child skills via the Skill
 # tool), so this suite pins the frontmatter contract and the reuse links
 # rather than mocking a runtime.

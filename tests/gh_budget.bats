@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for ai_clients/claude/hooks/lib/gh_budget.sh (dotfiles-dev#407) — pure text
+# Unit tests for ai_clients/claude/hooks/lib/gh_budget.sh (dotfiles-linux-dev#407) — pure text
 # classification, no network. Fixtures are captured response bodies, not live API calls, so the
 # suite stays deterministic in CI. Covers all four required cases: a real GitHub API 403, a
 # CodeRabbit review-slot notice, a CodeRabbit chat-quota notice, and an unrecognised notice.
@@ -48,7 +48,7 @@ teardown() {
 	[ "$GH_BUDGET_CLASS" = "unknown" ]
 }
 
-# --- secondary rate limit text variants (dotfiles-dev#533) ----------------------------------------
+# --- secondary rate limit text variants (dotfiles-linux-dev#533) ----------------------------------------
 # Measured 2026-09-26: GitHub's secondary limiter refused every GraphQL call for ~3 hours while
 # `gh api rate_limit` reported ~97% of the graphql quota free. The old fixed-phrase
 # "api rate limit exceeded" match missed the real wording ("... already exceeded"), fell through
@@ -111,7 +111,7 @@ x-ratelimit-reset: 1790470148'
 	[ "$status" -ne 0 ]
 }
 
-# --- 403 latch (dotfiles-dev#445) -----------------------------------------------------------------
+# --- 403 latch (dotfiles-linux-dev#445) -----------------------------------------------------------------
 
 @test "gh_budget_latch_path honours GH_BUDGET_LATCH_FILE" {
 	[ "$(gh_budget_latch_path)" = "$GH_BUDGET_LATCH_FILE" ]
@@ -149,7 +149,7 @@ x-ratelimit-reset: 1790470148'
 	[ "$diff" -le 45 ]
 }
 
-# --- gh_budget_reset_ttl: primary exhaustion vs. secondary/concurrency burst (dotfiles-dev#445 follow-up) --
+# --- gh_budget_reset_ttl: primary exhaustion vs. secondary/concurrency burst (dotfiles-linux-dev#445 follow-up) --
 
 stub_gh_rate_limit() {
     # $1 = core remaining, $2 = core reset (epoch), $3 = graphql remaining, $4 = graphql reset.
@@ -191,7 +191,7 @@ STUB
     [ "$ttl" -eq 45 ]
 }
 
-# --- gh_budget_quota_exhausted: dotfiles-dev#511 P1 -- GraphQL can be exhausted while core isn't --
+# --- gh_budget_quota_exhausted: dotfiles-linux-dev#511 P1 -- GraphQL can be exhausted while core isn't --
 
 @test "quota_exhausted is true when graphql remaining is under the floor, core healthy" {
     stub_gh_rate_limit 5000 9999999999 0 9999999999
@@ -222,7 +222,7 @@ STUB
 }
 
 # --- gh_budget_latch_default_dir / gh_budget_latch_path: never bare world-writable /tmp ----------
-# dotfiles-dev#511 review (Minor): the old default was a FIXED, PREDICTABLE filename directly
+# dotfiles-linux-dev#511 review (Minor): the old default was a FIXED, PREDICTABLE filename directly
 # under /tmp. On a shared host another local user can pre-create that name with a far-future
 # timestamp and disable the sweep indefinitely. Every test here unsets the setup()-exported
 # GH_BUDGET_LATCH_FILE to exercise the real default-resolution path.
@@ -257,7 +257,7 @@ STUB
 }
 
 # --- gh_budget_latch_write: a real write failure must be reported, never swallowed ----------------
-# dotfiles-dev#511 review (Minor): the old version discarded the redirect's own exit status
+# dotfiles-linux-dev#511 review (Minor): the old version discarded the redirect's own exit status
 # entirely (`2>/dev/null`, nothing checking `$?`), so a failed write was indistinguishable from a
 # successful one to every caller.
 
@@ -269,7 +269,7 @@ STUB
 
 @test "gh_budget_latch_write reports failure instead of swallowing it" {
     # A read-only PARENT dir, not a directory standing in for the file: the write now goes to a
-    # temp file first (atomic rename, dotfiles-dev#511 CodeRabbit follow-up), and `mv` onto an
+    # temp file first (atomic rename, dotfiles-linux-dev#511 CodeRabbit follow-up), and `mv` onto an
     # existing directory MOVES INTO it rather than failing -- the write must be blocked at its
     # source (no permission to create anything in the directory at all) to still reproduce.
     mkdir -p "$LATCH_DIR/readonly"
@@ -291,7 +291,7 @@ STUB
     [ "${#leftovers[@]}" -eq 0 ]
 }
 
-# --- gh_budget_retry_after_ttl: honour the real Retry-After header (dotfiles-dev#533) --------------
+# --- gh_budget_retry_after_ttl: honour the real Retry-After header (dotfiles-linux-dev#533) --------------
 
 @test "retry_after_ttl reads a lowercase retry-after header" {
     ttl="$(gh_budget_retry_after_ttl 'retry-after: 30')"
@@ -313,7 +313,7 @@ STUB
     [ "$ttl" = "45" ]
 }
 
-# NOTE (dotfiles-dev#533, retracted 2026-09-27): a `gh_budget_graphql_probe` predictive probe and
+# NOTE (dotfiles-linux-dev#533, retracted 2026-09-27): a `gh_budget_graphql_probe` predictive probe and
 # its tests were removed here. A trivial GraphQL probe cannot predict whether a real, costlier
 # GraphQL call moments later will be refused -- the secondary limiter is cost- and time-based, not
 # transport-based (measured same day; see gh_budget.sh's own NOTE at this location and

@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for ai_clients/claude/hooks/lib/kanban_reconcile.sh (dotfiles-dev#448)
+# Unit tests for ai_clients/claude/hooks/lib/kanban_reconcile.sh (dotfiles-linux-dev#448)
 #
 # Strategy (same shape as roadmap_unblock.bats / kanban_lifecycle.bats): a fake `gh` script is
 # placed first on PATH so these tests never touch the network or a real project board. It logs
@@ -90,7 +90,7 @@ write_closing() {
 
 # write_board_cache
 # Pre-populates the on-disk board cache `board_config` reads, so a test can fail `gh project
-# field-list` for `_kr_status_names`'s OWN read (dotfiles-dev#567) without also breaking
+# field-list` for `_kr_status_names`'s OWN read (dotfiles-linux-dev#567) without also breaking
 # `board_config`'s unrelated discover-on-cache-miss call to the same porcelain subcommand.
 write_board_cache() {
     mkdir -p "$CLAUDE_CONFIG_DIR/kanban-boards"
@@ -424,7 +424,7 @@ run_reconcile() {
     [[ "$output" == *"FAILED to move issue #42 to In review"* ]]
 }
 
-# --- dotfiles-dev#567: gh project throttle vs a genuinely unreadable board ------------------------
+# --- dotfiles-linux-dev#567: gh project throttle vs a genuinely unreadable board ------------------------
 
 @test "Status column read: field-list fails but GraphQL is healthy, falls back and succeeds" {
     write_board_cache

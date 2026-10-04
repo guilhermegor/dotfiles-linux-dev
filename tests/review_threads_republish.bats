@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Contract tests for .github/workflows/review_threads_republish.yml
-# (dotfiles-dev#492). review_threads.yml never triggers on `pull_request` —
+# (dotfiles-linux-dev#492). review_threads.yml never triggers on `pull_request` —
 # see its own header — because a verdict computed at push time can go stale
 # the instant a review lands (blueprintx#180). This sibling workflow is the
 # push-triggered half: it may publish `failure` (or the non-review "not

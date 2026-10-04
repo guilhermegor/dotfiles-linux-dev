@@ -256,7 +256,7 @@ EOF"
     rm -rf "$fake_home"
 }
 
-# --- pflag also accepts attached short flags: `-bX` and `-b=X` (dotfiles-dev#604) --------------
+# --- pflag also accepts attached short flags: `-bX` and `-b=X` (dotfiles-linux-dev#604) --------------
 #
 # scan_flags() used to read short flags only in the separated form, so an attached `-b`/`-F`/
 # `-l`/`-R` was never seen and the guard passed the command unread (fail-open).

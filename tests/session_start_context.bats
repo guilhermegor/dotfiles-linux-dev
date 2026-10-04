@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit tests for ai_clients/claude/hooks/session_start_context.sh — the fan-out
-# classifier added for dotfiles-dev#318.
+# classifier added for dotfiles-linux-dev#318.
 #
 # The discriminator (lessons-dotfiles: a-staged-deletion-set-is-a-stale-revert-not-lost-work.md):
 # dirty-file COUNT is not the signal, the SIGN of the diff against HEAD is. Net insertions or
@@ -103,7 +103,7 @@ run_hook() {
 	[[ "$output" == *"INTERRUPTED WORK, resume it"*"[anonymous branch, no issue reference]"* ]]
 }
 
-# --- the PR listing reaches past gh's default 30 (dotfiles-dev#606) ---------------------------
+# --- the PR listing reaches past gh's default 30 (dotfiles-linux-dev#606) ---------------------------
 
 @test "the fan-out PR listing passes an explicit --limit above gh's default of 30" {
 	FAKE_BIN="$TEST_TMP/bin"

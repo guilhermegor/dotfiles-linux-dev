@@ -2,7 +2,7 @@
 #
 # tests/bats_negation_gate.sh
 #
-# CI gate (dotfiles-dev#380): fails on any bare `! <cmd>` statement inside a
+# CI gate (dotfiles-linux-dev#380): fails on any bare `! <cmd>` statement inside a
 # `@test` body in tests/*.bats. bash exempts a `!`-inverted command from
 # `set -e`, so such a line is not an assertion unless it happens to be the
 # test's very last executed statement -- and "it is last today" is exactly

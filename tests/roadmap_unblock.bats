@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for ai_clients/claude/hooks/lib/roadmap_unblock.sh (dotfiles-dev#369)
+# Unit tests for ai_clients/claude/hooks/lib/roadmap_unblock.sh (dotfiles-linux-dev#369)
 #
 # Strategy (same shape as kanban_lifecycle.bats): a fake `gh` script is placed first on PATH so
 # these tests never touch the network or a real project board. It logs every invocation to
@@ -84,7 +84,7 @@ write_existing_comments() {
 
 # write_ref_state REPO NUMBER STATE
 # Registers what `gh issue view NUMBER --repo REPO --json state --jq .state` returns for one
-# prose-referenced issue (dotfiles-dev#416) — STATE is the real API's own casing ("OPEN"/"CLOSED").
+# prose-referenced issue (dotfiles-linux-dev#416) — STATE is the real API's own casing ("OPEN"/"CLOSED").
 # A bare "FAIL" sentinel leaves no fixture file, so the fake gh's `[ -f "$f" ]` check exits 1 —
 # the fail-closed path for prose-blocker resolution.
 write_ref_state() {
@@ -95,7 +95,7 @@ write_ref_state() {
 
 # write_throttled
 # Makes the `_board_throttled` probe (`gh api graphql -f query='query{rateLimit{remaining}}'`)
-# fail with rate-limit-shaped text, confirming a throttle (dotfiles-dev#567). Absent (the
+# fail with rate-limit-shaped text, confirming a throttle (dotfiles-linux-dev#567). Absent (the
 # default): the probe succeeds, i.e. GraphQL itself is healthy.
 write_throttled() {
     touch "$TEST_TMP/throttled"
@@ -145,7 +145,7 @@ echo "\$*" >> "$GH_LOG"
 case "\$1 \$2" in
     "project item-list")
         [ -f "$TEST_TMP/fail-item-list" ] && exit 1
-        # Per-board overrides (dotfiles-dev#531): a fail-board-<n> marker makes board <n>
+        # Per-board overrides (dotfiles-linux-dev#531): a fail-board-<n> marker makes board <n>
         # unreadable; items-<n>.json gives it its own items. Neither = the shared fixture.
         [ -f "$TEST_TMP/fail-board-\$3" ] && exit 1
         if [ -f "$TEST_TMP/items-\$3.json" ]; then cat "$TEST_TMP/items-\$3.json"; exit 0; fi
@@ -186,7 +186,7 @@ case "\$1 \$2" in
     "issue view")
         # Keyed on the --json PROJECTION (state vs comments), never the full query string —
         # a stub keyed on the whole command silently breaks the moment a flag is added
-        # elsewhere (dotfiles-dev#409).
+        # elsewhere (dotfiles-linux-dev#409).
         if printf '%s' "\$*" | grep -q -- '--json state'; then
             repo="\$5"
             key="\${repo//\//_}-\$3"
@@ -272,8 +272,8 @@ run_reconcile() {
     [[ "$output" == *"owner/blueprintx#482"* ]]
 }
 
-# --- prose blocker resolution (dotfiles-dev#416): native empty, blocker recorded only in prose ---
-# Repro shape measured on dotfiles-dev#405: `gh api .../dependencies/blocked_by` returns [] (no
+# --- prose blocker resolution (dotfiles-linux-dev#416): native empty, blocker recorded only in prose ---
+# Repro shape measured on dotfiles-linux-dev#405: `gh api .../dependencies/blocked_by` returns [] (no
 # native relation) while the body's own "**Blocked by:**" line names an issue — before this fix
 # the item read "still blocked" forever, blind to whether that named issue ever closed.
 
@@ -511,7 +511,7 @@ run_reconcile() {
     [[ "$output" == *"could not parse project owner/17"* ]]
 }
 
-# --- blocker-kind reporting (dotfiles-dev#528) ----------------------------------------------------
+# --- blocker-kind reporting (dotfiles-linux-dev#528) ----------------------------------------------------
 
 @test "same-repo native blocker: reported internal" {
     write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
@@ -570,7 +570,7 @@ run_reconcile() {
     [[ "$output" != *"blocker-kind"* ]]
 }
 
-# --- dotfiles-dev#567: gh project throttle vs a genuinely unreadable board ------------------------
+# --- dotfiles-linux-dev#567: gh project throttle vs a genuinely unreadable board ------------------------
 
 @test "project items read: item-list fails but GraphQL is healthy, falls back and succeeds" {
     write_item_list_graphql "$(graphql_item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
@@ -606,7 +606,7 @@ run_reconcile() {
     refute_gh 'issue edit'
 }
 
-# --- dotfiles-dev#531: the declared board registry ------------------------------------------------
+# --- dotfiles-linux-dev#531: the declared board registry ------------------------------------------------
 
 # run_boards ENTRY...
 # Overrides ROADMAP_BOARDS with ENTRY... (none = an empty registry) and runs the registry sweep.

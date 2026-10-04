@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit tests for ai_clients/claude/hooks/quota_gap_rescue.sh — the UserPromptSubmit hook added
-# for dotfiles-dev#383 to re-run the worktree rescue fan-out after a wall-clock gap since the
+# for dotfiles-linux-dev#383 to re-run the worktree rescue fan-out after a wall-clock gap since the
 # session's last prompt.
 #
 # Same bare-origin + real `git worktree add` strategy as tests/session_start_context.bats, so

@@ -2,7 +2,7 @@
 #
 # Unit tests for ai_clients/claude/hooks/commit_secret_guard.sh
 #
-# Focus: the shared matcher integration (dotfiles-dev#324) — does the hook actually scan the
+# Focus: the shared matcher integration (dotfiles-linux-dev#324) — does the hook actually scan the
 # staged diff for all four `git commit` invocation shapes, and does it correctly leave a mere
 # mention of "git commit" alone? A staged secret makes the signal unambiguous: BLOCKED (exit 2)
 # means the matcher let the hook past its early exit and it found the secret; ALLOWED (exit 0)

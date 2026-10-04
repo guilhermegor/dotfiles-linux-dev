@@ -78,7 +78,7 @@ WELL_FORMED_SPEC='# Gadget
 #
 # Indenting the fixture is NOT a fix, and looked like one: bats versions disagree on whether
 # that scan is anchored to column 0. The local version is, CI's is not — so the indented form
-# passed here and failed there, on the very commit that "fixed" it (dotfiles-dev#323).
+# passed here and failed there, on the very commit that "fixed" it (dotfiles-linux-dev#323).
 #
 # Nothing is lost by dropping the token: the gate looks for `@AC-<n>` anywhere on a line and
 # never parses bats syntax. What DOES matter is the line COUNT — "TEST_WITHOUT_AC: fires ..."
@@ -236,7 +236,7 @@ None.
     [[ "$output" == *"spec.md not found"* ]]
 }
 
-# --- legacy two-skill shape (design.md/plan.md, no spec.md) (dotfiles-dev#375) ---------------
+# --- legacy two-skill shape (design.md/plan.md, no spec.md) (dotfiles-linux-dev#375) ---------------
 
 @test "SECTION_MISSING: does not fire for a design.md-only legacy feature" {
     printf '%s' "# Gadget design" > "$FEATURE_DIR/design.md"
@@ -264,7 +264,7 @@ None.
     [[ "$output" == *"spec.md not found"* ]]
 }
 
-# --- TRACKER_STALE (dotfiles-dev#313) --------------------------------------------------------
+# --- TRACKER_STALE (dotfiles-linux-dev#313) --------------------------------------------------------
 #
 # progress.md is OPTIONAL, so the silent cases matter as much as the firing one: a feature
 # with no tracker, and a tracker with nothing `[~]`, must both stay quiet.

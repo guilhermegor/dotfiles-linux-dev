@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit tests for ai_clients/claude/hooks/lib/review_fanout_plan.py — the review fan-out
-# planner review_fanout_guard.sh reads for its verdict (dotfiles-dev#480).
+# planner review_fanout_guard.sh reads for its verdict (dotfiles-linux-dev#480).
 #
 # THE POINT OF THIS SUITE is the "needs a review?" predicate, which #480 leaves open and
 # which has a measured counter-example against BOTH obvious answers. Every one of the first
@@ -25,7 +25,7 @@
 # REVIEW_FANOUT_RUNG rather than by probing: resolve_fallback_reviewer makes LIVE model calls
 # and a test must never reach a real runtime.
 #
-# The gate's two-halves contract (ai_clients/CLAUDE.md, dotfiles-dev#398) applies here too:
+# The gate's two-halves contract (ai_clients/CLAUDE.md, dotfiles-linux-dev#398) applies here too:
 #   1. success returns a USABLE answer — dispatchable/excluded are the documented shape and
 #      non-empty content actually reaches them, not merely an exit-0 with nothing set;
 #   2. the fail-closed path is exercised deliberately, with a stub that makes the underlying
@@ -66,11 +66,11 @@ ago() {
 }
 
 # stub_gh_prs — reads a flat PR-array fixture on stdin and puts a gh stub on PATH that serves
-# TWO calls the planner makes. `api graphql` serves the board one page at a time (dotfiles-dev#600):
+# TWO calls the planner makes. `api graphql` serves the board one page at a time (dotfiles-linux-dev#600):
 # it honours the planner's own `first=` and `after=` variables, re-shapes the SAME flat fixture
 # into the GraphQL page the real API returns (so every fixture below stays in its flat form), and
 # uses the offset as the cursor. `GH_FAIL_AFTER=<cursor>` makes the page requested after that
-# cursor fail like a gateway 502. `api repos/{owner}/{repo}/commits/<oid>` (dotfiles-dev#537)
+# cursor fail like a gateway 502. `api repos/{owner}/{repo}/commits/<oid>` (dotfiles-linux-dev#537)
 # looks the oid up in the fixture's per-PR `commits` array and prints its `committedDate` —
 # simulating the REST read head_commit_time() makes. Every invocation is appended to $GH_LOG so a
 # test can assert the planner issues no mutation and how many pages it asked for. A fixture may
@@ -497,7 +497,7 @@ EOF
     [ "$status" -ne 0 ]
 }
 
-# dotfiles-dev#559 follow-up: `gh pr list` raising CalledProcessError used to propagate
+# dotfiles-linux-dev#559 follow-up: `gh pr list` raising CalledProcessError used to propagate
 # uncaught -- the guard's own fail-closed contract above still held (empty/unparseable
 # stdout, non-zero exit), but an agent running this planner DIRECTLY during s:dev-loop step
 # 4b saw a raw Python stack trace instead of a one-line, actionable message. This asserts the
@@ -520,7 +520,7 @@ EOF
     [ "$(jq -r '.excluded | length' <<<"$output")" -eq 0 ]
 }
 
-# --- dotfiles-dev#537: the request shape itself, not just the parse -----------------
+# --- dotfiles-linux-dev#537: the request shape itself, not just the parse -----------------
 
 @test "PR_SELECTION bounds every connection — GitHub rejects an unbounded commits one (#537, #600)" {
     # THE test that would have caught #537: every test above stubs `gh`, so it passes
@@ -545,7 +545,7 @@ assert 'commits(last:1)' in PR_SELECTION
     [ "$status" -eq 0 ]
 }
 
-# --- dotfiles-dev#600: the board is read in small pages, whole or not at all --------
+# --- dotfiles-linux-dev#600: the board is read in small pages, whole or not at all --------
 
 # board_of N — a flat fixture of N open PRs, each unreviewed at a head an hour old, so every
 # one of them is dispatchable and a page dropped on the way shows up as a missing number.

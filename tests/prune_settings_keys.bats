@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for prune_settings_keys() (dotfiles-dev#272) — the delete path for
+# Unit tests for prune_settings_keys() (dotfiles-linux-dev#272) — the delete path for
 # stale ~/.claude/settings.json keys that configure_settings()'s additive-only
 # merge (`jq '. * $base'`, in lib/settings.sh) can never remove on its own.
 #

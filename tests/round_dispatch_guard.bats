@@ -7,7 +7,7 @@
 # Every test writes a JSONL transcript, feeds the Stop payload that points at it, and asserts on
 # the exit status plus the wording.
 #
-# The behaviours that matter (dotfiles-dev#433):
+# The behaviours that matter (dotfiles-linux-dev#433):
 #   - a round with dispatchable candidates and no agent started must BLOCK, naming surfaces;
 #   - an agent started after the last s:dev-loop call satisfies the round;
 #   - an empty `dispatchable` with reasons in `excluded` is the legitimate zero case — pass;

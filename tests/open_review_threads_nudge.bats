@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for ai_clients/claude/hooks/open_review_threads_nudge.sh (dotfiles-dev#397)
+# Unit tests for ai_clients/claude/hooks/open_review_threads_nudge.sh (dotfiles-linux-dev#397)
 #
 # Strategy:
 #   - The hook is a stdin->exit-code filter: it reads a Stop-hook JSON payload and exits 0
@@ -45,7 +45,7 @@ case "$1 $2" in
         esac
         shift
     done
-    # Keyed on the --json/--jq PROJECTION, never the number/URL (dotfiles-dev#409's lesson): the
+    # Keyed on the --json/--jq PROJECTION, never the number/URL (dotfiles-linux-dev#409's lesson): the
     # live re-check added for #423 asks `--json state --jq .state` for an explicit PR number,
     # which is a different call shape than the fast path's `--json number,state -q '...'` with no
     # number argument at all.
@@ -101,7 +101,7 @@ case "$1 $2" in
         esac
     done
     echo "$num" >>"$GRAPHQL_LOG"
-    # dotfiles-dev#491's fix issues a SECOND graphql query (adds `isRequired`) to split a
+    # dotfiles-linux-dev#491's fix issues a SECOND graphql query (adds `isRequired`) to split a
     # genuinely-running CheckRun from an unbounded-PENDING StatusContext, distinct from the
     # gate's own reviewThreads/running query -- route each to its own fixture file.
     if printf '%s' "$query" | grep -q isRequired; then
@@ -130,7 +130,7 @@ payload() {
 # write_transcript PATH ISSUE_NAME [RESULT_TEXT]
 # Writes a one-line JSONL transcript with a single dispatched Agent tool_use whose `name`
 # declares ISSUE_NAME (e.g. "issue-600-fix-thing"). With no third argument the dispatch has NO
-# tool_result yet -- "live" per inflight_dispatch_issues()'s own convention (dotfiles-dev#516).
+# tool_result yet -- "live" per inflight_dispatch_issues()'s own convention (dotfiles-linux-dev#516).
 # A third argument is written as the tool_result content instead (used to simulate a completed
 # or failed background dispatch, which must NOT count as delegated work in flight).
 write_transcript() {
@@ -179,7 +179,7 @@ replied_unresolved_fixture() {
     }}}}' >"$FIXTURE_DIR/$1.json"
 }
 
-# dotfiles-dev#490: gate_pr_thread_state retries until the body carries a non-null `comments` key
+# dotfiles-linux-dev#490: gate_pr_thread_state retries until the body carries a non-null `comments` key
 # (the COMMENT-channel read #490 added), fail-closed on an incomplete page -- every gate-query
 # fixture below must include `comments`, even empty, or the gate exhausts its retries and reports
 # GATE_STATUS=unreadable instead of clean/problems/running.
@@ -209,7 +209,7 @@ problem_fixture() {
 
 # running_fixture NUM STATE
 # Gate-side fixture: zero threads, one StatusContext from a roster-listed creator, so
-# gate_pr_thread_state reports GATE_STATUS=running -- the undifferentiated verdict dotfiles-dev#491
+# gate_pr_thread_state reports GATE_STATUS=running -- the undifferentiated verdict dotfiles-linux-dev#491
 # is about. The caller must also write a `.review-bots.yaml` roster naming "coderabbitai[bot]",
 # since the gate's running filter only counts a StatusContext whose creator is on the roster.
 running_fixture() {
@@ -231,7 +231,7 @@ YAML
 }
 
 # checks_fixture NUM SHAPE
-# The SECOND query's fixture (dotfiles-dev#491's own `isRequired`-bearing read). Every node
+# The SECOND query's fixture (dotfiles-linux-dev#491's own `isRequired`-bearing read). Every node
 # carries the same roster-scoping fields the gate itself uses (`creator.login` /
 # `checkSuite.app.slug` = "coderabbitai", matching `roster_fixture`'s "coderabbitai[bot]") and
 # `totalCount` equal to the single returned node -- CodeRabbit review on PR #498 flagged both the
@@ -278,7 +278,7 @@ checks_fixture() {
     esac >"$FIXTURE_DIR/$1.checks.json"
 }
 
-# --- dotfiles-dev#491: split a running CheckRun from an unbounded-PENDING StatusContext ----------
+# --- dotfiles-linux-dev#491: split a running CheckRun from an unbounded-PENDING StatusContext ----------
 
 @test "a genuinely in-progress CheckRun still blocks, with the running message" {
     roster_fixture
@@ -394,7 +394,7 @@ checks_fixture() {
     [[ "$output" != *"repo-wide"* ]]
 }
 
-# --- dotfiles-dev#516: delegated to a live, same-session agent covering the thread's path --------
+# --- dotfiles-linux-dev#516: delegated to a live, same-session agent covering the thread's path --------
 
 @test "delegated: a replied-but-unresolved thread covered by a live same-session agent does not block" {
     export PR_VIEW_NUMBER=70
@@ -619,7 +619,7 @@ checks_fixture() {
     [ "$status" -eq 0 ]
 }
 
-# --- dotfiles-dev#423: a cached verdict must not outlive the PR's own merge ---------------------
+# --- dotfiles-linux-dev#423: a cached verdict must not outlive the PR's own merge ---------------------
 
 @test "a cached non-clean verdict for a PR that has since merged is dropped, not replayed" {
     export PR_LIST=$'10\n20'
@@ -663,7 +663,7 @@ checks_fixture() {
     [ "$status" -ne 0 ]
 }
 
-# --- dotfiles-dev#504 (second half): bound the cache's growth on each run -----------------------
+# --- dotfiles-linux-dev#504 (second half): bound the cache's growth on each run -----------------------
 
 @test "a cache entry older than the prune multiplier is deleted on the next run" {
     unset PR_VIEW_NUMBER
@@ -730,7 +730,7 @@ checks_fixture() {
     [ -f "$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-mine-o_r" ]
 }
 
-# --- dotfiles-dev#514 review: a knob that is not a positive integer must not disable the cache ---
+# --- dotfiles-linux-dev#514 review: a knob that is not a positive integer must not disable the cache ---
 
 @test "a prune multiplier of 0 falls back to the default instead of deleting fresh entries" {
     unset PR_VIEW_NUMBER

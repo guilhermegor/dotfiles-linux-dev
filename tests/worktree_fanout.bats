@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit tests for ai_clients/claude/hooks/lib/worktree_fanout.sh's fanout_worktrees() —
-# specifically the "pushed with NO PR" predicate (dotfiles-dev#457). "Pushed" must mean
+# specifically the "pushed with NO PR" predicate (dotfiles-linux-dev#457). "Pushed" must mean
 # refs/remotes/origin/<branch> exists, never merely that `@{upstream}` resolves: a worktree
 # created with `git worktree add -b <name> origin/master` tracks origin/master as its upstream
 # from birth, with no remote ref of its own, and that used to read as "pushed".
@@ -39,7 +39,7 @@ setup() {
     git -C "$wtB" push --quiet -u origin branchB
 
     # branchC: created from a LOCAL branch (never remote-tracking), so it has NO
-    # `@{upstream}` at all — the dotfiles-dev#571 gap. One real commit, never pushed
+    # `@{upstream}` at all — the dotfiles-linux-dev#571 gap. One real commit, never pushed
     # anywhere.
     wtC="$BATS_TEST_TMPDIR/wtC"
     git -C "$work" worktree add --quiet -b branchC "$wtC" master
@@ -65,7 +65,7 @@ setup() {
     git -C "$work" worktree add --quiet -b branchE "$wtE" master
 
     # branchF / branchG: TWO commits each, no upstream, then squash-merged into master as ONE
-    # commit — the dotfiles-dev#606 shape. The squashed commit's patch-id equals neither branch
+    # commit — the dotfiles-linux-dev#606 shape. The squashed commit's patch-id equals neither branch
     # commit, so `git cherry` marks both "+" and only the forge can say the work shipped.
     wtF="$BATS_TEST_TMPDIR/wtF"
     wtG="$BATS_TEST_TMPDIR/wtG"

@@ -83,7 +83,7 @@ check_no_broad_bash() {
 }
 
 # Check 4: git merge-base examples must compare against the remote ref, never a bare
-# base-branch placeholder (dotfiles-dev#229). A stale local tracking branch silently
+# base-branch placeholder (dotfiles-linux-dev#229). A stale local tracking branch silently
 # mis-scopes the diff the same way an implicit HEAD does — measured as a 16-tag gap
 # between `git describe` (implicit HEAD) and `git describe origin/main`. Narrowly scoped
 # to this one known-fixed anti-pattern (not a general "every git command needs a ref"
@@ -95,7 +95,7 @@ check_merge_base_qualifies_ref() {
     if hits="$(grep -rlE 'git merge-base ["'"'"'\`]?<base' "$CLAUDE_DIR" 2>/dev/null)"; then
         while IFS= read -r f; do
             [ -n "$f" ] || continue
-            print_status "error" "$(basename "$f"): git merge-base compares against a bare base, not origin/<base> (dotfiles-dev#229)"
+            print_status "error" "$(basename "$f"): git merge-base compares against a bare base, not origin/<base> (dotfiles-linux-dev#229)"
             FAILURES=$((FAILURES + 1))
         done <<< "$hits"
     fi

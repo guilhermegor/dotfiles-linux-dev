@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Invariant for every interactive prompt in the repo (dotfiles-dev#337): no `read` may use
+# Invariant for every interactive prompt in the repo (dotfiles-linux-dev#337): no `read` may use
 # `-n <count>` to grab a fixed number of characters from an interactive prompt.
 #
 # Why: `read -p "..." -n 1` puts the tty in non-canonical mode and returns after ONE character,

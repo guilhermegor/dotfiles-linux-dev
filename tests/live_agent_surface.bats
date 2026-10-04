@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
 #
 # Unit tests for gate_live_agent_surface / live_agent_classify_files
-# (ai_clients/claude/hooks/lib/free_surface.sh, dotfiles-dev#501).
+# (ai_clients/claude/hooks/lib/free_surface.sh, dotfiles-linux-dev#501).
 #
-# dotfiles-dev#501: three places defined "dispatch collision" and disagreed — #433 says
+# dotfiles-linux-dev#501: three places defined "dispatch collision" and disagreed — #433 says
 # agent-vs-agent, s:dev-loop step 6 and free_surface.sh's ONLY gate (gate_free_surface) said
 # agent-vs-open-PR. This file exercises the NEW, distinct gate that answers the agent-vs-agent
 # question with real git worktrees (never gh-stubbed — this gate is local-only), plus a
@@ -101,7 +101,7 @@ teardown() {
 	[[ "$output" == "free" ]]
 }
 
-# --- an open-PR-only overlap must NOT show up here — that's the whole bug (dotfiles-dev#501) --
+# --- an open-PR-only overlap must NOT show up here — that's the whole bug (dotfiles-linux-dev#501) --
 
 @test "gate_live_agent_surface never calls gh — a frozen open-PR branch is invisible to it" {
 	WT="$TEST_TMP/wt-frozen"
@@ -127,7 +127,7 @@ teardown() {
 	[[ "$LIVE_AGENT_PATHS" == *"frozen.txt"* ]]
 }
 
-# --- fail closed, never free, when liveness cannot be determined (dotfiles-dev#501) ----------
+# --- fail closed, never free, when liveness cannot be determined (dotfiles-linux-dev#501) ----------
 
 @test "not a git repo at all: fails closed to unknown, never free" {
 	local rc=0
@@ -230,7 +230,7 @@ STUB
 	[[ "$LIVE_AGENT_PATHS" == *"develop_held.txt"* ]]
 }
 
-# --- the pin: dev-loop.md's stated rule must name THIS implementation (dotfiles-dev#501) -----
+# --- the pin: dev-loop.md's stated rule must name THIS implementation (dotfiles-linux-dev#501) -----
 # The issue's own words: "One test that fails if the three ever disagree again — ideally
 # asserting the skill's stated rule against the gate's actual behaviour, so prose drift is
 # caught mechanically rather than by a reader noticing." This is that test: it greps the skill
@@ -249,19 +249,19 @@ STUB
 	done
 }
 
-@test "dev-loop.md step 6 no longer states the open-PR-is-the-collision rule (dotfiles-dev#501)" {
+@test "dev-loop.md step 6 no longer states the open-PR-is-the-collision rule (dotfiles-linux-dev#501)" {
 	SKILL="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/skills/dev-loop.md"
 	run grep -F "Compute the free surface: the exact files the open PRs touch, versus the exact files each open" "$SKILL"
 	[ "$status" -ne 0 ]
 }
 
-@test "dev-loop.md step 6 still states the agent-vs-agent collision rule from dotfiles-dev#433" {
+@test "dev-loop.md step 6 still states the agent-vs-agent collision rule from dotfiles-linux-dev#433" {
 	SKILL="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/skills/dev-loop.md"
 	run grep -F "Collision is between LIVE AGENTS" "$SKILL"
 	[ "$status" -eq 0 ]
 }
 
-# --- dotfiles-dev#523 review (codex fallback rung): three fail-open / over-broad paths --------
+# --- dotfiles-linux-dev#523 review (codex fallback rung): three fail-open / over-broad paths --------
 
 @test "called FROM a linked worktree, the main checkout's dirty files still hold" {
 	WT="$TEST_TMP/wt-caller"
@@ -317,7 +317,7 @@ STUB
 	[[ "$LIVE_AGENT_PATHS" == *"nohead_work.txt"* ]]
 }
 
-# --- dotfiles-dev#523 review, second round: three more fail-open paths ------------------------
+# --- dotfiles-linux-dev#523 review, second round: three more fail-open paths ------------------------
 
 @test "a DETACHED sibling worktree still holds its dirty files" {
 	WT="$TEST_TMP/wt-detached"
@@ -368,7 +368,7 @@ STUB
 	[[ "$output" == "held:café.txt" ]]
 }
 
-# --- dotfiles-dev#551: a dead worktree is not a live writer -----------------------------------
+# --- dotfiles-linux-dev#551: a dead worktree is not a live writer -----------------------------------
 #
 # The walk above has no pruning, so a long-lived checkout saturates: measured at 61 worktrees,
 # 56 on branches the forge reports MERGED, leaving ~0 genuine live writers while every candidate
@@ -516,11 +516,11 @@ _pushed_worktree() {
 	[[ "$LIVE_AGENT_PATHS" == *"reused_work.txt"* ]]
 }
 
-# --- dotfiles-dev#572: HEAD an ANCESTOR of the dead PR's head, not only an exact match --------
+# --- dotfiles-linux-dev#572: HEAD an ANCESTOR of the dead PR's head, not only an exact match --------
 #
 # GitHub's "Update branch" button merges the default branch into an open PR; once that PR is
 # later merged/closed, a worktree that never re-fetched has a HEAD strictly BEHIND the real dead
-# head, never equal to it. 28 of 62 dead worktrees measured needed this (dotfiles-dev#572).
+# head, never equal to it. 28 of 62 dead worktrees measured needed this (dotfiles-linux-dev#572).
 
 @test "551: HEAD an ancestor of the dead PR's head is dead too, not just an exact match" {
 	_stub_gh
@@ -684,7 +684,7 @@ _pushed_worktree() {
 	run _dead_branch_reaches "$index" "feature/reaches" "$head" "$WT"
 	[ "$status" -eq 0 ]
 
-	# ancestor match (dotfiles-dev#572): the index carries a LATER commit for the same branch,
+	# ancestor match (dotfiles-linux-dev#572): the index carries a LATER commit for the same branch,
 	# and HEAD is reachable from it.
 	index="$(printf '%s\t%s' "$new_oid" "feature/reaches")"
 	run _dead_branch_reaches "$index" "feature/reaches" "$head" "$WT"

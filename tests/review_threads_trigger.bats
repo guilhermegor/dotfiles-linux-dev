@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Contract tests for .github/workflows/review_threads.yml's "Check review-thread
-# state" step (dotfiles-dev#431). CodeRabbit posts no pull_request_review and no
+# state" step (dotfiles-linux-dev#431). CodeRabbit posts no pull_request_review and no
 # pull_request_review_comment when it finds nothing, so those two triggers alone
 # never fire for a clean review and the required check never posts (measured on
 # #412: `pulls/412/reviews` length 0, mergeStateStatus BLOCKED forever). The fix
@@ -11,13 +11,13 @@
 # bash decides correctly for every event shape it can now receive.
 #
 # The step's script lives inline in the workflow (`run: |`), not in a sourced
-# lib, per dotfiles-dev#431's file scope (workflow + test only — the shared
+# lib, per dotfiles-linux-dev#431's file scope (workflow + test only — the shared
 # ai_clients/claude/hooks/lib/review_thread_gate.sh gate stays untouched). It is
 # extracted here with PyYAML instead of parsed with a fragile sed/awk slice, so
 # a reformat of the surrounding YAML can't silently desync the test from the
 # step it's meant to cover.
 #
-# dotfiles-dev#490: gate_pr_thread_state now retries until the GraphQL body carries a non-null
+# dotfiles-linux-dev#490: gate_pr_thread_state now retries until the GraphQL body carries a non-null
 # `comments` key (the COMMENT-channel read added for #490), fail-closed on an incomplete page.
 # Every THREADS_JSON fixture below must include `"comments":{"totalCount":0,"nodes":[]}` (or a
 # populated one) or the gate exhausts its 3 retries and reports GATE_STATUS=unreadable instead of
@@ -50,7 +50,7 @@ teardown() {
 # then runs the extracted script from the repo root so its relative `source`
 # resolves.
 # The step publishes its verdict as a check-run POST instead of encoding it in its own exit
-# status (dotfiles-dev#481) — Actions attaches THIS job's check-run to the default branch for
+# status (dotfiles-linux-dev#481) — Actions attaches THIS job's check-run to the default branch for
 # an issue_comment event, so the exit status never reaches the PR. The stub therefore captures
 # the POSTed body, and the assertions below read the published `conclusion`. Exit status alone
 # would now pass for both verdicts, which is exactly the false pass these tests exist to catch.
@@ -91,7 +91,7 @@ run_step() {
         '
 }
 
-# --- the currently-unrepresented case (dotfiles-dev#431's own test ask) -----
+# --- the currently-unrepresented case (dotfiles-linux-dev#431's own test ask) -----
 # zero submitted reviews, zero review comments, and this run was NOT fired by
 # CodeRabbit's completion marker: must reach a DECIDED (failing) state, never
 # an absent one — the gate step must itself exit non-zero with a diagnostic.
@@ -196,7 +196,7 @@ run_step() {
 }
 
 
-# --- dotfiles-dev#451: the reviewer ladder's fallback review is a report ----
+# --- dotfiles-linux-dev#451: the reviewer ladder's fallback review is a report ----
 # The ladder (#444/#446/#449) posts its fallback review as an issue_comment
 # from the operator's own account — never a review object — so review_count
 # stays 0 and only the marker + author_association can tell "reviewed via
@@ -313,7 +313,7 @@ $LADDER_BODY"
     [ "$(published_conclusion)" = "failure" ]
 }
 
-# --- dotfiles-dev#502: the gate's scope filter must never diverge from the ---
+# --- dotfiles-linux-dev#502: the gate's scope filter must never diverge from the ---
 # --- trigger's, or a PR becomes REQUIRED to pass a check the trigger never --
 # --- asks a reviewer to produce (measured on #493: asks=0 for 8h05m). ------
 #
