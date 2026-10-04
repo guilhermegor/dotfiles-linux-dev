@@ -5,7 +5,7 @@
 # Extracted so both guards share ONE implementation of command matching, body extraction, and
 # repo-target resolution instead of each carrying its own copy that drifts the way
 # commit_command_matcher.sh's header already documents for the three commit guards
-# (dotfiles-dev#324) — and the way this exact file drifted from its own regex-based predecessor
+# (dotfiles-linux-dev#324) — and the way this exact file drifted from its own regex-based predecessor
 # (CodeRabbit review on PR #371, dotfiles-dev): a regex anchored to the START of the command
 # string, matched against raw un-tokenized text, missed every invocation chained after `;`,
 # `&&`, `||`, `|`, `&`, or a newline, and could be fooled by the SAME flag text appearing inside

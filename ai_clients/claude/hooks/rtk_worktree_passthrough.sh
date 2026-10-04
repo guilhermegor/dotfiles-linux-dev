@@ -1,6 +1,6 @@
 #!/bin/bash
 # PreToolUse (Bash matcher) hook: thin pre-filter in front of `rtk hook claude`, so a
-# worktree-isolated agent can still run git (dotfiles-dev#417).
+# worktree-isolated agent can still run git (dotfiles-linux-dev#417).
 #
 # The deadlock: `rtk hook claude` rewrites a bare `git status` into `rtk git status` at
 # execution time (RTK.md documents this as intentional — token savings). The harness's own
@@ -42,7 +42,7 @@ if [[ "$cwd" =~ /\.claude/worktrees/agent-[^/]+(/|$) ]]; then
 		if [ "$stripped" != "$cmd" ]; then
 			# Was typed/rewritten as an rtk form — hand back the stripped, plain form.
 			jq -nc --arg cmd "$stripped" \
-				'{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecisionReason:"worktree-isolated agent: pass git through unrewritten (dotfiles-dev#417)",updatedInput:{command:$cmd}}}'
+				'{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecisionReason:"worktree-isolated agent: pass git through unrewritten (dotfiles-linux-dev#417)",updatedInput:{command:$cmd}}}'
 		fi
 		# Already bare git: silent allow, nothing to rewrite.
 		exit 0

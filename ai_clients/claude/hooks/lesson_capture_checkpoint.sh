@@ -46,7 +46,7 @@ business rule)?
   this repo's git-ignored mirror(s) under .specs/_lessons/ — run
   `make lessons_mirror` (inside dotfiles-dev) or the deployed generator
   (`bash ~/.claude/hooks/lib/generate_lesson_mirrors.sh`) elsewhere. The mirror
-  is GENERATED, never hand-appended (dotfiles-dev#386) — do not hand-edit
+  is GENERATED, never hand-appended (dotfiles-linux-dev#386) — do not hand-edit
   .specs/_lessons/*.md.
 - If NO: say so in one line and continue. Do not skip the decision silently.
 EOF

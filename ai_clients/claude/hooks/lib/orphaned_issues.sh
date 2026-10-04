@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared orphaned-issues gate (dotfiles-dev#418): ONE implementation of "which open issues
+# Shared orphaned-issues gate (dotfiles-linux-dev#418): ONE implementation of "which open issues
 # already shipped in a merged PR that forgot to declare it", mirroring free_surface.sh and
 # roadmap_unblock.sh — skill-invoked shared logic that is not itself a hook, generic across
 # repos (owner/repo arguments, nothing hardcoded), sourced by s:dev-loop step 2 (SWEEP) instead
@@ -9,14 +9,14 @@
 # asks "given an issue about to be dispatched, does some PR already claim it?" (used to decide
 # NOT to dispatch). This gate asks the other direction, proactively, over every open issue: "is
 # there a merged PR whose title/branch/body already mentions this issue, without declaring it
-# via closingIssuesReferences?" — the fully-decidable half of dotfiles-dev#418's scope (a
+# via closingIssuesReferences?" — the fully-decidable half of dotfiles-linux-dev#418's scope (a
 # textual PR-mention with a missing link). The complementary signal named in #418 (the issue's
 # declared file surface existing on the default branch, with no PR mention at all) is already
 # s:intake-shipped's job (shipped_check.sh) once a specific issue is in hand; re-deriving that
 # content-probe here for every open issue on every round would duplicate it, so this gate stays
 # scoped to the PR-mention signal and s:dev-loop calls both.
 #
-# Measured (dotfiles-dev#418): blueprintx#381's own PR (#467) had "381" in its branch name
+# Measured (dotfiles-linux-dev#418): blueprintx#381's own PR (#467) had "381" in its branch name
 # (`refactor/migrations-folder-alembic-parity-373-381`) and in its title, and still only closed
 # 373 -- the orphan survived a human reading the title. blueprintx#355 shipped via PR #509 with
 # closingIssuesReferences = []. Never trust the branch-name `-<issue>` suffix heuristic alone
@@ -36,7 +36,7 @@
 #     (see #418's own scope: report, never auto-close), so a caller that treats a failure as "no
 #     candidates" would silently stop re-offering issues that already merged.
 #
-#   gate_orphaned_surface OWNER REPO  (dotfiles-dev#419)
+#   gate_orphaned_surface OWNER REPO  (dotfiles-linux-dev#419)
 #     The complementary signal named-but-deferred in the #418 header above: an issue with
 #     NO PR mention at all (blueprintx#438's shape -- both seams already existed on `main`,
 #     and nobody ever opened a PR that named the issue). Reuses free_surface.sh's
@@ -156,7 +156,7 @@ gate_orphaned_issues() {
 	return 0
 }
 
-# --- gate_orphaned_surface: the zero-PR-mention direction (dotfiles-dev#419) ---------------------
+# --- gate_orphaned_surface: the zero-PR-mention direction (dotfiles-linux-dev#419) ---------------------
 
 # _orphan_surface_lines BODY
 # Extracts the fenced ` ```surface ` block's non-empty lines from an issue body -- the exact

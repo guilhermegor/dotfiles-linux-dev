@@ -18,7 +18,7 @@ any code this skill produces or edits.
 ## The rule
 
 **There is no local proxy for "did this ship?"** Every cheap substitute answers a
-different question and each produces a plausible, wrong number (dotfiles-dev#427,
+different question and each produces a plausible, wrong number (dotfiles-linux-dev#427,
 parent #422, both measured on blueprintx 2026-09-20, hours apart):
 
 | substitute | why it lies |
@@ -45,7 +45,7 @@ third slice not been checked.
 
 Every command below names its target explicitly — absolute `cd <worktree-path> &&`
 for the directory, `origin/master` (or the repo's actual default branch) for the
-ref, never a bare local branch or an implicit `HEAD` (dotfiles-dev#229).
+ref, never a bare local branch or an implicit `HEAD` (dotfiles-linux-dev#229).
 
 1. **Extract deliverables from the issue body**, not just its `File surface`
    block — that block is a surface, not the full claim. Read the body for

@@ -2,7 +2,7 @@
 # PostToolUse (Bash matcher) hook: after a `gh pr create` that succeeded, assign the PR to its
 # author (`@me`) so every PR opened in a session is findable via `gh pr list --assignee @me` and
 # by assignee-driven board automation, instead of depending on whoever composed the command that
-# time to remember `--assignee` (dotfiles-dev#153).
+# time to remember `--assignee` (dotfiles-linux-dev#153).
 #
 # Match the VERB, then resolve the PR via gh — never scrape a flag out of the raw command string
 # (hook-command-string-scraping-fragile, same rule kanban_lifecycle.sh already documents). The one

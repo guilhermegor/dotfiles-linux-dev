@@ -65,7 +65,7 @@ count_pt_words() {
 	# legitimately quote Portuguese source code, a commit subject, a UI string, or a Gherkin
 	# keyword without being WRITTEN in it — the quoted literal is data the surrounding prose
 	# describes, not prose itself, and it must stay verbatim (and greppable) rather than being
-	# translated away. Measured (dotfiles-dev#187): a body that was entirely English prose, but
+	# translated away. Measured (dotfiles-linux-dev#187): a body that was entirely English prose, but
 	# quoted `Quando`/`Então`-style keywords in backticks, still scored above MIN_HITS and was
 	# blocked — the fenced-block strip alone does not cover an inline span.
 	local text="$1"

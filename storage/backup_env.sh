@@ -8,7 +8,7 @@
 # a symmetric passphrase (gpg --symmetric --cipher-algo AES256), prompted
 # twice via zenity's hidden-entry dialog and fed to gpg over stdin
 # (--passphrase-fd 0) so it never appears in argv / `ps` / shell history
-# (dotfiles-dev#367).
+# (dotfiles-linux-dev#367).
 
 GITHUB_DIR="$HOME/github"
 RCLONE_CONF="$HOME/.config/rclone/rclone.conf"

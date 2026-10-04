@@ -1,5 +1,5 @@
 #!/bin/bash
-# Reviewer fallback ladder (dotfiles-dev#444): s:dev-loop step 4b has exactly one
+# Reviewer fallback ladder (dotfiles-linux-dev#444): s:dev-loop step 4b has exactly one
 # reviewer and stalls whenever its window is closed (measured on blueprintx
 # 2026-09-21: 44 of 56 open PRs never reviewed while the primary reviewer's slot
 # was rate-limited most of the day). This lib resolves the two fallback rungs —
@@ -264,7 +264,7 @@ ladder_poster_login() {
 # review (CWE-345) — that check is unchanged by this function; freshness is an
 # independent AND clause next to it.
 #
-# ⚠️ dotfiles-dev#555: a marker predating the head reviewed a commit the head
+# ⚠️ dotfiles-linux-dev#555: a marker predating the head reviewed a commit the head
 # has since moved past and must NOT grant credit for the commit that replaced
 # it — measured on #546, a marker 45 minutes older than the head still read as
 # "already covered" and the ladder refused the fresh review that would have
@@ -274,7 +274,7 @@ ladder_poster_login() {
 # never silently trusts a stale marker forever; worst case is one extra
 # review, never a permanent skip.
 #
-# ⚠️ dotfiles-dev#564: HEAD_DATE alone is not enough — it is the commit's own
+# ⚠️ dotfiles-linux-dev#564: HEAD_DATE alone is not enough — it is the commit's own
 # `committer.date`, which whoever pushes controls, so a backdated push can
 # make a NEW head look OLDER than an EXISTING marker and inherit credit for
 # code that marker never reviewed (CWE-345's narrower residual left by #555).

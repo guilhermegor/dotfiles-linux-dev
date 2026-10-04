@@ -35,7 +35,7 @@ must). Work every line of all three.
 - **`[lessons] '<file>' is not in the <store> README index`** — a lesson file exists but is
   unindexed = a lost lesson. Add its one-line index entry to that store's `README.md`.
 - **`[lessons] '<file>' … not in .specs/_lessons/<mirror>.md`** — the mirror is GENERATED, never
-  hand-appended (dotfiles-dev#386): run `make lessons_mirror` (inside dotfiles-dev) or
+  hand-appended (dotfiles-linux-dev#386): run `make lessons_mirror` (inside dotfiles-dev) or
   `bash ~/.claude/hooks/lib/generate_lesson_mirrors.sh` (any other repo), then re-run the audit.
 - **`[lessons] '<file>' has no **Tier:** line`** — add a `- **Tier:**` line. Tier is an **open
   field**: pick the best fit (`python-common`, `language-common`, `language-specific (<lang>)`, or a

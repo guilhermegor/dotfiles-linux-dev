@@ -1,5 +1,5 @@
 #!/bin/bash
-# Kanban reconcile — closing direction + No-Status placement (dotfiles-dev#556).
+# Kanban reconcile — closing direction + No-Status placement (dotfiles-linux-dev#556).
 #
 # kanban_reconcile.sh's reconcile_kanban() only moves a card FORWARD to "In review" for an issue
 # an open PR names in closingIssuesReferences. As a side effect it already covers a No-Status
@@ -11,10 +11,10 @@
 #      see issue #556's own body.
 #   2. A card with NO STATUS AT ALL and no open closing PR sits in "No Status" forever, because
 #      the "Auto-add to project" workflow drops new issues there with nothing to advance them
-#      (dotfiles-dev#556's scope extension — #567, #571, #577, #579 measured stuck there).
+#      (dotfiles-linux-dev#556's scope extension — #567, #571, #577, #579 measured stuck there).
 #
 # Kept in its own file/function rather than folded into kanban_reconcile.sh's reconcile_kanban():
-# that file is being edited concurrently for board-gate/throttle-fallback work (dotfiles-dev#567)
+# that file is being edited concurrently for board-gate/throttle-fallback work (dotfiles-linux-dev#567)
 # — landing here as its own small commit keeps that merge trivial. This file SOURCES
 # kanban_reconcile.sh's already-shared helpers (board_config, move_card, _kr_status_names)
 # instead of redefining them — see subagent_stop_sweep.sh's source order, which sources

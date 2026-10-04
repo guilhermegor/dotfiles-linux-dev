@@ -68,7 +68,7 @@ mandatory, checked in order: **collision**, then **file count**.
 ### 4a. Collision is per FILE, never per directory
 
 🔴 Partition by exact file path. Two issues in the same directory do not collide; two issues
-touching the same file always do. Measured (dotfiles-dev#194): a per-directory calculation flagged
+touching the same file always do. Measured (dotfiles-linux-dev#194): a per-directory calculation flagged
 **9 of 11** candidate issues as colliding; redone per exact file, only **6 nominal files of 43**
 were contended — most of the batch was free and the coarse calculation would have discarded it.
 
@@ -168,7 +168,7 @@ before it goes out, so the subagent that picks it up already knows what "done" t
 
 ## 5a. Size the spec, then write it — Specify and Execute are never skipped
 
-This is the spec loop (dotfiles-dev#306), folded in here rather than living as its own skill —
+This is the spec loop (dotfiles-linux-dev#306), folded in here rather than living as its own skill —
 `s:work-breakdown` already owns decomposition, and a second skill covering the same ground drifts
 without ever throwing an error (measured in #272/#293). Every feature gets exactly one `spec.md`.
 Design and Tasks scale with size; Execute is `s:dev-loop`'s existing job (step 6) and needs no new
@@ -237,7 +237,7 @@ start dispatching subagents from inside this skill.
 
 - Do not reimplement `s:problem-framing`, `/issue`, the test skills, `s:dev-loop`, or
   `s:capturing-lessons` — call them.
-- Do not partition by directory. Only exact file paths prove non-collision (dotfiles-dev#194).
+- Do not partition by directory. Only exact file paths prove non-collision (dotfiles-linux-dev#194).
 - Do not treat wiring files as an ordinary collision — they serialize a whole batch if missed.
 - Do not stop at collision-free. A collision-free batch can still fail the reviewer's file-count
   ceiling outright; check both.

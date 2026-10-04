@@ -2,7 +2,7 @@
 # Stop hook: refuse to end a dev-loop round that had assignable open PRs and started no
 # review agent — the deterministic half of s:dev-loop step 4b (REVIEW FAN-OUT), sibling of
 # uncommitted_worktree_guard.sh, dispatch_free_surface_guard.sh and round_dispatch_guard.sh
-# (dotfiles-dev#480).
+# (dotfiles-linux-dev#480).
 #
 # THE MEASUREMENT THIS FILE REMOVES. Step 4b's fan-out was entirely prose, and the prose was
 # read into the opposite of its meaning. reviewer_ladder.sh states "one PR per invocation
@@ -83,7 +83,7 @@ PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-90}"
 # Pure data: did this session's transcript ever run s:dev-loop? MIRRORS
 # dispatch_free_surface_guard.sh's own function of the same name rather than sharing it —
 # #405 holds that file, and a second writer on it is a guaranteed conflict. Three shapes
-# count, all measured off real transcripts (dotfiles-dev#404); a session that never ran the
+# count, all measured off real transcripts (dotfiles-linux-dev#404); a session that never ran the
 # loop in ANY of them is not this hook's concern and must never be blocked:
 #   1. a Skill tool_use, bare ("dev-loop");
 #   2. a Skill tool_use, fully-qualified ("s:dev-loop") — some invocation paths serialise the
@@ -298,7 +298,7 @@ block_unreadable() {
 		echo "s:dev-loop step 4b (REVIEW FAN-OUT) cannot tell right now which open PRs need a"
 		echo "reviewer. Re-run the planner before reporting the board reviewed — a planner that"
 		echo "fails and is then read as routine silence is the defect this hook exists to catch"
-		echo "(dotfiles-dev#480, same shape as #396 and #433)."
+		echo "(dotfiles-linux-dev#480, same shape as #396 and #433)."
 	} >&2
 	exit 2
 }
@@ -380,7 +380,7 @@ main() {
 
 	# The planner runs in the repo the payload names, never this hook's ambient cwd: `gh pr
 	# list` resolves its repo from the working directory, and the harness can reset cwd to a
-	# DIFFERENT repository between calls (dotfiles-dev#229) — a plan computed against the
+	# DIFFERENT repository between calls (dotfiles-linux-dev#229) — a plan computed against the
 	# wrong repo is worse than no plan, because it reads as an answer.
 	plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)"
 

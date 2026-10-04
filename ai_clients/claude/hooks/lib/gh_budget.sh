@@ -1,6 +1,6 @@
 #!/bin/bash
 # Classifies a dev-loop round's read failure or CodeRabbit roster notice into the ONE limit it
-# actually hit (dotfiles-dev#407). Two distinct quotas share the substring "rate limit" and mean
+# actually hit (dotfiles-linux-dev#407). Two distinct quotas share the substring "rate limit" and mean
 # OPPOSITE things:
 #
 #   1. the GITHUB API/GraphQL budget (a failed `gh`/REST/GraphQL call, HTTP 403/429) — the board
@@ -44,7 +44,7 @@ gh_budget_classify() {
 	# substring "rate limit" that CodeRabbit's unrelated review-slot notice uses below.
 	#
 	# "api rate limit"*"exceeded" (two anchors, not one fixed phrase) rather than the old fixed
-	# "api rate limit exceeded" substring: measured 2026-09-26 (dotfiles-dev#533), GitHub's OWN
+	# "api rate limit exceeded" substring: measured 2026-09-26 (dotfiles-linux-dev#533), GitHub's OWN
 	# secondary limiter returned "API rate limit ALREADY exceeded" — the inserted word broke the
 	# fixed-phrase match, fell through to the generic "rate limit" check below, and misclassified
 	# a real ~3-hour GraphQL outage as a CodeRabbit review-slot busy-signal. `/rate_limit` read
@@ -81,12 +81,12 @@ gh_budget_classify() {
 
 # gh_budget_is_terminal
 # True (0) only right after gh_budget_classify found the GITHUB API budget itself exhausted —
-# the signal that a round must stop and report UNKNOWN rather than retry (dotfiles-dev#407).
+# the signal that a round must stop and report UNKNOWN rather than retry (dotfiles-linux-dev#407).
 gh_budget_is_terminal() {
 	[[ "${GH_BUDGET_CLASS:-}" == "github-api-limit" ]]
 }
 
-# --- 403 latch (dotfiles-dev#445) -----------------------------------------------------------------
+# --- 403 latch (dotfiles-linux-dev#445) -----------------------------------------------------------------
 # A hook-side twin of the agent-side lesson "the completion sweep retries a dead API until the
 # agent's budget is spent": a 403 is terminal until GitHub's own reset, so re-probing every time a
 # SubagentStop fires (measured: more than once per finished agent, unbounded with N agents) is pure
@@ -96,7 +96,7 @@ gh_budget_is_terminal() {
 # gh_budget_latch_default_dir
 # A private base directory for the default latch path — never bare /tmp, which is world-writable
 # and lets another local user on a shared host disable the sweep indefinitely by pre-creating the
-# predictable filename with a far-future timestamp (dotfiles-dev#511 review). Prefers
+# predictable filename with a far-future timestamp (dotfiles-linux-dev#511 review). Prefers
 # $XDG_RUNTIME_DIR (already private, mode 0700, per the XDG spec — the check below only confirms
 # it EXISTS, since a spec-compliant runtime dir is never created on demand by this script). Falls
 # back to "$HOME/.cache" (created mode 0700 if missing). If even that mkdir fails (no $HOME, a
@@ -132,7 +132,7 @@ gh_budget_latch_path() {
 # skips that step.
 #
 # Writes to a TEMP file in the same directory, then `mv` over the real path — never `>` directly
-# on the marker (dotfiles-dev#511 review, CodeRabbit follow-up): a plain `>` truncates the file
+# on the marker (dotfiles-linux-dev#511 review, CodeRabbit follow-up): a plain `>` truncates the file
 # the instant it opens, before `printf` has written anything, so a concurrent
 # gh_budget_latch_active() read in that window sees an EMPTY marker and treats the budget as not
 # latched, triggering exactly the extra probe this file exists to avoid. `mv` on the same
@@ -143,7 +143,7 @@ gh_budget_latch_path() {
 #
 # Returns 0 on a confirmed write, 1 (with a message on stderr) if either the temp write or the
 # rename failed — e.g. the marker directory is owned by another user and not writable.
-# dotfiles-dev#511 review: the old version discarded this status entirely (`2>/dev/null` with
+# dotfiles-linux-dev#511 review: the old version discarded this status entirely (`2>/dev/null` with
 # nothing checking `$?`), so a failed write meant the sweep silently kept re-running the full
 # fan-out forever with no record of why the latch never took. Callers decide what to do with a
 # failure; this function's only job is to stop hiding it.
@@ -186,7 +186,7 @@ gh_budget_latch_active() {
 #   - primary exhaustion: `remaining` near zero on core or graphql — wait for the real `reset`.
 #   - a secondary/concurrency burst: `remaining` still high — the documented quota was never
 #     touched, and the right wait is seconds, not minutes.
-# Measured dotfiles-dev#445 follow-up, 2026-09-25: two real 403s on this repo, both with core
+# Measured dotfiles-linux-dev#445 follow-up, 2026-09-25: two real 403s on this repo, both with core
 # `remaining:5000/used:0` — a burst, not the documented quota, clearing in under a minute both
 # times. A 300s fixed latch was suppressing the sweep ~5 minutes over a ~40s condition.
 # Falls back to BURST_TTL (default 45s) on anything unreadable — an unreadable rate_limit read
@@ -214,7 +214,7 @@ gh_budget_reset_ttl() {
 # gh_budget_quota_exhausted [FLOOR]
 # True (0) when `gh api rate_limit` reports EITHER core or graphql `remaining` under FLOOR
 # (default 5) — the one place this file deliberately reads rate_limit to decide exhaustion
-# rather than only to size a TTL after a real call already failed (dotfiles-dev#511 review
+# rather than only to size a TTL after a real call already failed (dotfiles-linux-dev#511 review
 # finding): gh_budget_gate's REST-only probe passes cleanly while GraphQL alone is exhausted, so
 # every per-PR GraphQL call in the sweep's fan-out then fails one at a time with no latch ever
 # written — the exact repeated-fan-out #445 exists to stop.
@@ -238,7 +238,7 @@ gh_budget_quota_exhausted() {
 
 # gh_budget_retry_after_ttl TEXT [DEFAULT_TTL]
 # Pulls a `Retry-After: N` value (any case, with or without a space after the colon) out of a
-# captured response TEXT and returns N seconds — dotfiles-dev#533 scope: a secondary rate limit
+# captured response TEXT and returns N seconds — dotfiles-linux-dev#533 scope: a secondary rate limit
 # clears on ITS OWN schedule, never the hourly quota reset gh_budget_reset_ttl reads, and GitHub
 # sends this header specifically so a caller does not have to guess which one applies. Falls back
 # to DEFAULT_TTL (45s, the same burst-backoff default used elsewhere in this file) when the
@@ -254,7 +254,7 @@ gh_budget_retry_after_ttl() {
 	printf '%s\n' "$default_ttl"
 }
 
-# NOTE (dotfiles-dev#533, retracted 2026-09-27): a `gh_budget_graphql_probe` predictive probe
+# NOTE (dotfiles-linux-dev#533, retracted 2026-09-27): a `gh_budget_graphql_probe` predictive probe
 # (`{ viewer { login } }`) was tried here and removed. Measured same day: GitHub's secondary
 # limiter is COST- and TIME-based, not transport-based — a trivial query can pass while a more
 # expensive GraphQL call on the exact same token is refused seconds later, and the threshold

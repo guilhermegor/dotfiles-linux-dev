@@ -1,6 +1,6 @@
 #!/bin/bash
 # Shared matcher: "does this Bash command invoke `git commit`?" — extracted from
-# commit_title_length_guard.sh, commit_body_wrap.sh and commit_secret_guard.sh (dotfiles-dev#324)
+# commit_title_length_guard.sh, commit_body_wrap.sh and commit_secret_guard.sh (dotfiles-linux-dev#324)
 # so the three guards share ONE detection rule instead of drifting apart the way the same shape
 # already has three times in this repo (#272, #293, #315).
 #
@@ -28,7 +28,7 @@
 # regex would have needed a fifth and sixth alternation branch each time a new spelling appeared,
 # which is the drift this file exists to stop.
 #
-# The per-segment anchor is preserved (dotfiles-dev#324 is explicit that losing it turns the guard
+# The per-segment anchor is preserved (dotfiles-linux-dev#324 is explicit that losing it turns the guard
 # into a false-positive machine): the binary must be the FIRST token of its segment, so a mere
 # *mention* of "git commit" inside another argument (e.g. --body "run git commit first") never
 # matches — it never begins a segment. Token-walking also makes `git commit-graph` a clean miss,

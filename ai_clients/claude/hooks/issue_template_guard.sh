@@ -225,7 +225,7 @@ block_unresolved_repo() {
 }
 
 block_unresolved_body_file() {
-    # Same reasoning as pr_template_guard.sh's block_unresolved_body_file (dotfiles-dev#78/#109):
+    # Same reasoning as pr_template_guard.sh's block_unresolved_body_file (dotfiles-linux-dev#78/#109):
     # a PreToolUse hook sees the command BEFORE shell expansion and sandboxed to the project
     # directory, so a generic "check the path" sends the author chasing a bug that isn't there.
     local path="$1" root="${2:-}"

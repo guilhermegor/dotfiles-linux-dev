@@ -70,7 +70,7 @@ load_last_dest() {
 # A saved destination whose PARENT no longer exists is stale, and pre-filling it is worse than
 # offering nothing: step 3 runs `mkdir -p`, so accepting the prompt silently RE-CREATES the dead
 # tree on the local disk and writes the archive there. It looks like a cloud backup and is a
-# local one — measured while migrating off Insync (dotfiles-dev#360), where the saved path lived
+# local one — measured while migrating off Insync (dotfiles-linux-dev#360), where the saved path lived
 # under ~/Insync/<account>/OneDrive/... and that whole tree is deleted by the migration.
 # The parent, not the leaf: the per-drive subdirectory is created by design on a first run.
 last_dest_is_stale() {

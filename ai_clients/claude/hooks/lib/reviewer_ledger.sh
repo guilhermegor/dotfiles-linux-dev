@@ -2,7 +2,7 @@
 # ai_clients/claude/hooks/lib/reviewer_ledger.sh
 #
 # SQLite ledger of reviewer asks and accepted findings by class
-# (dotfiles-dev#488). Answers one question from data instead of session
+# (dotfiles-linux-dev#488). Answers one question from data instead of session
 # memory: what did we spend on each rung of the reviewer ladder
 # (coderabbitai > codex > qwen > kimi), and what did it buy.
 #

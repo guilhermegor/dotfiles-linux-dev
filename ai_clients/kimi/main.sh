@@ -4,7 +4,7 @@
 #   ./main.sh all
 #   ./main.sh agents_md
 #
-# UNVERIFIED (dotfiles-dev#346): Kimi Code CLI is not installed on this
+# UNVERIFIED (dotfiles-linux-dev#346): Kimi Code CLI is not installed on this
 # machine. KIMI_CODE_HOME and the AGENTS.md delivery path below come from
 # the official docs (moonshotai.github.io/kimi-code) rather than a real
 # install — confirm against a real `kimi` install before relying on this.

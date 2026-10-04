@@ -1,5 +1,5 @@
 #!/bin/bash
-# Agent-vs-agent claims registry (dotfiles-dev#405 scope 1 and 5).
+# Agent-vs-agent claims registry (dotfiles-linux-dev#405 scope 1 and 5).
 #
 # The free-surface gate (lib/free_surface.sh) and the planner (lib/dispatch_plan.py) both see
 # only PRs and worktrees. Two agents dispatched in the SAME batch are invisible to each other
@@ -29,14 +29,14 @@
 #       Runs gate_free_surface ONCE and writes its held-path union to the registry directory.
 #
 #   claim_review_ask
-#       The shared, cross-agent primary-rung review-ask budget (dotfiles-dev#548). Atomic
+#       The shared, cross-agent primary-rung review-ask budget (dotfiles-linux-dev#548). Atomic
 #       check-and-stamp, prints exactly one of:
 #           GRANTED    — go ahead and post the @coderabbitai ask
 #           BUSY       — another reader already spent this window's ask
 #           UNKNOWN    — could not be decided (no flock, no git dir); treat like BUSY
 #       Returns 0 only on GRANTED.
 #
-# ⚠️ ONE gate read per round, never one per agent (dotfiles-dev#405 scope 5). Measured
+# ⚠️ ONE gate read per round, never one per agent (dotfiles-linux-dev#405 scope 5). Measured
 # 2026-09-17: 8 agents dispatched in one batch each ran `gate_free_surface` inside their own
 # claim step; it compares every branch against the default branch (33 branches, one API call
 # each) and the shared 5000/h GitHub quota hit 0 within seconds, twice. Every claim then failed
@@ -61,7 +61,7 @@ DISPATCH_CLAIMS_GIT=/usr/bin/git
 
 # Concurrency cap. The cap THROTTLES, it never drops an issue: dispatch_free_surface_guard.sh
 # reports everything over it as queued, and demands it as soon as a slot frees. 8 because the
-# session limit killed agents twice on 2026-09-17 (dotfiles-dev#405 scope 3).
+# session limit killed agents twice on 2026-09-17 (dotfiles-linux-dev#405 scope 3).
 DISPATCH_MAX_CONCURRENT="${DISPATCH_MAX_CONCURRENT:-8}"
 
 # A claim whose agent died without calling release_claims would otherwise wedge its paths — and
@@ -220,7 +220,7 @@ dispatch_claimed_issues() {
 }
 
 # The shared, cross-agent half of dev-loop.md step 4b item 4's "one ask per invocation on the
-# primary rung" cap (dotfiles-dev#548). That prose binds only the reader of the skill file — a
+# primary rung" cap (dotfiles-linux-dev#548). That prose binds only the reader of the skill file — a
 # dispatched subagent that asks for review on its own PR is invisible to it, so N subagents each
 # asking once is an N-ask burst against CodeRabbit's one ACCOUNT-level quota. Measured 2026-09-27:
 # four asks in five minutes (one orchestrator tick, three subagents) pushed the reviewer window
@@ -230,7 +230,7 @@ dispatch_claimed_issues() {
 # ask was for, only how many landed. TTL is the step's own dedicated-tick cadence (`8,28,48 * * *
 # * *` in dev-loop.md) rather than a fresh constant: a second ask inside the SAME tick window is
 # the burst this cap exists to stop, and a later tick asking again is the legitimate re-spend
-# dotfiles-dev#477 already carved out for a BUSY/UNKNOWN slot.
+# dotfiles-linux-dev#477 already carved out for a BUSY/UNKNOWN slot.
 DISPATCH_REVIEW_ASK_TTL="${DISPATCH_REVIEW_ASK_TTL:-1200}"
 # A non-integer TTL (`abc`, `10m`) makes the `((…))` check below fail, which falls through to
 # GRANTED — fail-open on the very budget this cap defends. Reset it rather than trust it.

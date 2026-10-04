@@ -16,7 +16,7 @@ live here:
   <id>/`) has its own guard that refuses an `rtk`-prefixed git invocation it
   cannot statically verify — and since the rewrite runs before that guard
   sees the command, no spelling the agent types satisfies both layers
-  (dotfiles-dev#417). `hooks/rtk_worktree_passthrough.sh` sits in front of
+  (dotfiles-linux-dev#417). `hooks/rtk_worktree_passthrough.sh` sits in front of
   `rtk hook claude` and skips the rewrite (stripping any `rtk`/`rtk proxy`
   prefix back to plain `git`) whenever cwd matches that path shape — a
   worktree an agent creates itself under any other name is unaffected.
@@ -28,7 +28,7 @@ live here:
   `branch -d/-D` run through the Bash tool executes in the **default
   sandbox** overlay, which can print full success while the ref update is
   discarded on teardown and HEAD never moves. This is a Claude Code harness
-  behaviour, not an RTK proxy issue (evaluated for dotfiles-dev#79 —
+  behaviour, not an RTK proxy issue (evaluated for dotfiles-linux-dev#79 —
   cosmetic, the proxy is not the persistence culprit). Run every git write
   with `dangerouslyDisableSandbox: true`, then apply the shared AGENTS.md
   verification steps above. A rejected pre-commit hook is the other cause
@@ -48,7 +48,7 @@ live here:
   the release gate would have diffed against the wrong tag and cut the
   wrong version with nothing red. `git -C <path>` does not fix this: it
   resolves the directory but not the implicit-HEAD half of the bug
-  (dotfiles-dev#229). A second, costlier recurrence: `git worktree add
+  (dotfiles-linux-dev#229). A second, costlier recurrence: `git worktree add
   <path> <branch>` naming a **bare local branch** checked out a ref 3
   commits behind the real PR head, and a review pass publicly refuted three
   real CodeRabbit findings (two Major) as "not in this PR", resolving all
@@ -56,7 +56,7 @@ live here:
   means reading it at `origin/<head-ref>` after an explicit fetch, never at
   a local branch of the same name — `stale_local_ref_guard.sh` /
   `hooks/lib/stale_local_ref_gate.sh` now refuse a checkout/worktree-add
-  whose local ref is behind `origin/<branch>` (dotfiles-dev#410).
+  whose local ref is behind `origin/<branch>` (dotfiles-linux-dev#410).
 
 ## Superpowers spec/plan output — redirect to `.specs/`
 
@@ -66,7 +66,7 @@ in their own `SKILL.md`, inside the plugin cache
 (`~/.claude/plugins/cache/<marketplace>/superpowers/<version>/skills/`) —
 not a file any of our repos own or can edit; it is overwritten on every
 plugin update. The redirect happens here instead, in the instructions read
-before that stated path is followed (dotfiles-dev#303):
+before that stated path is followed (dotfiles-linux-dev#303):
 
 Before writing a spec or plan, decide which applies — **ask if it isn't
 already obvious, never infer**:
@@ -133,7 +133,7 @@ in a new code-emitting skill — add the pointer instead.
 When a task handed to a subagent (or a worktree-isolated agent) is expected to touch
 multiple files or take more than a couple of tool calls, its brief must say to commit
 at the first coherent point and keep committing — not to save committing for the end.
-Measured cost of the opposite (dotfiles-dev#167): three subagents were killed on the
+Measured cost of the opposite (dotfiles-linux-dev#167): three subagents were killed on the
 session limit in one afternoon holding 662, 694, and 256 lines of *uncommitted* work
 each, rescued only because a human happened to notice before the worktree was torn
 down. The loss was never caused by running out of budget — a kill halfway through
@@ -184,8 +184,8 @@ rule**, grep the tracked docs for the OLD rule — a tracked doc outranks memory
 
 Auto-compact fires natively at **70%** of the context window
 (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "70"` in `env`, `ai_clients/claude/settings.json`,
-dotfiles-dev#406), not at the near-100% default. Not a `s:dev-loop` step or a
-hook: no remaining-context signal reaches a hook environment (dotfiles-dev#167),
+dotfiles-linux-dev#406), not at the near-100% default. Not a `s:dev-loop` step or a
+hook: no remaining-context signal reaches a hook environment (dotfiles-linux-dev#167),
 and `/compact` is typed by the user, not callable through a tool — this env var
 is the only native lever. Verified against the installed binary's own threshold
 function (`compactionThreshold = min(floor(window * pct/100), window - buffer)`):

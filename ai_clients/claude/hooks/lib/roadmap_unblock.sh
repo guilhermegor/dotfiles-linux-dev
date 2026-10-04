@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared roadmap-unblock reconcile (dotfiles-dev#369): closes the gap where a board item's
+# Shared roadmap-unblock reconcile (dotfiles-linux-dev#369): closes the gap where a board item's
 # Status/label/"Blocked by" field do not follow the native issue-dependency relationship when the
 # last blocker closes. GitHub resolves the native relationship
 # (repos/<o>/<r>/issues/<n>/dependencies/blocked_by) on its own; nothing else does — the board
@@ -38,7 +38,7 @@
 # project text field or the issue body's own "**Blocked by:**" line — is NEVER auto-cleared,
 # closed native blockers or not. By definition only a person removes a decision blocker.
 #
-# dotfiles-dev#416: a blocker recorded only as PROSE (the "Blocked by" field or the body's
+# dotfiles-linux-dev#416: a blocker recorded only as PROSE (the "Blocked by" field or the body's
 # "**Blocked by:**" line naming `#N` / `owner/repo#N`) is invisible to GitHub's native
 # `blocked_by` relation — nothing resolves it, so an item stays "still blocked" forever even
 # after the named issue closes. When native `blocked_by` is empty, this file now parses issue
@@ -48,7 +48,7 @@
 # always wins (this file never reaches the prose-ref resolution for one), and a failed state read
 # is UNKNOWN, left untouched, same fail-closed contract as the native read.
 #
-# dotfiles-dev#528: every report line for a determinate blocker now carries a `[blocker-kind: …]`
+# dotfiles-linux-dev#528: every report line for a determinate blocker now carries a `[blocker-kind: …]`
 # tag — `internal` (same repo as the item), `external` (a different repo), or `decision` — so the
 # board can colour-mark WHY an item is unpickable, not just THAT it is. Kind is decided purely by
 # comparing the blocker's own repo to the item's repo, never by which code path (native API vs.
@@ -65,7 +65,7 @@
 # "cross-repo native blocker" bats case below is a defensive path — this file tolerates whatever
 # repo a native entry happens to name — not a claim that GitHub's own UI offers cross-repo native
 # linking.)
-# dotfiles-dev#567: `reconcile_roadmap_unblock`'s own project item read shared the same
+# dotfiles-linux-dev#567: `reconcile_roadmap_unblock`'s own project item read shared the same
 # single-channel `gh project item-list` dependency as kanban_reconcile.sh's — two independent
 # call sites, same defect. `_board_item_list` (throttle-confirm + one `gh api graphql` fallback)
 # now lives in kanban_reconcile.sh, which already serves as this repo's shared board-helpers
@@ -174,7 +174,7 @@ _ru_has_comment() {
 
 # _ru_unblock OWNER PROJECT REPO NUMBER URL DETAIL
 # The one mutation path, in order: labels, board "Blocked by", audit comment, board Status LAST.
-# The comment is the audit trail (dotfiles-dev#369): a status that changes silently is
+# The comment is the audit trail (dotfiles-linux-dev#369): a status that changes silently is
 # indistinguishable from one someone fat-fingered.
 #
 # ⚠️ Status is the completion marker, so it writes last (PR #376 review). Writing it first is what
@@ -336,7 +336,7 @@ reconcile_roadmap_unblock() {
 	return 0
 }
 
-# dotfiles-dev#531: the declared set of boards the reconciler sweeps — "owner|project|repo" per
+# dotfiles-linux-dev#531: the declared set of boards the reconciler sweeps — "owner|project|repo" per
 # entry, the same shape as LESSON_STORES (lib/lesson_mirrors.sh). Before this, "every project this
 # operator tracks" was session memory: a board nobody passed was indistinguishable from a board
 # with nothing to unblock, since both report nothing.

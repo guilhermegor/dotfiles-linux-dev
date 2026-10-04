@@ -1,4 +1,4 @@
-# Reviewer ledger (dotfiles-dev#488)
+# Reviewer ledger (dotfiles-linux-dev#488)
 
 A SQLite record of every reviewer ask on the review ladder
 (`coderabbitai > codex > qwen > kimi`) and every finding it produced, so

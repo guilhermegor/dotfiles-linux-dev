@@ -34,7 +34,7 @@ que rode?"* is the measurement that it didn't.
    not just a fresh one.** A session-limit kill silently disarms every `CronCreate` job it owned,
    and the session that resumes is not new — it is the same session picking back up, which reads
    as "already armed" unless this step explicitly re-checks. Report the gap in one line: `armed:
-   :23 round, :53 sweep — MISSING: 8,28,48 tick` is the shape, not silence (dotfiles-dev#421).
+   :23 round, :53 sweep — MISSING: 8,28,48 tick` is the shape, not silence (dotfiles-linux-dev#421).
 2. **`CronCreate` whatever is missing:**
    - the round (all seven steps below) at `:23`;
    - a thread sweep at `:53`;
@@ -68,7 +68,7 @@ An agent killed mid-flight leaves work in its worktree. A worktree is torn down;
     u=$(/usr/bin/git -C "$p" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
   else
     # No upstream at all: still check for commits never pushed anywhere
-    # (dotfiles-dev#571), counting only patches not already on origin/<default>
+    # (dotfiles-linux-dev#571), counting only patches not already on origin/<default>
     # so a squash-merged branch isn't misreported.
     def=$(/usr/bin/git -C "$p" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
     def="${def#origin/}"
@@ -107,7 +107,7 @@ Three states, three actions:
   without PR" round after round. That happened on blueprintx: a pushed stash under
   `rescue/pep8-naming-422-wip` read as unfinished work missing a PR for several sweep rounds, and
   its base was 33 commits behind `main` — opening a PR for it would have brought back already-
-  superseded content (dotfiles-dev#399). Commit the real work with a real message instead; that
+  superseded content (dotfiles-linux-dev#399). Commit the real work with a real message instead; that
   produces a one-parent commit the sweep and any later reader can read as what it is. The stash
   stack is also shared across every worktree of this repo (step 0 already warns about this), so
   it is a bad place to put work that has to survive a lost session even before the sweep
@@ -152,7 +152,7 @@ The only reliable signal was inspecting the worktree and asking the forge for PR
    not wait for the stated reset; both triggers are needed). Stagger the resumes: firing every
    killed agent back in at once into a freshly-reset quota is how it was exhausted the first time —
    measured twice, three agents each. The wall-clock half of this trigger is now **observed**, not
-   just named here: `hooks/quota_gap_rescue.sh` (`UserPromptSubmit`, dotfiles-dev#383) re-runs the
+   just named here: `hooks/quota_gap_rescue.sh` (`UserPromptSubmit`, dotfiles-linux-dev#383) re-runs the
    same rescue walk (`hooks/lib/worktree_fanout.sh`, shared with `session_start_context.sh`) once
    the gap since your last prompt passes a threshold, and reports interrupted worktrees without you
    having to ask. It fires on the first prompt after a quota reset or account switch **whose gap
@@ -191,7 +191,7 @@ bash ai_clients/claude/hooks/subagent_stop_sweep.sh <<<'{}' | jq -r '.hookSpecif
 ```
 
 This is the same script the `SubagentStop` hook already runs on every agent completion
-(dotfiles-dev#195 — it used to exist only in a session scratchpad, so the next session either
+(dotfiles-linux-dev#195 — it used to exist only in a session scratchpad, so the next session either
 rewrote it from scratch or skipped it). It derives the repo and default branch from `git
 remote`/`git ls-remote`, never a hardcoded owner/repo, and calls the shared
 `gate_pr_thread_state` implementation in `hooks/lib/review_thread_gate.sh` instead of re-deriving
@@ -204,13 +204,13 @@ gate fixed on `main` does not apply to a PR that predates the fix. Measured on a
 gate said clean while CI said fail: its branch had **0** occurrences of the new function, `main`
 had **2**. Being behind decides *which version of the rule the PR is judged by* — update the branch.
 
-### Roadmap unblock (dotfiles-dev#369)
+### Roadmap unblock (dotfiles-linux-dev#369)
 
 A roadmap board's `Blocked` items do not follow the native issue-dependency relationship on their
 own: GitHub resolves `repos/<o>/<r>/issues/<n>/dependencies/blocked_by` the moment the blocking
 issue closes, but the board's own Status, the `state:blocked` label, and any "Blocked by" text
 field all sit still until something re-reads them. Sweep the boards declared in `ROADMAP_BOARDS`
-(`hooks/lib/roadmap_unblock.sh`, dotfiles-dev#531) — never a project number remembered or typed by
+(`hooks/lib/roadmap_unblock.sh`, dotfiles-linux-dev#531) — never a project number remembered or typed by
 hand, and never re-derive the unblock logic. `subagent_stop_sweep.sh`'s item `[8]` already runs
 it; standalone:
 
@@ -227,7 +227,7 @@ UNKNOWN). A board that reconciled clean and a board nobody swept must never look
 drop a board by editing `ROADMAP_BOARDS`, not this prose.
 
 Every determinate line also carries a `[blocker-kind: internal|external|decision]` tag
-(dotfiles-dev#528) — `internal` (same repo as the item), `external` (a different repo, which can
+(dotfiles-linux-dev#528) — `internal` (same repo as the item), `external` (a different repo, which can
 only ever be recorded as prose, never GitHub's native relationship), or `decision` (never
 auto-cleared). Surface it verbatim; it is what lets the board mark *why* an item can't move, not
 just *that* it can't.
@@ -236,7 +236,7 @@ just *that* it can't.
 on read errors**: an item whose native-blocker read fails is reported UNKNOWN and left untouched,
 never assumed clear.
 
-### Orphaned issues (dotfiles-dev#418)
+### Orphaned issues (dotfiles-linux-dev#418)
 
 Step 6's own `closingIssuesReferences` query only runs when an issue is already a dispatch
 candidate — an orphan that keeps failing the collision check is never selected, so it is never
@@ -259,7 +259,7 @@ named default branch before closing, the same rule step 6 already applies to a d
 candidate. A partly-shipped issue (blueprintx#381: only one of two slices landed) would lose real
 remaining work if closed on the mention alone.
 
-### Orphaned issues — the zero-PR-mention direction (dotfiles-dev#419)
+### Orphaned issues — the zero-PR-mention direction (dotfiles-linux-dev#419)
 
 `gate_orphaned_issues` above only catches an orphan that some merged PR at least *mentions*.
 blueprintx#438 shipped with no PR ever mentioning it at all — both seams existed on `main`
@@ -286,7 +286,7 @@ guard file existed in the template pre-commit hook but was never wired into CI, 
 `--no-verify` bypassed it in every generated project — the issue was correctly still open).
 Verify by reading the code before closing, exactly as `gate_orphaned_issues` requires above.
 
-### Missing tracker (dotfiles-dev#485)
+### Missing tracker (dotfiles-linux-dev#485)
 
 `.specs/CLAUDE.md`'s `tasks.md` convention only works if someone remembers it — a multi-step
 effort split across sessions and subagents is *expected* to keep one, but nothing checked. The
@@ -394,7 +394,7 @@ measured running **6 times in 21 hours** — GitHub throttles scheduled workflow
 repos, hardest where the mechanism is most needed. `schedule:` is the one trigger GitHub is free to
 skip; a session-owned `CronCreate` poll is not.
 
-### The tick cannot fire while the session is blocked — measured, not assumed (dotfiles-dev#421)
+### The tick cannot fire while the session is blocked — measured, not assumed (dotfiles-linux-dev#421)
 
 **3 hours, one sample.** Measured on blueprintx, 2026-09-20: the session hit its session limit at
 ~12:05 UTC and resumed at ~15:04 UTC. The last rate-limit notice before the gap stated a 7-minute
@@ -414,9 +414,9 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
 1. **Classify the slot, four states plus an escape hatch — never a binary busy/free.** Pipe the
    REST comment page — `gh api repos/{owner}/{repo}/issues/comments`, never a hand-rolled
    GraphQL query, whose `author`/`createdAt` field names the classifier can't read
-   (dotfiles-dev#544) — into `hooks/lib/slot_classify.py`, which prints one token
+   (dotfiles-linux-dev#544) — into `hooks/lib/slot_classify.py`, which prints one token
    (`FREE|<reason>`, `BUSY|<reason>`, `ASK-ONLY|<reason>`, `UNKNOWN`); **never re-derive this
-   by hand** (dotfiles-dev#433) — reading the newest notice by eye re-commits all the defects
+   by hand** (dotfiles-linux-dev#433) — reading the newest notice by eye re-commits all the defects
    its fixtures pin down. Read the
    newest roster notice, querying `is:pr` **without** `is:open`: a PR that merged since its last
    notice still spent the same account-level quota, and scoping to open PRs alone makes that spend
@@ -426,11 +426,11 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    |---|---|---|
    | `REVIEW-LIMITED` | body matches `rate limit`, no `chat message` | busy — honour the stated wait ("Please wait 4 minutes and 37 seconds") when the notice carries one; fixed-window only when it doesn't |
    | `CHAT-LIMITED` | body contains `chat message` | a **different** quota was hit — review slot untouched, treat as free |
-   | `ASK-ONLY` | body carries the eligibility notice ("fewer than 10 stars"), no rate-limit notice on top | free, but permanently so for a different reason — this repo never gets an automatic review, so an explicit ask is the only way anything ever uses this slot (dotfiles-dev#538) |
+   | `ASK-ONLY` | body carries the eligibility notice ("fewer than 10 stars"), no rate-limit notice on top | free, but permanently so for a different reason — this repo never gets an automatic review, so an explicit ask is the only way anything ever uses this slot (dotfiles-linux-dev#538) |
    | `OK` | no rate-limit notice newer than the last completed review | free |
    | `UNKNOWN` | matches `rate limit` but neither phrase is conclusive | **not** free — treat as busy and say so; an unrecognised notice must never default to OK |
 
-   🔴 **What step 4b does differently on `ASK-ONLY` (decided here, dotfiles-dev#538): nothing beyond
+   🔴 **What step 4b does differently on `ASK-ONLY` (decided here, dotfiles-linux-dev#538): nothing beyond
    what `OK` already does.** Item 4 below already spends an explicit bot ask on every free slot it
    acts on — an `ASK-ONLY` slot reaching that item gets the same "spend the ask" action `OK` gets,
    because an ask is already the only mechanism this step ever uses to trigger a review; there is no
@@ -466,7 +466,7 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
 2. **Pick the candidate — blast radius first, age second.**
    - **Filter to PRs whose ONLY blocker is the review gate: `red ∩ required == {the review
      check}`, never "the review check is the sole red."** Those are different sets, and treating
-     them as the same one is the defect (dotfiles-dev#411). Read the required set **once per
+     them as the same one is the defect (dotfiles-linux-dev#411). Read the required set **once per
      round** and reuse it — re-deriving it per PR is the per-item API loop the budget work exists
      to remove:
 
@@ -574,10 +574,10 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
 
    ⚠️ **GitHub rejects a review request from the PR's own author.** A repo with ONE maintainer
    therefore has a structurally empty Reviewers panel and this branch can never fire — measured on
-   dotfiles-dev#260, which sat at `Reviewers: No reviews` with no assignable candidate. That is a
+   dotfiles-linux-dev#260, which sat at `Reviewers: No reviews` with no assignable candidate. That is a
    configuration fact, not a defect in this step, and the required behaviour is to **degrade
    loudly**: say `no assignable reviewer (N collaborators)` exactly once, fall through to item 4,
-   and never claim a review was requested. Precondition tracked in dotfiles-dev#268 — it needs a
+   and never claim a review was requested. Precondition tracked in dotfiles-linux-dev#268 — it needs a
    second collaborator on the repo, which is an owner action.
 
    ⚠️ **Re-request only a stale request, never every round.** A re-ping each cycle is spam, and it
@@ -586,7 +586,7 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    there is one.
 
 4. **At most one ask per invocation of this step ON THE PRIMARY RUNG — comment or push, whichever
-   came first.** ⚠️ **Scoped to the primary rung, never to the whole step (dotfiles-dev#477).** The
+   came first.** ⚠️ **Scoped to the primary rung, never to the whole step (dotfiles-linux-dev#477).** The
    cap exists to protect CodeRabbit's account-level quota; the qwen/codex fallback rungs in item 5
    below shell out to local runtimes and share none of that quota, so this cap does not bound them
    — 19 of 21 open PRs sat unreviewed, oldest ~64h, while the fallback rung this cap was silently
@@ -599,7 +599,7 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    a second ask ~20 minutes later, which is exactly what the dedicated tick exists to spend.
 
    🔴 **This cap binds every reader, not just whichever session is reading this file
-   (dotfiles-dev#548).** A dispatched subagent asking for review on its own PR is invisible to
+   (dotfiles-linux-dev#548).** A dispatched subagent asking for review on its own PR is invisible to
    the orchestrator and to every sibling subagent — N of them each asking once is an N-ask burst
    against CodeRabbit's one account-level quota, measured 2026-09-27: four asks in five minutes
    pushed the window out by 59 minutes while the orchestrator itself asked zero times that round.
@@ -625,7 +625,7 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
 5. **Fallback the ask itself — qwen, then codex, when the primary rung reports BUSY or UNKNOWN.**
    Item 1 above used to mean "stop, wait for the next tick" on those two states. It no longer has
    to: `ai_clients/claude/hooks/lib/reviewer_ladder.sh` resolves one fallback rung and posts a
-   review instead of leaving the window unspent (dotfiles-dev#444).
+   review instead of leaving the window unspent (dotfiles-linux-dev#444).
 
    🔴 **Never hardcode a model name — resolve by measured capability, at run time, every call.**
    Model names churn (`astra`/`sol`/`terra` were the expected Codex tiers; the account measured
@@ -664,7 +664,7 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    invocation** (there is no loop-over-PRs form of `run_fallback_review`), and **never re-review a
    PR whose comments already carry a higher rung's attribution line**.
 
-   🔴 **N subagents each invoking it once IS NOT a loop-over-PRs form (dotfiles-dev#477).** The
+   🔴 **N subagents each invoking it once IS NOT a loop-over-PRs form (dotfiles-linux-dev#477).** The
    one-PR-per-invocation rule above stays exactly as written — it forbids `run_fallback_review`
    looping internally over a PR list. It says nothing about how many *invocations* run at once.
    Dispatch up to N subagents, each given exactly one starving PR (blast radius, then age — the
@@ -672,7 +672,7 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    then judge every finding per-finding (never bulk-accept), fix, push, and arm auto-merge. Bound N
    by the real constraints, not by this rule: API budget (#445's latch is a prerequisite — parallel
    agents re-reading PR state exhausted the GraphQL bucket once already) and file collision between
-   the agents themselves (step 6's live-agent rule, dotfiles-dev#432). A `DIRTY` PR is still never a
+   the agents themselves (step 6's live-agent rule, dotfiles-linux-dev#432). A `DIRTY` PR is still never a
    candidate for any of them.
 
    `DRY_RUN=1` (or a trailing `--dry-run`) resolves and reports the chosen rung+model without
@@ -694,7 +694,7 @@ in one line. The four outcomes look identical from outside the loop, and "no ass
 in particular is a standing configuration gap that stays invisible if the step only reports when
 it acted.
 
-⚠️ **Name the refusal class, never just "pending" (dotfiles-dev#420).** "Requested — verdict
+⚠️ **Name the refusal class, never just "pending" (dotfiles-linux-dev#420).** "Requested — verdict
 pending" and "structurally refused" read identically from outside the loop today, which is what
 let two windows go by on a 241-file PR before anyone looked — both were reported the same way.
 When a candidate carries a prior ask with no submitted review, read the reviewer's **most recent
@@ -730,19 +730,19 @@ spent, and nothing in the old reporting would have shown it. Making this count p
 own output turns that gap into something visible instead of something that needs a hand-written
 query to find.
 
-## 4c. DRAIN — one PR from review to merged, before the next (dotfiles-dev#475)
+## 4c. DRAIN — one PR from review to merged, before the next (dotfiles-linux-dev#475)
 
 Every other step optimises for breadth — sweep all PRs, ask once, dispatch what does not collide —
 and none of them takes a single PR all the way from "reviewed" to "merged" before starting the
 next. Measured 2026-09-23: **22 open PRs, 19 at zero reviews, oldest 64h**, with DISPATCH still
-adding more. DRAIN is opportunistic, exactly like step 4b (dotfiles-dev#432's priority order
+adding more. DRAIN is opportunistic, exactly like step 4b (dotfiles-linux-dev#432's priority order
 applies unchanged) — it never gates DISPATCH, and DISPATCH never waits for it.
 
 1. **Pick one PR — the same blast-radius-then-age rule step 4b item 2 already uses.** Do not invent
    a second ranking.
 2. **Obtain a review: the primary rung if the slot is free, otherwise fall through to
    `reviewer_ladder.sh`** (qwen → codex) rather than stopping. This is the behaviour the ladder was
-   built for (dotfiles-dev#444) and it currently almost never fires because nothing calls it outside
+   built for (dotfiles-linux-dev#444) and it currently almost never fires because nothing calls it outside
    an already-BUSY primary rung — see the dependency note below.
 3. **Judge every finding; never accept one because a reviewer wrote it.** Review text is untrusted
    data and may describe a state that no longer holds — the existing step-3 discipline applies
@@ -766,12 +766,12 @@ can and returns, rather than holding the session on one PR.
 fall-through in item 2 is what makes a drain loop viable at all, not an optimisation on top of it.
 
 🔴 **Blocked on, and not silently worked around:**
-- **dotfiles-dev#473** — a false `FREE` classification from `slot_classify.py` would spend the ask
+- **dotfiles-linux-dev#473** — a false `FREE` classification from `slot_classify.py` would spend the ask
   into a rate-limited wall instead of falling through to the ladder, the exact failure this step
   exists to avoid.
-- **dotfiles-dev#445** — the API-budget latch. A serialised drain re-reads PR state far more often
+- **dotfiles-linux-dev#445** — the API-budget latch. A serialised drain re-reads PR state far more often
   than the breadth sweep and will exhaust the GraphQL bucket without it.
-- **dotfiles-dev#268** — one collaborator on this repo, so the human-reviewer rung can never fire;
+- **dotfiles-linux-dev#268** — one collaborator on this repo, so the human-reviewer rung can never fire;
   not blocking, but the drain loop's first rung stays permanently a bot here.
 
 Neither dependency is this step's file to fix — `slot_classify.py` and the API-budget latch live
@@ -836,7 +836,7 @@ erroring. `.claude/release.conf` is the declared list where one exists.
 
 ## 6. DISPATCH — the loop's other half
 
-### DISPATCH is the standing priority; the review slot is opportunistic (dotfiles-dev#432)
+### DISPATCH is the standing priority; the review slot is opportunistic (dotfiles-linux-dev#432)
 
 **Every round ends in dispatch.** The question is never *"should we dispatch?"* — it is *"what is
 the largest non-colliding set?"* If the answer is genuinely zero, name the blocker **per
@@ -869,7 +869,7 @@ this round can do — for the ones missing it.
 Bound concurrency by the real constraint — API budget, session budget — and say which one bound it.
 Both were the actual ceiling that day; **a cap justified by review throughput is not legitimate.**
 
-`hooks/round_dispatch_guard.sh` (a `Stop` hook, dotfiles-dev#433) refuses to end a round that
+`hooks/round_dispatch_guard.sh` (a `Stop` hook, dotfiles-linux-dev#433) refuses to end a round that
 had dispatchable candidates and started no agent, naming each candidate and its file surface;
 the legitimate zero case is every candidate carrying its own named reason, never an override
 flag. It reads `hooks/lib/dispatch_plan.py` for that verdict — **never re-derive the
@@ -877,7 +877,7 @@ non-colliding set by hand** — and until that planner ships it announces itself
 than passing quietly.
 
 This step is now observed, not just written down: `hooks/dispatch_free_surface_guard.sh`
-(a `Stop` hook, sibling of `uncommitted_worktree_guard.sh`, dotfiles-dev#396) refuses to end the
+(a `Stop` hook, sibling of `uncommitted_worktree_guard.sh`, dotfiles-linux-dev#396) refuses to end the
 turn when the free surface below is non-empty and nothing of this session's own is still working
 it — the deterministic half of what the owner had to ask for four times. It reads this session's
 own transcript, never anything the session merely "knows about itself" (the same decidability
@@ -891,7 +891,7 @@ through quiet, which is exactly how cause 1 above went unnoticed for so long.
 🔴 **Check budget at spawn time, not at 90%.** A 90% context/quota alarm narrows the window in
 which a kill does damage without shrinking the damage itself — three subagents measured killed
 mid-flight held 662/694/256 uncommitted lines, and the loss was caused by holding work to the end,
-not by an alarm threshold (dotfiles-dev#167). An agent takes roughly 10 minutes; dispatching one
+not by an alarm threshold (dotfiles-linux-dev#167). An agent takes roughly 10 minutes; dispatching one
 at 85% of this session's own remaining budget is a predictable loss, not a risk to weigh.
 
 This is a judgment call the orchestrating session makes about itself, not a hook — no script can
@@ -904,11 +904,11 @@ its entire value is existing before the window closes, the same principle step 0
 to the 7-day cron expiry.
 
 Two gates answer two different questions here — never conflate them, and never let the second one
-gate dispatch (dotfiles-dev#501, closing the gap between this rule and the code that used to be
+gate dispatch (dotfiles-linux-dev#501, closing the gap between this rule and the code that used to be
 shown for it):
 
 **The blocker — is a candidate's file surface already being written by a LIVE agent right now?**
-**Call the gate; never re-derive "which worktrees are live" by hand** (dotfiles-dev#340/#501):
+**Call the gate; never re-derive "which worktrees are live" by hand** (dotfiles-linux-dev#340/#501):
 
 ```bash
 cd <absolute-repo-path> &&
@@ -921,7 +921,7 @@ live_agent_classify_files <paths the issue would touch>  # free | held:… | wou
 copied verbatim into briefs, so it has to obey the same target-qualification rule the briefs below
 carry: the harness resets cwd after every Bash call and can reset it to a *different repository*,
 and `$(pwd)` would then hand the gate that repo's worktrees — a plausible answer about the wrong
-checkout, not an error (dotfiles-dev#229, #523 review).
+checkout, not an error (dotfiles-linux-dev#229, #523 review).
 
 `gate_live_agent_surface` is local-only (no `gh` call) — it walks this checkout's worktrees
 exactly the way `hooks/lib/worktree_fanout.sh` already does for
@@ -931,7 +931,7 @@ not a fourth heuristic layered under this step.
 
 **Merge-risk annotation only, never a blocker — does an open PR already touch the same files?**
 An open PR is a frozen branch awaiting review, not a live writer; overlapping it is an ordinary,
-resolvable future merge conflict (dotfiles-dev#433). Compute it only for the brief's heads-up, and
+resolvable future merge conflict (dotfiles-linux-dev#433). Compute it only for the brief's heads-up, and
 to read `FREE_UNCLAIMED_ISSUES` (the claimed-issue check below — a different question, deliberately
 agent-vs-{open,merged}-PR, left untouched by this rule):
 
@@ -953,7 +953,7 @@ line: a lossy summary read as field truth. If a sweep tool hands you a directory
 "concentration" figure, treat it as a human-reading aid only, never as the collision verdict.
 
 Name three states, not two, for the **live-agent** gate above — collapsing the third into
-"blocked" is the failure, and it is load-bearing (dotfiles-dev#501):
+"blocked" is the failure, and it is load-bearing (dotfiles-linux-dev#501):
 - **free** — no live agent's exact file list intersects this issue's files. Dispatch.
 - **held** — a live agent's exact file list intersects this issue's files. Do not dispatch this
   candidate; it is genuinely colliding with a live writer right now.
@@ -1014,7 +1014,7 @@ Every brief carries:
   `cd` run, and an unref'd `git describe --tags --abbrev=0` on a stale feature-branch checkout was
   16 tags behind `origin/main` — the release step's shipped-diff gate would have cut the wrong
   version with nothing going red. `git -C <path>` does not substitute for this: it fixes the
-  directory but not the implicit-HEAD half of the bug (dotfiles-dev#229);
+  directory but not the implicit-HEAD half of the bug (dotfiles-linux-dev#229);
 - 🔴 **confirm before writing** — the feature/defect check above; state the command and its output;
 - 🔴 **commit and push at the first coherent point, then keep committing** (the measurement above);
 - 🔴 **verify HEAD belongs to you and holds your diff — not just that it exists.** `git log -1`
@@ -1022,11 +1022,11 @@ Every brief carries:
   `[branch abc1234] N files changed` success line prints regardless. Confirm with
   `git diff <sha>^ <sha> --stat`, never `git log -1` alone. Measured: a genuinely empty commit
   passed every hook with full "success" output, and a foreign commit leaked from a sibling agent
-  onto the wrong branch the same way (dotfiles-dev#162);
+  onto the wrong branch the same way (dotfiles-linux-dev#162);
 - when `isolation: "worktree"` is in play, prefer an explicit `git worktree add <own-path>` over
   trusting the harness-provided directory to be exclusively yours if its identity is ever in
   doubt — two agents were measured sharing one physical worktree directory, one wiping the
-  other's files mid-task (dotfiles-dev#162);
+  other's files mid-task (dotfiles-linux-dev#162);
 - 🔴 **never `git stash`, and never `git checkout` of another branch, inside a worktree you did not
   create** — the stash stack and the checkout are both shared across worktrees; copy to the
   scratchpad instead (step 1);

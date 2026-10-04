@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploys cheap-brain Claude Code session profiles (dotfiles-dev#151).
+# Deploys cheap-brain Claude Code session profiles (dotfiles-linux-dev#151).
 #
 # A profile is a small `--settings` overlay (just `env`, not a full
 # settings.json) that points ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN at an
@@ -64,7 +64,7 @@ _install_profile_launcher() {
     else
         {
             echo ""
-            echo "# Claude Code session profiles (dotfiles-dev#151)"
+            echo "# Claude Code session profiles (dotfiles-linux-dev#151)"
             echo "$source_line"
         } >> "$bashrc"
         print_status "success" "Appended profile launcher source line to $bashrc"

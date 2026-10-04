@@ -128,7 +128,7 @@ check_vscode_installed() {
 install_extensions() {
     print_status "section" "INSTALLING VS CODE EXTENSIONS"
     
-    # ⚠️ ONE list, read from disk — never a second array here (dotfiles-dev#185).
+    # ⚠️ ONE list, read from disk — never a second array here (dotfiles-linux-dev#185).
     # Two lists existed and only this one installed anything, so ~15 entries that lived only
     # in .vscode/extensions.txt were never installed while the file looked authoritative.
     # Adding an extension there and nowhere else looked done and was a no-op.

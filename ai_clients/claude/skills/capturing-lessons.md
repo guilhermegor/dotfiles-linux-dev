@@ -70,7 +70,7 @@ fix ultimately lands, never by what the lesson is about.**
   (a slash command, skill, agent, rule, hook, global `CLAUDE.md` rule, `settings*.json`, or
   installer — changes how *Claude itself* behaves across every project)
   → **Claude-toolchain store** `~/.claude/memory/lessons-claude-toolchain/`. Named for the
-  CONCERN, not a repo (dotfiles-dev#536) — `LESSON_STORES` in
+  CONCERN, not a repo (dotfiles-linux-dev#536) — `LESSON_STORES` in
   `ai_clients/claude/hooks/lib/lesson_mirrors.sh` declares its full repo set
   (`dotfiles-dev`, `dotfiles-linux-dev`, `dotfiles-macos-dev`, `dotfiles-linux-prod`)
   explicitly, since the toolchain repo has already been renamed once and the local
@@ -79,7 +79,7 @@ fix ultimately lands, never by what the lesson is about.**
   Backport target: `~/github/dotfiles-dev/ai_clients/claude/`, each landing via its own PR.
 
 - Fix edits neither of the above — the repo is a standalone project (a scaffolded-but-independent
-  app, or a future extraction like the `determinism` package, dotfiles-dev#119) with **no**
+  app, or a future extraction like the `determinism` package, dotfiles-linux-dev#119) with **no**
   template to re-scaffold from and **no** shared toolchain to reinstall — a fresh environment can
   only inherit the fix by that specific repo being fixed again
   → **third-party store** `~/.claude/memory/lessons-other/`.
@@ -112,7 +112,7 @@ lessons to work that never touched them.
 
 1. Save it as **one file per lesson** (kebab-case) in the store, using that store's format.
 2. Add it to the store's `README.md` index.
-3. **Regenerate this repo's mirror — do not hand-write it (dotfiles-dev#386).** The mirror
+3. **Regenerate this repo's mirror — do not hand-write it (dotfiles-linux-dev#386).** The mirror
    (`.specs/_lessons/blueprintx-lessons.md` or `.specs/_lessons/claude-toolchain-lessons.md`) is a
    git-ignored, **generated** index of the lessons whose `**Origin:**` line names this repo —
    run `make lessons_mirror` (inside dotfiles-dev) or

@@ -1,12 +1,12 @@
 name: coderabbit_trigger
 
 # Asks CodeRabbit for a review on every new PR. Required because CodeRabbit
-# does not auto-review a repo with fewer than 10 stars (dotfiles-dev#157),
+# does not auto-review a repo with fewer than 10 stars (dotfiles-linux-dev#157),
 # and this repo is at 0 — without this ask, no PR here is ever reviewed.
 on:
   pull_request:
     types: [opened]
-    # Selective, not full-parity (dotfiles-dev#157): review is scarce and
+    # Selective, not full-parity (dotfiles-linux-dev#157): review is scarce and
     # account-level (shared with blueprintx, ~2/hour), so it is spent where a
     # defect is invisible — hooks/settings that silently change behaviour in
     # every project — not uniformly on every PR.
@@ -21,7 +21,7 @@ jobs:
     steps:
       - name: The trigger PAT must be configured
         # An absent PAT is a configuration gap, not a defect in the PR being
-        # checked, so it must not fail this PR's CI (dotfiles-dev#250). Warn
+        # checked, so it must not fail this PR's CI (dotfiles-linux-dev#250). Warn
         # loudly instead: with no PAT nothing here is reviewed, and silence
         # would hide that on exactly the paths this workflow selects for.
         id: pat_present
@@ -30,7 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::warning::GH_REVIEW_TRIGGER_PAT is not set — skipping the CodeRabbit review request. No PR touching hooks/ or settings.json will be reviewed until it is configured (see dotfiles-dev#130)."
+            echo "::warning::GH_REVIEW_TRIGGER_PAT is not set — skipping the CodeRabbit review request. No PR touching hooks/ or settings.json will be reviewed until it is configured (see dotfiles-linux-dev#130)."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -102,7 +102,7 @@ jobs:
 
       - name: Request full review
         # Must come from a user PAT, never GITHUB_TOKEN: CodeRabbit silently
-        # ignores bot-authored comments (dotfiles-dev#130). Must say "full
+        # ignores bot-authored comments (dotfiles-linux-dev#130). Must say "full
         # review", not "review" — a plain "review" answers "already reviewed"
         # for commits CodeRabbit has already seen on another PR (a reopen, a
         # rebase, a re-PR); only the full form disregards that history.
@@ -110,7 +110,7 @@ jobs:
         # REST, not `gh pr comment`: `gh pr comment` issues the GraphQL
         # `addComment` mutation, which 403'd here (`Resource not accessible
         # by personal access token`) while REST reads succeeded with the
-        # same token. blueprintx uses this same REST call (dotfiles-dev#317).
+        # same token. blueprintx uses this same REST call (dotfiles-linux-dev#317).
         if: steps.pat_present.outputs.skip != 'true' && steps.pat_check.outputs.skip_review != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_REVIEW_TRIGGER_PAT }}

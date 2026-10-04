@@ -1,7 +1,7 @@
 #!/bin/bash
 # Stop hook: refuse to end the turn while the worktree has uncommitted changes.
 #
-# dotfiles-dev#167's "commit-early" mechanism, enforcement half. The measured
+# dotfiles-linux-dev#167's "commit-early" mechanism, enforcement half. The measured
 # failure: three subagents were killed mid-session holding 662, 694, and 256
 # lines of uncommitted work — rescued only because a human happened to notice
 # before the worktree was discarded. The loss was never caused by running out
@@ -12,7 +12,7 @@
 # ⚠️ /usr/bin/git, never the rtk proxy: a clean tree can come back through the
 # proxy as the literal string "ok", which downstream tooling has miscounted
 # as 1 uncommitted file. Judging git state through anything but the real
-# binary is the exact trap dotfiles-dev#167's sweep hook also had to avoid.
+# binary is the exact trap dotfiles-linux-dev#167's sweep hook also had to avoid.
 #
 # Fails OPEN on everything it cannot resolve (no git repo, detached/bare
 # worktree) — a guard that blocks on its own blindness gets disabled, same
@@ -46,7 +46,7 @@ main() {
 		echo
 		echo "Commit (and push, if a remote is configured) before ending the turn. Work"
 		echo "left uncommitted in a worktree is destroyed when that worktree is torn down —"
-		echo "three agents lost 662/694/256 lines this way in one session (dotfiles-dev#167)."
+		echo "three agents lost 662/694/256 lines this way in one session (dotfiles-linux-dev#167)."
 		echo "A kill part-way through costs the same whether it happens now or later, so"
 		echo "commit at the first coherent point rather than saving it for the end."
 	} >&2
