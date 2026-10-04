@@ -205,7 +205,9 @@ JQ
 # as the explicit, unforgeable "not the same comment" guard the ordering alone does not name.
 _gate_comment_findings_filter() {
 	cat <<'JQ'
-(.data.repository.pullRequest.comments.nodes // []) as $cs
+($roster | split("\n") | map(select(length > 0)) | map(ascii_downcase)) as $bots
+| ($bots | index("__no_roster__")) as $no_roster
+| (.data.repository.pullRequest.comments.nodes // []) as $cs
 | ($cs | map(select(
     (((.body // "") | split("\n")[0]) | test($marker))
     and ((.authorAssociation // "") | test("^(OWNER|MEMBER|COLLABORATOR)$"))
@@ -221,6 +223,11 @@ _gate_comment_findings_filter() {
        ((.id // "__missing__") != ($lc.id // "__ladder__"))
        and ((.createdAt // "") > ($lc.createdAt // ""))
        and (((.body // "") | length) >= $min)
+       # #620: an answer comes from OUTSIDE the reviewer roster -- a bot's own long comment
+       # (CodeRabbit etc.) must not clear a finding nobody addressed. No roster file falls
+       # back to "any Bot account", the same fallback the other filters use.
+       and ((. as $n | if $no_roster then (($n.author.__typename // "") != "Bot")
+             else (($bots | index(($n.author.login // "") | ascii_downcase)) == null) end))
        # A ladder review is a REPORT, never an answer to an earlier one. Excluding only
        # $lc.id let the NEXT fallback review clear this finding: it carries a distinct id,
        # a later timestamp and easily 100+ characters, so a second review saying "no issues
@@ -427,7 +434,8 @@ gate_pr_thread_state() {
 	# reviewThreads above. Run and merged exactly like the thread-problems filter, so an unanswered
 	# ladder finding turns the same GATE_STATUS=problems, naming its own channel in GATE_DETAIL.
 	comment_problems="$(_gate_run_jq "$threads" "$(_gate_comment_findings_filter)" "$jq_err" \
-		--argjson min "$_gate_min_reply_chars" --arg marker "$_gate_ladder_marker_re")" || {
+		--argjson min "$_gate_min_reply_chars" --arg marker "$_gate_ladder_marker_re" \
+		--arg roster "$roster")" || {
 		_gate_filter_aborted "$jq_err" "comment"
 		return 0
 	}

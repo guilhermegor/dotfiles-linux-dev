@@ -68,10 +68,10 @@ ladder_comment_fixture() {
     '
 }
 
-# run_comment_filter <fixture-json>
+# run_comment_filter <fixture-json> [roster, default: no roster file]
 run_comment_filter() {
     run bash -c "source '$GATE'; printf '%s' '$1' \
-        | jq -r --argjson min 100 --arg marker '$MARKER' \"\$(_gate_comment_findings_filter)\""
+        | jq -r --argjson min 100 --arg marker '$MARKER' --arg roster '${2:-__NO_ROSTER__}' \"\$(_gate_comment_findings_filter)\""
 }
 
 # run_reported_filter <fixture-json> <roster>
@@ -712,4 +712,18 @@ JSON
     wf="$BATS_TEST_DIRNAME/../.github/workflows/review_threads.yml"
     run grep -c 'GATE_STATUS" != "problems"' "$wf"
     [ "$output" -ge 1 ]
+}
+
+@test "comment channel #620: a long reply from a ROSTER bot does not answer a finding" {
+    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\nReviewed head: aaa\n\n- [P2] x'
+    run_comment_filter "$(ladder_comment_fixture MEMBER "$body" coderabbitai "$LONG_BODY")" "coderabbitai"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"unanswered ladder finding"* ]]
+}
+
+@test "comment channel #620: a long reply from outside the roster still answers" {
+    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\nReviewed head: aaa\n\n- [P2] x'
+    run_comment_filter "$(ladder_comment_fixture MEMBER "$body" guilhermegor "$LONG_BODY")" "coderabbitai"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
 }
