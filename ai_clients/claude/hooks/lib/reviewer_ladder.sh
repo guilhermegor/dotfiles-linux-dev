@@ -259,25 +259,45 @@ resolve_fallback_reviewer() {
 	LADDER_SIGNAL=""
 	LADDER_FALLBACK_MODELS=""
 
-	if resolve_qwen_model; then
+	# LADDER_SKIP_RUNGS: rungs already ruled out for the rest of this
+	# invocation — those whose review FAILED (run_fallback_review appends them,
+	# so a probe that only proves login — coderabbit's `--usage` — can never pin
+	# the ladder to a rate-limited rung) and those whose resolution/probe failed
+	# (appended here, so a fall-through re-resolve never re-runs a probe that
+	# already failed — each costs up to REVIEWER_LADDER_PROBE_TIMEOUT, #627 review).
+	local skip=" ${LADDER_SKIP_RUNGS:-} "
+
+	if [[ "$skip" == *" qwen "* ]]; then
+		print_status "info" "rung qwen excluded earlier this run"
+	elif resolve_qwen_model; then
 		LADDER_RUNTIME="qwen"
 		LADDER_MODEL="$QWEN_MODEL"
 		LADDER_SIGNAL="$QWEN_MODEL_SIGNAL"
 		LADDER_FALLBACK_MODELS="$QWEN_FALLBACK_MODELS"
 		return 0
+	else
+		print_status "info" "rung qwen skipped: no entitled model"
+		LADDER_SKIP_RUNGS="${LADDER_SKIP_RUNGS:-} qwen"
 	fi
-	print_status "info" "rung qwen skipped: no entitled model"
 
-	if resolve_codex_model; then
+	if [[ "$skip" == *" codex "* ]]; then
+		print_status "info" "rung codex excluded earlier this run"
+	elif resolve_codex_model; then
 		LADDER_RUNTIME="codex"
 		LADDER_MODEL="$CODEX_MODEL"
 		LADDER_SIGNAL="$CODEX_MODEL_SIGNAL"
 		return 0
+	else
+		print_status "info" "rung codex skipped: no entitled model"
+		LADDER_SKIP_RUNGS="${LADDER_SKIP_RUNGS:-} codex"
 	fi
-	print_status "info" "rung codex skipped: no entitled model"
 
 	local rung
 	for rung in $LADDER_CLI_RUNGS; do
+		if [[ "$skip" == *" $rung "* ]]; then
+			print_status "info" "rung $rung excluded earlier this run"
+			continue
+		fi
 		if "_${rung}_entitlement_probe"; then
 			LADDER_RUNTIME="$rung"
 			LADDER_MODEL="default"
@@ -286,6 +306,7 @@ resolve_fallback_reviewer() {
 			return 0
 		fi
 		print_status "info" "rung $rung skipped: probe failed (401/403, quota, expired login or timeout)"
+		LADDER_SKIP_RUNGS="${LADDER_SKIP_RUNGS:-} $rung"
 	done
 
 	return 1
@@ -724,37 +745,45 @@ run_fallback_review() {
 		: "${REVIEWER_LADDER_CLAUDE_PROBE:=true}"
 	fi
 
-	if ! resolve_fallback_reviewer; then
-		print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable)"
-		return 1
-	fi
-
-	local attribution
-	attribution="$(ladder_attribution_line "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_SIGNAL" "$head_sha")"
-
-	if [ "$dry_run" = "1" ]; then
-		print_status "info" "DRY RUN (candidates unprobed) — would probe, then post to PR #$pr_number: $attribution"
-		return 0
-	fi
-
-	# Only codex reads the working tree (issue #487) — qwen's own
-	# `review run PR_NUMBER` already fetches the PR itself. Resolving a
-	# worktree only when it is actually needed keeps qwen's rung free of a
-	# fetch+worktree round trip it has no use for.
-	local workdir="." worktree_dir=""
-	if [[ " codex $LADDER_CLI_RUNGS " == *" $LADDER_RUNTIME "* ]]; then
-		if ! _checkout_pr_worktree "$owner" "$repo" "$pr_number"; then
-			print_status "error" "PR #$pr_number: cannot check out a verified head for codex — refusing to review"
+	# A rung whose probe passed but whose REVIEW fails (non-zero exit) or
+	# returns nothing is appended to LADDER_SKIP_RUNGS and the ladder resolves
+	# again — it never stops at the first rung that merely proved it is logged
+	# in, and an empty review is never posted as a clean one (#626 review).
+	local LADDER_SKIP_RUNGS="${LADDER_SKIP_RUNGS:-}" attribution findings
+	while :; do
+		if ! resolve_fallback_reviewer; then
+			print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable)"
 			return 1
 		fi
-		workdir="$PR_WORKTREE_DIR"
-		worktree_dir="$PR_WORKTREE_DIR"
-	fi
 
-	local findings rc=0
-	findings="$(_run_runtime_review "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_FALLBACK_MODELS" "$pr_number" "$workdir")" || rc=1
-	[ -n "$worktree_dir" ] && _teardown_pr_worktree "$worktree_dir"
-	[ "$rc" -eq 0 ] || return 1
+		attribution="$(ladder_attribution_line "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_SIGNAL" "$head_sha")"
+
+		if [ "$dry_run" = "1" ]; then
+			print_status "info" "DRY RUN (candidates unprobed) — would probe, then post to PR #$pr_number: $attribution"
+			return 0
+		fi
+
+		# qwen's own `review run PR_NUMBER` fetches the PR itself (issue #487);
+		# every other rung reads a verified PR-head checkout.
+		local workdir="." worktree_dir=""
+		if [[ " codex $LADDER_CLI_RUNGS " == *" $LADDER_RUNTIME "* ]]; then
+			if ! _checkout_pr_worktree "$owner" "$repo" "$pr_number"; then
+				print_status "error" "PR #$pr_number: cannot check out a verified head for $LADDER_RUNTIME — refusing to review"
+				return 1
+			fi
+			workdir="$PR_WORKTREE_DIR"
+			worktree_dir="$PR_WORKTREE_DIR"
+		fi
+
+		local rc=0
+		findings="$(_run_runtime_review "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_FALLBACK_MODELS" "$pr_number" "$workdir")" || rc=1
+		[ -n "$worktree_dir" ] && _teardown_pr_worktree "$worktree_dir"
+		if [ "$rc" -eq 0 ] && [ -n "${findings//[[:space:]]/}" ]; then
+			break
+		fi
+		print_status "info" "rung $LADDER_RUNTIME skipped: review failed or returned nothing"
+		LADDER_SKIP_RUNGS="$LADDER_SKIP_RUNGS $LADDER_RUNTIME"
+	done
 
 	local body
 	body="$attribution"$'\n\n'"$findings"

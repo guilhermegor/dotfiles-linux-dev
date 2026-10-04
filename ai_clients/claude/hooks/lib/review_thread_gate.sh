@@ -49,7 +49,7 @@ _gate_min_reply_chars=100
 # review_threads.yml's `ladder_marker_re` -- dotfiles-linux-dev#490). A text match on this line ALONE
 # is the CWE-345 hole #455 closed for the merge gate: any PR commenter can paste this line into a
 # comment they wrote themselves. It is only ever trusted paired with authorAssociation below.
-_gate_ladder_marker_re='^Fallback review — runtime: (qwen|codex), model: .+ \(selected by: .+\)$'
+_gate_ladder_marker_re='^Fallback review — runtime: (qwen|codex|kimi|coderabbit|copilot|claude), model: .+ \(selected by: .+\)$'
 
 _gate_query() {
 	cat <<'GRAPHQL'
