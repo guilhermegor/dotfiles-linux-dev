@@ -11,10 +11,10 @@
 # switch, and an overnight pause alike, without pretending to detect something it cannot.
 #
 # ⚠️ This is the repo's FIRST UserPromptSubmit hook — it runs on EVERY prompt. It stays cheap
-# (below the gap threshold it exits before touching git at all; above it, no `gh` call —
-# fanout_worktrees is called with github_ok=0, worktree walk only) and, above all, SILENT when
-# it has nothing to say: it reuses fanout_worktrees()'s verdict (interrupted vs. stale revert)
-# rather than re-deriving "dirty means lost work" — printing on every stale-revert worktree is
+# (below the gap threshold it exits before touching git at all; above it, one `gh pr list` read
+# so merged PRs are excluded; an unreadable forge degrades to the worktree walk only) and,
+# above all, SILENT when it has nothing to say: it reuses fanout_worktrees()'s verdict
+# (interrupted vs. stale revert) rather than re-deriving "dirty means lost work" — printing on every stale-revert worktree is
 # the exact "cries wolf" failure the sweep hook's own comments warn about.
 #
 # Fails OPEN on everything: no jq/git, not a repo, no session id, an unreadable/unwritable
@@ -33,7 +33,7 @@ command -v git >/dev/null 2>&1 || exit 0
 source "$(dirname "${BASH_SOURCE[0]}")/lib/worktree_fanout.sh" 2>/dev/null || exit 0
 
 main() {
-	local payload cwd session_id state_dir state_file now last gap report
+	local payload cwd session_id state_dir state_file now last gap report slug="" json="" github_ok=0
 
 	payload="$(cat)"
 	cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
@@ -71,7 +71,15 @@ main() {
 	gap=$((now - last))
 	[ "$gap" -gt "$QUOTA_GAP_THRESHOLD_SECONDS" ] || exit 0
 
-	report="$(fanout_worktrees "$cwd" 0 "" 2>/dev/null)" || exit 0
+	# Real forge state, as session_start_context.sh passes it: with github_ok=0 the merged-PR
+	# exclusion never runs and every squash-merged leftover reads as interrupted work
+	# (dotfiles-linux-dev#616). Unreadable forge (no gh, offline, non-GitHub) -> github_ok=0.
+	slug="$(fanout_repo_slug "$cwd" 2>/dev/null)" || slug=""
+	if [ -n "$slug" ] && command -v gh >/dev/null 2>&1; then
+		json="$(fanout_pr_json "$slug")"
+		printf '%s' "$json" | jq -e 'type=="array"' >/dev/null 2>&1 && github_ok=1
+	fi
+	report="$(fanout_worktrees "$cwd" "$github_ok" "$json" 2>/dev/null)" || exit 0
 	# fanout_worktrees() prints an informational line for EVERY dirty worktree, stale reverts
 	# included — right for SessionStart, wrong here. Gate on its own "RESUME ... interrupted
 	# work" summary line instead, which it only emits when interrupted_names is non-empty: that

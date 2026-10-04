@@ -414,6 +414,7 @@ main() {
 	dispatchable="$(printf '%s' "$plan" | jq -r '
 		.dispatchable[]?
 		| "  #\(.pr)  head \((.head // "")[0:8])"
+		  + (if (.ladder // "") != "" then "  [ladder: \(.ladder)] -> run_fallback_review now, no human prompt" else "" end)
 		  + (if ((.checks.failing // []) | length) > 0
 		     then "  [failing: \((.checks.failing) | join(", "))]" else "" end)
 		  + (if ((.checks.running // []) | length) > 0
