@@ -7,4 +7,4 @@
 reviewers:
   - login: coderabbitai[bot]
   # The fallback reviewer ladder's own identity (dotfiles-linux-dev#624).
-  - login: guilhermegor-review-ladder[bot]
+  - login: guilhermegor-codew-reviewer[bot]
