@@ -1,4 +1,4 @@
-"""Compute the non-colliding dispatch set for round_dispatch_guard.sh (dotfiles-dev#433).
+"""Compute the non-colliding dispatch set for round_dispatch_guard.sh (dotfiles-linux-dev#433).
 
 Invoked with NO arguments, from the current working directory — a checkout of the target
 repo, the same convention round_dispatch_guard.sh's own ``python3 "$PLANNER"`` call relies
@@ -7,9 +7,9 @@ on (it never ``cd``s anywhere first). Prints exactly one JSON object to stdout::
     {"dispatchable": [{"issue": 433, "surface": ["a/b.py"]}],
      "excluded":     [{"issue": 426, "reason": "..."}]}
 
-Collision is agent-vs-agent, never agent-vs-open-PR (dotfiles-dev#433; review findings on PR
+Collision is agent-vs-agent, never agent-vs-open-PR (dotfiles-linux-dev#433; review findings on PR
 #476). The held set fed to ``free_classify_files`` (``lib/free_surface.sh``, #340) is built by
-``gate_live_agent_surface`` (same file, dotfiles-dev#572) — called via a subprocess, the same way
+``gate_live_agent_surface`` (same file, dotfiles-linux-dev#572) — called via a subprocess, the same way
 ``run_gate()`` below shells out to ``gate_free_surface`` — never from ``gate_free_surface``'s own
 ``FREE_HELD_PATHS``, which unions every open PR's files regardless of whether an agent is still
 live on it (a frozen/idle open PR would otherwise suppress dispatch of an unrelated candidate).
@@ -25,25 +25,25 @@ bug that hid 97% of a free directory behind a directory-level summary (#340); th
 keeps all three classify states apart on purpose.
 
 An issue's file surface is declared as a fenced ```surface block in its body — the
-convention dotfiles-dev#426 formalises with an issue-template requirement; here it is
+convention dotfiles-linux-dev#426 formalises with an issue-template requirement; here it is
 read, not enforced. An issue with no such block, or an empty one, is reported UNDECLARED,
 never "collides with nothing": it is excluded with its own named reason (``UNDECLARED_REASON``,
 which leads with the token so a consumer can tell it apart by prefix, not by prose), same as one
 whose surface is held.
 
 A glob token in a declared surface is matched against the local checkout tree AND the
-live-agent held-paths set (dotfiles-dev#433 finding 3): a live agent's own branch can hold a
+live-agent held-paths set (dotfiles-linux-dev#433 finding 3): a live agent's own branch can hold a
 file matching the token that never reaches this checkout, and would otherwise read as free.
 
 Because each issue is classified independently, two issues can both come back individually
-free while declaring an overlapping path (dotfiles-dev#433 finding 4). ``select_disjoint`` runs
+free while declaring an overlapping path (dotfiles-linux-dev#433 finding 4). ``select_disjoint`` runs
 a second, deterministic GREEDY pass — smallest surface first, ties by issue number — reserving
 each selected candidate's paths before the next is considered. This is not an optimal
 maximum-cardinality solver; #433 explicitly does not require one.
 
 A PR that NAMES an issue (``#N`` in its title or body) without GitHub counting it in
 ``closingIssuesReferences`` is a third signal, distinct from both "claimed" and "held"
-above (dotfiles-dev#413): ``closingIssuesReferences`` only answers "will merging this PR
+above (dotfiles-linux-dev#413): ``closingIssuesReferences`` only answers "will merging this PR
 close issue N", never "does this PR's own text talk about issue N at all" — a missing
 ``Closes`` line or a deliberate stacked follow-up both look identical to the unclaimed
 check, and either way dispatching N risks a duplicate PR against real, in-review work.
@@ -55,14 +55,14 @@ offering it as a candidate.
 
 Fails LOUD, not closed-and-quiet, on anything that breaks the read itself (``gh`` missing, not
 authenticated, a malformed response, or an open-issue count at/above the 500-issue cap
-``gate_free_surface``'s own claimed-issue read shares — dotfiles-dev#433 finding 2, LATENT on
+``gate_free_surface``'s own claimed-issue read shares — dotfiles-linux-dev#433 finding 2, LATENT on
 this repo's ~33 open issues): an uncaught exception prints a traceback to stderr and nothing
 parseable to stdout, which is exactly what round_dispatch_guard.sh's own shape check reads as
 UNREADABLE and blocks on. A *recoverable* gate failure (a rate limit, a bad compare, or the
 live-agent worktree walk itself failing) is different: it is surfaced as a named UNKNOWN
 exclusion reason on every open issue — still a valid, still fail-closed JSON object.
 
-A blocked issue is excluded too (dotfiles-dev#560): a `state:blocked` label or an open native
+A blocked issue is excluded too (dotfiles-linux-dev#560): a `state:blocked` label or an open native
 `issues/<n>/dependencies/blocked_by` entry reports "dispatchable" a candidate no agent's PR could
 ever land. Blocked state is read in that order — native relation first (authoritative; it is
 what GitHub itself resolves on close), the label second — and reported as its own reason,
@@ -96,12 +96,12 @@ GATE_TIMEOUT = 25
 # otherwise need this to scale, but LATENT at this repo's ~33 open issues like the other caps.
 BLOCKED_TIMEOUT = 120
 
-# The label this repo's board triad (dotfiles-dev#369/#528) uses for a blocked issue —
+# The label this repo's board triad (dotfiles-linux-dev#369/#528) uses for a blocked issue —
 # `_ru_unblock` in roadmap_unblock.sh adds/removes the very same string.
 BLOCKED_LABEL = "state:blocked"
 
 # gate_free_surface's own `gh issue list --state open --limit 500` cap (free_surface.sh) — not
-# editable from here (dotfiles-dev#433 finding 2, see module docstring).
+# editable from here (dotfiles-linux-dev#433 finding 2, see module docstring).
 FREE_SURFACE_ISSUE_CAP = 500
 
 # open_prs()'s own read ceiling, and the truncation-detection cap `build_plan` checks its read
@@ -114,8 +114,8 @@ OPEN_PR_LIST_CAP = 200
 SURFACE_BLOCK_RE = re.compile(r"```surface\s*\n(.*?)```", re.DOTALL)
 GLOB_CHARS = ("*", "?", "[")
 
-# The one place an issue's declared-surface convention is named (dotfiles-dev#405 scope 2).
-# Today it is the fenced ```surface block above (dotfiles-dev#426). blueprintx#314 will move it
+# The one place an issue's declared-surface convention is named (dotfiles-linux-dev#405 scope 2).
+# Today it is the fenced ```surface block above (dotfiles-linux-dev#426). blueprintx#314 will move it
 # to a scope LABEL; that format does NOT exist yet and is deliberately not invented here.
 # When #314 lands, the label prefix is set below and ``declared_surface`` learns to read it —
 # one edit, in one file, because nothing else re-states the convention.
@@ -145,7 +145,7 @@ source "$free_surface_sh"
 # synchronous and gh has no default request deadline of its own.
 gh() { timeout "${DISPATCH_PLAN_GH_TIMEOUT:-15}" gh "$@"; }
 
-# dotfiles-dev#607: gate_free_surface's agent-vs-open-PR held set is OVERWRITTEN below (#433
+# dotfiles-linux-dev#607: gate_free_surface's agent-vs-open-PR held set is OVERWRITTEN below (#433
 # finding 1) and never read, yet computing it costs one `gh pr view` per open PR plus one compare
 # per pushed branch, so it grows with the board and pushed the planner past the Stop guard's
 # timeout. Only FREE_UNCLAIMED_ISSUES is wanted from the gate, so skip the dead half. The gate's
@@ -168,7 +168,7 @@ if ! gate_free_surface "$owner" "$repo"; then
 fi
 echo "GATE_STATUS:ok"
 
-# dotfiles-dev#433 finding 1: overwrite gate_free_surface's own agent-vs-open-PR held set with
+# dotfiles-linux-dev#433 finding 1: overwrite gate_free_surface's own agent-vs-open-PR held set with
 # the caller's agent-vs-agent one before classifying.
 FREE_HELD_PATHS="$(printf '%s\n' "$live_held" | sed '/^$/d' | sort -u)"
 
@@ -216,7 +216,7 @@ def repo_slug() -> str:
 	was the first call ``build_plan()`` made, so asking GitHub for it made the whole planner
 	unreadable during a GraphQL outage: ``gh repo view --json`` routes through GraphQL, and when
 	that surface is refused the planner died here with an uncaught CalledProcessError, before it
-	had read a single issue (dotfiles-dev#534). Measured 2026-09-27: GraphQL refused every call
+	had read a single issue (dotfiles-linux-dev#534). Measured 2026-09-27: GraphQL refused every call
 	for over half an hour while ``git remote get-url`` answered instantly and REST was healthy.
 
 	``gh repo view`` stays as the fallback for the one case the remote cannot answer — a checkout
@@ -237,10 +237,10 @@ def repo_root() -> Path:
 	return Path(_run(["git", "rev-parse", "--show-toplevel"]))
 
 
-# dotfiles-dev#572: calls gate_live_agent_surface (free_surface.sh) via a subprocess, the same
+# dotfiles-linux-dev#572: calls gate_live_agent_surface (free_surface.sh) via a subprocess, the same
 # way run_gate() above already shells out to gate_free_surface — ONE liveness notion shared by
 # both callers, rather than a second walk in Python that can (and did) drift from the shell
-# gate's own dead-worktree exclusion (dotfiles-dev#551/#572). The gate resolves its own default
+# gate's own dead-worktree exclusion (dotfiles-linux-dev#551/#572). The gate resolves its own default
 # branch from the local repo's `origin` remote, so this script no longer needs a separate
 # `gh api repos/{slug} --jq .default_branch` call of its own.
 _LIVE_AGENT_GATE_SCRIPT = r"""
@@ -263,13 +263,13 @@ printf '%s\n' "$LIVE_AGENT_PATHS"
 
 def live_agent_held_paths(root: Path) -> tuple[bool, list[str]]:
 	"""Return ``(ok, held_paths)`` — files any OTHER live-agent worktree's branch has changed
-	relative to the repo's default branch (dotfiles-dev#433 finding 1), via
-	``gate_live_agent_surface`` (``hooks/lib/free_surface.sh``, dotfiles-dev#572).
+	relative to the repo's default branch (dotfiles-linux-dev#433 finding 1), via
+	``gate_live_agent_surface`` (``hooks/lib/free_surface.sh``, dotfiles-linux-dev#572).
 
 	Delegating here — instead of this script re-walking ``git worktree list --porcelain``
 	itself — is what gives this planner the same dead-worktree exclusion
-	``gate_live_agent_surface`` already has (dotfiles-dev#551, and the ancestor extension added
-	for dotfiles-dev#572): one shared, tested implementation of "is this worktree a live writer",
+	``gate_live_agent_surface`` already has (dotfiles-linux-dev#551, and the ancestor extension added
+	for dotfiles-linux-dev#572): one shared, tested implementation of "is this worktree a live writer",
 	never a second one that can independently drift.
 
 	``ok=False`` on anything that leaves liveness undetermined (``gate_live_agent_surface``
@@ -314,11 +314,11 @@ def open_issues(slug: str) -> list[dict]:
 	"""Return every open issue's number, body, and label names for ``slug`` (``owner/name``).
 
 	Capped at ``FREE_SURFACE_ISSUE_CAP`` — ``build_plan`` refuses to print a plan when the
-	result hits that cap (dotfiles-dev#433 finding 2).
+	result hits that cap (dotfiles-linux-dev#433 finding 2).
 
 	Read over REST, never ``gh issue list --json``: that form routes through GraphQL, and it was the
 	SECOND place this planner died during the GraphQL outage measured 2026-09-27 — immediately after
-	``repo_slug()`` and for the same reason (dotfiles-dev#534). REST answered normally throughout, so
+	``repo_slug()`` and for the same reason (dotfiles-linux-dev#534). REST answered normally throughout, so
 	the whole planner now survives an outage that only affects GraphQL.
 
 	⚠️ REST's ``/issues`` returns PULL REQUESTS too — GitHub models a PR as an issue — so every
@@ -347,7 +347,7 @@ def open_issues(slug: str) -> list[dict]:
 	return issues[:FREE_SURFACE_ISSUE_CAP]
 
 
-# Bounded like every connection read through open_pr_pages.py (dotfiles-dev#600); 100 is far
+# Bounded like every connection read through open_pr_pages.py (dotfiles-linux-dev#600); 100 is far
 # past any PR's real closing-reference count, so the bound never truncates in practice.
 PR_SELECTION = "number title body closingIssuesReferences(first:100){nodes{number}}"
 
@@ -359,12 +359,12 @@ def open_prs(slug: str) -> list[dict]:
 	graphql`` call ``gate_free_surface`` already makes for ``FREE_UNCLAIMED_ISSUES``, because
 	that call answers "does this PR close issue N" and never exposes the PR's own title/body
 	text this function needs to answer a different question: "does this PR merely NAME issue
-	N" (dotfiles-dev#413). Capped at ``OPEN_PR_LIST_CAP`` — ``build_plan`` refuses to print a
+	N" (dotfiles-linux-dev#413). Capped at ``OPEN_PR_LIST_CAP`` — ``build_plan`` refuses to print a
 	plan when the result hits that cap, same contract as ``open_issues``/
 	``FREE_SURFACE_ISSUE_CAP`` (PR #506 review: a truncated read can miss a PR that mentions a
 	later issue, reading that issue as unmentioned rather than held).
 
-	Paged (``open_pr_pages.py``, dotfiles-dev#600), so a large board is never one oversized
+	Paged (``open_pr_pages.py``, dotfiles-linux-dev#600), so a large board is never one oversized
 	request; a failing page raises and discards the pages before it, which ``build_plan``
 	turns into the by-name UNREADABLE exclusion rather than a partial list.
 	"""
@@ -380,7 +380,7 @@ def mentioned_without_closing(issue_numbers: set[int], prs: list[dict], slug: st
 	``closingIssuesReferences`` is the reliable oracle for "this PR WILL close that issue"
 	(module docstring); a bare ``#N`` in the same PR's title or body without a closing keyword
 	is neither closing it nor irrelevant — GitHub still renders it as a cross-reference, so
-	dispatching #N risks a duplicate PR against real, in-review work (dotfiles-dev#413).
+	dispatching #N risks a duplicate PR against real, in-review work (dotfiles-linux-dev#413).
 
 	Matches ``#N`` (word-boundary, so ``#12`` never matches inside ``#123``) and also ``<this
 	repo's slug>#N`` (e.g. ``acme/widgets#361``, GitHub's own same-repository qualified
@@ -411,7 +411,7 @@ def mentioned_without_closing(issue_numbers: set[int], prs: list[dict], slug: st
 # Sources roadmap_unblock.sh and calls its OWN `_ru_native_blockers` per issue number read from
 # stdin — never a re-derived `gh api .../dependencies/blocked_by` call. A fix to that function
 # (pagination, jq parsing) reaches this planner the moment roadmap_unblock.sh changes instead of
-# needing a second, independent edit here (dotfiles-dev#560's explicit ask).
+# needing a second, independent edit here (dotfiles-linux-dev#560's explicit ask).
 _BLOCKED_SCRIPT = r"""
 set -eu
 repo="$1"; roadmap_unblock_sh="$2"
@@ -486,7 +486,7 @@ def native_open_blockers(slug: str, numbers: list[int]) -> dict[int, list[str] |
 def blocked_reason(issue: dict, native_refs: list[str] | None) -> str | None:
 	"""Return the exclusion reason for a blocked issue, or ``None`` when it is not blocked.
 
-	Checked in the order dotfiles-dev#560 specifies: the native relation first (authoritative —
+	Checked in the order dotfiles-linux-dev#560 specifies: the native relation first (authoritative —
 	it is what GitHub itself resolves on close), the ``state:blocked`` label second. A board-only
 	``Status = Blocked`` is deliberately not a third source here (module docstring) — that
 	mismatch belongs to `roadmap_unblock.sh`'s own reconcile step.
@@ -509,7 +509,7 @@ def declared_surface(body: str) -> list[str]:
 	"""Parse the fenced ```surface block out of an issue body into path/glob tokens.
 
 	An absent block and an empty one return the same thing (``[]``) — the caller reads both
-	as "no declared surface", never as "collides with nothing" (dotfiles-dev#426).
+	as "no declared surface", never as "collides with nothing" (dotfiles-linux-dev#426).
 	"""
 	match = SURFACE_BLOCK_RE.search(body or "")
 	if not match:
@@ -538,11 +538,11 @@ def expand_tokens(tokens: list[str], root: Path, held: list[str]) -> list[str]:
 	``fnmatch`` does and ``pathlib.Path.glob`` does not (``pathlib``'s `*` stops at `/`,
 	and its `**` yields directories, not files — matching ``docs/**`` against the repo
 	tree that way returned zero files while ``fnmatch`` matched everything under
-	``docs/``, dotfiles-dev#549). Using one matcher for both sides means a token can no
+	``docs/``, dotfiles-linux-dev#549). Using one matcher for both sides means a token can no
 	longer expand to two disagreeing answers depending on which side evaluates it.
 
 	A live agent can add a file matching an issue's glob token on its own branch, invisible to
-	the local walk since it never reaches this checkout (dotfiles-dev#433 finding 3) — matching
+	the local walk since it never reaches this checkout (dotfiles-linux-dev#433 finding 3) — matching
 	the token against ``held`` too surfaces that collision instead of reading the issue as free.
 	A literal (non-glob) token passes through unchanged whether or not it exists yet — an
 	issue's declared surface may name a file its own solution would create. A token that
@@ -604,7 +604,7 @@ def select_disjoint(candidates: list[dict]) -> tuple[list[dict], list[dict]]:
 	"""Greedily select the largest disjoint set of candidates and name every collision.
 
 	Each issue is classified independently against the held set, so two issues declaring an
-	overlapping free path both read individually free (dotfiles-dev#433 finding 4) — nothing
+	overlapping free path both read individually free (dotfiles-linux-dev#433 finding 4) — nothing
 	reserves a selected candidate's paths before the next one is considered. This is a
 	deterministic GREEDY pass over candidates sorted by surface size ascending (ties by issue
 	number), not an optimal maximum-cardinality solver — sorting smallest-first means a single
@@ -643,14 +643,14 @@ def build_plan() -> dict:
 		raise RuntimeError(
 			f"open issue count ({len(issues)}) is at or past the "
 			f"{FREE_SURFACE_ISSUE_CAP}-issue cap this read and gate_free_surface's own "
-			"claimed-issue read share (dotfiles-dev#433 finding 2) — a truncated read can "
+			"claimed-issue read share (dotfiles-linux-dev#433 finding 2) — a truncated read can "
 			"misclassify a later issue as claimed; refusing to print a plan rather than a "
 			"possibly wrong one"
 		)
 
 	issue_numbers = {issue["number"] for issue in issues}
 	# `closingIssuesReferences` has no REST equivalent, so this one read stays on GraphQL and can be
-	# refused while the rest of the planner is healthy (dotfiles-dev#534). Dying here printed nothing
+	# refused while the rest of the planner is healthy (dotfiles-linux-dev#534). Dying here printed nothing
 	# at all, and both Stop guards then reported the plan UNREADABLE — true, but it hid a plan that
 	# was otherwise fully computable. Excluding every candidate BY NAME with this reason is the
 	# documented legitimate-zero shape: fail closed, stay readable, say which read failed.
