@@ -698,8 +698,9 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    run measures that. Required for any manual check of this step; never post a live review to a
    real PR while verifying the ladder by hand.
 
-   **Non-goals:** this does not replace the primary reviewer (item 3/4 above still runs first and
-   this only fires when that rung is unavailable), does not add a Claude marketplace plugin (both
+   **Non-goals:** this does not replace the primary reviewer (item 3/4 above still runs first for
+   an ordinary PR; the ladder takes over when that rung is unavailable, or at once for a PR the
+   planner tags `backlog`/`bot-skipped`), does not add a Claude marketplace plugin (both
    CLIs are already on `PATH`), and is not a general multi-model router — one ladder, one step.
 
 Report **time-to-first-review per PR**, never requests per hour: a PR sitting unreviewed is the

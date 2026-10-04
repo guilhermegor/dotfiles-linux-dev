@@ -164,7 +164,9 @@ LADDER_BACKLOG_HOURS = float(os.environ.get("REVIEW_FANOUT_BACKLOG_HOURS", "6"))
 # The reviewer's own refusal to review a bot-authored PR -- structural like the file cap
 # (#420): waiting never clears it and re-asking never will, so the ladder is the only path in.
 # Matched on the reviewer's login AND the phrase; anyone can type the phrase.
-REVIEWER_LOGIN_SUBSTRING = "coderabbit"
+# Exact logins, never a substring: GraphQL reports `coderabbitai`, REST `coderabbitai[bot]`, and a
+# lookalike account (`coderabbit-fan`) must not be able to fake a refusal (CWE-290).
+REVIEWER_LOGINS = frozenset({"coderabbitai", "coderabbitai[bot]"})
 BOT_SKIP_PHRASE = "review skipped"
 BOT_SKIP_DETAIL = "bot user detected"
 
@@ -459,7 +461,7 @@ def bot_skipped(pr: dict) -> bool:
 	for comment in pr.get("comments") or []:
 		login = ((comment.get("author") or {}).get("login") or "").lower()
 		body = (comment.get("body") or "").lower()
-		if REVIEWER_LOGIN_SUBSTRING in login and BOT_SKIP_PHRASE in body and BOT_SKIP_DETAIL in body:
+		if login in REVIEWER_LOGINS and BOT_SKIP_PHRASE in body and BOT_SKIP_DETAIL in body:
 			return True
 	return False
 

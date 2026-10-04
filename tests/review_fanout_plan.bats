@@ -51,7 +51,7 @@ setup() {
     # A rung resolved, so no predicate test is silently masked by the rung's own exclusion
     # reason (which is checked on purpose by its own tests below).
     export REVIEW_FANOUT_RUNG="qwen|qwen3-coder-plus|configured-default"
-    unset REVIEW_FANOUT_RECENT_PUSH_SECONDS
+    unset REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
 }
 
 teardown() {
@@ -773,4 +773,17 @@ EOF
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+}
+
+@test "a lookalike coderabbit login cannot fake a bot-skip refusal (CWE-290)" {
+    stub_gh_prs <<EOF
+[{"number":706,"headRefOid":"aaaa7060","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],
+  "comments":[{"body":"Review skipped — Bot user detected","createdAt":"$(ago 900)",
+               "author":{"login":"coderabbit-fan"}}],
+  "commits":[{"oid":"aaaa7060","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].ladder' <<<"$output")" = "null" ]
 }
