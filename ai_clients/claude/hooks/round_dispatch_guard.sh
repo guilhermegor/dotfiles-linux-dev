@@ -48,7 +48,11 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLANNER="${ROUND_DISPATCH_PLANNER:-$HOOK_DIR/lib/dispatch_plan.py}"
-PLANNER_TIMEOUT="${ROUND_DISPATCH_PLANNER_TIMEOUT:-30}"
+# 60s, not 30: dispatch_plan.py measured 39s on 2026-10-03 15:40Z under a GitHub
+# burst (every Stop read UNREADABLE) and 17s at 21:15Z after #605/#576 cut its
+# reads. ~3.5x the quiet runtime absorbs API latency; a real hang still times out
+# and fails closed (dotfiles-dev#607).
+PLANNER_TIMEOUT="${ROUND_DISPATCH_PLANNER_TIMEOUT:-60}"
 
 # round_events TRANSCRIPT
 # The round's tool_use stream reduced to the two tokens that decide this hook:
