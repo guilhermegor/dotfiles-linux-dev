@@ -62,6 +62,55 @@ classify_worktree_diff() {
 	printf 'interrupted\t%s\t%s\n' "$ins" "$del"
 }
 
+# owner/repo parsed from the origin remote URL, no network call. Empty when there is no
+# GitHub origin (a non-GitHub repo skips the whole GitHub half, silently).
+fanout_repo_slug() {
+	local cwd="$1" url
+	url="$(git -C "$cwd" remote get-url origin 2>/dev/null)" || return 1
+	[ -n "$url" ] || return 1
+	url="${url%.git}"
+	case "$url" in
+	*github.com[:/]*) printf '%s\n' "${url#*github.com}" | sed 's#^[:/]##' ;;
+	*) return 1 ;;
+	esac
+}
+
+# The PR payload fanout_worktrees() and fanout_pr_summary() read, shared by every caller so
+# none re-derives the query (dotfiles-linux-dev#616: quota_gap_rescue.sh hard-coded "forge
+# unreadable" and never ran the merged-PR exclusion). Prints the raw JSON, or nothing when
+# gh is missing/fails — callers test `jq -e 'type=="array"'` before trusting it.
+fanout_pr_json() {
+	local slug="$1"
+	# gh pr list returns 30 PRs when --limit is omitted. The worktree walk matches local
+	# branches against this list (merged heads, branches without a PR), and a live agent
+	# worktree can belong to a PR further back than 30 (dotfiles-dev#606). A branch the list
+	# misses is still reported, so a short list adds noise, never a missed rescue.
+	local pr_limit="${FANOUT_PR_LIMIT:-100}"
+	if command -v timeout >/dev/null 2>&1; then
+		timeout 8 gh pr list --repo "$slug" --state all --limit "$pr_limit" \
+			--json number,url,state,headRefName,headRefOid,reviews,createdAt 2>/dev/null
+	else
+		gh pr list --repo "$slug" --state all --limit "$pr_limit" \
+			--json number,url,state,headRefName,headRefOid,reviews,createdAt 2>/dev/null
+	fi
+}
+
+# True when a MERGED PR for <branch> shipped everything the worktree at <path> holds: the
+# local HEAD IS the merged head, or an ANCESTOR of it (the agent pushed more commits after
+# this worktree's last one — dotfiles-linux-dev#616). $3 is the "<branch>\t<headRefOid>" list.
+# The ancestor test needs the merged head object locally; when it is absent the check fails
+# toward reporting, never toward hiding work.
+merged_pr_covers_head() {
+	local path="$1" branch="$2" merged_heads="$3" head oid
+	head="$(git -C "$path" rev-parse HEAD 2>/dev/null)" || return 1
+	while IFS=$'\t' read -r b oid; do
+		[ "$b" = "$branch" ] && [ -n "$oid" ] || continue
+		[ "$oid" = "$head" ] && return 0
+		git -C "$path" merge-base --is-ancestor "$head" "$oid" 2>/dev/null && return 0
+	done <<<"$merged_heads"
+	return 1
+}
+
 # `git worktree list` entries for THIS repo (parallel-agent worktrees included) — unpushed
 # commits, classified dirty state, and (when the GitHub half answered) a branch that was
 # pushed but never got a PR. One walk, no per-branch `gh` calls.
@@ -121,12 +170,11 @@ fanout_worktrees() {
 				# applied there). That drops a ONE-commit squash merge only: squashing several
 				# commits yields a patch-id equal to none of them, so every one stays "+"
 				# (dotfiles-dev#606). The forge settles that case — a MERGED PR for this branch
-				# whose headRefOid is the local HEAD shipped exactly what is here. With the
+				# whose headRefOid is the local HEAD (or contains it as an ancestor) shipped what is here. With the
 				# forge unreadable (github_ok=0) merged_heads is empty, so it keeps reporting.
 				if [ "$has_upstream" = "0" ] && [ "$pushed" = "0" ] && [ -n "$branch" ] \
 					&& [ -n "$default_branch" ] && [ "$branch" != "$default_branch" ] \
-					&& ! printf '%s\n' "$merged_heads" \
-						| grep -qxF "$branch"$'\t'"$(git -C "$path" rev-parse HEAD 2>/dev/null)"; then
+					&& ! merged_pr_covers_head "$path" "$branch" "$merged_heads"; then
 					never_pushed="$(git -C "$path" cherry "origin/$default_branch" HEAD 2>/dev/null \
 						| grep -c '^+')"
 					[ -n "$never_pushed" ] || never_pushed=0

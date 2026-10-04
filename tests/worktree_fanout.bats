@@ -158,3 +158,23 @@ pr_row() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"worktree wtC: 1 commit(s) never pushed"* ]]
 }
+
+@test "merged PR whose head descends from the local HEAD suppresses the report" {
+    later="$(git -C "$wtF" commit-tree 'HEAD^{tree}' -p "$headF" -m "later push")"
+    run fanout_worktrees "$work" 1 "$(pr_row MERGED branchF "$later")"
+    [ "$status" -eq 0 ]
+    [[ ! "$output" == *"worktree wtF: "*"never pushed"* ]]
+}
+
+@test "merged PR head absent locally still reports the worktree" {
+    run fanout_worktrees "$work" 1 "$(pr_row MERGED branchF "0123456789abcdef0123456789abcdef01234567")"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtF: 2 commit(s) never pushed"* ]]
+}
+
+@test "merged PR head that is an ancestor of the local HEAD does not suppress the report" {
+    parent="$(git -C "$wtF" rev-parse HEAD~1)"
+    run fanout_worktrees "$work" 1 "$(pr_row MERGED branchF "$parent")"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtF: 2 commit(s) never pushed"* ]]
+}
