@@ -116,4 +116,4 @@ It is **silent on the keyword-argument form**:
 
 So the comparison half is already mechanically enforced for Python. Anything built on top of
 this rule should target the keyword-argument half and nothing else; re-covering PLR2004 would
-be a second implementation of a check that already runs (dotfiles-dev#333).
+be a second implementation of a check that already runs (dotfiles-linux-dev#333).

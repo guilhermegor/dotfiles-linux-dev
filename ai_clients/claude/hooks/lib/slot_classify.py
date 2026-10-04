@@ -12,7 +12,7 @@ not that the slot is idle. s:dev-loop step 4b spends the slot on that verdict.
 carries the reviewer's "fewer than 10 stars" eligibility notice, so no automatic
 review will EVER arrive here — an explicit ask is the only path in, permanently,
 not just right now. Losing that distinction reads a permanently-manual repo as an
-ordinary idle slot (dotfiles-dev#538).
+ordinary idle slot (dotfiles-linux-dev#538).
 
 Input contract: a REST comment-listing page (`gh api
 repos/{owner}/{repo}/issues/comments`), never a hand-rolled GraphQL query — see
@@ -26,7 +26,7 @@ Lives in its own file rather than inline in the watcher: the first version embed
 this in ``python3 -c '...'`` inside a shell script, where the f-string's escaped
 quotes survived the single quotes literally and Python raised SyntaxError on every
 poll. The watcher reported UNKNOWN (fail-closed, correctly) instead of a slot state,
-for 3 minutes before it was caught (dotfiles-dev#433).
+for 3 minutes before it was caught (dotfiles-linux-dev#433).
 """
 
 import datetime
@@ -51,7 +51,7 @@ def is_rest_shaped(list_comments: list) -> bool:
 	``created_at``). A GraphQL-shaped page uses different names (``author.login``,
 	``createdAt``) and silently yields zero matches from every filter below — not
 	because no reviewer commented, but because the field names don't exist on any
-	record. That produced a false ``FREE`` (dotfiles-dev#544): a real BUSY slot
+	record. That produced a false ``FREE`` (dotfiles-linux-dev#544): a real BUSY slot
 	read as free because the caller queried the wrong endpoint shape.
 
 	Parameters
@@ -117,7 +117,7 @@ def rate_limit_verdict(list_comments: list) -> str:
 	# ⚠️ A non-empty page where NOT ONE record carries a REST field name is a shape
 	# mismatch, not an empty roster — fail closed rather than read the silent zero
 	# matches below as FREE. An empty list is still a legitimate FREE: a repo with
-	# no comments really has no notice. dotfiles-dev#544; deliberately does NOT
+	# no comments really has no notice. dotfiles-linux-dev#544; deliberately does NOT
 	# accept the GraphQL shape as a fallback (the issue's own explicit scope) —
 	# absorbing it would hide which projection the caller used instead of telling
 	# them to fix the query. Bare ``UNKNOWN``, like every other fail-closed path:
@@ -133,7 +133,7 @@ def rate_limit_verdict(list_comments: list) -> str:
 	# pick "the" limit/done notice by taking the FIRST match in list order — that is only
 	# "the newest one" if the caller already reversed the page. Sort defensively here
 	# instead of trusting every call site to remember that: a silently wrong "newest" reads
-	# as a right answer (dotfiles-dev#473). Measured impact: mixing up an older CHAT-quota
+	# as a right answer (dotfiles-linux-dev#473). Measured impact: mixing up an older CHAT-quota
 	# notice for a newer REVIEW-limit notice inverts the verdict, since the two mean
 	# opposite things for the slot (CHAT = a different quota, untouched review slot).
 	list_bot = sorted(list_bot, key=lambda c: c.get("created_at") or "", reverse=True)
@@ -204,7 +204,7 @@ def classify(list_comments: list) -> str:
 	# ASK-ONLY whenever it is otherwise free, however the "free" was reached — no limit
 	# notice, an expired wait, a completed review, or a chat-only quota. Deciding it only
 	# when NO limit notice existed let any old notice demote the repo to plain FREE
-	# (dotfiles-dev#538 review). BUSY is left alone: a live limit is the more urgent fact.
+	# (dotfiles-linux-dev#538 review). BUSY is left alone: a live limit is the more urgent fact.
 	if not str_verdict.startswith("FREE|"):
 		return str_verdict
 	if any(ELIGIBILITY_PHRASE in body_of(c) for c in list_comments if is_reviewer(c)):

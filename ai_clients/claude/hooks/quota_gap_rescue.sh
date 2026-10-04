@@ -1,7 +1,7 @@
 #!/bin/bash
 # UserPromptSubmit hook: re-run the worktree rescue fan-out after a quota gap.
 #
-# dotfiles-dev#383. session_start_context.sh's fanout_worktrees() (hooks/lib/worktree_fanout.sh)
+# dotfiles-linux-dev#383. session_start_context.sh's fanout_worktrees() (hooks/lib/worktree_fanout.sh)
 # only runs at SessionStart. A quota kill does not start a new session — the SAME one resumes —
 # so nothing re-checks the worktrees after a 429 until the next s:dev-loop round (up to an hour
 # away) or the owner remembering to ask. This hook is the missing sensor for the trigger

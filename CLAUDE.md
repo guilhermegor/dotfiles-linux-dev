@@ -62,9 +62,9 @@ ai_clients/kimi/main.sh         ← Kimi Code CLI orchestrator (1 step; NOT inst
 Work-in-flight feature specs and plans (what `s:brainstorming` /
 `s:writing-plans` produce) live under `.specs/features/<feature-name>/`. See
 `.specs/CLAUDE.md` for what belongs there, what doesn't, and the out-of-repo
-rule for projects this doesn't apply to (dotfiles-dev#303). The pre-existing
+rule for projects this doesn't apply to (dotfiles-linux-dev#303). The pre-existing
 `docs/superpowers/{plans,specs}/` files have been migrated into
-`.specs/features/<feature-name>/{plan.md,design.md}` (dotfiles-dev#375,
+`.specs/features/<feature-name>/{plan.md,design.md}` (dotfiles-linux-dev#375,
 answering #302 Q-2: everything migrates); `docs/superpowers/` no longer
 exists.
 

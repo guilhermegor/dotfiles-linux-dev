@@ -26,7 +26,7 @@ skeleton name in the table below, not asked in a fixed slot order.
 ## 1. The measured answer surface
 
 ⚠️ This table is a measurement of `bin/blueprintx.sh` and `bin/scaffold/` taken for
-dotfiles-dev#363 — re-measure it (same method: read `prompt_*` call sites in
+dotfiles-linux-dev#363 — re-measure it (same method: read `prompt_*` call sites in
 `bin/blueprintx.sh` and each `templates/*/skeleton.meta`-driven scaffold) before trusting it
 if BlueprintX's own prompts have moved on since.
 

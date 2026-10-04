@@ -12,13 +12,13 @@
 # full bump math and the next-version-across-BOTH-indices computation. This guard owns only what is
 # deterministic and OFFLINE, so it never false-blocks:
 #   * shipped diff since the last tag is EMPTY               -> BLOCK (the byte-identical-wheel case);
-#   * shipped diff is NON-empty but semantically empty (dotfiles-dev#100) -> BLOCK, same reason;
+#   * shipped diff is NON-empty but semantically empty (dotfiles-linux-dev#100) -> BLOCK, same reason;
 #   * an obvious over-bump (a non-breaking change taking the minor/major axis, pre-1.0)
 #     -> ADVISORY note only (never a block — a legit Test PyPI floor jump can look identical).
 # The absolute version number is NOT checked here: it depends on max(PyPI, Test PyPI), which needs
 # the network, and a wrong offline guess would false-block. That check stays in the skill.
 #
-# dotfiles-dev#100: a non-empty shipped diff proves "these files were touched", never "the artifact
+# dotfiles-linux-dev#100: a non-empty shipped diff proves "these files were touched", never "the artifact
 # changed" — a diff touching only comments/formatting inside a .py file is non-empty in bytes and
 # semantically empty (identical ast.dump()). semantic_diff_empty() below extends the block to that
 # case. Coverage is Python-only (ast.dump is a Python-specific check): any non-.py file in the
@@ -95,7 +95,7 @@ shipped_diff_empty() {
 
 semantic_diff_empty() {
     # True only when EVERY changed shipped-path file is a tracked .py file whose AST is identical
-    # across revisions (dotfiles-dev#100). A non-empty byte diff proves "these files were touched",
+    # across revisions (dotfiles-linux-dev#100). A non-empty byte diff proves "these files were touched",
     # never "the artifact changed": a comment/docstring/formatting-only edit is non-empty in bytes
     # and AST-identical under ast.dump(). This check is Python-only by construction — ast.dump()
     # has no equivalent here for any other language — so it FAILS TOWARD "real change" for anything

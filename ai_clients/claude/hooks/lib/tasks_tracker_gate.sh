@@ -1,10 +1,10 @@
 #!/bin/bash
-# Shared missing-tracker gate (dotfiles-dev#485): "which in-flight multi-step effort has no
+# Shared missing-tracker gate (dotfiles-linux-dev#485): "which in-flight multi-step effort has no
 # tasks.md tracker", mirroring orphaned_issues.sh / roadmap_unblock.sh in shape -- generic across
 # repos (owner/repo arguments, nothing hardcoded), sourced by s:dev-loop step 2 (SWEEP) instead of
 # re-deriving the walk by hand.
 #
-# The predicate that had to be settled first (measured, dotfiles-dev#485): every one of this
+# The predicate that had to be settled first (measured, dotfiles-linux-dev#485): every one of this
 # repo's .specs/features/<slug>/ directories carries a plan.md, and none carries a tasks.md -- so
 # "has plan.md, lacks tasks.md" fires on every feature at once, including long-finished ones, and
 # a check that reports N findings the day it ships is a check nobody reads twice. The missing half

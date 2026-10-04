@@ -1,4 +1,4 @@
-"""Read the open-PR board one small GraphQL page at a time (dotfiles-dev#600).
+"""Read the open-PR board one small GraphQL page at a time (dotfiles-linux-dev#600).
 
 ``gh pr list --limit 200 --json …reviews,comments,statusCheckRollup`` is one request whose
 cost is the REQUESTED page size times every nested connection, not the number of PRs that

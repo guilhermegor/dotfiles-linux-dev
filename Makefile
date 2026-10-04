@@ -250,7 +250,7 @@ permissions:  ## chmod +x every *.sh in the repo (skips sourced libs — see bel
 	@find ai_clients -name "*.sh" -not -path "*/lib/*" -not -path "*/profile_functions.sh" -exec chmod +x {} \; 2>/dev/null || true
 	@echo "✅ Permissions updated successfully!"
 
-# Boring path-shaped exclusion, not a shebang/main() sniff (dotfiles-dev#312):
+# Boring path-shaped exclusion, not a shebang/main() sniff (dotfiles-linux-dev#312):
 # skip every */lib/* dir under ai_clients/ plus the one top-level exception,
 # profile_functions.sh. Some files under */lib/* are legitimately executable
 # (already committed 755, e.g. ai_clients/lib/restore_env_prompt.sh is

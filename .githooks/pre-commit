@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local pre-commit hook -- run the .specs/ structure gate locally, before
 # push/CI, so a violation is caught at commit time instead of after a red
-# CI round-trip (dotfiles-dev#443: CI alone is one leg, and --no-verify
+# CI round-trip (dotfiles-linux-dev#443: CI alone is one leg, and --no-verify
 # bypasses it -- this is the other leg, the defect blueprintx#510 exists
 # for). Enable with `make git_hooks`.
 set -euo pipefail

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared free-surface gate (dotfiles-dev#340): ONE implementation of "which open issues are
+# Shared free-surface gate (dotfiles-linux-dev#340): ONE implementation of "which open issues are
 # safe to dispatch right now", mirroring hooks/lib/review_thread_gate.sh — skill-invoked shared
 # logic that is not itself a hook, generic across repos (owner/repo arguments, nothing
 # hardcoded), sourced by both the SubagentStop sweep and s:dev-loop step 6 instead of either one
@@ -26,7 +26,7 @@
 #     empty FREE_HELD_PATHS on a failure — a guard that fails open here reads as "everything is
 #     free" and dispatches colliding agents.
 #
-#     ⚠️ dotfiles-dev#501: FREE_HELD_PATHS is the OPEN-PR union — an open PR is a frozen branch
+#     ⚠️ dotfiles-linux-dev#501: FREE_HELD_PATHS is the OPEN-PR union — an open PR is a frozen branch
 #     awaiting review, not a live writer. It answers the claimed-issue question
 #     (FREE_UNCLAIMED_ISSUES) and, read alongside free_classify_files below, a merge-risk
 #     annotation worth a note in a dispatched agent's brief. It is NEVER the dispatch-collision
@@ -49,8 +49,8 @@
 #     read it as the dispatch-collision verdict. Use live_agent_classify_files for that.
 #
 #   gate_live_agent_surface CWD
-#     dotfiles-dev#501's answer to "what is a dispatch collision": two LIVE agents writing the
-#     same file right now, never a candidate vs. a frozen open PR (dotfiles-dev#433). Sets:
+#     dotfiles-linux-dev#501's answer to "what is a dispatch collision": two LIVE agents writing the
+#     same file right now, never a candidate vs. a frozen open PR (dotfiles-linux-dev#433). Sets:
 #       LIVE_AGENT_STATUS = ok | unknown
 #       LIVE_AGENT_PATHS  = newline-separated exact paths any OTHER worktree of this checkout
 #                           is touching right now — its branch's committed diff against the
@@ -59,7 +59,7 @@
 #     A worktree IS the live-agent signal, same notion `hooks/lib/worktree_fanout.sh` walks for
 #     session_start_context.sh/quota_gap_rescue.sh, and the same notion
 #     `hooks/lib/dispatch_plan.py`'s `live_agent_held_paths()` already enforces via
-#     `round_dispatch_guard.sh` (dotfiles-dev#433/#476) — this is the shared, testable form of
+#     `round_dispatch_guard.sh` (dotfiles-linux-dev#433/#476) — this is the shared, testable form of
 #     that same recipe for any caller working in bash (dev-loop.md's manual step 6 included), not
 #     a fourth, independently-drifting liveness heuristic. It deliberately does NOT reuse
 #     `worktree_fanout.sh`'s `classify_worktree_diff` staleness filter: that question ("should a
@@ -68,7 +68,7 @@
 #     worth resuming. Returns 1 and sets LIVE_AGENT_STATUS=unknown on any read failure — never
 #     returns 0 with an empty LIVE_AGENT_PATHS on a failure, same fail-closed contract as above.
 #
-#     ⚠️ dotfiles-dev#551: nothing ever prunes a worktree whose agent finished, so the walk above
+#     ⚠️ dotfiles-linux-dev#551: nothing ever prunes a worktree whose agent finished, so the walk above
 #     saturates over the life of a long-lived checkout — measured at 61 worktrees, 56 on branches
 #     the forge reports MERGED, leaving ~0 genuine live writers while every candidate file still
 #     read `held`. `git merge-base --is-ancestor` cannot detect this (a squash-merged branch is
@@ -84,7 +84,7 @@
 #     PR at all is UNEXAMINED, never dead — this gate does not content-diff against the default
 #     branch to guess "superseded"; that call needs a human or a follow-up issue, not a guess here.
 #
-#     ⚠️ dotfiles-dev#572: an EXACT HEAD match against the dead PR's `headRefOid` (the #566 case
+#     ⚠️ dotfiles-linux-dev#572: an EXACT HEAD match against the dead PR's `headRefOid` (the #566 case
 #     above) misses a worktree whose branch was advanced on the forge AFTER this worktree's last
 #     fetch — GitHub's "Update branch" button merges the default branch into an open PR, and once
 #     that PR is later merged/closed the local worktree's HEAD is an ANCESTOR of the real dead
@@ -96,7 +96,7 @@
 #     fail-closed direction as everything else here — a guess that prunes a live worktree loses
 #     real work, which is strictly worse than one round of over-holding.
 #
-#   dispatch_plan.py's `live_agent_held_paths()` (dotfiles-dev#572) calls THIS gate via a
+#   dispatch_plan.py's `live_agent_held_paths()` (dotfiles-linux-dev#572) calls THIS gate via a
 #   subprocess, the same way `run_gate()` in that file already shells out to `gate_free_surface`
 #   — one liveness notion shared by both callers, never a second, independently-drifting walk in
 #   Python. Before #572, dispatch_plan.py re-implemented the local worktree walk from scratch and
@@ -222,14 +222,14 @@ gate_free_surface() {
 
 # _classify_files_against STATUS HELD_PATHS FILE...
 # Pure exact-path set math shared by free_classify_files (open-PR surface) and
-# live_agent_classify_files (live-agent surface, dotfiles-dev#501) — one implementation of the
+# live_agent_classify_files (live-agent surface, dotfiles-linux-dev#501) — one implementation of the
 # free/held/would-need-a-held-file trichotomy so the two callers can never independently drift
 # on what each state means. Fails closed (prints UNKNOWN, returns 1) unless STATUS is "ok" —
 # gating on that explicit sentinel, never on HELD_PATHS being non-empty, is what tells
 # "unset/unprimed" apart from "primed with a legitimately empty held set" (a repo with zero
 # open PRs/live agents, where every file really is free). Under `set -u`, an unprimed call used
 # to hit an unbound-variable error inside the loop, fall through the untouched held_count=0, and
-# print "free" for a fully held file list (dotfiles-dev#414) — the exact input that causes a
+# print "free" for a fully held file list (dotfiles-linux-dev#414) — the exact input that causes a
 # duplicate PR. Exact-path membership only — never a prefix/substring test, which is the whole
 # defect this gate exists to avoid.
 _classify_files_against() {
@@ -260,14 +260,14 @@ _classify_files_against() {
 
 # free_classify_files FILE... — see _classify_files_against; classifies against the open-PR
 # surface (FREE_STATUS/FREE_HELD_PATHS). Merge-risk annotation only — never the dispatch-
-# collision verdict (dotfiles-dev#501). Signature unchanged for existing callers.
+# collision verdict (dotfiles-linux-dev#501). Signature unchanged for existing callers.
 free_classify_files() {
 	_classify_files_against "${FREE_STATUS:-}" "${FREE_HELD_PATHS:-}" "$@"
 }
 
 # live_agent_classify_files FILE... — see _classify_files_against; classifies against the
 # live-agent surface (LIVE_AGENT_STATUS/LIVE_AGENT_PATHS, set by gate_live_agent_surface). This
-# is the verdict that actually blocks dispatch (dotfiles-dev#501).
+# is the verdict that actually blocks dispatch (dotfiles-linux-dev#501).
 live_agent_classify_files() {
 	_classify_files_against "${LIVE_AGENT_STATUS:-}" "${LIVE_AGENT_PATHS:-}" "$@"
 }
@@ -277,7 +277,7 @@ live_agent_classify_files() {
 # SSH and HTTPS forms only. Returns 1 (silently — never logged as a failure) for anything else: a
 # local-path remote (every fixture in tests/live_agent_surface.bats), a non-GitHub host, or a
 # missing `origin` at all. Callers treat a 1 here as "the forge-exclusion enhancement below is
-# unavailable", never as a reason to fail the whole gate closed (dotfiles-dev#551) — resolving the
+# unavailable", never as a reason to fail the whole gate closed (dotfiles-linux-dev#551) — resolving the
 # repo is a capability probe, not a correctness gate.
 _origin_owner_repo() {
 	local cwd="$1" url
@@ -302,7 +302,7 @@ _origin_owner_repo() {
 #
 # ⚠️ Built once and passed down, never called per worktree (#566 review). A per-worktree lookup
 # issued one `gh pr list` per eligible worktree, so the 61-worktree checkout that motivated
-# dotfiles-dev#551 would spend dozens of sequential forge requests before classifying a single
+# dotfiles-linux-dev#551 would spend dozens of sequential forge requests before classifying a single
 # file — and the shared 5000/h quota is per USER, drained by every concurrent agent at once
 # (measured to exhaustion twice). A gate whose cost scales with worktree count is a quota bomb
 # aimed at the very fleet it exists to coordinate.
@@ -330,7 +330,7 @@ _dead_branch_index() {
 
 # _dead_branch_reaches INDEX BRANCH HEAD PATH
 # True (0) when INDEX carries a MERGED/CLOSED PR for BRANCH whose head commit either EQUALS HEAD
-# (the #566 case) or is a commit HEAD is an ancestor of (dotfiles-dev#572: the branch was advanced
+# (the #566 case) or is a commit HEAD is an ancestor of (dotfiles-linux-dev#572: the branch was advanced
 # on the forge — e.g. GitHub's "Update branch" button — after PATH's last fetch). The ancestor
 # check only trusts a commit object PATH's local database already has (`git cat-file -e`, never a
 # network fetch): a candidate sha this worktree has not fetched is skipped, never guessed at, so
@@ -357,7 +357,7 @@ _dead_branch_reaches() {
 # a worktree that still holds work the merged PR does not account for". Fails closed to "not dead"
 # (1) on any read failure, an unreadable HEAD, an empty index, or a missing upstream (an unpushed
 # branch's local commits cannot be verified as already-shipped) — this only ever narrows
-# LIVE_AGENT_PATHS, never on a guess (dotfiles-dev#551).
+# LIVE_AGENT_PATHS, never on a guess (dotfiles-linux-dev#551).
 _worktree_dead_and_clean() {
 	local index="$1" branch="$2" path="$3" head porcelain ahead
 	[ -n "$index" ] && [ -n "$branch" ] || return 1
@@ -382,7 +382,7 @@ _worktree_dead_and_clean() {
 # _free_held_paths's own "No common ancestor" tolerance above, just against local git's wording
 # instead of the GitHub compare API's.
 #
-# OWNER/REPO are optional (dotfiles-dev#551): when both are non-empty, a worktree's committed
+# OWNER/REPO are optional (dotfiles-linux-dev#551): when both are non-empty, a worktree's committed
 # divergence is skipped entirely once `_worktree_dead_and_clean` confirms it is dead — the forge
 # already shipped or closed its PR, and it holds no unaccounted-for work. Every existing caller
 # that passes only CWD/DEFAULT keeps the prior, purely-local behaviour byte for byte.
@@ -402,7 +402,7 @@ _live_agent_held_paths() {
 	# Skipping every worktree whose branch equals $default excluded the wrong set: invoked from a
 	# linked worktree, it dropped the main checkout's uncommitted files from LIVE_AGENT_PATHS
 	# entirely, so a file an agent was holding there classified `free` and could be dispatched
-	# concurrently (dotfiles-dev#523 review). The header already says "any OTHER worktree" — this
+	# concurrently (dotfiles-linux-dev#523 review). The header already says "any OTHER worktree" — this
 	# is what that sentence claimed all along.
 	self="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || return 1
 	[ -n "$self" ] || return 1
@@ -430,7 +430,7 @@ _live_agent_held_paths() {
 			# never reached $held. The branch is required only for the committed-divergence diff
 			# below, which is the one read that genuinely needs a branch name (#523 review).
 			if [ -n "$path" ] && [ -d "$path" ] && [ "$path" != "$self" ]; then
-				# dotfiles-dev#551: a forge-confirmed dead-and-clean worktree contributes nothing
+				# dotfiles-linux-dev#551: a forge-confirmed dead-and-clean worktree contributes nothing
 				# — skip it entirely rather than walk its (empty, by definition) diffs below. Only
 				# armed when the caller resolved an owner/repo (see the file header); with neither,
 				# this is always false and every existing caller's behaviour is unchanged byte for
@@ -468,7 +468,7 @@ _live_agent_held_paths() {
 				# status made an unreadable worktree indistinguishable from a clean one: the
 				# empty result added nothing, the gate still returned `ok`, and a file another
 				# agent was holding classified `free` — a permission error or a transient read
-				# failure silently licensed a second agent onto it (dotfiles-dev#523 review).
+				# failure silently licensed a second agent onto it (dotfiles-linux-dev#523 review).
 				# The header's "fails closed on anything but the no-shared-history case" was
 				# already the stated contract; these lines were the exception nobody declared.
 				# Status is checked WITHOUT folding stderr into the value: a git warning on a
@@ -495,7 +495,7 @@ _live_agent_held_paths() {
 }
 
 # gate_live_agent_surface CWD — see the file header contract. Purely local unless CWD's
-# `origin` resolves to a GitHub owner/repo (dotfiles-dev#551), in which case it also excludes any
+# `origin` resolves to a GitHub owner/repo (dotfiles-linux-dev#551), in which case it also excludes any
 # worktree whose branch is forge-confirmed dead-and-clean; see _origin_owner_repo.
 gate_live_agent_surface() {
 	local cwd="$1"
@@ -507,7 +507,7 @@ gate_live_agent_surface() {
 
 	local default_branch="" held cand
 
-	# Best-effort only (dotfiles-dev#551): a local-path or non-GitHub origin (every fixture in
+	# Best-effort only (dotfiles-linux-dev#551): a local-path or non-GitHub origin (every fixture in
 	# tests/live_agent_surface.bats included) leaves owner/repo empty, which disables the
 	# forge-exclusion enhancement in _live_agent_held_paths without affecting this gate's own
 	# fail-closed contract — parse failure here is never a reason to return unknown.
@@ -549,7 +549,7 @@ gate_live_agent_surface() {
 	# A missing local refs/remotes/origin/HEAD is NOT a read failure — it is simply absent in any
 	# clone made with `git remote add`, and in clones whose remote never advertised a HEAD.
 	# Treating it as unreadable returned `unknown` and blocked dispatch forever in a perfectly
-	# healthy repository (dotfiles-dev#523 review). Fall back to whichever conventional remote
+	# healthy repository (dotfiles-linux-dev#523 review). Fall back to whichever conventional remote
 	# branch actually exists; still fail closed when none does, because then the default genuinely
 	# cannot be determined and a wrong guess would mis-scope every diff below.
 	if [ -z "$default_branch" ]; then

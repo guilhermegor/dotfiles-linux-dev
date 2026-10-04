@@ -12,7 +12,7 @@ You are summarizing all work done on the current branch. Follow these steps exac
 Run these in parallel:
 - `git rev-parse --show-toplevel` — absolute repo root; keep it as `$REPO_ROOT` and prefix every
   command below with `cd "$REPO_ROOT" &&` — the harness resets cwd between Bash calls and can
-  reset it to a different repo entirely (dotfiles-dev#229)
+  reset it to a different repo entirely (dotfiles-linux-dev#229)
 - `git rev-parse --abbrev-ref HEAD` — current branch name
 - `git rev-parse --abbrev-ref --symbolic-full-name @{u}` — tracking remote (may fail if unset)
 - `git branch --show-current`

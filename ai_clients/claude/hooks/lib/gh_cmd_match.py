@@ -9,7 +9,7 @@ inside a quoted argument, and only ever looked at the START of the whole command
 missing every invocation chained after `;`, `&&`, `||`, `|`, `&`, or a newline (dotfiles-dev,
 CodeRabbit review on PR #371).
 
-`merge` was added for pr_merge_threads_guard.sh (dotfiles-dev#462): it needs to know whether
+`merge` was added for pr_merge_threads_guard.sh (dotfiles-linux-dev#462): it needs to know whether
 `--auto` is present on `gh pr merge`, off the same real argv, for the identical reason — a
 `--auto` INSIDE a quoted `--title`/`--body` value must not count, and the same chaining rule
 applies.

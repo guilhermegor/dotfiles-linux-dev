@@ -16,7 +16,7 @@ authoring half of a Linear-style flow. This command only sets the card's *starti
   `Closes #N` link in step 9 feeds it) — those two toggles are OFF by default and the API
   cannot enable them, so step 7 below verifies them every run. `subagent_stop_sweep.sh`'s
   kanban reconcile is the deterministic fallback when a human never flips them, or a card
-  lands in No Status with nothing to advance it (dotfiles-dev#556). GitHub can silently
+  lands in No Status with nothing to advance it (dotfiles-linux-dev#556). GitHub can silently
   drop the link (`closingIssuesReferences: []`), so after `gh pr create` run
   `gh pr view <n> --json closingIssuesReferences` and warn when empty. A repo-level
   `close-linked-issues` workflow (guilhermegor/blueprintx#604) closes the issue from the
@@ -26,7 +26,7 @@ Follow these steps exactly. `$ARGUMENTS` holds an issue reference *or* a work de
 plus optional flags.
 
 **`--quick`** exists for the by-product case: an issue that surfaces mid-round, not the
-task at hand (dotfiles-dev#179 — measured 14/14 such issues on one session bypassing this
+task at hand (dotfiles-linux-dev#179 — measured 14/14 such issues on one session bypassing this
 command entirely via bare `gh issue create`, so step 4's classification table never ran
 and no card was ever placed). `--quick` keeps that classification reachable without the
 full interactive cost: it requires `--work <type>` (step 4's ask is already skipped by
@@ -142,7 +142,7 @@ Once resolved to an existing issue:
 - **Check for an existing score, never left blank.** A score already present is kept — never
   re-derived or overridden here. One that is absent runs step 5a before anything else proceeds:
   resuming is the natural moment to close that gap, and silently leaving it blank is what makes
-  the requirement optional in practice (dotfiles-dev#178). **Linear** exposes the native
+  the requirement optional in practice (dotfiles-linux-dev#178). **Linear** exposes the native
   `estimate` on the issue already fetched above — check it right here. **GitHub** has no such
   field on the issue itself; its `Points` value lives on the board item, so this check happens
   in step 7 once the card is located — run step 5a there, before setting the column, if it reads
@@ -263,7 +263,7 @@ logic for no gain.
 *(Runs here — after hierarchy so the final subtask boundaries are known, before step 6's create
 so the score exists to write. Also entered directly from step 2's resume path when a score is
 missing.)* No issue is filed or left resumed without a score, on either tracker — see
-dotfiles-dev#178.
+dotfiles-linux-dev#178.
 
 Load `s:story-score` via Skill tool, passing the Scope/description of each unit step 5 settled
 on as context — the single flat issue, or each child (never the parent as one lump; the scale
@@ -294,7 +294,7 @@ scored before the parent is written.
 Body template. The **Documentation** section is mandatory and stays verbatim — it is a standing
 requirement. It is written in English, like the rest of this repo's durable record
 (`gh_prose_language_guard.sh` enforces exactly that for whatever is published here — a template
-demanding non-English prose would fight its own guard, dotfiles-dev#187):
+demanding non-English prose would fight its own guard, dotfiles-linux-dev#187):
 
 ```
 ## Goal
@@ -310,7 +310,7 @@ demanding non-English prose would fight its own guard, dotfiles-dev#187):
 
 A quoted non-English literal (a UI string, a Gherkin keyword, a foreign source identifier) is
 data, not prose — keep it verbatim in backticks so it stays greppable in the code it describes;
-the guard exempts inline `code` spans exactly for this case (dotfiles-dev#187).
+the guard exempts inline `code` spans exactly for this case (dotfiles-linux-dev#187).
 
 Per-tracker operations — one spine, two arms:
 
@@ -386,7 +386,7 @@ and match the project titled exactly **`<repo> kanban`** (e.g. `filings-cvm kanb
 
   **Then ensure a `Points` field exists.** GitHub has no native estimate field, so the score from
   step 5a is recorded as a project (board) `Number` field — summable in a board view, unlike a
-  `points/<n>` label (dotfiles-dev#178 weighed both and picked the field for exactly that reason).
+  `points/<n>` label (dotfiles-linux-dev#178 weighed both and picked the field for exactly that reason).
   Check `field-list` first; create it only if missing:
 
   ```bash
@@ -401,7 +401,7 @@ and match the project titled exactly **`<repo> kanban`** (e.g. `filings-cvm kanb
 **Verify the Done workflows every run — new board or existing.** A board created before today
 may have shipped with #7/#8 already off, and a human can turn either off again later; nothing
 else in this command or in the sweep's kanban reconcile ever re-checks the toggle itself
-(dotfiles-dev#556 — board 13 sat with both disabled for weeks, unnoticed, because the only
+(dotfiles-linux-dev#556 — board 13 sat with both disabled for weeks, unnoticed, because the only
 warning ever printed was at board-creation time, and never again). GitHub exposes no GraphQL
 read for a workflow's *enabled* state, so "verify" here means **ask, every run, and record
 the answer** — never print static instructions once and move on. Use AskUserQuestion with
@@ -412,7 +412,7 @@ these three toggles as options; do not proceed on a silent assumption:
 > - **Pull request merged** → Set value → Status → Done — **ON**?
 > - **Item added to project** → stays **OFF**. Enabling it sets a Status the instant an item
 >   is added — before this command's own step 7 derives and sets the real one — and races
->   `subagent_stop_sweep.sh`'s No-Status reconcile (dotfiles-dev#556's scope extension) the
+>   `subagent_stop_sweep.sh`'s No-Status reconcile (dotfiles-linux-dev#556's scope extension) the
 >   same way.
 >
 > Do **not** enable **Pull request linked to issue** either — `kanban_lifecycle.sh` already

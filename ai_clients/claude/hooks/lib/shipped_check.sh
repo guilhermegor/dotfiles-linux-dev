@@ -1,7 +1,7 @@
 #!/bin/bash
 # ai_clients/claude/hooks/lib/shipped_check.sh
 #
-# Shared "was this already shipped" gate for s:intake-shipped (dotfiles-dev#427,
+# Shared "was this already shipped" gate for s:intake-shipped (dotfiles-linux-dev#427,
 # parent #422). Same contract shape as review_thread_gate.sh / roadmap_unblock.sh:
 # one function, two globals, fail-closed on any read error.
 #
@@ -46,7 +46,7 @@ fi
 # git's own exit code is captured separately here rather than trusted through
 # a pipe -- a `git show`/`cat-file` operational failure must never collapse
 # into "missing", which the caller would read as evidence the deliverable was
-# never shipped (dotfiles-dev#427 PR #460 review).
+# never shipped (dotfiles-linux-dev#427 PR #460 review).
 _shipped_probe_one() {
     local base_ref="$1" deliverable="$2" path pattern
     local errfile content git_status stderr_msg

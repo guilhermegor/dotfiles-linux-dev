@@ -10,7 +10,7 @@
 # token still works; a failure points at `rclone config reconnect <remote>:`
 # rather than leaving a broken mount silently in place — OneDrive refresh
 # tokens expire after disuse, so this is expected, not an error
-# (dotfiles-dev#367).
+# (dotfiles-linux-dev#367).
 
 GITHUB_DIR="$HOME/github"
 RCLONE_CONF_DEST="$HOME/.config/rclone/rclone.conf"

@@ -55,7 +55,7 @@ test command rather than inverting it. Add a per-suite `refute_*` helper
 
 Write it correctly the first time — `tests/bats_negation_gate.sh` rejects
 any bare `! <cmd>` inside a `@test` body in `tests/*.bats`, wired into both
-`make test` and CI, with no last-line exemption (dotfiles-dev#380).
+`make test` and CI, with no last-line exemption (dotfiles-linux-dev#380).
 
 ## Status output: always `print_status`, never raw `echo`/`printf`
 

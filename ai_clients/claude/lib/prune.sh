@@ -101,7 +101,7 @@ _prune_file_artifacts() {
     print_status "success" "Removed ${#orphan_paths[@]} orphaned artifact(s)"
 }
 
-# ── Settings-key pruning (dotfiles-dev#272) ─────────────────────────────────
+# ── Settings-key pruning (dotfiles-linux-dev#272) ─────────────────────────────────
 #
 # configure_settings() merges source into ~/.claude/settings.json with
 # `jq '. * $base'` — additive only. It can update a key's value but can

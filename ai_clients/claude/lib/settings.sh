@@ -36,7 +36,7 @@ configure_settings() {
     # source: it silently stays behind forever. The "prune" step's
     # prune_settings_keys() (lib/prune.sh) is the delete path for the specific,
     # fully source-owned subtrees where that matters (e.g. enabledPlugins) —
-    # see dotfiles-dev#272.
+    # see dotfiles-linux-dev#272.
     echo "$current" | jq --argjson base "$base_settings" '. * $base' > "${settings_file}.tmp"
 
     # Add portable statusLine only if claude-hud cache is present.

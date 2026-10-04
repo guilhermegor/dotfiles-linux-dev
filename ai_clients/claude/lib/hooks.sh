@@ -13,7 +13,7 @@
 #      string, not an interpolated one, so tests/hooks_install_parity.bats's
 #      static extractor can see it (the same reason the lib/ loop below needs
 #      its own dedicated "actually installed" test rather than reusing that
-#      extractor). Forgetting this step is dotfiles-dev#532:
+#      extractor). Forgetting this step is dotfiles-linux-dev#532:
 #      pr_body_orphan_check.sh shipped a script, a bats suite, and a
 #      CLAUDE.md entry with no copy_hook_file call, so it was tested,
 #      documented, and never installed. The bats suite's
@@ -28,7 +28,7 @@ HOOKS_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" && pwd)"
 
 # A verdict cached by a hook is only valid for the logic that computed it. Deploying a new
 # version of that hook without clearing its cache lets the OLD verdict keep being replayed
-# until its TTL expires (dotfiles-dev#504) — measured: PR #498 fixed open_review_threads_nudge.sh
+# until its TTL expires (dotfiles-linux-dev#504) — measured: PR #498 fixed open_review_threads_nudge.sh
 # at 15:28:34Z, but a verdict cached 40s earlier by the pre-fix logic was still replayable
 # afterwards. Keying each cache entry by a hash of its producing script would make this
 # automatic, but that key has to live inside the hook that WRITES the cache
@@ -108,9 +108,9 @@ install_hooks() {
     copy_hook_file "pr_self_assign.sh" "$hooks_dir"
     copy_hook_file "rtk_worktree_passthrough.sh" "$hooks_dir"
     copy_hook_file "stale_local_ref_guard.sh" "$hooks_dir"
-    # Manual/periodic report (dotfiles-dev#441) — installed so it CAN be run by
+    # Manual/periodic report (dotfiles-linux-dev#441) — installed so it CAN be run by
     # hand or by /session-closeout, deliberately never wired to a settings.json
-    # event. Missing here is the exact defect dotfiles-dev#532 reported: tested
+    # event. Missing here is the exact defect dotfiles-linux-dev#532 reported: tested
     # and documented, but never installed, so it never ran either way.
     copy_hook_file "pr_body_orphan_check.sh" "$hooks_dir"
 

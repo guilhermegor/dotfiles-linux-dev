@@ -97,10 +97,10 @@ fanout_pr_summary() {
 }
 
 # classify_worktree_diff() and fanout_worktrees() live in lib/worktree_fanout.sh (sourced
-# above) — dotfiles-dev#383 extracted them so quota_gap_rescue.sh (UserPromptSubmit) can call
+# above) — dotfiles-linux-dev#383 extracted them so quota_gap_rescue.sh (UserPromptSubmit) can call
 # the same implementation instead of re-deriving it.
 
-# Outstanding fan-out state (dotfiles-dev#160): PRs waiting on a review of the current head
+# Outstanding fan-out state (dotfiles-linux-dev#160): PRs waiting on a review of the current head
 # commit, worktrees with unpushed commits or uncommitted files, and branches pushed with no PR.
 # Silent when clean — this is a janitor, never a gate (bin/CLAUDE.md): report and exit 0, never
 # block, never fail the session. A `gh` failure prints an explicit "could not reach GitHub" line

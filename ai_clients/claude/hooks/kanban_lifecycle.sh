@@ -40,7 +40,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 command -v gh >/dev/null 2>&1 || exit 0
 
 # owner_repo/cache_file/discover_board/board_config/move_card live in the shared lib
-# (dotfiles-dev#448) so this event hook and the reconcile that covers its misses
+# (dotfiles-linux-dev#448) so this event hook and the reconcile that covers its misses
 # (subagent_stop_sweep.sh) share one implementation instead of two copies drifting apart.
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/kanban_reconcile.sh

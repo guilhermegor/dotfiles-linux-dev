@@ -25,7 +25,7 @@ Run in parallel:
 - `git rev-parse --show-toplevel` — absolute repo root; keep it as `$REPO_ROOT` and prefix every
   command below with `cd "$REPO_ROOT" &&` — the harness resets cwd between Bash calls and can
   reset it to a different repo entirely, so an unqualified command answers about whatever the
-  shell happens to point at (dotfiles-dev#229)
+  shell happens to point at (dotfiles-linux-dev#229)
 - `git branch --show-current` — active branch name
 - `git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null` — upstream (may fail)
 - `gh pr list --head "$(git branch --show-current)" --json number,title,url --limit 1`
@@ -47,7 +47,7 @@ If the user answers no, stop.
 
 Compute the merge base and collect data in parallel. Compare against `origin/<base-branch>`,
 never the bare local branch name — a stale local tracking ref silently mis-scopes the diff the
-same way an implicit `HEAD` does (dotfiles-dev#229):
+same way an implicit `HEAD` does (dotfiles-linux-dev#229):
 
 ```bash
 cd "$REPO_ROOT" && git fetch origin "<base-branch>" --quiet

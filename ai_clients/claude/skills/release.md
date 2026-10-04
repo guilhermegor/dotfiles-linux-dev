@@ -55,7 +55,7 @@ git diff --name-only <last-tag>..HEAD -- <shipped-paths...>
 - **Shipped diff empty** → **STOP. No release.** Say plainly: *"No shipped change since
   `<last-tag>` — ci/docs/chore/test do not get a release."* Do not publish, do not tag.
 - **Shipped diff non-empty is necessary, not sufficient** — it proves these files were *touched*,
-  never that the artifact *changed* (dotfiles-dev#100). A diff touching only a comment, docstring
+  never that the artifact *changed* (dotfiles-linux-dev#100). A diff touching only a comment, docstring
   prose, or formatting inside a `.py` file is non-empty in bytes and semantically empty. One-line
   discriminator, per changed `.py` file: `ast.dump(ast.parse(old_src)) == ast.dump(ast.parse(new_src))`.
   If every changed file is `.py` and AST-identical → **STOP. No release**, same as an empty diff —
@@ -99,7 +99,7 @@ Load the matching arm and ask it for the floor, then `next = bump(floor)`.
 
 ## 5. Announce the computed version, then cut
 
-🔴 **CUT IT. Do not ask.** Standing decision, 2026-08-30 (dotfiles-dev#171): *"sempre seguir com
+🔴 **CUT IT. Do not ask.** Standing decision, 2026-08-30 (dotfiles-linux-dev#171): *"sempre seguir com
 a release quando possível, prefiro que sempre que possível seja publicado mediante o código estar
 funcional."*
 

@@ -1,4 +1,4 @@
-"""Compute the review fan-out plan for review_fanout_guard.sh (dotfiles-dev#480).
+"""Compute the review fan-out plan for review_fanout_guard.sh (dotfiles-linux-dev#480).
 
 Invoked with NO arguments, from a checkout of the target repo — the same convention
 ``dispatch_plan.py`` (#433) and its own ``round_dispatch_guard.sh`` caller already rely on.
@@ -13,7 +13,7 @@ issues, keyed on ``pr`` instead of ``issue``::
 SCHEDULING only — which PRs get a reviewer. Nothing in this file accepts, applies or resolves
 a review finding, and nothing downstream should: a deterministic fan-out that auto-applied
 findings would industrialise the false positives and be strictly worse than the prose it
-replaces (dotfiles-dev#480, "The boundary this must not cross").
+replaces (dotfiles-linux-dev#480, "The boundary this must not cross").
 
 "NEEDS A REVIEW?" IS NOT ``reviews | length == 0``
 --------------------------------------------------
@@ -46,7 +46,7 @@ the two rungs publish to different places and neither channel alone sees the oth
 ``needs_review`` is the negation of that union. A PR whose head commit is not resolvable at
 all is UNKNOWN, never "needs a review" and never "covered" — it is excluded by name.
 
-⚠️ Channel 2 is head-scoped by SHA *and* by time (dotfiles-dev#564). The time clause alone
+⚠️ Channel 2 is head-scoped by SHA *and* by time (dotfiles-linux-dev#564). The time clause alone
 is defeated by a backdated head: committer date is whoever-pushes-controlled, so a new head
 can look older than an existing marker for a different commit and inherit its coverage. The
 SHA clause answers "was it the same commit"; the time clause still catches a marker written
@@ -79,7 +79,7 @@ plan that reads as "only these three qualify".
 The rung itself comes from #479's shipped probe (``resolve_fallback_reviewer``,
 reviewer_ladder.sh), called once per plan and never re-implemented here.
 
-``commits`` IS NEVER REQUESTED UNBOUNDED (dotfiles-dev#537)
+``commits`` IS NEVER REQUESTED UNBOUNDED (dotfiles-linux-dev#537)
 -----------------------------------------------------------
 It was, until this planner's very first live run: ``gh pr list --json …,commits,…`` at
 ``--limit 200`` is rejected UNCONDITIONALLY by GitHub — "requesting up to 1,000,000 possible
@@ -90,7 +90,7 @@ list only clears the cap at ``--limit 20``, one tenth of ``OPEN_PR_LIST_CAP``). 
 every resulting traceback as ``UNREADABLE`` and blocked every round since #527 merged — the
 plan had never once succeeded, on an empty repo or a busy one, because the cap is computed
 from the REQUESTED limits, not the actual data volume. (The same cost model is why the whole
-board read is now paged -- dotfiles-dev#600, ``open_pr_pages.py``.)
+board read is now paged -- dotfiles-linux-dev#600, ``open_pr_pages.py``.)
 
 ``commits`` fed exactly one value: ``head_commit_time()`` now fetches that one datum from
 REST instead — ``repos/{owner}/{repo}/commits/{oid}`` → ``.commit.committer.date`` — a
@@ -125,7 +125,7 @@ GH_TIMEOUT = 30
 # that needed no reviewer.
 OPEN_PR_LIST_CAP = 200
 
-# Every connection is bounded explicitly (open_pr_pages.py, dotfiles-dev#600). `commits` is
+# Every connection is bounded explicitly (open_pr_pages.py, dotfiles-linux-dev#600). `commits` is
 # `last:1` and carries only the rollup -- never the unbounded commit list #537 was rejected for.
 # `last:` on reviews/comments keeps the NEWEST 100, which is what head coverage reads; their
 # `totalCount` is requested so a window that dropped older entries is known, not assumed whole
@@ -243,11 +243,11 @@ def open_prs() -> list[dict]:
 	"""Return every open PR with the fields the predicate and the eligibility rules need.
 
 	Paged through ``open_pr_pages.read_open_prs`` -- one 200-PR ``gh pr list`` request 502s
-	above ~20 PRs (dotfiles-dev#600) -- and still one read for the whole plan: ``reviews``,
+	above ~20 PRs (dotfiles-linux-dev#600) -- and still one read for the whole plan: ``reviews``,
 	``comments`` and the rollup all arrive on the PR node, so a per-PR ``gh pr view`` fan-out
 	(N calls, the shape that drained both REST and GraphQL buckets in #445) is not needed. A
 	failing page raises and discards the pages before it. ``commits`` is requested only as
-	``last:1`` for the rollup -- see the module docstring's dotfiles-dev#537 section;
+	``last:1`` for the rollup -- see the module docstring's dotfiles-linux-dev#537 section;
 	``head_commit_time()`` fetches the head's own commit date from REST instead.
 	"""
 	return [_flatten(n) for n in read_open_prs(PR_SELECTION, _run, OPEN_PR_LIST_CAP)]
@@ -353,7 +353,7 @@ def check_states(rollup: list | None) -> dict:
 
 # oid -> resolved committedDate (or None), across every PR in one process's plan. A rerun
 # against the same head never re-fetches it; the cost of the extra REST round trip this
-# dotfiles-dev#537 fix introduces is paid at most once per distinct oid, not once per PR.
+# dotfiles-linux-dev#537 fix introduces is paid at most once per distinct oid, not once per PR.
 _HEAD_COMMIT_TIME_CACHE: dict[str, datetime.datetime | None] = {}
 
 
@@ -361,7 +361,7 @@ def head_commit_time(pr: dict) -> datetime.datetime | None:
 	"""Return the ``committedDate`` of the commit ``headRefOid`` names, or None.
 
 	Fetched from REST (``repos/{owner}/{repo}/commits/{oid}``) rather than read off the
-	``gh pr list`` response — see the module docstring's dotfiles-dev#537 section for why
+	``gh pr list`` response — see the module docstring's dotfiles-linux-dev#537 section for why
 	``commits`` cannot be requested unbounded at all. ``{owner}``/``{repo}`` are resolved by
 	``gh`` itself from the working directory, the same way ``gh pr list`` resolves its repo.
 
@@ -411,7 +411,7 @@ def reviewed_at_head(pr: dict) -> bool:
 def names_head(body: str, head: str) -> bool:
 	"""True when the marker's own SECOND line is ``Reviewed head: <head>``.
 
-	Same test as ``ladder_already_covered`` / the thread gate (dotfiles-dev#564), so the
+	Same test as ``ladder_already_covered`` / the thread gate (dotfiles-linux-dev#564), so the
 	three readers of a marker cannot disagree about which commit it reviewed. A marker with
 	no second line (written before #564) or an unresolved ``head`` is False — fail closed.
 	"""
@@ -426,7 +426,7 @@ def ladder_covered_at_head(pr: dict, head_time: datetime.datetime) -> bool:
 	``Reviewed head:`` line names ``headRefOid`` (which commit), and it was posted strictly
 	after the head commit (a comment written before the head existed provably did not
 	review it). A time-only check is defeated by a backdated head whose committer date
-	predates an existing marker for a different commit (dotfiles-dev#564).
+	predates an existing marker for a different commit (dotfiles-linux-dev#564).
 	"""
 	head = pr.get("headRefOid") or ""
 	for comment in pr.get("comments") or []:
@@ -568,10 +568,10 @@ def main() -> int:
 	"""Print the review fan-out plan as one JSON object and return 0.
 
 	A `gh` failure (a real API refusal, including a secondary GraphQL rate limit -- measured
-	live, dotfiles-dev#559 follow-up) or a timeout must read as an actionable UNKNOWN, never
+	live, dotfiles-linux-dev#559 follow-up) or a timeout must read as an actionable UNKNOWN, never
 	an uncaught traceback. `review_fanout_guard.sh` already fails closed on this either way
 	(empty/unparseable stdout plus a non-zero exit is its own UNREADABLE contract,
-	dotfiles-dev#480's `block_unreadable`) -- this is about what an agent running the planner
+	dotfiles-linux-dev#480's `block_unreadable`) -- this is about what an agent running the planner
 	DIRECTLY during s:dev-loop step 4b sees on its own screen: one line naming the failure,
 	not a raw Python stack trace with no bearing on what to do next.
 	"""

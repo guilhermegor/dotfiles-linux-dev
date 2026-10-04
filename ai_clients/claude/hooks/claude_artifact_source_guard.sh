@@ -18,7 +18,7 @@
 # Only Write/Edit *tool* calls are caught; the correct deploy step (`cp` via Bash) is not, so
 # "edit source, then cp into place" keeps working.
 #
-# Other clients (dotfiles-dev#346): Qwen, Copilot and Kimi Code each get exactly one guarded file —
+# Other clients (dotfiles-linux-dev#346): Qwen, Copilot and Kimi Code each get exactly one guarded file —
 # the shared AGENTS.md delivered by ai_clients/lib/shared_agents_md.sh, at whatever filename that CLI
 # actually reads (copilot-instructions.md for Copilot; AGENTS.md for the rest). Everything else in
 # those clients' live dirs (credentials, caches, session history, IDE locks) is unversioned machine

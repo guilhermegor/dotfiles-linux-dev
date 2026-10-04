@@ -35,14 +35,14 @@ main() {
     # anchored to the START of the command missed every invocation chained after `;`/`&&`/`||`/
     # `|`/`&`/a newline, and could be fooled by "--repo"/"--body" text appearing inside an
     # unrelated quoted argument like --title (CodeRabbit review, PR #371). This is ALSO what keeps
-    # `gh issue create` untouched (dotfiles-dev#154 defect 1): "pr" is a required argv position
+    # `gh issue create` untouched (dotfiles-linux-dev#154 defect 1): "pr" is a required argv position
     # here, so an issue command never matches.
     resolve_gh_command "$command" "pr" || exit 0   # unparseable → unknown, not non-compliant
     [[ "$GH_MATCHED" == "true" ]] || exit 0
     # Only when a body is actually being set (skip title-only edits, editor-mode create, --fill).
     [[ "$GH_HAS_BODY" == "true" || "$GH_HAS_BODY_FILE" == "true" ]] || exit 0
 
-    # Resolve the TARGET repo's template, not the session cwd's (dotfiles-dev#154 defect 2). A
+    # Resolve the TARGET repo's template, not the session cwd's (dotfiles-linux-dev#154 defect 2). A
     # `--repo`/`-R owner/name` on the gh command itself always wins over cwd — the command can
     # target a different repo than the session is sitting in (`cd other-repo; gh pr create --repo
     # this-repo ...` is routine in a multi-repo session), and judging it against the wrong repo's
@@ -61,7 +61,7 @@ main() {
     # section headers directly).
     #
     # A --body-file/-F flag that we cannot resolve to a readable file is NOT the same as "no
-    # body-file" (dotfiles-dev#78): falling back to scanning the command string then produces a
+    # body-file" (dotfiles-linux-dev#78): falling back to scanning the command string then produces a
     # verdict from the wrong source — it can false-PASS when the header texts happen to appear in
     # e.g. --title, or block with a misleading "missing sections". A verdict from unresolved input
     # is "unknown", not "approved": fail loud instead.
@@ -104,7 +104,7 @@ main() {
 # $1: repo root to search (may be empty). $2: 1 to fall back to the canonical personal template
 # when the root ships none, 0 to skip that fallback. The fallback is only correct for the
 # session's OWN repo — imposing a personal template preference onto an unrelated --repo target
-# would be a scope overreach the caller (main) must opt out of explicitly (dotfiles-dev#154).
+# would be a scope overreach the caller (main) must opt out of explicitly (dotfiles-linux-dev#154).
 find_template() {
     local root="$1" allow_personal_fallback="${2:-1}" candidate multi
     if [[ -n "$root" ]]; then
@@ -151,10 +151,10 @@ block_unresolved_body_file() {
     # A PreToolUse hook sees the command BEFORE shell expansion, AND runs sandboxed to the
     # project directory — either fact alone can make an otherwise-fine --body-file unreadable
     # HERE while the file is perfectly readable everywhere else. A generic "check the path" then
-    # sends the author chasing a typo or permission bug that does not exist (dotfiles-dev#109),
+    # sends the author chasing a typo or permission bug that does not exist (dotfiles-linux-dev#109),
     # so name the actual cause: an unexpanded shell variable, a path outside the project
-    # directory (this hook's filesystem view is sandboxed to the project — dotfiles-dev#109), or
-    # the file genuinely not existing yet (dotfiles-dev#78, e.g. create-and-consume in one call).
+    # directory (this hook's filesystem view is sandboxed to the project — dotfiles-linux-dev#109), or
+    # the file genuinely not existing yet (dotfiles-linux-dev#78, e.g. create-and-consume in one call).
     local path="$1" root="${2:-}"
 
     {
@@ -175,7 +175,7 @@ block_unresolved_body_file() {
             echo "read — its filesystem view is sandboxed to the project. Move the file inside"
             echo "the repo instead — but NOT into $root/.git/: inside a git worktree, .git is a"
             echo "plain FILE (not a directory), so a write there fails outright, and a body left"
-            echo "there anyway has no lifecycle (dotfiles-dev#441). Use a root-level"
+            echo "there anyway has no lifecycle (dotfiles-linux-dev#441). Use a root-level"
             echo "$root/.git-pr-<slug>.md file instead — already git-ignored (see .gitignore's"
             echo "'.git-pr-*.md' entry) and a real writable path in every checkout, worktree or"
             echo "not — then re-run the SAME gh command with the new path."

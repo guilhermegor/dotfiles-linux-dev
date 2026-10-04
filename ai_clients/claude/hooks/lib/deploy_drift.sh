@@ -1,6 +1,6 @@
 #!/bin/bash
 # Detects drift between ai_clients/claude/** (source) and ~/.claude/** (live) — sourced by
-# session_start_context.sh so a stale deploy is visible at session start (dotfiles-dev#345).
+# session_start_context.sh so a stale deploy is visible at session start (dotfiles-linux-dev#345).
 #
 # Why not `diff -rq` the two trees: skills transform on install (flat source
 # `skills/<name>.md` -> nested live `skills/<name>/SKILL.md`, ai_clients/claude/lib/skills.sh),

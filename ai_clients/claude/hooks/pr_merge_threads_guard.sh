@@ -23,7 +23,7 @@
 #   - the repo's CI gate: checks both halves, but only when something re-triggers it.
 #   - this guard: both halves, live, on the merge itself.
 #
-# A fourth question, added by dotfiles-dev#379: the three layers above all ask "is every thread
+# A fourth question, added by dotfiles-linux-dev#379: the three layers above all ask "is every thread
 # FINISHED?", and a PR with ZERO threads satisfies that vacuously — it cannot distinguish "the
 # reviewer looked and found nothing" from "the reviewer has not spoken yet". Measured on #376:
 # merged with CodeRabbit's check still PENDING and `reviewThreads.nodes == []`; three Major
@@ -31,7 +31,7 @@
 # (CheckRun/StatusContext, matched against `.review-bots.yaml`) sits in a non-terminal state on
 # the PR's head commit — `statusCheckRollup` is inherently head-scoped, which is what makes it
 # the right signal here (a *review object*, by contrast, is only created when the reviewer has a
-# finding — dotfiles-dev#378 finished with an empty thread list, an empty `reviews.nodes`, AND a
+# finding — dotfiles-linux-dev#378 finished with an empty thread list, an empty `reviews.nodes`, AND a
 # terminal SUCCESS check, and that is the ordinary shape of a clean PR, not a red flag).
 # Once the check reaches a terminal state, the existing thread logic above is the whole verdict
 # again — zero threads plus a terminal check means "reviewed, nothing found", not "unreviewed".
@@ -40,7 +40,7 @@
 # maintainer and a structurally empty Reviewers panel (#268), and a guard that demanded a
 # reviewer's presence would brick every merge here.
 #
-# A fifth question, dotfiles-dev#462: `--auto` does not merge anything — it tells GitHub to
+# A fifth question, dotfiles-linux-dev#462: `--auto` does not merge anything — it tells GitHub to
 # merge only once every REQUIRED check goes green, which includes the very reviewer check this
 # guard is waiting for. So the guard was blocking the one form of the command that already
 # honours its own rule, and the state it protects against (merging past an unfinished review)
@@ -131,7 +131,7 @@ roster_logins() {
 	# ⚠️ The discriminator there is `author.__typename == "Bot"`, NOT a `[bot]` login suffix.
 	# GraphQL strips that suffix (the warning above), so a suffix test matched NOTHING and every
 	# bot counted as a human reply. Measured on this repo, which ships no roster: all 11
-	# CodeRabbit findings on dotfiles-dev#127 were reported as "replied" when nobody had replied
+	# CodeRabbit findings on dotfiles-linux-dev#127 were reported as "replied" when nobody had replied
 	# to any of them. `__typename` is the API's own answer to the question and cannot drift.
 	printf '__NO_ROSTER__\n'
 }
@@ -154,7 +154,7 @@ main() {
 	# Explicit opt-out.
 	printf '%s' "$command" | grep -q "$ESCAPE_HATCH" && exit 0
 
-	# `--auto` off the REAL argv (dotfiles-dev#462, see the header). Stand aside only when the
+	# `--auto` off the REAL argv (dotfiles-linux-dev#462, see the header). Stand aside only when the
 	# matcher positively reports both `matched` and `auto`; every other outcome -- no python3,
 	# an untokenizable command, a `--auto` that lives inside a quoted value -- leaves the checks
 	# below running, so uncertainty keeps today's blocking behaviour rather than waving a merge

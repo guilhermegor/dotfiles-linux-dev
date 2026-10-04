@@ -2,7 +2,7 @@
 # Stop hook: refuse to end a dev-loop round that had dispatchable candidates and
 # started no agent — the deterministic half of s:dev-loop step 6 (DISPATCH),
 # sibling of uncommitted_worktree_guard.sh and dispatch_free_surface_guard.sh
-# (dotfiles-dev#433).
+# (dotfiles-linux-dev#433).
 #
 # The measurement: on 2026-09-20 the owner asked "is any free slot to be used…
 # how do I work on them in subagents?" eight times in one session, each time
@@ -21,7 +21,7 @@
 # branch as a live claim excluded 7 of 10 candidates in one round and suppressed
 # dispatch entirely; the planner owns that rule, this hook only reads its answer.
 #
-# THE PLANNER CONTRACT (hooks/lib/dispatch_plan.py, dotfiles-dev#433 item 2 — not
+# THE PLANNER CONTRACT (hooks/lib/dispatch_plan.py, dotfiles-linux-dev#433 item 2 — not
 # yet shipped). Invoked with no arguments, prints one JSON object on stdout:
 #
 #   {"dispatchable": [{"issue": 433, "surface": ["ai_clients/claude/hooks/…"]}],
@@ -36,7 +36,7 @@
 # ⚠️ Until that planner exists this hook DEGRADES TO AN ANNOUNCED NO-OP: it exits
 # 1 (non-blocking) with a message saying it could not evaluate, once per session.
 # It does not pass quietly. A hook that goes silent because its input is missing
-# is the exact defect dotfiles-dev#433 is about — a gate reporting its own
+# is the exact defect dotfiles-linux-dev#433 is about — a gate reporting its own
 # blindness as OK.
 #
 # Fails OPEN on everything else it cannot resolve (no jq, no transcript, a
@@ -51,7 +51,7 @@ PLANNER="${ROUND_DISPATCH_PLANNER:-$HOOK_DIR/lib/dispatch_plan.py}"
 # 60s, not 30: dispatch_plan.py measured 39s on 2026-10-03 15:40Z under a GitHub
 # burst (every Stop read UNREADABLE) and 17s at 21:15Z after #605/#576 cut its
 # reads. ~3.5x the quiet runtime absorbs API latency; a real hang still times out
-# and fails closed (dotfiles-dev#607).
+# and fails closed (dotfiles-linux-dev#607).
 PLANNER_TIMEOUT="${ROUND_DISPATCH_PLANNER_TIMEOUT:-60}"
 
 # round_events TRANSCRIPT
@@ -93,7 +93,7 @@ announce_no_planner() {
 		echo "round_dispatch_guard: COULD NOT EVALUATE — no dispatch planner at $PLANNER."
 		echo
 		echo "s:dev-loop step 6 (DISPATCH) is unenforced this session. This is a no-op, said"
-		echo "out loud rather than passed in silence: the planner (dotfiles-dev#433 item 2)"
+		echo "out loud rather than passed in silence: the planner (dotfiles-linux-dev#433 item 2)"
 		echo "has not shipped yet, so nothing can be asked which candidates are dispatchable."
 		echo "Run step 6 by hand this round, and do not read this hook's silence as a clear"
 		echo "board once the planner lands."
@@ -136,7 +136,7 @@ main() {
 			echo
 			echo "Re-run the planner before reporting the board clear. A planner that fails and"
 			echo "is then read as routine silence is the defect this hook exists to catch"
-			echo "(dotfiles-dev#433)."
+			echo "(dotfiles-linux-dev#433)."
 		} >&2
 		exit 2
 	fi
