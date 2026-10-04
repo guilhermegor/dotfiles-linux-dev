@@ -88,7 +88,7 @@ payload() {
     [ "$status" -eq 2 ]
 }
 
-# --- blocked: known wrappers around a destructive command (dotfiles-dev#271) --------------------
+# --- blocked: known wrappers around a destructive command (dotfiles-linux-dev#271) --------------------
 #
 # PR #260 anchored the git-push/chmod predicates to a command START, closing the false-positive
 # hole from #217 (quoted text no longer trips the guard) but reopening a gap: a wrapper token in

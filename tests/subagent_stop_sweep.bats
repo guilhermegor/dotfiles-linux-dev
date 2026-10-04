@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for ai_clients/claude/hooks/subagent_stop_sweep.sh (dotfiles-dev#167, #195)
+# Unit tests for ai_clients/claude/hooks/subagent_stop_sweep.sh (dotfiles-linux-dev#167, #195)
 #
 # Strategy:
 #   - The script unconditionally runs `main "$@"` at the bottom, so `source`-ing it as-is would
@@ -120,7 +120,7 @@ STUB
 
 # --- format_free_surface_report: item [6]'s label can never read as dispatch_plan.py's verdict ----
 #
-# dotfiles-dev#535: item [6] used to print "dispatch these 13: ..." for the exact 13 issues
+# dotfiles-linux-dev#535: item [6] used to print "dispatch these 13: ..." for the exact 13 issues
 # dispatch_plan.py excluded the same round — one enumeration read as fact would have sent 13
 # agents onto undeclared surfaces. The fix pinned here is wording, not a live cross-check: the
 # label must never claim "dispatch"/"dispatchable" (dispatch_plan.py's own, stricter verdict)
@@ -185,7 +185,7 @@ STUB
 }
 
 # --- sweep_orphan_branches: a pushed stash reads as a snapshot, never a missing-PR branch --------
-# dotfiles-dev#399: `subagent_stop_sweep.sh`'s [3] check used to print every branch with no PR the
+# dotfiles-linux-dev#399: `subagent_stop_sweep.sh`'s [3] check used to print every branch with no PR the
 # same way, so a pushed `git stash` (tip titled `WIP on <branch>: ...` by git stash itself) read
 # as unfinished work missing a PR, round after round, on blueprintx's `rescue/pep8-naming-422-wip`.
 
@@ -370,7 +370,7 @@ STUB
     [[ "$output" != *"no open or merged PR touches these files"* ]]
 }
 
-# --- gh_budget_gate: latch on a real 403, no further gh call while fresh (dotfiles-dev#445) ------
+# --- gh_budget_gate: latch on a real 403, no further gh call while fresh (dotfiles-linux-dev#445) ------
 
 stub_gh_budget_probe() {
     # $1 = "403" to make the `repos/o/r --jq .id` probe return the exact measured 2026-09-20 403
@@ -437,7 +437,7 @@ STUB
 # sweep_review_gate()'s per-PR GraphQL calls (via review_thread_gate.sh) then fail one at a time
 # with no latch ever written — the exact repeated fan-out #445 exists to stop. This must latch
 # via gh_budget_quota_exhausted() BEFORE the REST probe even runs.
-@test "GraphQL quota exhausted while REST core is healthy still latches (dotfiles-dev#511 P1)" {
+@test "GraphQL quota exhausted while REST core is healthy still latches (dotfiles-linux-dev#511 P1)" {
     export GH_BUDGET_LATCH_FILE="$REPO/latch"
     cat > "$BIN/gh" <<'STUB'
 #!/bin/bash
@@ -458,7 +458,7 @@ STUB
     [ -f "$GH_BUDGET_LATCH_FILE" ]
 }
 
-# dotfiles-dev#559 (PR #559 review, comment 4117399074): gate_pr_thread_state() latching on ITS
+# dotfiles-linux-dev#559 (PR #559 review, comment 4117399074): gate_pr_thread_state() latching on ITS
 # OWN terminal refusal is only half the fix -- without this, PR #10's latch does nothing to stop
 # PR #20's identical GraphQL call a moment later in the SAME sweep, which is the "repeated
 # fan-out attempts" the finding named. This asserts the loop stops after the first PR and never
@@ -496,12 +496,12 @@ STUB
     [ -f "$GH_BUDGET_LATCH_FILE" ]
 }
 
-# dotfiles-dev#511 review (Minor): the latch write can fail (marker path owned by another user,
+# dotfiles-linux-dev#511 review (Minor): the latch write can fail (marker path owned by another user,
 # read-only filesystem, ...) and the old gh_budget_gate never checked it, so BUDGET_GATE_REASON
 # claimed "latched until reset" even though nothing was written. Called directly (not via `run`,
 # which forks a subshell) so BUDGET_GATE_REASON is readable afterward in this test's own shell.
 @test "gh_budget_gate reports a failed latch write instead of hiding it" {
-    # A read-only PARENT dir: the write goes to a temp file first (atomic rename, dotfiles-dev#511
+    # A read-only PARENT dir: the write goes to a temp file first (atomic rename, dotfiles-linux-dev#511
     # CodeRabbit follow-up), and `mv` onto an existing directory moves INTO it rather than failing
     # -- the write must be blocked at its source (no permission to create anything in the
     # directory) to still reproduce a failure.
@@ -525,7 +525,7 @@ STUB
 }
 
 # --- sweep_no_automerge / sweep_behind_base: a raw 403 body must never read as PR numbers -------
-# dotfiles-dev#512: `gh api ... --jq` exits non-zero on an HTTP error WITHOUT ever running the
+# dotfiles-linux-dev#512: `gh api ... --jq` exits non-zero on an HTTP error WITHOUT ever running the
 # filter, but still writes the unfiltered JSON body to stdout. Piping that straight into
 # `while read` via `done < <(...)` (no exit-status check) turned each raw body line into a bogus
 # "- #{" / "- #\"message\": ..." finding instead of failing.
@@ -588,7 +588,7 @@ STUB
     [[ "$output" != *"no open or merged PR touches these files"* ]]
 }
 
-# --- agent-type gate: sweep fires only for dev/implementation subagents (dotfiles-dev#508) -------
+# --- agent-type gate: sweep fires only for dev/implementation subagents (dotfiles-linux-dev#508) -------
 # A reviewer, Explore, Plan, or a "fork" running a read-only skill (the ditto#681 case measured in
 # the issue: 45 sweep injections into one forked code-review subagent) must get NO
 # additionalContext at all — not an empty one, none — so its real result isn't buried under
@@ -675,7 +675,7 @@ STUB
     [[ "$output" == *"hookSpecificOutput"* ]]
 }
 
-# --- dotfiles-dev#531: item [8], the declared roadmap-board registry --------------------------
+# --- dotfiles-linux-dev#531: item [8], the declared roadmap-board registry --------------------------
 
 @test "sweep_roadmap_boards: one line per declared board, an unreadable one reads UNKNOWN" {
     cat > "$BIN/gh" <<'STUB'

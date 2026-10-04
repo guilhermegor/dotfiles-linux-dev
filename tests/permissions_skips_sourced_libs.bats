@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Invariant for `make permissions` (dotfiles-dev#312): four sourced libraries
+# Invariant for `make permissions` (dotfiles-linux-dev#312): four sourced libraries
 # (ai_clients/claude/lib/profiles.sh, ai_clients/claude/hooks/lib/review_thread_gate.sh,
 # ai_clients/claude/lib/shared_agents_md.sh, ai_clients/claude/profile_functions.sh) are stored
 # 100644 in git because nothing execs them directly -- only `source`. `make permissions` chmodding

@@ -6,7 +6,7 @@
 # on the emitted additionalContext (RELEASE DUE / NO RELEASE NEEDED / nothing).
 #
 # The repo under test is a REAL git repo with a real "origin" remote (a second bare-ish clone dir),
-# because the fix under test (dotfiles-dev#156) is precisely about fetching the true remote ref
+# because the fix under test (dotfiles-linux-dev#156) is precisely about fetching the true remote ref
 # instead of trusting a possibly-stale local one — that can't be faked with a mock.
 #
 # `gh` is faked: `gh pr view [<number>] --json state,baseRefName` reads its answer from
@@ -104,7 +104,7 @@ push_py_edit_to_origin() {
 }
 
 # A non-.py file under a shipped path, changed and pushed directly to origin — the fallback path
-# the AST check cannot cover (dotfiles-dev#100: non-.py must always be treated as a real change).
+# the AST check cannot cover (dotfiles-linux-dev#100: non-.py must always be treated as a real change).
 push_non_py_shipped_change_to_origin() {
     local worker
     worker="$(mktemp -d)"
@@ -166,7 +166,7 @@ merged_json() {
     # Sanity on the fixture: nobody has fetched in TEST_TMP since the clone, so the LOCAL
     # remote-tracking ref genuinely does not have the commit yet. If the hook's own `git fetch`
     # were removed, this diff would come back empty and the hook would wrongly say NO RELEASE
-    # NEEDED instead of RELEASE DUE — that's the exact bug dotfiles-dev#156 reports.
+    # NEEDED instead of RELEASE DUE — that's the exact bug dotfiles-linux-dev#156 reports.
     stale_diff="$(git diff --name-only v1.0.0..origin/main -- src/)"
     [ -z "$stale_diff" ]
 
@@ -230,7 +230,7 @@ merged_json() {
     [[ "$output" == *"RELEASE DUE"* ]]
 }
 
-# --- dotfiles-dev#99: bump type must come from shipped-path commits only, not the whole log -----
+# --- dotfiles-linux-dev#99: bump type must come from shipped-path commits only, not the whole log -----
 
 @test "bump is patch: feat touches only .github/, fix touches src/ (not vacuous vs current impl)" {
     mkdir -p .github
@@ -276,7 +276,7 @@ merged_json() {
     [[ "$output" == *"NO RELEASE NEEDED"* ]]
 }
 
-# --- dotfiles-dev#100: shipped diff non-empty is not sufficient — AST-identical means no release --
+# --- dotfiles-linux-dev#100: shipped diff non-empty is not sufficient — AST-identical means no release --
 
 @test "NO RELEASE NEEDED (comment-only): edit only a comment inside tracked .py path" {
     push_py_edit_to_origin "docs: reword comment" \

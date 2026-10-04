@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit tests for ai_clients/claude/hooks/lib/dispatch_claims.sh — the agent-vs-agent claims
-# registry (dotfiles-dev#405 scope 1).
+# registry (dotfiles-linux-dev#405 scope 1).
 #
 # Strategy: the lib is SOURCED (it is a library, not a hook), against a throwaway real git repo
 # so `git rev-parse --git-common-dir` has a real answer and the registry lands in a real, shared
@@ -103,7 +103,7 @@ refute() {
 }
 
 @test "an eight-agent race on one path still produces exactly one CLAIMED" {
-    # The measured batch size (dotfiles-dev#405 scope 1: 8 agents in one blueprintx round).
+    # The measured batch size (dotfiles-linux-dev#405 scope 1: 8 agents in one blueprintx round).
     local i
     for i in 1 2 3 4 5 6 7 8; do
         ( claim_files "50$i" "a/b.sh" >"$TEST_TMP/out.$i" 2>&1 ) &
@@ -135,7 +135,7 @@ refute() {
 }
 
 @test "the PR held-paths read is exact-path, never a prefix match" {
-    # Same rule free_classify_files enforces (dotfiles-dev#340): a directory-level match
+    # Same rule free_classify_files enforces (dotfiles-linux-dev#340): a directory-level match
     # reported 9 of 11 candidates as colliding when the exact recount said 97% free.
     printf 'open-pr\t%s\n' "a/b.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
     run claim_files 405 "a/b.sh.orig"
@@ -203,7 +203,7 @@ refute() {
 
 @test "a claim past its TTL stops holding its paths" {
     # A killed agent never calls release_claims. Without expiry the registry reads
-    # "everything is in flight" forever, and a guard that never fires is dotfiles-dev#404
+    # "everything is in flight" forever, and a guard that never fires is dotfiles-linux-dev#404
     # with a different cause.
     claim_files 405 "a/b.sh"
     DISPATCH_CLAIM_TTL=0
@@ -230,7 +230,7 @@ refute() {
     [ "$output" = "3" ]
 }
 
-# --- the shared review-ask budget (dotfiles-dev#548) --------------------------------------
+# --- the shared review-ask budget (dotfiles-linux-dev#548) --------------------------------------
 
 @test "the first review ask is GRANTED and recorded in the shared git common dir" {
     run claim_review_ask

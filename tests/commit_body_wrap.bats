@@ -2,7 +2,7 @@
 #
 # Unit tests for ai_clients/claude/hooks/commit_body_wrap.sh
 #
-# Focus: the shared matcher integration (dotfiles-dev#324) — does the hook actually reflow the
+# Focus: the shared matcher integration (dotfiles-linux-dev#324) — does the hook actually reflow the
 # message file for all four `git commit` invocation shapes, and does it correctly leave a mere
 # mention of "git commit" alone? The reflow mechanics themselves are exercised implicitly (a
 # rewrite only happens when the matcher lets the hook past its early exit).

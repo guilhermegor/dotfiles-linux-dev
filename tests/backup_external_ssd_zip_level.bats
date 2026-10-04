@@ -3,7 +3,7 @@
 # The Super+B backup screen lets the operator pick zip's own 0-9 compression
 # level (a radiolist, never a slider/percentage) and remembers the choice as
 # LAST_ZIP_LEVEL= beside LAST_DEST in ~/.config/backup-external-ssd.conf,
-# falling back to 6 when unset or not a single digit (dotfiles-dev#368).
+# falling back to 6 when unset or not a single digit (dotfiles-linux-dev#368).
 
 setup() {
     REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"

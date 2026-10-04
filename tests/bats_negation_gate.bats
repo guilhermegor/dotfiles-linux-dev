@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for tests/bats_negation_gate.sh (dotfiles-dev#380).
+# Unit tests for tests/bats_negation_gate.sh (dotfiles-linux-dev#380).
 #
 # Strategy: run the gate script directly against two fixtures under
 # tests/fixtures/bats_negation_gate/ -- one holding the dead `! <cmd>`

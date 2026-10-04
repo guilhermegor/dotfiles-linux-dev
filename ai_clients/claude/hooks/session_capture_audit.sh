@@ -24,9 +24,9 @@
 # dependency-free (no lib/common.sh) so it runs early and never fails a session.
 # Fails OPEN everywhere: any uncertainty is skipped, never a hard error.
 #
-# Concurrent README appends (dotfiles-dev#356): the stores are global and written by
+# Concurrent README appends (dotfiles-linux-dev#356): the stores are global and written by
 # multiple sessions at once (measured — three sessions inside one 40-minute window,
-# dotfiles-dev#356). Two sessions appending a new index line to the same store
+# dotfiles-linux-dev#356). Two sessions appending a new index line to the same store
 # README.md at once COULD interleave and lose one line — investigated: neither
 # `~/.claude/memory/lessons/` nor `lessons-claude-toolchain/` is version-controlled, so there
 # is no history to confirm it has ever actually happened, and no clobbered README has
@@ -39,7 +39,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/lesson_mirrors.sh"
 
 # LESSON_STORES, mirror_path()/mirror_rel_path(), mirror_expected_for_repo(), and
 # lesson_originates_in_repo() all come from lib/lesson_mirrors.sh — shared with
-# generate_lesson_mirrors.sh (dotfiles-dev#386) so the checker and the generator
+# generate_lesson_mirrors.sh (dotfiles-linux-dev#386) so the checker and the generator
 # can never independently drift on what a mirror is supposed to contain.
 # kind=blueprintx also gets the Tier-line presence check below (tier is an OPEN
 # field: an unknown tier value is a no-op, never a rejection — only a MISSING
@@ -97,7 +97,7 @@ check_lessons() {
 	local entry store mirror_base kind target_repo legacy_dir resolved readme file name
 	for entry in "${LESSON_STORES[@]}"; do
 		IFS='|' read -r store mirror_base kind target_repo legacy_dir <<<"$entry"
-		# Falls back to the store's declared legacy directory (dotfiles-dev#536
+		# Falls back to the store's declared legacy directory (dotfiles-linux-dev#536
 		# review, PR #546) so this checker never disagrees with what
 		# generate_lesson_mirrors.sh actually read from — same resolve_store_dir()
 		# both share via lib/lesson_mirrors.sh.
@@ -139,14 +139,14 @@ check_mirrors() {
 	# this repo's git-ignored mirror. We can only verify the current repo's mirror
 	# (the mirror is per-origin-repo); other repos' mirrors are out of reach here.
 	#
-	# The mirror is a GENERATED artifact (dotfiles-dev#386, `make lessons_mirror` /
+	# The mirror is a GENERATED artifact (dotfiles-linux-dev#386, `make lessons_mirror` /
 	# generate_lesson_mirrors.sh), not hand-typed — a gap here means "regenerate it",
 	# never "go hand-append an entry".
 	local cwd="$1" repo entry store mirror_base kind target_repo legacy_dir resolved mirror rel file name
 	repo="$(resolve_repo_identity_only "$cwd")" || return 0
 	for entry in "${LESSON_STORES[@]}"; do
 		IFS='|' read -r store mirror_base kind target_repo legacy_dir <<<"$entry"
-		# Same legacy-directory fallback as check_lessons() above (dotfiles-dev#536
+		# Same legacy-directory fallback as check_lessons() above (dotfiles-linux-dev#536
 		# review, PR #546) — resolve_store_dir() is the ONE place this join happens.
 		resolved="$(resolve_store_dir "$store" "$legacy_dir")" || continue
 		store="${resolved%%$'\t'*}"
@@ -167,7 +167,7 @@ check_mirrors() {
 			elif ! grep -qF "$name" "$mirror"; then
 				add_gap "[lessons] '$name' originated here but is not in $rel — regenerate it, do not hand-append"
 			elif [ "$file" -nt "$mirror" ]; then
-				# Filename-only matching (dotfiles-dev#356): the name was in the mirror
+				# Filename-only matching (dotfiles-linux-dev#356): the name was in the mirror
 				# BEFORE a later edit to the lesson file, so the presence check above
 				# stays green forever even when that edit never propagated. mtime-newer
 				# is a heuristic, not proof (the mirror may just have been generated
@@ -192,7 +192,7 @@ repo_slug() {
 	esac
 }
 
-# The both-directions completeness table (dotfiles-dev#81). A one-directional
+# The both-directions completeness table (dotfiles-linux-dev#81). A one-directional
 # lessons→issues audit proves only that no lesson lacks an index entry; it never sees
 # the B-side orphan — an OPEN ISSUE with no lesson, where the rationale is already lost
 # once the PR closes it. So print BOTH rows, never a single number.
@@ -207,7 +207,7 @@ repo_slug() {
 # lesson-born and not every lesson maps to an issue, so a hard gap would cry wolf (and
 # fire at SessionEnd). They are surfaced for /session-closeout to resolve consciously.
 #
-# dotfiles-dev#94: audit EVERY store, not the one keyed by this repo's name.
+# dotfiles-linux-dev#94: audit EVERY store, not the one keyed by this repo's name.
 # `target_repo` answers "where does this store backport INTO?" (it exists so
 # check_mirrors() can skip a redundant same-repo mirror) — a different question
 # than "which stores could hold a lesson that originated here?", whose answer is
@@ -220,7 +220,7 @@ repo_slug() {
 # skip can never be misread as "checked and clean".
 emit_completeness() {
 	local cwd="$1" mode="$2" repo
-	printf '%s\n' "--- completeness (both directions, dotfiles-dev#81) ---"
+	printf '%s\n' "--- completeness (both directions, dotfiles-linux-dev#81) ---"
 
 	repo="$(resolve_repo_identity_only "$cwd")" || {
 		printf '  repo identity unresolved (no origin remote, no usable basename) — skipped\n'
@@ -231,7 +231,7 @@ emit_completeness() {
 	for entry in "${LESSON_STORES[@]}"; do
 		IFS='|' read -r store mirror_base kind target_repo legacy_dir <<<"$entry"
 		# Same legacy-directory fallback as check_lessons()/check_mirrors() above
-		# (dotfiles-dev#536 review, PR #546): a store that renamed its registry
+		# (dotfiles-linux-dev#536 review, PR #546): a store that renamed its registry
 		# entry without a matching directory move is "using the old path", not
 		# "not on disk at all".
 		if ! resolved="$(resolve_store_dir "$store" "$legacy_dir")"; then
@@ -249,7 +249,7 @@ emit_completeness() {
 }
 
 # One store's both-direction rows. Split out of emit_completeness() so the
-# per-store loop above stays readable (dotfiles-dev#94).
+# per-store loop above stays readable (dotfiles-linux-dev#94).
 emit_completeness_store() {
 	local cwd="$1" mode="$2" repo="$3" store="$4" mirror_base="$5"
 
@@ -260,15 +260,15 @@ emit_completeness_store() {
 	# A citation says which issue exists; only a Status: VALUE says whether the work LANDED —
 	# so a lesson with no PR citation is debt ONLY when its Status is queued/tracked/missing.
 	# delivered/advisory/superseded mean the work shipped (or was never scaffold-shaped) with
-	# no PR to cite (dotfiles-dev#138: pre-PR-flow direct commits, or advisory-only guidance).
+	# no PR to cite (dotfiles-linux-dev#138: pre-PR-flow direct commits, or advisory-only guidance).
 	# Counting those as debt reports the store's age, not its debt (measured blueprintx
 	# 2026-08-16: 170/243 "unaccounted", 156 delivered; dotfiles-dev 2026-08-23: 19/268, 15
 	# delivered + 4 advisory — zero of the 19 were actually owed).
 	local total=0 no_ref=0 delivered=0 advisory=0 superseded=0 file name
 	local -a unaccounted=()
-	# Alias-aware: a citation written as `dotfiles-dev#42` before the rename must
+	# Alias-aware: a citation written as `dotfiles-linux-dev#42` before the rename must
 	# still count as accounted for when the CURRENT identity resolves to
-	# `dotfiles-linux-dev` (dotfiles-dev#536) — repo_citation_regex expands $repo to
+	# `dotfiles-linux-dev` (dotfiles-linux-dev#536) — repo_citation_regex expands $repo to
 	# its full declared alias group.
 	local citation_re
 	citation_re="$(repo_citation_regex "$repo")"
@@ -345,7 +345,7 @@ emit_report() {
 	local cwd="$1" mode="${2:-report}" repo identity identity_source date_str
 	date_str="$(date +%Y-%m-%d)"
 
-	# resolve_repo_identity() over basename (dotfiles-dev#536) — say which signal
+	# resolve_repo_identity() over basename (dotfiles-linux-dev#536) — say which signal
 	# was used so a mismatch (renamed remote, stale local directory name) is
 	# visible in the report header rather than silently assumed.
 	identity="$(resolve_repo_identity "$cwd" 2>/dev/null || true)"
@@ -367,7 +367,7 @@ emit_report() {
 		done
 	fi
 
-	# Completeness in BOTH directions (dotfiles-dev#81) — printed between the decided
+	# Completeness in BOTH directions (dotfiles-linux-dev#81) — printed between the decided
 	# gaps and the judgment checklist because its orphans are judgment, not gaps.
 	emit_completeness "$cwd" "$mode"
 

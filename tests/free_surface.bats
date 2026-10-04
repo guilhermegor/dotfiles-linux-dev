@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit tests for ai_clients/claude/hooks/lib/free_surface.sh — free_classify_files only, which is
-# pure set math over FREE_HELD_PATHS (dotfiles-dev#340). The network half is exercised through
+# pure set math over FREE_HELD_PATHS (dotfiles-linux-dev#340). The network half is exercised through
 # free_dispatch_surface in subagent_stop_sweep.bats.
 
 setup() {
@@ -31,7 +31,7 @@ b/other.sh'
     [[ "$output" == "free" ]]
 }
 
-# --- fail-closed on an unprimed/unset precondition (dotfiles-dev#414) ----------------------------
+# --- fail-closed on an unprimed/unset precondition (dotfiles-linux-dev#414) ----------------------------
 # Called without a prior gate_free_surface, FREE_STATUS is unset, so free_classify_files must
 # refuse rather than fall through to "free" — the exact input that caused a duplicate PR.
 
@@ -115,7 +115,7 @@ gh() {
     [ "$FREE_UNCLAIMED_ISSUES" = $'5\n6\n7' ]
 }
 
-# --- live_agent_classify_files: same set math, wired to a DIFFERENT global pair (dotfiles-dev#501)
+# --- live_agent_classify_files: same set math, wired to a DIFFERENT global pair (dotfiles-linux-dev#501)
 # free_classify_files and live_agent_classify_files answer two different questions (open-PR
 # merge-risk vs. actual dispatch-collision blocker — see the file header). These pin that they
 # stay wired to their OWN globals and never bleed into each other's.

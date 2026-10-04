@@ -7,7 +7,7 @@
 #   - The guard reads the repo's own README to decide the doc language, so tests run inside a
 #     throwaway git repo whose README.md is English.
 #
-# dotfiles-dev#187 measured a false positive distinct from the mandated-Portuguese-template bug:
+# dotfiles-linux-dev#187 measured a false positive distinct from the mandated-Portuguese-template bug:
 # a body that is entirely English prose, but that quotes non-English literals (Gherkin keywords,
 # UI strings) inside single-backtick spans so they stay verbatim and greppable, was blocked
 # anyway because count_pt_words() only stripped FENCED (```) code blocks, never inline `code`
@@ -36,7 +36,7 @@ run_guard() {
     payload "$1" | "$GUARD"
 }
 
-# --- dotfiles-dev#187: quoted non-English literals are data, not prose ---------------------------
+# --- dotfiles-linux-dev#187: quoted non-English literals are data, not prose ---------------------------
 
 @test "accepts an English body that only quotes non-English literals in backticks" {
     body='This adds BDD keyword parsing for Gherkin: `Quando` maps to When, `Então` maps to Then,

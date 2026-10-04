@@ -124,7 +124,7 @@ run_guard() {
 # The routing strips the live dir's prefix and matches what remains against a literal allowlist, so
 # `~/.qwen/./AGENTS.md` used to leave rel as `./AGENTS.md`, miss every arm and exit 0 (fail open)
 # while the write still landed on the real file. Measured on all four client branches, the
-# pre-existing Claude one included (dotfiles-dev#346, PR #355 review).
+# pre-existing Claude one included (dotfiles-linux-dev#346, PR #355 review).
 
 @test "a './' component does not bypass the Qwen arm" {
     run run_guard Write "$HOME/.qwen/./AGENTS.md"

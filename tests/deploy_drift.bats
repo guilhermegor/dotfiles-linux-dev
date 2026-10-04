@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit tests for ai_clients/claude/hooks/lib/deploy_drift.sh — the drift detector added for
-# dotfiles-dev#345 (nothing detected that ~/.claude/ was stale relative to source; a stale
+# dotfiles-linux-dev#345 (nothing detected that ~/.claude/ was stale relative to source; a stale
 # ai_clients/claude/commands/issue.md ran for 5 days and filed duplicate issues #336/#337).
 #
 # Synthetic tree with three commands/*.md files: one identical (source == live), one divergent

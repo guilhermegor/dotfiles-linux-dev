@@ -4,7 +4,7 @@
 #
 # Scope: mostly `_gate_problems_filter`, the jq program that decides whether a review thread
 # still needs a reply or a resolve, tested against fixtures rather than through
-# gate_pr_thread_state() end to end. Two tests at the bottom (dotfiles-dev#398) close that last
+# gate_pr_thread_state() end to end. Two tests at the bottom (dotfiles-linux-dev#398) close that last
 # gap with a stubbed `gh`: gate_pr_thread_state() itself now has a contract test on both the
 # success path (a usable, non-empty GATE_DETAIL) and the fail-closed path (unreadable after 3
 # attempts, never `clean`) -- a regression in the retry loop or the roster-file wiring above the
@@ -14,7 +14,7 @@
 # "author"` (exit 5) whenever a roster file was present AND the PR had at least one thread. The
 # workflow runs the gate under `set -euo pipefail`, so the step died before printing any verdict
 # -- a required check failing with no diagnostic. It stayed invisible because every PR gated
-# until dotfiles-dev#325 had zero threads, and `nodes[]` over an empty list never evaluates the
+# until dotfiles-linux-dev#325 had zero threads, and `nodes[]` over an empty list never evaluates the
 # body. A fixture with one thread is all it takes to catch it, which is what these tests are.
 #
 # Run locally:  bats tests/            (install with: sudo apt-get install -y bats)
@@ -52,7 +52,7 @@ run_filter() {
 # ladder_comment_fixture <authorAssociation> <body> [reply_author] [reply_body]
 # One PR-level (issue) comment carrying the ladder's attribution line, plus an optional later
 # reply from a different author -- the shape gate_pr_thread_state's COMMENT channel reads
-# (dotfiles-dev#490). Zero review threads, on purpose: the whole point is that the ladder's
+# (dotfiles-linux-dev#490). Zero review threads, on purpose: the whole point is that the ladder's
 # finding lives ONLY here.
 ladder_comment_fixture() {
     jq -nc --arg assoc "$1" --arg body "$2" --arg reply_author "${3:-}" --arg reply_body "${4:-}" '
@@ -182,7 +182,7 @@ reviewed_fixture() {
     [ -z "$output" ]
 }
 
-# --- dotfiles-dev#331: an aborted filter must never reach the `clean` verdict -------------------
+# --- dotfiles-linux-dev#331: an aborted filter must never reach the `clean` verdict -------------------
 #
 # `jq ... 2>/dev/null` with the status discarded turns a program ABORT into empty output, and
 # empty output is what "nothing to report" looks like — so a crashed filter used to fall through
@@ -252,7 +252,7 @@ reviewed_fixture() {
     [[ "$output" == *"150 PR comments exist, only 0"*"(comment channel)"* ]]
 }
 
-# --- the comment channel (dotfiles-dev#490): the reviewer ladder's fallback review posts as a
+# --- the comment channel (dotfiles-linux-dev#490): the reviewer ladder's fallback review posts as a
 # plain PR comment, never a review thread -- run_fallback_review ends in _post_pr_comment, an
 # ordinary issue comment. reviewThreads-only tests above cannot see it by construction: this is
 # the exact blind spot that reported #453 "clean" while it carried an unanswered [P2] finding.
@@ -303,7 +303,7 @@ reviewed_fixture() {
 # --- gate_pr_thread_state: the top-level contract, not just the filters it runs -------------------
 # Every test above exercises one jq filter directly; none call gate_pr_thread_state() itself, so a
 # regression in the retry loop, the roster-file wiring, or the final status assignment could ship
-# with every filter test green (dotfiles-dev#398). These two close that gap: a usable, non-empty
+# with every filter test green (dotfiles-linux-dev#398). These two close that gap: a usable, non-empty
 # answer on success, and the deliberate fail-closed path once the API truly cannot be read.
 
 @test "gate_pr_thread_state: success reports problems with a non-empty, parseable answer" {
@@ -348,7 +348,7 @@ JSON
     [[ "$output" == *"after 3 attempts"* ]]
 }
 
-# dotfiles-dev#559 (PR #559 review, comment 4117399074): the OLD code discarded a GraphQL
+# dotfiles-linux-dev#559 (PR #559 review, comment 4117399074): the OLD code discarded a GraphQL
 # HTTP-200-with-`.errors` refusal via `2>/dev/null` plus an unconditional `threads=""`, so a real
 # secondary rate limit (measured the same session: "API rate limit already exceeded" with
 # rate_limit reporting 4973/5000 remaining) was NEVER classified and NEVER latched -- the gate
@@ -380,7 +380,7 @@ JSON
     rm -f "$latch"
 }
 
-# --- dotfiles-dev#490: the exact defect, end to end -----------------------------------------------
+# --- dotfiles-linux-dev#490: the exact defect, end to end -----------------------------------------------
 #
 # Measured 2026-09-23: the gate reported `clean` for every one of 16 open PRs while #440 carried
 # an unanswered [P2] ladder finding, POSTED AS A PLAIN PR COMMENT -- zero review threads, so every
@@ -415,7 +415,7 @@ JSON
     [[ "$output" == *"unanswered ladder finding (comment channel)"* ]]
 }
 
-# --- dotfiles-dev#505: a fourth state for "nobody has reviewed this at all" ----------------------
+# --- dotfiles-linux-dev#505: a fourth state for "nobody has reviewed this at all" ----------------------
 #
 # Measured 2026-09-25 across the live open-PR board: #513, #514 and #517 carried zero threads and
 # zero reviews (CI's own "Review threads answered" check-run: `No submitted review, and no
@@ -456,7 +456,7 @@ JSON
     # No createdAt on the comment/commit here: reviewed_fixture() defaults both to HEAD_DATE, so
     # the marker satisfies the #555 freshness constraint (>=, equal counts as fresh) without this
     # test having to restate head identity -- it is exercising the author check, not staleness.
-    # dotfiles-dev#564: the marker's second line must name the head SHA -- HEAD_OID is the oid
+    # dotfiles-linux-dev#564: the marker's second line must name the head SHA -- HEAD_OID is the oid
     # reviewed_fixture() puts on the head commit.
     body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\nReviewed head: '"$HEAD_OID"$'\n\nNo issues found.'
     fixture="$(reviewed_fixture '[]' \
@@ -466,7 +466,7 @@ JSON
     [ "$output" = "true" ]
 }
 
-# --- dotfiles-dev#555: a stale ladder marker must not grant credit forever ----------------------
+# --- dotfiles-linux-dev#555: a stale ladder marker must not grant credit forever ----------------------
 #
 # Measured on #546, 2026-09-27: marker at 12:43:28Z, head committed 13:28:42Z -- the marker
 # predates the head by 45 minutes and reviewed a commit the head has since moved past. The
@@ -493,7 +493,7 @@ JSON
 
 # marker_newer_fixture <marker-body>
 # A marker NEWER than the head (13:40 vs 13:28:42) whose body the caller controls, so the
-# dotfiles-dev#564 tests vary only the "Reviewed head:" line.
+# dotfiles-linux-dev#564 tests vary only the "Reviewed head:" line.
 marker_newer_fixture() {
     jq -nc --arg body "$1" '
       { data: { repository: { pullRequest: {
@@ -514,7 +514,7 @@ marker_newer_fixture() {
     [ "$output" = "true" ]
 }
 
-# --- dotfiles-dev#564: a marker is credited only for the commit it names ------------------------
+# --- dotfiles-linux-dev#564: a marker is credited only for the commit it names ------------------------
 
 @test "_gate_reported_filter: a newer marker naming a DIFFERENT head SHA is not a report" {
     body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\nReviewed head: deadbeef\n\nNo issues found.'
@@ -586,7 +586,7 @@ JSON
     [[ "$output" == *"status=clean"* ]]
 }
 
-# --- dotfiles-dev#511: the comment-channel answer check used author INEQUALITY, which makes a
+# --- dotfiles-linux-dev#511: the comment-channel answer check used author INEQUALITY, which makes a
 # ladder finding posted under the operator's own token structurally unanswerable -- the operator is
 # also the only account that can reply to it. Measured, PR #511's own comment ids/timestamps:
 # ladder finding 5830451560 (guilhermegor, 09:55:56Z), substantive answer 5830636642

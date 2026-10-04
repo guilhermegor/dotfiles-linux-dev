@@ -6,7 +6,7 @@
 # stdin->stdout JSON filter. `payload <cmd>` builds the PostToolUse payload;
 # `run_hook <cmd>` pipes it through the hook so $output is its stdout.
 #
-# dotfiles-dev#386: the mirror moved from a hand-appended `docs/*-lessons.md`
+# dotfiles-linux-dev#386: the mirror moved from a hand-appended `docs/*-lessons.md`
 # entry (which needed an exact `- **Source:**` field for check_mirrors()'s
 # literal-substring join) to a GENERATED `.specs/_lessons/*-lessons.md` file
 # (`make lessons_mirror` / generate_lesson_mirrors.sh). The reminder's job is
@@ -49,7 +49,7 @@ run_hook() {
     [ -z "$output" ]
 }
 
-# dotfiles-dev#386: the reminder must no longer point at the retired docs/ path — that
+# dotfiles-linux-dev#386: the reminder must no longer point at the retired docs/ path — that
 # location was forbidden by .specs/CLAUDE.md's own "What does NOT belong here" section
 # even before the mirror was generated, and now the mirror lives under .specs/_lessons/.
 @test "reminder no longer names the retired docs/*-lessons.md path" {

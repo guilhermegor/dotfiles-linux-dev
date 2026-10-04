@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# dotfiles-dev#461: .vscode/settings.json's [python] block declared
+# dotfiles-linux-dev#461: .vscode/settings.json's [python] block declared
 # "editor.tabSize": 4 but not "editor.insertSpaces" -- with
 # "editor.detectIndentation" left at its VS Code default of true, VS Code
 # overrides tabSize/insertSpaces from whatever the opened file already uses,

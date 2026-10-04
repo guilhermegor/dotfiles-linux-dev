@@ -4,7 +4,7 @@
 #
 # Direct tests of command_has_git_commit(), the matcher shared by
 # commit_title_length_guard.sh, commit_body_wrap.sh and commit_secret_guard.sh
-# (dotfiles-dev#324). Per-hook end-to-end coverage lives in each hook's own
+# (dotfiles-linux-dev#324). Per-hook end-to-end coverage lives in each hook's own
 # .bats file; this file pins the matcher's own contract so all three hooks
 # inherit it correctly.
 #

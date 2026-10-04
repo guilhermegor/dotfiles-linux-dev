@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit tests for ai_clients/claude/hooks/dispatch_free_surface_guard.sh
-# (dotfiles-dev#396, rewritten for the coverage rule in #405)
+# (dotfiles-linux-dev#396, rewritten for the coverage rule in #405)
 #
 # Strategy: the PLANNER is stubbed, not `gh`. The guard no longer computes the candidate set
 # itself — it reads lib/dispatch_plan.py's plan, which has its own suite
@@ -11,7 +11,7 @@
 #
 # `gh` IS stubbed, but only to fail loudly: the guard must make zero gh calls of its own now
 # that the plan is its input (a per-agent gate read is what exhausted the shared API quota
-# twice on 2026-09-17, dotfiles-dev#405 scope 5). `git` is the real /usr/bin/git against a
+# twice on 2026-09-17, dotfiles-linux-dev#405 scope 5). `git` is the real /usr/bin/git against a
 # throwaway local repo, so the claims registry lands in a real `.git` common dir.
 #
 # `transcript_*` helpers build throwaway JSONL transcripts. Invoking s:dev-loop is a literal
@@ -134,7 +134,7 @@ transcript_dev_loop_agent_resolved() {
     printf '%s\n' "$f"
 }
 
-# transcript_slash_dev_loop_agent_resolved — real shape (dotfiles-dev#404), not a Skill
+# transcript_slash_dev_loop_agent_resolved — real shape (dotfiles-linux-dev#404), not a Skill
 # tool_use: a `/dev-loop` slash command lands as a plain-string user message. Verified against
 # an actual ~/.claude/projects/*.jsonl record.
 transcript_slash_dev_loop_agent_resolved() {
@@ -243,7 +243,7 @@ transcript_dev_loop_many_failed_agents() {
     refute_gh_called
 }
 
-# --- coverage, not presence (dotfiles-dev#405) ---------------------------------------------
+# --- coverage, not presence (dotfiles-linux-dev#405) ---------------------------------------------
 
 @test "blocks (exit 2) naming the dispatchable issue nothing is working" {
     plan_of "4"
@@ -347,7 +347,7 @@ transcript_dev_loop_many_failed_agents() {
 
 @test "a stacked follow-up is never demanded (excluded by the planner, not UNKNOWN)" {
     # An open PR that NAMES #6 without closing it: dispatching it risks a duplicate PR against
-    # real in-review work (dotfiles-dev#413, lesson free-surface-cannot-see-an-issue-stacked-
+    # real in-review work (dotfiles-linux-dev#413, lesson free-surface-cannot-see-an-issue-stacked-
     # on-an-open-pr). The planner excludes it; the guard must not ask for it back.
     stub_plan '{"dispatchable":[],"excluded":[{"issue":6,"reason":"referenced by open PR #514 without a closing keyword — verify by hand"}]}'
     run run_guard "$(transcript_dev_loop)"
@@ -373,7 +373,7 @@ transcript_dev_loop_many_failed_agents() {
 @test "blocks (exit 2) when the planner's own read failed (UNKNOWN exclusions)" {
     # The planner fails closed by excluding EVERY issue as UNKNOWN, which arrives here as an
     # empty dispatchable list — identical in shape to a clear board. Read explicitly or the
-    # whole gate goes silent exactly when it cannot see (dotfiles-dev#396's own defect).
+    # whole gate goes silent exactly when it cannot see (dotfiles-linux-dev#396's own defect).
     stub_plan '{"dispatchable":[],"excluded":[{"issue":4,"reason":"free surface gate UNKNOWN (gh API failure) — verify non-collision by hand"}]}'
     run run_guard "$(transcript_dev_loop)"
     [ "$status" -eq 2 ]
@@ -443,7 +443,7 @@ transcript_dev_loop_many_failed_agents() {
     [[ "$output" == *"bg-agent"* ]]
 }
 
-# --- a failed dispatch becomes RESOLVED (dotfiles-dev#540) ----------------------------------
+# --- a failed dispatch becomes RESOLVED (dotfiles-linux-dev#540) ----------------------------------
 # Before #540 a FAILED dispatch had no way to become resolved: it stayed on the rescue list for
 # the rest of the session, unbounded and undeduplicated (measured: 34 names on every Stop, one
 # of them literally duplicated). Three fixtures pin the fix.

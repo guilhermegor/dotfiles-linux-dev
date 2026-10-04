@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for install_codexbar (dotfiles-dev#563): distribution-flexible
+# Unit tests for install_codexbar (dotfiles-linux-dev#563): distribution-flexible
 # install of the CodexBar Codex/Claude usage tray (Swift CLI + Qt 6 desktop),
 # replacing upstream's per-distro README shopping list + hand-run `sh` block.
 #
@@ -167,7 +167,7 @@ STUB
     [[ "$fn" != *$'\n    read '* ]]
 }
 
-# --- registry entry shape (dotfiles-dev#563) ---------------------------------
+# --- registry entry shape (dotfiles-linux-dev#563) ---------------------------------
 
 @test "INSTALL_REGISTRY has an install_codexbar entry with the verified fields" {
     local entry fn label folder desktop found=0

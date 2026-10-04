@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Pins the PR-to-issue link verification guidance (dotfiles-dev#585): a `Closes #N`
+# Pins the PR-to-issue link verification guidance (dotfiles-linux-dev#585): a `Closes #N`
 # line is not a link until GitHub reports it in closingIssuesReferences.
 
 REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"

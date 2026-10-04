@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit tests for ai_clients/claude/hooks/lib/reviewer_probe.sh — the once-per-session
-# reviewer-rung capability probe added for dotfiles-dev#479 (measured: kimi sits on
+# reviewer-rung capability probe added for dotfiles-linux-dev#479 (measured: kimi sits on
 # PATH with `grep -c kimi reviewer_ladder.sh` returning 0 — installed, never wired;
 # the CodeRabbit CLI sits on PATH, wired nowhere, and `coderabbit auth status`
 # reports "signed out" — installed, unusable. Neither gap was visible before this).
@@ -107,7 +107,7 @@ stub_bin() {
 	[[ "$output" == *"coderabbit: on PATH, wiring state unknown (ladder file unreadable), NOT authenticated"* ]]
 }
 
-# --- wiring is the SELECTION PATH, never a text mention (dotfiles-dev#486) -----
+# --- wiring is the SELECTION PATH, never a text mention (dotfiles-linux-dev#486) -----
 #
 # Measured on the real ladder: appending one comment line naming kimi flipped
 # _reviewer_probe_wired from no to yes, so a comment saying a rung is NOT wired

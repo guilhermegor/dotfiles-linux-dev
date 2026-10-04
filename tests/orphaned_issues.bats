@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for ai_clients/claude/hooks/lib/orphaned_issues.sh (dotfiles-dev#418).
+# Unit tests for ai_clients/claude/hooks/lib/orphaned_issues.sh (dotfiles-linux-dev#418).
 # Both halves of the gate contract (ai_clients/CLAUDE.md, "A gate's contract"): success returns
 # a usable, non-empty answer on a fixture that provably has content, and the fail-closed path
 # leaves every global empty. All `gh` calls are stubbed -- never a live token.
@@ -225,7 +225,7 @@ JSON
     [ -z "$ORPHAN_REPORT" ]
 }
 
-# --- _orphan_surface_lines / _orphan_surface_present_count: pure helpers (dotfiles-dev#419) ------
+# --- _orphan_surface_lines / _orphan_surface_present_count: pure helpers (dotfiles-linux-dev#419) ------
 
 @test "_orphan_surface_lines extracts a fenced surface block, dropping the fences" {
     local body
@@ -262,7 +262,7 @@ JSON
     [ "$output" = "1 2" ]
 }
 
-# --- gate_orphaned_surface: the zero-PR-mention direction (dotfiles-dev#419) ---------------------
+# --- gate_orphaned_surface: the zero-PR-mention direction (dotfiles-linux-dev#419) ---------------------
 #
 # gate_orphaned_surface composes gate_free_surface (never re-derived) with a content probe, so
 # every fixture below stubs BOTH `gh` (free_surface's own calls, plus `gh issue view` for the

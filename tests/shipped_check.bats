@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for ai_clients/claude/hooks/lib/shipped_check.sh (dotfiles-dev#427).
+# Unit tests for ai_clients/claude/hooks/lib/shipped_check.sh (dotfiles-linux-dev#427).
 #
 # Both halves of a gate's contract (ai_clients/CLAUDE.md, "A gate's contract"):
 #   1. Success returns a usable answer -- SHIPPED_STATUS/SHIPPED_DETAIL are set

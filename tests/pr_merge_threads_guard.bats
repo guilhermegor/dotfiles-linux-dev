@@ -161,7 +161,7 @@ GraphQL strips the [bot] marker and the suffix test therefore matched nothing at
 }
 
 # --- an empty thread list is UNKNOWN, not clean, while the reviewer's own check is mid-flight ---
-# dotfiles-dev#379: #376 merged with CodeRabbit's check still PENDING and reviewThreads == [].
+# dotfiles-linux-dev#379: #376 merged with CodeRabbit's check still PENDING and reviewThreads == [].
 
 # Patches a CheckRun onto a clean/resolved threads_fixture and writes a roster naming it.
 checkrun_fixture() {
@@ -185,7 +185,7 @@ checkrun_fixture() {
 }
 
 @test "passes a zero-thread PR once the roster reviewer's check is terminal" {
-    # This is the ordinary shape of a clean PR (dotfiles-dev#378): no threads, reviewer's check
+    # This is the ordinary shape of a clean PR (dotfiles-linux-dev#378): no threads, reviewer's check
     # finished SUCCESS. Blocking here would be the false-block this guard must not reintroduce.
     checkrun_fixture "COMPLETED"
     run bash -c "payload 'gh pr merge 42' | '$GUARD'"
@@ -220,7 +220,7 @@ checkrun_fixture() {
     [ "$status" -eq 0 ]
 }
 
-# --- --auto is a deferred merge, not a merge (dotfiles-dev#462) ---------------------------------
+# --- --auto is a deferred merge, not a merge (dotfiles-linux-dev#462) ---------------------------------
 # `gh pr merge --auto` merges only once every REQUIRED check is green, which includes the very
 # reviewer check this guard waits for -- so the state the guard protects against cannot be
 # reached through it. Both halves matter: the pass-through alone would let the next refactor

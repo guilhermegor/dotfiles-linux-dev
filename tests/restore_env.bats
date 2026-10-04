@@ -4,7 +4,7 @@
 # 600, never overwriting an existing file. After restoring rclone.conf it
 # runs a cheap `rclone lsd <remote>: --max-depth 1` check and, on failure,
 # points at `rclone config reconnect <remote>:` instead of leaving a broken
-# mount silently in place (dotfiles-dev#367).
+# mount silently in place (dotfiles-linux-dev#367).
 #
 # zenity/gpg/rclone/notify-send are stubbed on PATH — no real GUI, no real
 # decryption, no real rclone remote is ever touched. gpg's stub performs no

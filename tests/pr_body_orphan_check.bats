@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for ai_clients/claude/hooks/pr_body_orphan_check.sh (dotfiles-dev#441).
+# Unit tests for ai_clients/claude/hooks/pr_body_orphan_check.sh (dotfiles-linux-dev#441).
 #
 # Strategy: a throwaway git repo with `.git-pr-*.md` scratch files, and a stubbed `gh` shell
 # function (matching the pattern in tests/free_surface.bats / tests/review_thread_gate.bats)

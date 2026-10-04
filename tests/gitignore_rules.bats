@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit test for the Python cache rules in .gitignore (dotfiles-dev#541): the four
+# Unit test for the Python cache rules in .gitignore (dotfiles-linux-dev#541): the four
 # Python hooks under ai_clients/claude/hooks/lib/ run every session and leave
 # __pycache__/ behind, which the Stop guard and SubagentStop sweep then flag as
 # uncommitted work. This pins the rule so a future template refresh (the file is
