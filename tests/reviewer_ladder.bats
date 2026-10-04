@@ -1032,10 +1032,10 @@ _only_cli_rungs() {
     _fake_cli kimi ok
     local wd="$BATS_TEST_TMPDIR/wd"
     git init -q "$wd"
-    export REVIEWER_LADDER_BASE=HEAD
     git -C "$wd" -c user.email=a@b -c user.name=t commit -q --allow-empty -m x
-    export REVIEWER_LADDER_BASE=master
     git -C "$wd" branch -M master
+    export REVIEWER_LADDER_BASE=master
+    cd "$wd"
     run _run_runtime_review coderabbit default "" 7 "$wd"
     grep -q -- '--agent --base' "$BATS_TEST_TMPDIR/coderabbit.argv"
     run grep -e '--use-credits' -e '--api-key' "$BATS_TEST_TMPDIR/coderabbit.argv"
