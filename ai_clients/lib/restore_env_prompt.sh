@@ -35,11 +35,11 @@ prompt_restore_env() {
     [[ -f "$REPO_ROOT/.env" ]] && env_exists=1
 
     if [[ $env_exists -eq 1 ]]; then
-        read -rp "Restore .env files from an external drive? [y/N]: " reply
+        read -rp "Restore .env files from an external drive? [y/N]: " reply || reply="n"
         reply="${reply:-n}"
     else
         print_status "info" "No .env at $REPO_ROOT — restore recommended on a fresh setup"
-        read -rp "Restore .env files from an external drive? [Y/n]: " reply
+        read -rp "Restore .env files from an external drive? [Y/n]: " reply || reply="n"
         reply="${reply:-y}"
     fi
 
@@ -54,10 +54,10 @@ prompt_restore_env() {
     # resolved individually by the restore script (overwrite / back up first / skip).
     if [[ $env_exists -eq 1 ]]; then
         print_status "warning" "A .env already exists at $REPO_ROOT and may be replaced."
-        read -rp "Are you sure you want to replace existing .env file(s)? [y/N]: " confirm
+        read -rp "Are you sure you want to replace existing .env file(s)? [y/N]: " confirm || confirm="n"
         confirm="${confirm:-n}"
     else
-        read -rp "Are you sure you want to restore .env file(s)? [Y/n]: " confirm
+        read -rp "Are you sure you want to restore .env file(s)? [Y/n]: " confirm || confirm="n"
         confirm="${confirm:-y}"
     fi
 
