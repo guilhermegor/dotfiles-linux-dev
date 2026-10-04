@@ -701,7 +701,10 @@ _run_runtime_review() {
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
 			return 1
 		}
-		diff="$(git -C "$workdir" diff "${rv_base}...HEAD" | head -c 200000)"
+		# The prompt is ONE argv string: Linux caps that at MAX_ARG_STRLEN (131072
+		# bytes), so 200000 made every large diff fail with "Argument list too long"
+		# before the CLI started (#634). 120000 leaves room for the prompt prefix.
+		diff="$(git -C "$workdir" diff "${rv_base}...HEAD" | head -c 120000)"
 		[ -n "$diff" ] || return 1
 		prompt="Review PR #$pr_number. Report concrete bugs and risks as a markdown list with file:line. Diff:"$'\n'"$diff"
 		if [ "$runtime" = "kimi" ]; then
