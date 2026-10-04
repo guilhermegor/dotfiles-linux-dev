@@ -735,6 +735,38 @@ _make_two_commit_repo() {
     [[ "$output" != *"GH CALLED"* ]]
 }
 
+@test "_post_pr_review: the owner's GH_TOKEN is replaced by the App token, never forwarded (#624)" {
+    unset REVIEWER_LADDER_POST_CMD
+    export GH_TOKEN="owner-token"
+    GH_LOG="$BATS_TEST_TMPDIR/gh-owner.log"
+    : >"$GH_LOG"
+    gh() { printf 'token=%s\n' "${GH_TOKEN:-}" >>"$GH_LOG"; cat >/dev/null; }
+    _ladder_app_token() { echo "app-installation-token"; }
+    export -f gh _ladder_app_token
+    export GH_LOG
+
+    run _post_pr_review o r 487 "hello" "$HEAD_SHA"
+    [ "$status" -eq 0 ]
+    run grep -F -- 'owner-token' "$GH_LOG"
+    [ "$status" -ne 0 ]
+    run grep -F -- 'token=app-installation-token' "$GH_LOG"
+    [ "$status" -eq 0 ]
+}
+
+@test "_post_pr_review: an unconfigured App never reaches gh even with an owner GH_TOKEN set (#624)" {
+    unset REVIEWER_LADDER_POST_CMD
+    export GH_TOKEN="owner-token"
+    export REVIEWER_LADDER_APP_CONFIG="$BATS_TEST_TMPDIR/absent.json"
+    gh() { echo "GH CALLED" >&2; }
+    curl() { echo "CURL CALLED" >&2; }
+    export -f gh curl
+
+    run _post_pr_review o r 487 "hello" "$HEAD_SHA"
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"GH CALLED"* ]]
+    [[ "$output" != *"CURL CALLED"* ]]
+}
+
 @test "ladder_poster_login: the App's <slug>[bot], read from the App config (#624)" {
     unset REVIEWER_LADDER_POSTER
     export REVIEWER_LADDER_APP_CONFIG="$BATS_TEST_TMPDIR/app.json"
