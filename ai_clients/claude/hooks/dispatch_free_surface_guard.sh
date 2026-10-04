@@ -65,7 +65,11 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HOOK_DIR/lib/dispatch_claims.sh"
 
 PLANNER="${DISPATCH_GUARD_PLANNER:-$HOOK_DIR/lib/dispatch_plan.py}"
-PLANNER_TIMEOUT="${DISPATCH_GUARD_PLANNER_TIMEOUT:-30}"
+# 60s, not 30: dispatch_plan.py measured 39s on 2026-10-03 15:40Z under a GitHub
+# burst (every Stop read UNREADABLE) and 17s at 21:15Z after #605/#576 cut its
+# reads. ~3.5x the quiet runtime absorbs API latency; a real hang still times out
+# and fails closed (dotfiles-dev#607).
+PLANNER_TIMEOUT="${DISPATCH_GUARD_PLANNER_TIMEOUT:-60}"
 # A session-long FAILED_BACKGROUND_AGENTS accumulation is unreadable by construction
 # (dotfiles-dev#540, measured: 34 names on every Stop). Only the newest N are ever printed.
 FAILED_AGENTS_MAX="${DISPATCH_GUARD_FAILED_AGENTS_MAX:-10}"
