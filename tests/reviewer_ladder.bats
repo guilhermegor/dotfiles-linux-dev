@@ -1253,6 +1253,7 @@ SH
     [ "$status" -eq 0 ]
     grep -qF -- '[--tools][]' "$BATS_TEST_TMPDIR/claude.argv"
     grep -qF -- '[--strict-mcp-config]' "$BATS_TEST_TMPDIR/claude.argv"
+    grep -qF -- '[--settings][{"disableAllHooks":true}]' "$BATS_TEST_TMPDIR/claude.argv"
     run grep -E -- '--allowedTools|--dangerously|bypassPermissions|--permission-mode' "$BATS_TEST_TMPDIR/claude.argv"
     [ "$status" -ne 0 ]
     # the run happened inside the PR checkout, even when the caller sits elsewhere
@@ -1260,4 +1261,47 @@ SH
     run _run_runtime_review claude default "" 7 "$wd"
     [ "$status" -eq 0 ]
     [ "$(cat "$BATS_TEST_TMPDIR/claude.pwd")" = "$wd" ]
+}
+
+@test "the claude probe passes when the caller's stdin is an open pipe (#634)" {
+    # A CLI in -p mode reads a non-TTY stdin to EOF; under a background caller
+    # that pipe never closes, so the probe used to time out every time.
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    cat >"$BATS_TEST_TMPDIR/bin/claude" <<'SH'
+#!/bin/bash
+cat >/dev/null
+echo OK
+SH
+    chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+    unset REVIEWER_LADDER_CLAUDE_PROBE
+    export REVIEWER_LADDER_PROBE_TIMEOUT=3
+    run bash -c "source '$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/reviewer_ladder.sh'; sleep 10 | _claude_entitlement_probe"
+    [ "$status" -eq 0 ]
+}
+
+@test "a diff larger than MAX_ARG_STRLEN still reaches the CLI rung (#634)" {
+    # The prompt is one argv string; the kernel refuses any single argument over
+    # 131072 bytes with E2BIG before the CLI starts. Measured on blueprintx#552.
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    cat >"$BATS_TEST_TMPDIR/bin/claude" <<SH
+#!/bin/bash
+printf '%s\n' "\${#2}" >"$BATS_TEST_TMPDIR/claude.promptlen"
+echo "1 finding"
+SH
+    chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+    local wd="$BATS_TEST_TMPDIR/wd"
+    git init -q "$wd"
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q --allow-empty -m x
+    git -C "$wd" branch -M master
+    git -C "$wd" branch base
+    head -c 300000 /dev/zero | tr '\0' 'a' | fold -w 100 >"$wd/big"
+    git -C "$wd" add big
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q -m y
+    export REVIEWER_LADDER_BASE=base
+    cd "$wd"
+    run _run_runtime_review claude default "" 7 "$wd"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$BATS_TEST_TMPDIR/claude.promptlen")" -lt 131072 ]
 }

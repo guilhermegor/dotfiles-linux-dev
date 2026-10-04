@@ -210,7 +210,9 @@ _rung_probe() {
 		return $?
 	fi
 	shift 2
-	timeout "${REVIEWER_LADDER_PROBE_TIMEOUT:-30}" "$@" 2>/dev/null
+	# </dev/null: a CLI in -p mode reads a non-TTY stdin and waits forever on an
+	# open pipe (a background caller), so the probe always hit its timeout.
+	timeout "${REVIEWER_LADDER_PROBE_TIMEOUT:-30}" "$@" 2>/dev/null </dev/null
 }
 
 _kimi_entitlement_probe() {
@@ -235,9 +237,14 @@ _copilot_entitlement_probe() {
 # strictly LAST rung. It is only reached when every cheaper rung failed its
 # probe, and the probe itself is a one-word call. A session/usage limit or auth
 # error exits non-zero or prints no OK, so the rung is skipped.
+#
+# A headless reviewer must not run the operator's session hooks: inside a repo
+# they walk every worktree and read the board, measured at >60s per call, so the
+# 30s probe always timed out and the rung never fired (#634). 3.3s without them.
+LADDER_CLAUDE_FLAGS=(--settings '{"disableAllHooks":true}' --tools "" --strict-mcp-config)
 _claude_entitlement_probe() {
 	local out
-	out="$(_rung_probe claude REVIEWER_LADDER_CLAUDE_PROBE claude -p "reply with the single word OK")" || return 1
+	out="$(_rung_probe claude REVIEWER_LADDER_CLAUDE_PROBE claude -p "reply with the single word OK" "${LADDER_CLAUDE_FLAGS[@]}")" || return 1
 	[[ "$out" == *OK* ]]
 }
 
@@ -701,11 +708,14 @@ _run_runtime_review() {
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
 			return 1
 		}
-		diff="$(git -C "$workdir" diff "${rv_base}...HEAD" | head -c 200000)"
+		# The prompt is ONE argv string: Linux caps that at MAX_ARG_STRLEN (131072
+		# bytes), so 200000 made every large diff fail with "Argument list too long"
+		# before the CLI started (#634). 120000 leaves room for the prompt prefix.
+		diff="$(git -C "$workdir" diff "${rv_base}...HEAD" | head -c 120000)"
 		[ -n "$diff" ] || return 1
 		prompt="Review PR #$pr_number. Report concrete bugs and risks as a markdown list with file:line. Diff:"$'\n'"$diff"
 		if [ "$runtime" = "kimi" ]; then
-			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" kimi -p "$prompt"
+			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" kimi -p "$prompt" </dev/null
 		elif [ "$runtime" = "claude" ]; then
 			# NO tools at all, no MCP: the diff is already in the prompt, and it is
 			# untrusted PR content. With Read/Grep/Glob, an injected instruction
@@ -713,9 +723,9 @@ _run_runtime_review() {
 			# review body would publish it (#624 review). Measured: with these
 			# flags a "Read /etc/hostname" request answers that no tool exists.
 			(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
-				claude -p "$prompt" --tools "" --strict-mcp-config)
+				claude -p "$prompt" "${LADDER_CLAUDE_FLAGS[@]}" </dev/null)
 		else
-			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" copilot -s -p "$prompt"
+			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" copilot -s -p "$prompt" </dev/null
 		fi
 		;;
 	*)
