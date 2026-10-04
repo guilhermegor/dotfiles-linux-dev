@@ -57,7 +57,7 @@ setup() {
 teardown() {
     cd /
     rm -rf "$TEST_TMP"
-    unset REVIEW_FANOUT_RUNG REVIEW_FANOUT_RECENT_PUSH_SECONDS
+    unset REVIEW_FANOUT_RUNG REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
 }
 
 # ago SECONDS — an ISO-8601 UTC timestamp that many seconds in the past.
@@ -707,4 +707,70 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(grep -c 'api graphql' "$GH_LOG")" -eq 3 ]
     [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 55 ]
+}
+
+# --- the ladder trigger: backlog and structural refusal, not slot state (#616) ------------
+
+@test "an unreviewed head older than the backlog window is flagged for the ladder" {
+    stub_gh_prs <<EOF
+[{"number":700,"headRefOid":"aaaa7000","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa7000","committedDate":"$(ago 28800)"}],"statusCheckRollup":[]},
+ {"number":701,"headRefOid":"aaaa7010","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa7010","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[] | select(.pr == 700) | .ladder' <<<"$output")" = "backlog" ]
+    [ "$(jq -r '.dispatchable[] | select(.pr == 701) | .ladder' <<<"$output")" = "null" ]
+}
+
+@test "the backlog window is configurable" {
+    export REVIEW_FANOUT_BACKLOG_HOURS=0.5
+    stub_gh_prs <<EOF
+[{"number":702,"headRefOid":"aaaa7020","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa7020","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].ladder' <<<"$output")" = "backlog" ]
+}
+
+@test "a CodeRabbit bot-skip notice is a structural refusal even on a fresh head" {
+    stub_gh_prs <<EOF
+[{"number":703,"headRefOid":"aaaa7030","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],
+  "comments":[{"body":"Review skipped — Bot user detected","createdAt":"$(ago 900)",
+               "author":{"login":"coderabbitai[bot]"}}],
+  "commits":[{"oid":"aaaa7030","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].ladder' <<<"$output")" = "bot-skipped" ]
+}
+
+@test "a human typing the bot-skip phrase is not a refusal" {
+    stub_gh_prs <<EOF
+[{"number":704,"headRefOid":"aaaa7040","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],
+  "comments":[{"body":"Review skipped — Bot user detected","createdAt":"$(ago 900)",
+               "author":{"login":"someone"}}],
+  "commits":[{"oid":"aaaa7040","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].ladder' <<<"$output")" = "null" ]
+}
+
+@test "a DIRTY backlog PR stays excluded, never flagged for the ladder" {
+    stub_gh_prs <<EOF
+[{"number":705,"headRefOid":"aaaa7050","mergeStateStatus":"DIRTY","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa7050","committedDate":"$(ago 28800)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
 }

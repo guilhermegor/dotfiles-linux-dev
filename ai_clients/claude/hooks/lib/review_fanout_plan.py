@@ -6,7 +6,7 @@ Prints exactly one JSON object to stdout, the same shape ``dispatch_plan.py`` pr
 issues, keyed on ``pr`` instead of ``issue``::
 
     {"rung":         {"status": "ok", "runtime": "qwen", "model": "…", "signal": "…"},
-     "dispatchable": [{"pr": 520, "head": "e131992…", "checks": {…}}],
+     "dispatchable": [{"pr": 520, "head": "e131992…", "checks": {…}, "ladder": "backlog"}],
      "excluded":     [{"pr": 453, "reason": "…"}]}
 
 **It emits the assignment set and never dispatches.** Determinism here belongs to the
@@ -133,7 +133,7 @@ OPEN_PR_LIST_CAP = 200
 PR_SELECTION = (
 	"number headRefOid mergeStateStatus isDraft "
 	"reviews(last:100){totalCount nodes{commit{oid}}} "
-	"comments(last:100){totalCount nodes{body createdAt}} "
+	"comments(last:100){totalCount nodes{body createdAt author{login}}} "
 	"commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{"
 	"__typename ... on CheckRun{name status conclusion} "
 	"... on StatusContext{context state}}}}}}}"
@@ -154,6 +154,19 @@ RECENT_PUSH_SECONDS = int(os.environ.get("REVIEW_FANOUT_RECENT_PUSH_SECONDS", "6
 # and can walk several candidates at its own per-probe timeout. A Stop hook is synchronous,
 # so the walk gets one overall deadline; exceeding it is `unknown`, never `none`.
 RUNG_TIMEOUT = int(os.environ.get("REVIEW_FANOUT_RUNG_TIMEOUT", "45"))
+
+# A dispatchable PR (no review on its CURRENT head) older than this goes to the fallback
+# ladder whatever the primary rung's slot reads (dotfiles-linux-dev#616): slot_classify.py read
+# FREE for a week on a 50-PR backlog because "the slot is free" and "PRs are getting reviewed"
+# are different facts. A default, not a measurement -- move it when there is one.
+LADDER_BACKLOG_HOURS = float(os.environ.get("REVIEW_FANOUT_BACKLOG_HOURS", "6"))
+
+# The reviewer's own refusal to review a bot-authored PR -- structural like the file cap
+# (#420): waiting never clears it and re-asking never will, so the ladder is the only path in.
+# Matched on the reviewer's login AND the phrase; anyone can type the phrase.
+REVIEWER_LOGIN_SUBSTRING = "coderabbit"
+BOT_SKIP_PHRASE = "review skipped"
+BOT_SKIP_DETAIL = "bot user detected"
 
 # `conclusion` values that are not a failure. NEUTRAL/SKIPPED are how a conditional job
 # reports "did not need to run" — counting either as failing would make almost every PR look
@@ -437,6 +450,35 @@ def truncated_window(pr: dict) -> str | None:
 	return " and ".join(pr.get("truncated") or []) or None
 
 
+def bot_skipped(pr: dict) -> bool:
+	"""True when the reviewer posted its "Review skipped -- Bot user detected" notice.
+
+	Any head: the refusal is about who authored the PR, not about a commit, so a push does not
+	clear it. Author-checked -- the phrase alone is typeable by any commenter.
+	"""
+	for comment in pr.get("comments") or []:
+		login = ((comment.get("author") or {}).get("login") or "").lower()
+		body = (comment.get("body") or "").lower()
+		if REVIEWER_LOGIN_SUBSTRING in login and BOT_SKIP_PHRASE in body and BOT_SKIP_DETAIL in body:
+			return True
+	return False
+
+
+def ladder_reason(pr: dict, now: datetime.datetime) -> str | None:
+	"""Return why a DISPATCHABLE PR belongs on the fallback ladder regardless of slot state.
+
+	``bot-skipped`` (structural refusal) or ``backlog`` (no review on the current head for
+	longer than ``LADDER_BACKLOG_HOURS``); None otherwise. Only called for PRs that already
+	passed ``exclusion_reason``, so DIRTY, draft and just-pushed heads never get here.
+	"""
+	if bot_skipped(pr):
+		return "bot-skipped"
+	head_time = head_commit_time(pr)
+	if head_time is not None and (now - head_time).total_seconds() > LADDER_BACKLOG_HOURS * 3600:
+		return "backlog"
+	return None
+
+
 def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None:
 	"""Return why this PR gets no reviewer this round, or None when it is dispatchable.
 
@@ -513,6 +555,7 @@ def build_plan() -> dict:
 				"pr": number,
 				"head": pr.get("headRefOid") or "",
 				"checks": check_states(pr.get("statusCheckRollup")),
+				"ladder": ladder_reason(pr, now),
 			}
 		)
 

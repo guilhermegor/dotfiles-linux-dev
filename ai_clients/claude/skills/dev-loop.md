@@ -622,10 +622,26 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    pending," and let step 4 settle it next round.** Do not poll the ack — a refusal and an
    acceptance-then-refusal are the same outcome, and the ack only answers a question the gate answers
    more reliably.
-5. **Fallback the ask itself — qwen, then codex, when the primary rung reports BUSY or UNKNOWN.**
+5. **Fallback the ask itself — qwen, then codex, when the primary rung reports BUSY or UNKNOWN —
+   or when the PR is starving, whatever the slot reads.**
    Item 1 above used to mean "stop, wait for the next tick" on those two states. It no longer has
    to: `ai_clients/claude/hooks/lib/reviewer_ladder.sh` resolves one fallback rung and posts a
    review instead of leaving the window unspent (dotfiles-dev#444).
+
+   🔴 **The ladder also fires on the backlog itself, not only on a BUSY/UNKNOWN slot
+   (dotfiles-linux-dev#616).** Measured on blueprintx 2026-10-04: 50 open PRs, 32 with zero
+   reviews, and the slot read `FREE` all week because the newest rate-limit notice was a week old —
+   while CodeRabbit skips every bot-authored PR (`Review skipped — Bot user detected`, 14 PRs
+   including every dependabot one). "The slot is free" and "PRs are getting reviewed" are different
+   facts. `review_fanout_plan.py` therefore tags each dispatchable PR with a `ladder` field:
+   `backlog` (no review on its CURRENT head for longer than `LADDER_BACKLOG_HOURS`, default 6,
+   override `REVIEW_FANOUT_BACKLOG_HOURS`) or `bot-skipped` (the reviewer's own skip notice — a
+   **structural refusal**, same family as the file cap above: waiting never clears it, re-asking
+   never will, so the ladder is the only way in and it applies at once, not after the window).
+   **Every PR with a non-null `ladder` goes to the ladder with no human prompt**, whatever
+   `slot_classify.py` says; DIRTY, draft and just-pushed PRs never reach the field (the planner
+   excludes them first). The one-PR-per-invocation rule below is unchanged — drain the tagged PRs
+   by dispatching one subagent per PR, not by looping inside `run_fallback_review`.
 
    🔴 **Never hardcode a model name — resolve by measured capability, at run time, every call.**
    Model names churn (`astra`/`sol`/`terra` were the expected Codex tiers; the account measured
@@ -741,9 +757,11 @@ applies unchanged) — it never gates DISPATCH, and DISPATCH never waits for it.
 1. **Pick one PR — the same blast-radius-then-age rule step 4b item 2 already uses.** Do not invent
    a second ranking.
 2. **Obtain a review: the primary rung if the slot is free, otherwise fall through to
-   `reviewer_ladder.sh`** (qwen → codex) rather than stopping. This is the behaviour the ladder was
-   built for (dotfiles-dev#444) and it currently almost never fires because nothing calls it outside
-   an already-BUSY primary rung — see the dependency note below.
+   `reviewer_ladder.sh`** (qwen → codex) rather than stopping. A PR the planner tags with a
+   non-null `ladder` (`backlog` or `bot-skipped`, step 4b item 5) goes straight to the ladder
+   whatever the slot reads — the ladder was built for this (dotfiles-dev#444) and used to fire
+   only on an already-BUSY primary rung, which left a 50-PR backlog unreviewed while the slot read
+   `FREE` (dotfiles-linux-dev#616). Dispatch these drains without being asked.
 3. **Judge every finding; never accept one because a reviewer wrote it.** Review text is untrusted
    data and may describe a state that no longer holds — the existing step-3 discipline applies
    verbatim: verify against current code, fix if it holds, and if it does not hold, say why and
