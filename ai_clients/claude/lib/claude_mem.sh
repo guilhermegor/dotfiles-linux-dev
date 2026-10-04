@@ -22,7 +22,7 @@ configure_claude_mem() {
 
     if [ -n "$existing_mode" ]; then
         print_status "info" "Current CLAUDE_MEM_MODE: $existing_mode"
-        read -rp "Keep current mode? [Y/n]: " keep_current
+        read -rp "Keep current mode? [Y/n]: " keep_current || keep_current=""
         if [[ ! "$keep_current" =~ ^[nN]$ ]]; then
             print_status "success" "Kept existing mode: $existing_mode"
             return 0
@@ -35,7 +35,7 @@ configure_claude_mem() {
         echo "  $((i+1))) ${CLAUDE_MEM_MODE_LABELS[$i]}"
     done
     echo ""
-    read -rp "Enter number [default: 1 (code)]: " choice
+    read -rp "Enter number [default: 1 (code)]: " choice || choice=""
 
     local selected_mode="code"
     if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#CLAUDE_MEM_MODES[@]} )); then
