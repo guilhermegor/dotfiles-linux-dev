@@ -689,3 +689,27 @@ JSON
     [ "$status" -eq 0 ]
     [[ "$output" == *"unanswered ladder finding (comment channel)"* ]]
 }
+
+# --- #620: a ladder finding stays red until answered; a newer review at a newer head answers it.
+
+@test "comment channel #620: a later marker at the SAME head does not clear a finding" {
+    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\nReviewed head: aaa\n\n- [P2] x'
+    later=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\nReviewed head: aaa\n\nNo issues found, '"$LONG_BODY"
+    run_comment_filter "$(ladder_comment_fixture MEMBER "$body" guilhermegor "$later")"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"unanswered ladder finding"* ]]
+}
+
+@test "comment channel #620: a later marker at a NEWER head supersedes the finding" {
+    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\nReviewed head: aaa\n\n- [P2] x'
+    later=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\nReviewed head: bbb\n\nNo issues found, '"$LONG_BODY"
+    run_comment_filter "$(ladder_comment_fixture MEMBER "$body" guilhermegor "$later")"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "workflow #620: the out-of-scope skip is gated on no unanswered finding" {
+    wf="$BATS_TEST_DIRNAME/../.github/workflows/review_threads.yml"
+    run grep -c 'GATE_STATUS" != "problems"' "$wf"
+    [ "$output" -ge 1 ]
+}

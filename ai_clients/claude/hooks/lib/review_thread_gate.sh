@@ -225,7 +225,12 @@ _gate_comment_findings_filter() {
        # $lc.id let the NEXT fallback review clear this finding: it carries a distinct id,
        # a later timestamp and easily 100+ characters, so a second review saying "no issues
        # found" would silently satisfy a finding nobody addressed.
-       and ((((.body // "") | split("\n")[0]) | test($marker)) | not)))
+       # ...except a later review at a DIFFERENT head (#620): the finding was about code
+       # that has since been replaced, and that newer review carries its own findings,
+       # judged by this same filter. Same head never supersedes.
+       and (((((.body // "") | split("\n")[0]) | test($marker)) | not)
+            or (((.authorAssociation // "") | test("^(OWNER|MEMBER|COLLABORATOR)$"))
+                and ((((.body // "") | split("\n"))[1] // "x") != ((($lc.body // "") | split("\n"))[1] // "y"))))))
    | length) as $answers
 | if $answers == 0 then "  unanswered ladder finding (comment channel)" else empty end
 JQ

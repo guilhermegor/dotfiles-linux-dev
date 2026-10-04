@@ -195,9 +195,17 @@ jobs:
           # shellcheck disable=SC2153
           changed=$(gh pr view "$PR_NUMBER" --repo "$OWNER/$REPO" \
             --json files --jq '.files[].path')
+          # ⚠️ dotfiles-linux-dev#620: the scope skip must never wave through an unanswered
+          # ladder finding. It published success before the gate ran at all, so #619
+          # auto-merged over a [P2] comment-channel finding. Out of scope AND no open
+          # finding is the only skip; otherwise fall through to the live verdict below.
           if ! printf '%s\n' "$changed" | grep -qE '^ai_clients/claude/hooks/|^ai_clients/claude/settings\.json$'; then
-            report success "gate not required (selective policy)" \
-              "No ai_clients/claude/hooks/ or ai_clients/claude/settings.json changes in this PR."
+            gate_pr_thread_state "$OWNER" "$REPO" "$PR_NUMBER" ".review-bots.yaml"
+            if [ "$GATE_STATUS" != "problems" ]; then
+              report success "gate not required (selective policy)" \
+                "No ai_clients/claude/hooks/ or ai_clients/claude/settings.json changes in this PR."
+            fi
+            report failure "unanswered review finding (out-of-scope PR)" "$GATE_DETAIL"
           fi
 
           # No review at all is a distinct failure from "thread left open" —
