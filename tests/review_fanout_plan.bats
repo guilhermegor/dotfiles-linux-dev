@@ -700,3 +700,11 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "613" ]
 }
+
+@test "a 55-PR board, past the size that 502'd the single page, is read whole (dotfiles-linux-dev#616)" {
+    stub_gh_prs <<<"$(board_of 55)"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(grep -c 'api graphql' "$GH_LOG")" -eq 3 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 55 ]
+}
