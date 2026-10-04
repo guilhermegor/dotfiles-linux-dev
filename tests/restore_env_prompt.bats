@@ -54,7 +54,7 @@ echo "INSTALLED-RAN"
 STUB
     chmod +x "$HOME/.local/bin/restore-env.sh"
 
-    run prompt_restore_env <<< ""
+    run prompt_restore_env <<< $'\n'
     [ "$status" -eq 0 ]
     [[ "$output" == *"INSTALLED-RAN"* ]]
 }
@@ -68,7 +68,7 @@ echo "INSTALLED-RAN"
 STUB
     chmod +x "$HOME/.local/bin/restore-env.sh"
 
-    run prompt_restore_env <<< "y"
+    run prompt_restore_env <<< $'y\ny'
     [ "$status" -eq 0 ]
     [[ "$output" == *"INSTALLED-RAN"* ]]
 }
