@@ -137,7 +137,10 @@ issue_json_labeled() {
 # here so gate_free_surface itself keeps succeeding for the claimed-issue answer it still
 # supplies). CLAIMED_ISSUE, if given, is the one issue number closingIssuesReferences reports as
 # already claimed. FAIL_BRANCH=1 makes the default-branch lookup fail, exercising
-# gate_free_surface's own fail-closed path. FROZEN_PR_FILE, if given, is a file an OPEN PR (no
+# gate_free_surface's own fail-closed path, and the claimed-issues read too: the planner no longer
+# computes the gate's held set (dotfiles-dev#607), so the default-branch lookup alone cannot break
+# the gate any more. Every call is appended to $BIN/gh.calls.
+# FROZEN_PR_FILE, if given, is a file an OPEN PR (no
 # live agent behind it — no matching worktree) touches, for finding 1's own test. MENTION_PRS_JSON,
 # if given, is the flat `number,title,body,closingIssuesReferences` PR array the stub serves, re-shaped
 # into GraphQL pages, to the planner's OWN mention-without-closing read (dotfiles-dev#413) returns — default `[]` (no PRs
@@ -165,6 +168,7 @@ stub_gh() {
     fi
     cat >"$BIN/gh" <<STUB
 #!/bin/bash
+echo "\$*" >>"$BIN/gh.calls"
 case "\$*" in
 "repo view --json nameWithOwner -q .nameWithOwner") echo "acme/widgets" ;;
 "api --paginate repos/acme/widgets/issues"*)
@@ -240,6 +244,7 @@ JSON
     echo '$dead_prs'
     ;;
 "api graphql -f query="*)
+    [ "$fail" = 1 ] && exit 1
     echo '{"data":{"search":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":$claimed_nodes}}}'
     ;;
 *) echo "UNSTUBBED: \$*" >&2; exit 1 ;;
@@ -663,6 +668,21 @@ print(len(prs), sorted(p["number"] for p in prs) == list(range(1, 46)), prs[0]["
     [ "$(field '.excluded | length')" -eq 2 ]
     [[ "$(field '.excluded[0].reason')" == *"UNKNOWN"* ]]
     [[ "$(field '.excluded[1].reason')" == *"UNKNOWN"* ]]
+}
+
+# --- dotfiles-dev#607: no gh call whose answer the planner throws away ----------------------
+
+@test "the planner never reads per-PR files or per-branch compares it overwrites" {
+    # gate_free_surface's agent-vs-open-PR held set is replaced by the live-agent set (#433
+    # finding 1), yet computing it cost one `pr view` per open PR plus one compare per pushed
+    # branch -- a cost that grows with the board and made the planner outrun the Stop guard.
+    stub_gh "[$(issue_json 1 free/a.sh)]" held/file.sh "" 0 frozen/file.sh
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable[0].issue')" = "1" ]
+    [ -s "$BIN/gh.calls" ]
+    run grep -E 'pr view|/compare/|/branches' "$BIN/gh.calls"
+    [ "$status" -ne 0 ]
 }
 
 # --- fails loud, not closed-and-quiet, on a broken read itself -------------------------------
