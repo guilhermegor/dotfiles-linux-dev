@@ -31,6 +31,14 @@ setup() {
     _default_no_reviews() { echo '[]'; }
     export -f _default_no_reviews
     export REVIEWER_LADDER_REVIEWS_CMD=_default_no_reviews
+
+    # dotfiles-linux-dev#626: the kimi/coderabbit/copilot rungs default to
+    # unavailable so no test ever reaches a real binary on the host.
+    _default_rung_down() { return 1; }
+    export REVIEWER_LADDER_KIMI_PROBE=_default_rung_down
+    export REVIEWER_LADDER_CODERABBIT_PROBE=_default_rung_down
+    export REVIEWER_LADDER_COPILOT_PROBE=_default_rung_down
+    export REVIEWER_LADDER_CLAUDE_PROBE=_default_rung_down
 }
 
 # The head every already-covered fixture below reviewed (dotfiles-linux-dev#564).
@@ -1012,4 +1020,246 @@ _make_bare_remote_with_pr() {
     [ "$status" -eq 1 ]
     [[ "$output" != *"SHOULD NOT RUN"* ]]
     [[ "$output" != *"SHOULD NOT POST"* ]]
+}
+
+# --- kimi / coderabbit / copilot rungs (dotfiles-linux-dev#626) ----------------
+
+# Fake CLI on PATH. MODE: ok | forbidden (403, exit 1) | quota (exit 1) | hang.
+# Every invocation's argv is appended to $BATS_TEST_TMPDIR/<name>.argv.
+_fake_cli() {
+    local name="$1" mode="$2"
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    cat >"$BATS_TEST_TMPDIR/bin/$name" <<SH
+#!/bin/bash
+echo "\$*" >>"$BATS_TEST_TMPDIR/$name.argv"
+case "$mode" in
+ok) echo OK ;;
+forbidden) echo "403 subscription does not have access" >&2; exit 1 ;;
+quota) echo "quota exhausted" >&2; exit 1 ;;
+hang) sleep 30 ;;
+esac
+SH
+    chmod +x "$BATS_TEST_TMPDIR/bin/$name"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+}
+
+_only_cli_rungs() {
+    export REVIEWER_LADDER_QWEN_SETTINGS=/nonexistent
+    export REVIEWER_LADDER_CODEX_CACHE=/nonexistent
+    unset REVIEWER_LADDER_KIMI_PROBE REVIEWER_LADDER_CODERABBIT_PROBE REVIEWER_LADDER_COPILOT_PROBE REVIEWER_LADDER_CLAUDE_PROBE
+    export REVIEWER_LADDER_PROBE_TIMEOUT=1
+}
+
+@test "kimi rung is selected when its live probe passes" {
+    _only_cli_rungs
+    _fake_cli kimi ok
+    _fake_cli coderabbit forbidden
+    _fake_cli copilot forbidden
+    _fake_cli claude ok
+    resolve_fallback_reviewer
+    [ "$LADDER_RUNTIME" = "kimi" ]
+    # a cheaper rung resolved: claude must never have been called
+    [ ! -e "$BATS_TEST_TMPDIR/claude.argv" ]
+}
+
+@test "coderabbit rung is selected when its probe passes and kimi is down" {
+    _only_cli_rungs
+    _fake_cli kimi forbidden
+    _fake_cli coderabbit ok
+    _fake_cli copilot forbidden
+    resolve_fallback_reviewer
+    [ "$LADDER_RUNTIME" = "coderabbit" ]
+}
+
+@test "copilot rung is selected when kimi and coderabbit are down" {
+    _only_cli_rungs
+    _fake_cli kimi quota
+    _fake_cli coderabbit quota
+    _fake_cli copilot ok
+    resolve_fallback_reviewer
+    [ "$LADDER_RUNTIME" = "copilot" ]
+}
+
+@test "each new rung is skipped on 403, quota and timeout, one log line each" {
+    _only_cli_rungs
+    _fake_cli kimi forbidden
+    _fake_cli coderabbit quota
+    _fake_cli copilot hang
+    _fake_cli claude forbidden
+    run resolve_fallback_reviewer
+    [ "$status" -eq 1 ]
+    [ "$(grep -c 'rung kimi skipped' <<<"$output")" -eq 1 ]
+    [ "$(grep -c 'rung coderabbit skipped' <<<"$output")" -eq 1 ]
+    [ "$(grep -c 'rung copilot skipped' <<<"$output")" -eq 1 ]
+}
+
+@test "full ladder falls through all five rungs to no rung available" {
+    _only_cli_rungs
+    _fake_cli kimi forbidden
+    _fake_cli coderabbit forbidden
+    _fake_cli copilot forbidden
+    _fake_cli claude quota
+    export REVIEWER_LADDER_HEAD_SHA_CMD=_default_fake_head_sha
+    run run_fallback_review o r 1 CLEAN 0 99999 '[]'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no rung available"* ]]
+}
+
+_cli_run_harness() {
+    _only_cli_rungs
+    # copilot's probe checks for "OK" in the output, so its stub must print it
+    probe_ok() { echo OK; }
+    export -f probe_ok
+    # claude is pinned down: these tests must never reach the real, paid CLI
+    export REVIEWER_LADDER_KIMI_PROBE=false REVIEWER_LADDER_CODERABBIT_PROBE=true \
+        REVIEWER_LADDER_COPILOT_PROBE=probe_ok REVIEWER_LADDER_CLAUDE_PROBE=false
+    # a SUBDIR: the ladder tears down whatever "worktree" it was handed after
+    # every attempt, and handing it $BATS_TEST_TMPDIR itself deletes the test's
+    # own scratch files mid-run
+    fake_checkout() { mkdir -p "$BATS_TEST_TMPDIR/wt" && echo "$BATS_TEST_TMPDIR/wt"; }
+    export -f fake_checkout
+    export REVIEWER_LADDER_CHECKOUT_CMD=fake_checkout
+    fake_post() { printf 'POSTED:%s\n' "$4"; }
+    export -f fake_post
+    export REVIEWER_LADDER_POST_CMD=fake_post
+}
+
+@test "a rung whose probe passes but whose review fails falls through to the next" {
+    _cli_run_harness
+    fake_run() {
+        [ "$1" = "coderabbit" ] && { echo "Review rate limited" >&2; return 1; }
+        echo "copilot found 1 P2"
+    }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rung coderabbit skipped: review failed"* ]]
+    [[ "$output" == *"POSTED:"*"runtime: copilot"*"copilot found 1 P2"* ]]
+}
+
+@test "an empty review is never posted as a clean one" {
+    _cli_run_harness
+    fake_run() { [ "$1" = "copilot" ] && echo "real finding"; return 0; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rung coderabbit skipped: review failed or returned nothing"* ]]
+    [[ "$output" == *"runtime: copilot"* ]]
+    [[ "$output" != *"runtime: coderabbit"* ]]
+}
+
+@test "a failed probe runs once per invocation, never again on a fall-through re-resolve" {
+    _cli_run_harness
+    mkdir -p "$BATS_TEST_TMPDIR"
+    export PROBE_LOG="$BATS_TEST_TMPDIR/kimi.probes"
+    kimi_probe_counted() { echo x >>"$PROBE_LOG"; return 1; }
+    export -f kimi_probe_counted
+    export REVIEWER_LADDER_KIMI_PROBE=kimi_probe_counted
+    fake_run() {
+        [ "$1" = "coderabbit" ] && return 1
+        echo "copilot found 1 P2"
+    }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <"$PROBE_LOG")" -eq 1 ]
+    [[ "$output" == *"rung kimi excluded earlier this run"* ]]
+    [[ "$output" == *"runtime: copilot"* ]]
+}
+
+@test "every rung failing its review ends in no rung available, posting nothing" {
+    _cli_run_harness
+    fake_run() { return 1; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no rung available"* ]]
+    [[ "$output" != *"POSTED:"* ]]
+}
+
+@test "coderabbit invocation never carries --use-credits or an api key" {
+    _fake_cli coderabbit ok
+    _fake_cli kimi ok
+    local wd="$BATS_TEST_TMPDIR/wd"
+    git init -q "$wd"
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q --allow-empty -m x
+    git -C "$wd" branch -M master
+    export REVIEWER_LADDER_BASE=master
+    cd "$wd"
+    run _run_runtime_review coderabbit default "" 7 "$wd"
+    grep -q -- '--agent --base' "$BATS_TEST_TMPDIR/coderabbit.argv"
+    run grep -e '--use-credits' -e '--api-key' "$BATS_TEST_TMPDIR/coderabbit.argv"
+    [ "$status" -ne 0 ]
+    # only comments may mention the flag; no code line of the lib may
+    run bash -c "grep -v '^[[:space:]]*#' '$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/reviewer_ladder.sh' | grep -e '--use-credits' -e '--api-key'"
+    [ "$status" -ne 0 ]
+}
+
+@test "claude is the last-resort rung: selected only when all earlier rungs fail" {
+    _only_cli_rungs
+    _fake_cli kimi forbidden
+    _fake_cli coderabbit forbidden
+    _fake_cli copilot quota
+    _fake_cli claude ok
+    resolve_fallback_reviewer
+    [ "$LADDER_RUNTIME" = "claude" ]
+    [ "$LADDER_SIGNAL" = "last-resort" ]
+    [[ "$(ladder_attribution_line "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_SIGNAL" abc)" == "Fallback review — runtime: claude, model: default (selected by: last-resort)"* ]]
+}
+
+@test "claude rung is skipped on a session/usage limit error" {
+    _only_cli_rungs
+    _fake_cli kimi forbidden
+    _fake_cli coderabbit forbidden
+    _fake_cli copilot forbidden
+    _fake_cli claude quota
+    run resolve_fallback_reviewer
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"rung claude skipped"* ]]
+}
+
+@test "claude review denies every write-capable tool and runs inside the PR checkout" {
+    # --allowedTools alone only PRE-APPROVES on top of the owner's settings
+    # allow list, so the read-only guarantee is the DENY list; and Read/Grep
+    # must see the verified PR checkout, not the caller's cwd (#628 review).
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    cat >"$BATS_TEST_TMPDIR/bin/claude" <<SH
+#!/bin/bash
+printf '%s\n' "\$PWD" >"$BATS_TEST_TMPDIR/claude.pwd"
+printf '%s\n' "\$*" >>"$BATS_TEST_TMPDIR/claude.argv"
+echo "1 finding"
+SH
+    chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+    local wd="$BATS_TEST_TMPDIR/wd"
+    git init -q "$wd"
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q --allow-empty -m x
+    git -C "$wd" branch -M master
+    git -C "$wd" branch base
+    echo hi >"$wd/f"
+    git -C "$wd" add f
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q -m y
+    export REVIEWER_LADDER_BASE=base
+    cd "$wd"
+    run _run_runtime_review claude default "" 7 "$wd"
+    [ "$status" -eq 0 ]
+    local tool
+    for tool in Bash Edit Write MultiEdit NotebookEdit; do
+        grep -qE -- "--disallowedTools [^ ]*\b$tool\b" "$BATS_TEST_TMPDIR/claude.argv"
+    done
+    run grep -E -- '--dangerously|bypassPermissions|--permission-mode' "$BATS_TEST_TMPDIR/claude.argv"
+    [ "$status" -ne 0 ]
+    # the run happened inside the PR checkout, even when the caller sits elsewhere
+    cd "$BATS_TEST_TMPDIR"
+    run _run_runtime_review claude default "" 7 "$wd"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$BATS_TEST_TMPDIR/claude.pwd")" = "$wd" ]
 }
