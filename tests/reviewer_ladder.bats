@@ -26,6 +26,11 @@ setup() {
     export -f _default_fake_head_sha
     export HEAD_SHA
     export REVIEWER_LADDER_HEAD_SHA_CMD=_default_fake_head_sha
+
+    # dotfiles-linux-dev#624: coverage also reads the PR's submitted reviews.
+    _default_no_reviews() { echo '[]'; }
+    export -f _default_no_reviews
+    export REVIEWER_LADDER_REVIEWS_CMD=_default_no_reviews
 }
 
 # The head every already-covered fixture below reviewed (dotfiles-linux-dev#564).
@@ -370,8 +375,8 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
     fake_probe() { return 0; }
     export REVIEWER_LADDER_QWEN_PROBE=fake_probe
     _run_runtime_review() { echo "SHOULD NOT BE CALLED" >&2; return 1; }
-    _post_pr_comment() { echo "SHOULD NOT BE CALLED" >&2; return 1; }
-    export -f _run_runtime_review _post_pr_comment
+    _post_pr_review() { echo "SHOULD NOT BE CALLED" >&2; return 1; }
+    export -f _run_runtime_review _post_pr_review
 
     run run_fallback_review o r 42 BLOCKED "" 5000 "[]" --dry-run
     [ "$status" -eq 0 ]
@@ -436,8 +441,8 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
 @test "no rung resolves — run_fallback_review fails closed, posts nothing" {
     export REVIEWER_LADDER_QWEN_SETTINGS="$FIXTURES/qwen_malformed.json"
     export REVIEWER_LADDER_CODEX_CACHE="$FIXTURES/codex_malformed.json"
-    _post_pr_comment() { echo "SHOULD NOT BE CALLED" >&2; return 1; }
-    export -f _post_pr_comment
+    _post_pr_review() { echo "SHOULD NOT BE CALLED" >&2; return 1; }
+    export -f _post_pr_review
 
     run run_fallback_review o r 42 BLOCKED "" 5000 ""
     [ "$status" -eq 1 ]
@@ -449,8 +454,8 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
     # review would be spent and repeated on every run. Nothing downstream may run.
     _no_sha() { return 1; }
     resolve_fallback_reviewer() { echo "SHOULD NOT RESOLVE" >&2; return 1; }
-    _post_pr_comment() { echo "SHOULD NOT BE CALLED" >&2; return 1; }
-    export -f _no_sha resolve_fallback_reviewer _post_pr_comment
+    _post_pr_review() { echo "SHOULD NOT BE CALLED" >&2; return 1; }
+    export -f _no_sha resolve_fallback_reviewer _post_pr_review
     export REVIEWER_LADDER_HEAD_SHA_CMD=_no_sha
 
     run run_fallback_review o r 42 BLOCKED "" 5000 ""
@@ -694,23 +699,64 @@ _make_two_commit_repo() {
     [ -z "$output" ]
 }
 
-@test "_post_pr_comment: default command is REST (issues/{n}/comments), never gh pr comment" {
+@test "_post_pr_review: a COMMENT review on the head commit, as the App token, over REST (#624)" {
     unset REVIEWER_LADDER_POST_CMD
     GH_LOG="$BATS_TEST_TMPDIR/gh-post.log"
     : >"$GH_LOG"
     gh() {
-        printf '%s\n' "$*" >>"$GH_LOG"
-        cat >/dev/null
+        printf 'token=%s %s\n' "${GH_TOKEN:-}" "$*" >>"$GH_LOG"
+        cat >>"$GH_LOG"
     }
-    export -f gh
+    _ladder_app_token() { echo "app-installation-token"; }
+    export -f gh _ladder_app_token
     export GH_LOG
 
-    run _post_pr_comment o r 487 "hello world"
+    run _post_pr_review o r 487 "hello world" "$HEAD_SHA"
     [ "$status" -eq 0 ]
-    run grep -F -- 'pr comment' "$GH_LOG"
+    run grep -F -- 'token=app-installation-token api --method POST repos/o/r/pulls/487/reviews' "$GH_LOG"
+    [ "$status" -eq 0 ]
+    run grep -F -- "\"commit_id\":\"$HEAD_SHA\"" "$GH_LOG"
+    [ "$status" -eq 0 ]
+    run grep -F -- '"event":"COMMENT"' "$GH_LOG"
+    [ "$status" -eq 0 ]
+    run grep -F -- 'issues/487/comments' "$GH_LOG"
     [ "$status" -ne 0 ]
-    run grep -F -- 'api --method POST repos/o/r/issues/487/comments' "$GH_LOG"
+}
+
+@test "_post_pr_review: no App configured fails loudly and never posts as the owner (#624)" {
+    unset REVIEWER_LADDER_POST_CMD
+    export REVIEWER_LADDER_APP_CONFIG="$BATS_TEST_TMPDIR/absent.json"
+    gh() { echo "GH CALLED" >&2; }
+    export -f gh
+
+    run _post_pr_review o r 487 "hello world" "$HEAD_SHA"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"ladder identity not configured"* ]]
+    [[ "$output" != *"GH CALLED"* ]]
+}
+
+@test "ladder_poster_login: the App's <slug>[bot], read from the App config (#624)" {
+    unset REVIEWER_LADDER_POSTER
+    export REVIEWER_LADDER_APP_CONFIG="$BATS_TEST_TMPDIR/app.json"
+    echo '{"app_id":1,"slug":"some-ladder","pem":"/x"}' >"$REVIEWER_LADDER_APP_CONFIG"
+    run ladder_poster_login
+    [ "$output" = "some-ladder[bot]" ]
+}
+
+@test "already-covered: the App's own submitted review on this head blocks a re-review (#624)" {
+    export REVIEWER_LADDER_POSTER='some-ladder[bot]'
+    resolve_fallback_reviewer() { echo "SHOULD NOT RESOLVE" >&2; return 1; }
+    fake_reviews() {
+        jq -cn --arg a "$MARKER_BODY" --arg s "$FRESH_CREATED_AT" \
+            '[{user:{login:"some-ladder[bot]"},body:$a,submitted_at:$s}]'
+    }
+    export -f resolve_fallback_reviewer fake_reviews
+    export MARKER_BODY FRESH_CREATED_AT REVIEWER_LADDER_REVIEWS_CMD=fake_reviews
+
+    run run_fallback_review o r 42 BLOCKED "" 5000 "[]"
     [ "$status" -eq 0 ]
+    [[ "$output" == *"already covered"* ]]
+    [[ "$output" != *"SHOULD NOT RESOLVE"* ]]
 }
 
 @test "_pr_remote_url: default fetches from the forge's owner/repo, never a local remote name" {

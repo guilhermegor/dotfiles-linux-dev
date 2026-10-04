@@ -241,16 +241,54 @@ ladder_attribution_line() {
 		"$runtime" "$model" "$signal" "$head_sha"
 }
 
+# The ladder's own identity (issue #624): a GitHub App, so its output is a
+# submitted review from a login a repo's review roster can name. Never the
+# owner's account — a marker in an owner comment is forgeable by any PR author.
+# The JSON holds {app_id, slug, pem}; it lives outside every repo.
+_ladder_app_config() {
+	printf '%s\n' "${REVIEWER_LADDER_APP_CONFIG:-$HOME/.config/ladder/app.json}"
+}
+
 # ladder_poster_login
-# The account _post_pr_comment posts as — `gh`'s authenticated user. Override
-# via REVIEWER_LADDER_POSTER for tests. Empty on any gh error (the caller then
-# matches no author, i.e. fails closed into "not covered").
+# The login _post_pr_review posts as — the App's `<slug>[bot]`. Override via
+# REVIEWER_LADDER_POSTER for tests. Empty when the App is not configured (the
+# caller then matches no author, i.e. fails closed into "not covered").
 ladder_poster_login() {
 	if [ -n "${REVIEWER_LADDER_POSTER:-}" ]; then
 		printf '%s\n' "$REVIEWER_LADDER_POSTER"
 		return 0
 	fi
-	gh api user --jq '.login' 2>/dev/null
+	jq -er '.slug + "[bot]"' "$(_ladder_app_config)" 2>/dev/null
+}
+
+_b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+
+# _ladder_app_token OWNER REPO
+# An installation token for the App on OWNER/REPO: a 9-minute RS256 JWT signed
+# with the App key, then exchanged for the installation that covers this repo.
+# Fails loudly on any gap — a missing key must never fall back to the owner.
+_ladder_app_token() {
+	local owner="$1" repo="$2" config app_id pem now header payload sig jwt inst
+	config="$(_ladder_app_config)"
+	app_id="$(jq -er '.app_id' "$config" 2>/dev/null)" || app_id=""
+	pem="$(jq -er '.pem' "$config" 2>/dev/null)" || pem=""
+	pem="${pem/#\~/$HOME}"
+	if [ -z "$app_id" ] || [ ! -r "$pem" ]; then
+		print_status "error" "ladder identity not configured: $config needs app_id and a readable pem (dotfiles-linux-dev#624)"
+		return 1
+	fi
+	now="$(date +%s)"
+	header="$(printf '{"alg":"RS256","typ":"JWT"}' | _b64url)"
+	payload="$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' $((now - 60)) $((now + 540)) "$app_id" | _b64url)"
+	sig="$(printf '%s.%s' "$header" "$payload" | openssl dgst -sha256 -sign "$pem" | _b64url)" || return 1
+	jwt="$header.$payload.$sig"
+	inst="$(curl -fsS --max-time 15 -H "Authorization: Bearer $jwt" -H 'Accept: application/vnd.github+json' \
+		"https://api.github.com/repos/$owner/$repo/installation" | jq -er '.id')" || {
+		print_status "error" "ladder App is not installed on $owner/$repo — install it before reviewing"
+		return 1
+	}
+	curl -fsS --max-time 15 -X POST -H "Authorization: Bearer $jwt" -H 'Accept: application/vnd.github+json' \
+		"https://api.github.com/app/installations/$inst/access_tokens" | jq -er '.token'
 }
 
 # ladder_already_covered COMMENTS_JSON HEAD_DATE HEAD_SHA
@@ -295,7 +333,7 @@ ladder_already_covered() {
 			((.author.login // .user.login // "") == $who)
 			and ((.body // "") | test("^Fallback review — runtime:"; "m"))
 			and (($head_date != "")
-			     and ((.created_at // .createdAt // "") >= $head_date))
+			     and ((.created_at // .createdAt // .submitted_at // "") >= $head_date))
 			and (($head_sha != "")
 			     and ((((.body // "") | split("\n"))[1] // "") == ("Reviewed head: " + $head_sha))))
 	' >/dev/null 2>&1 || return 1
@@ -355,6 +393,20 @@ _pr_head_sha() {
 		return $?
 	fi
 	gh api "repos/$owner/$repo/pulls/$pr_number" --jq '.head.sha' 2>/dev/null
+}
+
+# _pr_reviews_json OWNER REPO PR_NUMBER
+# The PR's submitted reviews (REST), where the App's own coverage now lands
+# (issue #624) — callers still pass issue comments, which hold only the
+# pre-#624 markers. Override via REVIEWER_LADDER_REVIEWS_CMD for tests. `[]` on
+# any error: no review read means "not covered", one extra review at worst.
+_pr_reviews_json() {
+	local owner="$1" repo="$2" pr_number="$3"
+	if [ -n "${REVIEWER_LADDER_REVIEWS_CMD:-}" ]; then
+		"$REVIEWER_LADDER_REVIEWS_CMD" "$owner" "$repo" "$pr_number"
+		return $?
+	fi
+	gh api "repos/$owner/$repo/pulls/$pr_number/reviews?per_page=100" 2>/dev/null || echo '[]'
 }
 
 # _pr_head_committed_at OWNER REPO PR_NUMBER
@@ -547,22 +599,24 @@ _run_runtime_review() {
 	esac
 }
 
-# _post_pr_comment OWNER REPO PR_NUMBER BODY
-# Override via REVIEWER_LADDER_POST_CMD for tests/dry-run.
+# _post_pr_review OWNER REPO PR_NUMBER BODY HEAD_SHA
+# Posts BODY as a submitted COMMENT review on HEAD_SHA, as the ladder App
+# (issue #624) — the shape a review-roster gate counts, which an issue comment
+# never was. Override via REVIEWER_LADDER_POST_CMD for tests/dry-run.
 #
-# REST, never GraphQL (issue #543), same reasoning as _pr_head_sha: `gh pr
-# comment` is GraphQL, and posting is the last step of the one rung meant to
-# survive a degraded forge — measured live 2026-09-21, a correct review was
-# produced then thrown away here with "GraphQL: API rate limit already
-# exceeded" while REST stayed healthy throughout the same outage.
-_post_pr_comment() {
-	local owner="$1" repo="$2" pr_number="$3" body="$4"
+# REST, never GraphQL (issue #543), same reasoning as _pr_head_sha: posting is
+# the last step of the one rung meant to survive a degraded forge — measured
+# live 2026-09-21, a correct review was produced then thrown away with
+# "GraphQL: API rate limit already exceeded" while REST stayed healthy.
+_post_pr_review() {
+	local owner="$1" repo="$2" pr_number="$3" body="$4" head_sha="$5" token
 	if [ -n "${REVIEWER_LADDER_POST_CMD:-}" ]; then
-		"$REVIEWER_LADDER_POST_CMD" "$owner" "$repo" "$pr_number" "$body"
+		"$REVIEWER_LADDER_POST_CMD" "$owner" "$repo" "$pr_number" "$body" "$head_sha"
 		return $?
 	fi
-	jq -n --arg b "$body" '{body: $b}' |
-		gh api --method POST "repos/$owner/$repo/issues/$pr_number/comments" --input -
+	token="$(_ladder_app_token "$owner" "$repo")" || return 1
+	jq -cn --arg b "$body" --arg c "$head_sha" '{body: $b, commit_id: $c, event: "COMMENT"}' |
+		GH_TOKEN="$token" gh api --method POST "repos/$owner/$repo/pulls/$pr_number/reviews" --input -
 }
 
 # run_fallback_review OWNER REPO PR_NUMBER MERGE_STATE PUSHED_EPOCH NOW_EPOCH COMMENTS_JSON [--dry-run]
@@ -598,7 +652,11 @@ run_fallback_review() {
 		return 1
 	fi
 
-	if ladder_already_covered "$comments" "$head_date" "$head_sha"; then
+	local coverage
+	coverage="$(jq -cn --argjson c "${comments:-[]}" --argjson r "$(_pr_reviews_json "$owner" "$repo" "$pr_number")" \
+		'($c | if type == "array" then . else [] end) + ($r | if type == "array" then . else [] end)' 2>/dev/null)" ||
+		coverage="${comments:-[]}"
+	if ladder_already_covered "$coverage" "$head_date" "$head_sha"; then
 		print_status "info" "PR #$pr_number already covered by a higher rung — skipping"
 		return 0
 	fi
@@ -651,5 +709,5 @@ run_fallback_review() {
 
 	local body
 	body="$attribution"$'\n\n'"$findings"
-	_post_pr_comment "$owner" "$repo" "$pr_number" "$body"
+	_post_pr_review "$owner" "$repo" "$pr_number" "$body" "$head_sha"
 }
