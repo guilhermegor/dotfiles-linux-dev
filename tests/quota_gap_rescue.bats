@@ -152,6 +152,14 @@ run_hook() {
 	[ -z "$output" ]
 }
 
+# Remote rewrite for the slug, guarded: an empty/foreign $REPO makes `git -C` hit the SHARED
+# repo config of the checkout running the suite (it once rewrote origin for every worktree).
+point_origin_at_github() {
+	[ -n "${TEST_TMP:-}" ] && [ -n "${REPO:-}" ] && [[ "$REPO" == "$TEST_TMP"/* ]] || return 1
+	[ "$(git -C "$REPO" rev-parse --show-toplevel)" = "$REPO" ] || return 1
+	git -C "$REPO" remote set-url origin "https://github.com/o/r.git"
+}
+
 # --- dotfiles-linux-dev#616: the hook reads the forge so merged-PR worktrees are excluded ------
 
 @test "a squash-merged no-upstream worktree is not reported when gh says its PR merged" {
@@ -175,7 +183,7 @@ run_hook() {
 printf '[{"number":5,"url":"u","state":"MERGED","headRefName":"feat-merged","headRefOid":"$head","reviews":[],"createdAt":"2026-01-01T00:00:00Z"}]'
 EOF
 	chmod +x "$TEST_TMP/bin/gh"
-	git -C "$REPO" remote set-url origin "https://github.com/o/r.git"
+	point_origin_at_github
 
 	seed_state 1800
 	run bash -c "CLAUDE_CONFIG_DIR='$STATE_DIR' PATH='$TEST_TMP/bin:$PATH' bash '$HOOK' <<<'{\"cwd\":\"$REPO\",\"session_id\":\"$SID\"}'"
@@ -192,7 +200,7 @@ EOF
 	mkdir -p "$TEST_TMP/bin"
 	printf '#!/bin/bash\nexit 1\n' >"$TEST_TMP/bin/gh"
 	chmod +x "$TEST_TMP/bin/gh"
-	git -C "$REPO" remote set-url origin "https://github.com/o/r.git"
+	point_origin_at_github
 
 	seed_state 1800
 	run bash -c "CLAUDE_CONFIG_DIR='$STATE_DIR' PATH='$TEST_TMP/bin:$PATH' bash '$HOOK' <<<'{\"cwd\":\"$REPO\",\"session_id\":\"$SID\"}'"
