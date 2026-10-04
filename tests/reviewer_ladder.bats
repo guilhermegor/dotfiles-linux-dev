@@ -1148,8 +1148,19 @@ _cli_run_harness() {
     [[ "$output" == *"rung claude skipped"* ]]
 }
 
-@test "claude review invocation carries only read-only tools" {
-    _fake_cli claude ok
+@test "claude review denies every write-capable tool and runs inside the PR checkout" {
+    # --allowedTools alone only PRE-APPROVES on top of the owner's settings
+    # allow list, so the read-only guarantee is the DENY list; and Read/Grep
+    # must see the verified PR checkout, not the caller's cwd (#628 review).
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    cat >"$BATS_TEST_TMPDIR/bin/claude" <<SH
+#!/bin/bash
+printf '%s\n' "\$PWD" >"$BATS_TEST_TMPDIR/claude.pwd"
+printf '%s\n' "\$*" >>"$BATS_TEST_TMPDIR/claude.argv"
+echo "1 finding"
+SH
+    chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
     local wd="$BATS_TEST_TMPDIR/wd"
     git init -q "$wd"
     git -C "$wd" -c user.email=a@b -c user.name=t commit -q --allow-empty -m x
@@ -1162,7 +1173,15 @@ _cli_run_harness() {
     cd "$wd"
     run _run_runtime_review claude default "" 7 "$wd"
     [ "$status" -eq 0 ]
-    grep -q -- '--allowedTools Read,Grep,Glob' "$BATS_TEST_TMPDIR/claude.argv"
-    run grep -E 'Edit|Write|Bash|NotebookEdit|--dangerously|bypassPermissions' "$BATS_TEST_TMPDIR/claude.argv"
+    local tool
+    for tool in Bash Edit Write MultiEdit NotebookEdit; do
+        grep -qE -- "--disallowedTools [^ ]*\b$tool\b" "$BATS_TEST_TMPDIR/claude.argv"
+    done
+    run grep -E -- '--dangerously|bypassPermissions|--permission-mode' "$BATS_TEST_TMPDIR/claude.argv"
     [ "$status" -ne 0 ]
+    # the run happened inside the PR checkout, even when the caller sits elsewhere
+    cd "$BATS_TEST_TMPDIR"
+    run _run_runtime_review claude default "" 7 "$wd"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$BATS_TEST_TMPDIR/claude.pwd")" = "$wd" ]
 }

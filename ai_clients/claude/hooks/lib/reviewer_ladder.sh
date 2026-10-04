@@ -633,7 +633,7 @@ _run_runtime_review() {
 		# Reviews the verified PR-head checkout against the base. Never
 		# `--use-credits` or any paid flag (#626: no rung may spend money).
 		local cr_base
-		cr_base="$(_review_base_ref)" || {
+		cr_base="$(cd "$workdir" && _review_base_ref)" || {
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
 			return 1
 		}
@@ -644,7 +644,7 @@ _run_runtime_review() {
 		# No review subcommand: hand the verified checkout's diff in the prompt,
 		# so no tool permission (and no --yolo/--allow-all) is ever needed.
 		local rv_base diff prompt
-		rv_base="$(_review_base_ref)" || {
+		rv_base="$(cd "$workdir" && _review_base_ref)" || {
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
 			return 1
 		}
@@ -654,9 +654,16 @@ _run_runtime_review() {
 		if [ "$runtime" = "kimi" ]; then
 			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" kimi -p "$prompt"
 		elif [ "$runtime" = "claude" ]; then
-			# READ-ONLY allowlist: the review must never edit, commit or push.
-			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" claude -p "$prompt" \
-				--allowedTools "Read,Grep,Glob"
+			# READ-ONLY: --allowedTools only PRE-APPROVES on top of the owner's
+			# settings.json allow list (which permits git commit, Edit, ...), so
+			# it restricts nothing on its own; the --disallowedTools deny list is
+			# what enforces read-only, since deny always wins. Run inside the
+			# verified PR-head checkout so Read/Grep see the PR, not whatever
+			# directory the ladder was invoked from (#628 review).
+			(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
+				claude -p "$prompt" \
+				--allowedTools "Read,Grep,Glob" \
+				--disallowedTools "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task")
 		else
 			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" copilot -s -p "$prompt"
 		fi
