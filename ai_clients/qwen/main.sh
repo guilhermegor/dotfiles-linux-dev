@@ -55,7 +55,7 @@ interactive_menu() {
 
     while true; do
         show_menu
-        read -rp "Enter numbers separated by spaces (e.g. 1 2), or a/q: " input || { print_status "info" "No input (stdin closed); exiting."; exit 0; }
+        read -rp "Enter numbers separated by spaces (e.g. 1 2), or a/q: " input || [[ -n "$input" ]] || { print_status "info" "No input (stdin closed); exiting."; exit 0; }
 
         case "$input" in
             q|Q) print_status "info" "Aborted."; exit 0 ;;

@@ -79,7 +79,7 @@ interactive_menu() {
 
     while true; do
         show_menu "${clients[@]}"
-        read -rp "Enter choice: " input || { print_status "info" "No input (stdin closed); exiting."; exit 0; }
+        read -rp "Enter choice: " input || [[ -n "$input" ]] || { print_status "info" "No input (stdin closed); exiting."; exit 0; }
 
         case "$input" in
             q|Q) print_status "info" "Aborted."; exit 0 ;;

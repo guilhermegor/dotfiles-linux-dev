@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit tests for ai_clients/claude/hooks/lib/dispatch_plan.py — the planner
-# round_dispatch_guard.sh reads for its verdict (dotfiles-dev#433 item 2).
+# round_dispatch_guard.sh reads for its verdict (dotfiles-linux-dev#433 item 2).
 #
 # Strategy (same as dispatch_free_surface_guard.bats): `gh` is stubbed on PATH with a real
 # executable script written per-test — dispatch_plan.py shells out to it directly, and again
@@ -10,7 +10,7 @@
 # either child process). `git` is the real `/usr/bin/git` against a throwaway local repo, so
 # `git rev-parse --show-toplevel` and glob expansion have a real tree to work against.
 #
-# The gate's own two-halves contract (ai_clients/CLAUDE.md, dotfiles-dev#398) applies here too:
+# The gate's own two-halves contract (ai_clients/CLAUDE.md, dotfiles-linux-dev#398) applies here too:
 #   1. success returns a USABLE answer — dispatchable/excluded are the documented shape, and
 #      non-empty content actually reaches them, not just an exit-0 with nothing set;
 #   2. the fail-closed path is exercised with a stub that makes the underlying gh call fail,
@@ -27,7 +27,7 @@ setup() {
     /usr/bin/git config user.email t@t
     /usr/bin/git config user.name t
     /usr/bin/git commit -q --allow-empty -m init
-    # dotfiles-dev#572: live_agent_held_paths() now delegates to gate_live_agent_surface
+    # dotfiles-linux-dev#572: live_agent_held_paths() now delegates to gate_live_agent_surface
     # (free_surface.sh), which resolves ITS OWN default branch from a real `origin` remote --
     # unlike the planner's old from-scratch walk, which took the branch name as a plain
     # argument and needed no remote at all. A non-GitHub URL keeps every test below byte-for-
@@ -59,7 +59,7 @@ teardown() {
 
 # mk_agent_worktree BRANCH FILE...
 # Registers a real git worktree of $TEST_TMP on a new branch off "main", with FILE... committed
-# on it — simulates a LIVE agent (dotfiles-dev#433 finding 1: collision is agent-vs-agent, a
+# on it — simulates a LIVE agent (dotfiles-linux-dev#433 finding 1: collision is agent-vs-agent, a
 # git-worktree notion, never agent-vs-open-PR). The worktree lives outside $TEST_TMP so its
 # files can never be reached by root.glob() from the planner's own checkout (finding 3's whole
 # point: a live agent's file is invisible to the local glob and must still be caught).
@@ -82,7 +82,7 @@ mk_agent_worktree() {
 # mk_dead_agent_worktree BRANCH FILE -> echoes the worktree's HEAD sha.
 # Like mk_agent_worktree, but also fabricates a same-commit upstream tracking ref — this
 # fixture has no real remote to push to, and _worktree_dead_and_clean (free_surface.sh,
-# dotfiles-dev#551) requires "nothing ahead of upstream" before it will call a worktree dead.
+# dotfiles-linux-dev#551) requires "nothing ahead of upstream" before it will call a worktree dead.
 # Exercises the #572 delegation end-to-end: a forge-confirmed dead worktree must stop holding
 # its files once dispatch_plan.py routes through gate_live_agent_surface.
 mk_dead_agent_worktree() {
@@ -138,19 +138,19 @@ issue_json_labeled() {
 # supplies). CLAIMED_ISSUE, if given, is the one issue number closingIssuesReferences reports as
 # already claimed. FAIL_BRANCH=1 makes the default-branch lookup fail, exercising
 # gate_free_surface's own fail-closed path, and the claimed-issues read too: the planner no longer
-# computes the gate's held set (dotfiles-dev#607), so the default-branch lookup alone cannot break
+# computes the gate's held set (dotfiles-linux-dev#607), so the default-branch lookup alone cannot break
 # the gate any more. Every call is appended to $BIN/gh.calls.
 # FROZEN_PR_FILE, if given, is a file an OPEN PR (no
 # live agent behind it — no matching worktree) touches, for finding 1's own test. MENTION_PRS_JSON,
 # if given, is the flat `number,title,body,closingIssuesReferences` PR array the stub serves, re-shaped
-# into GraphQL pages, to the planner's OWN mention-without-closing read (dotfiles-dev#413) returns — default `[]` (no PRs
+# into GraphQL pages, to the planner's OWN mention-without-closing read (dotfiles-linux-dev#413) returns — default `[]` (no PRs
 # mention anything). NATIVE_BLOCK_ISSUE/NATIVE_BLOCK_JSON, if given, make the
 # `issues/<n>/dependencies/blocked_by` read for that one issue return NATIVE_BLOCK_JSON (a
 # `_ru_native_blockers`-shaped array) instead of the default `[]` (no native blockers).
 # NATIVE_BLOCK_FAIL_ISSUE, if given, makes that same read FAIL for that one issue (dotfiles-
 # dev#560's fail-closed path). Every other issue's blocked_by read defaults to `[]`. DEAD_PR_ROW,
 # if given as "<oid>:<branch>", is the one row `_dead_branch_index` (free_surface.sh,
-# dotfiles-dev#572) reports as a MERGED PR — default `[]` (no dead PRs), which is what keeps the
+# dotfiles-linux-dev#572) reports as a MERGED PR — default `[]` (no dead PRs), which is what keeps the
 # forge dead-worktree exclusion off for every test that does not opt in via a GitHub-shaped
 # origin (see mk_dead_agent_worktree).
 stub_gh() {
@@ -204,7 +204,7 @@ JSON
     ;;
 "pr list --repo acme/widgets --state open --json number,headRefName --limit 200") echo '$pr_list' ;;
 "api graphql -f owner="*)
-    # open_prs() pages the board (dotfiles-dev#600): honour the planner's own \`first=\` and
+    # open_prs() pages the board (dotfiles-linux-dev#600): honour the planner's own \`first=\` and
     # \`after=\` variables and re-shape the flat MENTION_PRS_JSON fixture into the GraphQL page
     # the real API returns, with the offset as the cursor. GH_FAIL_AFTER=<cursor> makes the page
     # requested after that cursor fail like a gateway 502.
@@ -328,7 +328,7 @@ field() {
     [[ "$(field '.excluded[0].reason')" == *"already claimed"* ]]
 }
 
-# --- blocked state (dotfiles-dev#560): distinct from UNDECLARED, never dispatchable ----------
+# --- blocked state (dotfiles-linux-dev#560): distinct from UNDECLARED, never dispatchable ----------
 
 @test "an open native blocker excludes the issue as blocked, not UNDECLARED (no surface)" {
     # Mirrors #119: an open issue with no declared surface AND a native blocked_by relation --
@@ -412,7 +412,7 @@ PY
     [[ "$(field '.dispatchable[0].surface | join(",")')" == *"hooks/lib/foo_handler.py"* ]]
 }
 
-# --- dotfiles-dev#549: local-tree expansion and the held-path check must agree on `*` -------
+# --- dotfiles-linux-dev#549: local-tree expansion and the held-path check must agree on `*` -------
 #
 # Both tests below expand against the REAL on-disk tree (a real subprocess python3 run against
 # a real git repo, same as every other test in this file) -- not the stubbed `gh` responses --
@@ -469,7 +469,7 @@ PY
     [[ "$(field '.excluded[0].reason')" == *"agent/held.sh"* ]]
 }
 
-# --- dotfiles-dev#572: the shared gate's dead-worktree exclusion reaches the planner too --------
+# --- dotfiles-linux-dev#572: the shared gate's dead-worktree exclusion reaches the planner too --------
 
 @test "a forge-confirmed dead worktree is no longer counted as a live writer" {
     local dead_oid
@@ -529,7 +529,7 @@ PY
     [ "$(field '.excluded[0].issue')" = "32" ]
 }
 
-# --- mentioned-without-closing: a PR naming an issue but not closing it (dotfiles-dev#413) ----
+# --- mentioned-without-closing: a PR naming an issue but not closing it (dotfiles-linux-dev#413) ----
 
 @test "an issue named by an open PR without a closing keyword is excluded, not offered" {
     stub_gh "[$(issue_json 361 free/a.sh)]" "" "" 0 "" \
@@ -612,7 +612,7 @@ PY
     [[ "$output" != *'"dispatchable"'* ]]
 }
 
-# --- dotfiles-dev#600: the PR board is read in small pages, whole or not at all --------------
+# --- dotfiles-linux-dev#600: the PR board is read in small pages, whole or not at all --------------
 
 # mention_board N MENTIONER — a flat board of N PRs naming nothing, except PR number MENTIONER,
 # whose body names issue #361 without a closing keyword. Putting it on the LAST page means it
@@ -658,7 +658,7 @@ print(len(prs), sorted(p["number"] for p in prs) == list(range(1, 46)), prs[0]["
     [ "$output" = "45 True []" ]
 }
 
-# --- fail-closed half of the gate contract (dotfiles-dev#398) --------------------------------
+# --- fail-closed half of the gate contract (dotfiles-linux-dev#398) --------------------------------
 
 @test "a gate failure excludes every issue as UNKNOWN, never a partial free answer" {
     stub_gh "[$(issue_json 1 free/a.sh), $(issue_json 2 free/b.sh)]" "" "" 1
@@ -670,7 +670,7 @@ print(len(prs), sorted(p["number"] for p in prs) == list(range(1, 46)), prs[0]["
     [[ "$(field '.excluded[1].reason')" == *"UNKNOWN"* ]]
 }
 
-# --- dotfiles-dev#607: no gh call whose answer the planner throws away ----------------------
+# --- dotfiles-linux-dev#607: no gh call whose answer the planner throws away ----------------------
 
 @test "the planner never reads per-PR files or per-branch compares it overwrites" {
     # gate_free_surface's agent-vs-open-PR held set is replaced by the live-agent set (#433
@@ -694,7 +694,7 @@ print(len(prs), sorted(p["number"] for p in prs) == list(range(1, 46)), prs[0]["
     [[ "$output" != *'"dispatchable"'* ]]
 }
 
-# --- dotfiles-dev#534: the repo slug is a LOCAL fact -----------------------------------------
+# --- dotfiles-linux-dev#534: the repo slug is a LOCAL fact -----------------------------------------
 
 @test "repo_slug reads the local origin remote, so a dead gh cannot break the plan" {
 	# The planner's FIRST call used to be `gh repo view --json nameWithOwner` (GraphQL). During a
@@ -757,7 +757,7 @@ for url in ("git@github.com:o/r.git", "https://github.com/o/r.git",
 	[ "$(printf '%s\n' "$output" | sort -u)" = "o/r" ]
 }
 
-# --- dotfiles-dev#534: REST for what REST can answer, fail-closed-but-readable for what it cannot
+# --- dotfiles-linux-dev#534: REST for what REST can answer, fail-closed-but-readable for what it cannot
 
 @test "open_issues drops pull requests, which REST returns alongside issues" {
 	# GitHub models a PR as an issue, so /issues returns both. `gh issue list` filtered for us;

@@ -15,7 +15,7 @@ configure_env() {
 
     if [ -n "$existing_backup_dir" ]; then
         print_status "info" "CLAUDE_BACKUP_DIR already set: $existing_backup_dir"
-        read -rp "Keep current path? [Y/n]: " keep_current || keep_current=""
+        read -rp "Keep current path? [Y/n]: " keep_current || [[ -n "$keep_current" ]] || keep_current=""
         if [[ "$keep_current" =~ ^[nN]$ ]]; then
             existing_backup_dir=""
         else
@@ -27,7 +27,7 @@ configure_env() {
         print_status "info" "CLAUDE_BACKUP_DIR is the path where /export-memory saves backups."
         print_status "info" "Example: /media/user/external-drive/claude-backup"
         echo ""
-        read -rp "Enter backup directory path (leave empty to skip): " user_path || user_path=""
+        read -rp "Enter backup directory path (leave empty to skip): " user_path || [[ -n "$user_path" ]] || user_path=""
 
         if [ -z "$user_path" ]; then
             print_status "warning" "No backup path provided — skipping CLAUDE_BACKUP_DIR"
@@ -39,7 +39,7 @@ configure_env() {
 
         # Validate the path exists or offer to create it
         if [ ! -d "$user_path" ]; then
-            read -rp "Directory does not exist. Create it? [Y/n]: " create_dir || create_dir="n"
+            read -rp "Directory does not exist. Create it? [Y/n]: " create_dir || [[ -n "$create_dir" ]] || create_dir="n"
             if [[ "$create_dir" =~ ^[nN]$ ]]; then
                 print_status "warning" "Directory not created — CLAUDE_BACKUP_DIR not set"
                 _write_env_file "$env_file" ""

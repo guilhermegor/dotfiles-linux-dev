@@ -79,6 +79,23 @@ eof_run() {
     [ ! -e "$missing" ]
 }
 
+@test "configure_env keeps a partial last-line answer 'n' on EOF" {
+    echo "CLAUDE_BACKUP_DIR=/keep/me" > "$CLAUDE_DIR/.env"
+    export HOME CLAUDE_DIR TMP_DIR
+
+    # printf without a trailing newline: read returns 1 yet has set the answer to "n".
+    run bash -c '
+        set -e
+        source "'"$REPO_ROOT_REAL"'/ai_clients/claude/lib/env.sh"
+        print_status() { echo "[$1] $2"; }
+        _write_env_file() { echo "WROTE:$2"; }
+        printf n | configure_env
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Kept existing CLAUDE_BACKUP_DIR"* ]]
+    [[ "$output" == *"No backup path provided"* ]]
+}
+
 # ── claude_mem.sh ────────────────────────────────────────────────────────────
 
 @test "configure_claude_mem keeps the existing mode on EOF" {
