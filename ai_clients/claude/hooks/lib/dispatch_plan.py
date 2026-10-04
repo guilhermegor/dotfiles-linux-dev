@@ -145,6 +145,13 @@ source "$free_surface_sh"
 # synchronous and gh has no default request deadline of its own.
 gh() { timeout "${DISPATCH_PLAN_GH_TIMEOUT:-15}" gh "$@"; }
 
+# dotfiles-dev#607: gate_free_surface's agent-vs-open-PR held set is OVERWRITTEN below (#433
+# finding 1) and never read, yet computing it costs one `gh pr view` per open PR plus one compare
+# per pushed branch, so it grows with the board and pushed the planner past the Stop guard's
+# timeout. Only FREE_UNCLAIMED_ISSUES is wanted from the gate, so skip the dead half. The gate's
+# fail-closed path is unchanged: an unreadable claimed-issues read still returns unknown.
+_free_held_paths() { :; }
+
 # stdin: the live-agent held paths, one per line, then a lone "===REQUESTS===" line, then every
 # classify request as issue<TAB>file1|file2|... . Read before the network call below: neither
 # gate_free_surface nor free_classify_files touches stdin, so this ordering is safe.
