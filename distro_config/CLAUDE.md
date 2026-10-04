@@ -152,7 +152,7 @@ Folders are grouped by **artifact produced**, not by tool category. Existing fol
 | `Media` | Media | Video players, audio players, media tools |
 | `Sharing` | Sharing | File-sharing and remote-desktop apps |
 | `IRPF` | IRPF | Brazilian tax program |
-| `Code` | Code | IDEs, editors, terminals (VS Code, Cursor, vim, nvim, Notepadqq, Warp, Devtoolbox) |
+| `Code` | Code | IDEs, editors, terminals (Cursor, vim, nvim, Notepadqq, Warp, Devtoolbox) |
 | `Data` | Data | DB clients (pgAdmin4, DBeaver) |
 | `Infra` | Infra | VMs, containers, USB imaging (Docker Desktop, VM Manager, Ventoy, Balena Etcher) |
 | `Design` | Design | Image/graphic design tools (Figma, GIMP, Pinta) |
@@ -164,7 +164,7 @@ Folders are grouped by **artifact produced**, not by tool category. Existing fol
 
 For **pre-installed system apps** (e.g. `gnome-control-center.desktop`, `gnome-system-monitor.desktop`) that no install function manages, append them to the static `<id>_app_names` arrays inside `organize_app_folders()`. The registry merge runs alongside the static arrays — both contribute to the same folder.
 
-For **dock pinning**: add the `.desktop` filename to the `favorite-apps` gsettings key in `configure_dock`. The registry does not currently model dock placement.
+For **dock pinning**: add the `.desktop` filename to the `favorite-apps` gsettings key in `configure_dock`. The registry does not currently model dock placement. VS Code is dock-pinned, not in the `Code` folder: its registry entry keeps the desktop id but leaves the folder empty (#638).
 
 ⚠️ **The dock is declared AND merged — removing a pin needs the explicit unpin list, not just a deleted block.** `configure_dock` builds `favorites` from a fixed set of declared blocks, then `_merge_dock_favorites` re-appends every app already in the live `favorite-apps` value that isn't declared — deliberate, so a hand-pinned app survives a `gsettings set` that replaces the key wholesale (#103). This means **deleting an app's declared block does not unpin it**: the app is simply no longer declared, and the merge re-adds it from the live dock on every run, forever. To actually remove a pin, add its `.desktop` id (plus fallback ids, same pattern as everywhere else in this file) to `DOCK_UNPINNED`, the array `_merge_dock_favorites` is passed as its third argument and skips when merging (#392). Read `DOCK_UNPINNED` as a *declaration of intent*, not a permanent blocklist: if the owner pins one of those apps by hand again, this list will silently unpin it again on the next run — that is the surprising, deliberate consequence of stating a removal here instead of just deleting a pin once by hand.
 
