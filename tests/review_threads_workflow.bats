@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Invariants for .github/workflows/review_threads.yml (dotfiles-dev#481).
+# Invariants for .github/workflows/review_threads.yml (dotfiles-linux-dev#481).
 #
 # The defect this pins down is not a logic bug inside the gate — the gate was correct. It is
 # that the verdict was published to the WRONG COMMIT: for an issue_comment event GitHub runs
@@ -95,7 +95,7 @@ print((step.get('with') or {}).get('ref',''))
     [[ "$output" == *"default_branch"* ]]
 }
 
-# --- dotfiles-dev#550: the ladder marker's history path -------------------------------------------
+# --- dotfiles-linux-dev#550: the ladder marker's history path -------------------------------------------
 #
 # CodeRabbit's marker was already re-resolved from PR HISTORY (comments after head_seen_at), so a
 # later ordinary comment re-running this job could never revoke it. The ladder marker (#444/#446)

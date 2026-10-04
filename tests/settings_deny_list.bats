@@ -1,13 +1,13 @@
 #!/usr/bin/env bats
 #
 # Unit tests for the permissions.deny additions in ai_clients/claude/settings.json
-# (dotfiles-dev#503): secret-bearing paths and environment-dumping Bash commands
+# (dotfiles-linux-dev#503): secret-bearing paths and environment-dumping Bash commands
 # the deny list previously missed.
 #
 # Three proposed entries from the issue were deliberately NOT adopted and must
 # never reappear:
 #   - Read(**/.env.*)   would re-collapse the enumerated .env suffix list back
-#     into the glob it replaced (dotfiles-dev#123/#124), denying .env.example/
+#     into the glob it replaced (dotfiles-linux-dev#123/#124), denying .env.example/
 #     .env.sample/.env.template again. Covered in depth by settings_env_deny.bats;
 #     re-asserted here as a second line of defence since this file is the one
 #     that reviews this issue's diff.
@@ -125,7 +125,7 @@ setup() {
     [ "$status" -ne 0 ]
 }
 
-# --- the .env enumeration must stay enumerated (dotfiles-dev#123/#124) ------
+# --- the .env enumeration must stay enumerated (dotfiles-linux-dev#123/#124) ------
 
 @test "the .env enumeration still has all eight environment-suffix entries" {
     run jq -r '[.permissions.deny[] | select(startswith("Read(**/.env.") and (. != "Read(**/.env.local)") and (. != "Read(**/.env.*.local)"))] | length' "$SETTINGS"

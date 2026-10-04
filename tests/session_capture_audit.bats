@@ -2,12 +2,12 @@
 #
 # Unit tests for ai_clients/claude/hooks/session_capture_audit.sh
 #
-# Focus: the both-directions completeness table (dotfiles-dev#81). A one-directional
+# Focus: the both-directions completeness table (dotfiles-linux-dev#81). A one-directional
 # lessons→issues audit hid an OPEN ISSUE with no lesson (#75); these tests pin both rows.
 #
 # Strategy:
 #   - Point the hook's store at a throwaway CLAUDE_CONFIG_DIR so we control the lessons.
-#   - Run inside a git repo with a github origin, so repo_slug resolves (dotfiles-dev#94:
+#   - Run inside a git repo with a github origin, so repo_slug resolves (dotfiles-linux-dev#94:
 #     every LESSON_STORES entry is audited regardless of the repo's basename — there is
 #     no more repo-name gate to satisfy).
 #   - Stub `gh` on PATH to feed a deterministic open-issue list (no network).
@@ -69,7 +69,7 @@ run_report() {
 
 # --- row 1: lessons → issues (store-internal, no network) ---------------------------------------
 #
-# dotfiles-dev#138: a lesson with a `delivered`/`advisory`/`superseded` Status and no PR
+# dotfiles-linux-dev#138: a lesson with a `delivered`/`advisory`/`superseded` Status and no PR
 # citation is NOT debt — only `queued`/`tracked`/a missing Status line is genuinely owed.
 # The old behaviour lumped every Status value (including queued) into "declared" and only
 # flagged the true no-Status-no-ref case; these tests pin the corrected buckets.
@@ -183,7 +183,7 @@ STUB
 	[[ "$output" == *"issues  → lessons: skipped"* ]]
 }
 
-# --- dotfiles-dev#94: the table must emit in ANY repo, not just the two whose basename ------------
+# --- dotfiles-linux-dev#94: the table must emit in ANY repo, not just the two whose basename ------------
 # happens to equal a store's backport target ("blueprintx" / "dotfiles-dev"). The old
 # `store_dir_for_repo("$repo")` answered "which store backports INTO this repo?" and
 # `return 0`d silently — no header, nothing — the instant no store matched. Every other
@@ -201,12 +201,12 @@ STUB
 	run bash -c "cd '$OTHER_REPO' && PATH='$TEST_TMP/bin:$PATH' GH_ISSUES='' \
 		GH_ARGV_LOG='$TEST_TMP/gh_argv' bash '$HOOK' </dev/null"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"--- completeness (both directions, dotfiles-dev#81) ---"* ]]
+	[[ "$output" == *"--- completeness (both directions, dotfiles-linux-dev#81) ---"* ]]
 	[[ "$output" == *"[claude-toolchain-lessons]"* ]]
 	[[ "$output" == *"lessons → issues :"* ]]
 }
 
-# --- check_mirrors: the audit's actual join rule (dotfiles-dev#315) ---------------------------
+# --- check_mirrors: the audit's actual join rule (dotfiles-linux-dev#315) ---------------------------
 #
 # lesson_capture_checkpoint.sh's reminder claims (now correctly) that the mirror check matches
 # on the bare filename appearing anywhere in the mirror text. Pin that here directly against
@@ -306,7 +306,7 @@ STUB
 	[[ "$output" != *"using legacy path"* ]]
 }
 
-# --- lessons-other: the third store, no distinct backport target (dotfiles-dev#356) -------------
+# --- lessons-other: the third store, no distinct backport target (dotfiles-linux-dev#356) -------------
 
 @test "lessons-other never expects a repo mirror even when Origin matches the current repo" {
 	OTHER_STORE="$CLAUDE_CONFIG_DIR/memory/lessons-other"
@@ -325,7 +325,7 @@ STUB
 }
 
 # --- check_mirrors: an append that changes the file after its mirror was last touched -----------
-# (dotfiles-dev#356's first gap: filename-only matching can't see an append to an EXISTING lesson,
+# (dotfiles-linux-dev#356's first gap: filename-only matching can't see an append to an EXISTING lesson,
 # since the presence check passed the moment the lesson was first created.)
 
 @test "check_mirrors flags a lesson that changed after its mirror was last touched" {
@@ -371,7 +371,7 @@ STUB
 	[[ "$output" != *"origin-lesson.md' changed after"* ]]
 }
 
-# --- dotfiles-dev#536: repo identity via remote, and the declared alias set ---------------------
+# --- dotfiles-linux-dev#536: repo identity via remote, and the declared alias set ---------------------
 
 @test "identity resolves via the remote and says so, even when the directory name differs" {
 	# The renamed-repo case: directory still called "dotfiles-dev" locally, but the
@@ -384,7 +384,7 @@ STUB
 }
 
 @test "a citation written before the rename still counts as accounted for after it" {
-	# lesson() stamps "guilhermegor/dotfiles-dev#42" (the pre-rename citation shape).
+	# lesson() stamps "guilhermegor/dotfiles-linux-dev#42" (the pre-rename citation shape).
 	# Once the remote points at dotfiles-linux-dev, repo resolves to the NEW name —
 	# the citation must still match via the store's declared alias set, not a fresh
 	# literal string comparison, or ~242 real lessons would all flip to "unaccounted".

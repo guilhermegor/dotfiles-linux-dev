@@ -55,7 +55,7 @@ payload() {
 
 @test "fails loud and names the cause for a literal --body-file outside the project dir (#109)" {
     # A literal, absolute path that is genuinely outside the repo root this hook resolves
-    # (dotfiles-dev#109): the old message said "check the path exists and is readable", which
+    # (dotfiles-linux-dev#109): the old message said "check the path exists and is readable", which
     # is false and sends the author chasing a typo that isn't there. Must name the real cause.
     run bash -c "payload 'gh pr create --title x --body-file /tmp/outside-repo-109/body.md' | '$GUARD'"
     [ "$status" -eq 2 ]
@@ -63,7 +63,7 @@ payload() {
     [[ "$output" != *"unexpanded shell variable"* ]]
 }
 
-@test "recommends the git-ignored root-level scratch path, not .git/ (dotfiles-dev#441)" {
+@test "recommends the git-ignored root-level scratch path, not .git/ (dotfiles-linux-dev#441)" {
     # .git/ is a plain FILE (not a directory) inside a git worktree, so the old advice ("move
     # it into $root/.git/") failed outright there and left orphaned bodies with no lifecycle.
     run bash -c "payload 'gh pr create --title x --body-file /tmp/outside-repo-441/body.md' | '$GUARD'"
@@ -120,14 +120,14 @@ payload() {
     [ "$status" -eq 0 ]
 }
 
-@test "ignores gh issue create even with a body flag (dotfiles-dev#154 defect 1)" {
+@test "ignores gh issue create even with a body flag (dotfiles-linux-dev#154 defect 1)" {
     # An issue has no PR-template obligation; the anchored 'gh pr create|edit' match must not
     # widen to any gh create/edit carrying a body.
     run bash -c "payload 'gh issue create --repo guilhermegor/dotfiles-dev --title x --body \"nothing useful\"' | '$GUARD'"
     [ "$status" -eq 0 ]
 }
 
-# --- --repo resolution: dotfiles-dev#154 defect 2 -----------------------------------------------
+# --- --repo resolution: dotfiles-linux-dev#154 defect 2 -----------------------------------------------
 #
 # These override HOME to a throwaway directory so ~/github/<name> resolves to a fixture repo
 # instead of the real checkout tree, keeping the tests hermetic.
@@ -234,7 +234,7 @@ EOF"
     rm -rf "$fake_home"
 }
 
-# --- pflag also accepts attached short flags: `-bX` and `-b=X` (dotfiles-dev#604) --------------
+# --- pflag also accepts attached short flags: `-bX` and `-b=X` (dotfiles-linux-dev#604) --------------
 #
 # scan_flags() used to read short flags only in the separated form, so `gh pr create -b"…"` or
 # `-F<path>` was never seen and the guard passed it unread (fail-open).

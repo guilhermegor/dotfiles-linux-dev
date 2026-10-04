@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# GNOME custom keybinding slots are positional (dotfiles-dev#601): the number of
+# GNOME custom keybinding slots are positional (dotfiles-linux-dev#601): the number of
 # `custom<N>` paths in set_keybindings_array must equal the number of
 # set_individual_keybinding calls, with no gap and no dangling path.
 

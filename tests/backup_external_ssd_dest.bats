@@ -4,7 +4,7 @@
 #
 # Step 3 of the backup runs `mkdir -p "$dest_dir"`, so accepting a pre-filled dead path
 # re-creates the tree on the LOCAL disk and writes the archive there — a backup that looks like
-# it went to the cloud and did not. Measured while migrating off Insync (dotfiles-dev#360): the
+# it went to the cloud and did not. Measured while migrating off Insync (dotfiles-linux-dev#360): the
 # saved path was ~/Insync/<account>/OneDrive/Workspace/!BACKUP/External Storage, and the whole
 # ~/Insync tree is deleted by that migration.
 

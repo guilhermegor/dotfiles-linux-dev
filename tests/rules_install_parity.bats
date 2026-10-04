@@ -3,7 +3,7 @@
 # Parity between the rule files PRESENT in ai_clients/claude/rules/ and the rules
 # INSTALLED by install_rules() in ai_clients/claude/lib/rules.sh.
 #
-# Why this exists (dotfiles-dev#333): rules are ENUMERATED, not globbed. install_rules()
+# Why this exists (dotfiles-linux-dev#333): rules are ENUMERATED, not globbed. install_rules()
 # calls one install_<lang>_rules() function per file, by name. A .md dropped into rules/
 # with no matching function and no call in the dispatcher is silently never installed --
 # it copies nothing, errors nothing, and simply never reaches ~/.claude/rules/. The deploy

@@ -2,7 +2,7 @@
 #
 # Unit tests for ai_clients/claude/hooks/lib/stale_local_ref_gate.sh and its
 # PreToolUse caller, ai_clients/claude/hooks/stale_local_ref_guard.sh
-# (dotfiles-dev#410).
+# (dotfiles-linux-dev#410).
 #
 # Strategy: a real, hermetic git repo built with `mktemp -d` — no gh, no
 # network. A remote-tracking ref is faked with `git update-ref

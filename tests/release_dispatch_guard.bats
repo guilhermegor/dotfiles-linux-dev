@@ -6,7 +6,7 @@
 # an allow (with or without an advisory note) is exit 0. Every test feeds a payload for
 # `gh workflow run release-pypi.yaml -f version=X.Y.Z` and asserts on exit status + output.
 #
-# dotfiles-dev#100: the guard's binding check ("shipped diff since the last tag is empty") is
+# dotfiles-linux-dev#100: the guard's binding check ("shipped diff since the last tag is empty") is
 # correct in one direction only — non-empty proves files were TOUCHED, never that the artifact
 # CHANGED. The comment-only tests below cover the false-negative this issue closes: a non-empty
 # byte diff that is AST-identical must still block, same as a truly empty diff.
@@ -65,7 +65,7 @@ commit_py() {
     [[ "$output" == *"no shipped-artifact change"* ]]
 }
 
-# --- dotfiles-dev#100: shipped diff non-empty is not sufficient — AST-identical must still BLOCK --
+# --- dotfiles-linux-dev#100: shipped diff non-empty is not sufficient — AST-identical must still BLOCK --
 
 @test "BLOCKED (comment-only): edit only a comment inside tracked .py path" {
     commit_py "docs: reword comment" \

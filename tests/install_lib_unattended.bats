@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Invariant for the two registry-driven installers (dotfiles-dev#339): an `install_*` function
+# Invariant for the two registry-driven installers (dotfiles-linux-dev#339): an `install_*` function
 # must never prompt. The mode menu in the orchestrator (`install_programs.sh` /
 # `install_coding.sh`) is the operator's consent -- once an entry is selected, it runs to
 # completion without asking anything else.

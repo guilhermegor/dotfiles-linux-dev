@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit tests for ai_clients/claude/hooks/lib/generate_lesson_mirrors.sh
-# (dotfiles-dev#386): the mirror under .specs/_lessons/ is GENERATED from the
+# (dotfiles-linux-dev#386): the mirror under .specs/_lessons/ is GENERATED from the
 # global lesson stores, never hand-typed. These tests pin:
 #   - a lesson whose Origin names the target repo IS mirrored
 #   - a lesson whose Origin does NOT name it is excluded
@@ -24,10 +24,10 @@ setup() {
 	OTHER_STORE="$CLAUDE_CONFIG_DIR/memory/lessons-other"
 	mkdir -p "$BX_STORE" "$DF_STORE" "$OTHER_STORE"
 	# DF_LEGACY is deliberately NOT created here — the declared legacy directory
-	# (dotfiles-dev#536 review, PR #546) only matters to the tests that exercise it.
+	# (dotfiles-linux-dev#536 review, PR #546) only matters to the tests that exercise it.
 
 	# No git remote by default — identity falls back to basename, same as before
-	# the dotfiles-dev#536 rename (the store's declared alias set includes
+	# the dotfiles-linux-dev#536 rename (the store's declared alias set includes
 	# "dotfiles-dev", so this directory name still self-mirror-skips).
 	REPO="$TEST_TMP/dotfiles-dev"
 	mkdir -p "$REPO"
@@ -68,7 +68,7 @@ lesson() {
 	[ ! -e "$REPO/.specs/_lessons/claude-toolchain-lessons.md" ]
 }
 
-# --- dotfiles-dev#536: a declared repo SET, resolved from the remote first ---------------
+# --- dotfiles-linux-dev#536: a declared repo SET, resolved from the remote first ---------------
 
 @test "a declared alias of the store's own repo also self-mirror-skips (the renamed repo)" {
 	# The exact inverse bug from the issue: a checkout literally named after the NEW
@@ -101,7 +101,7 @@ lesson() {
 }
 
 @test "the reproduction: a fresh dotfiles-macos-dev checkout writes no empty mirror" {
-	# dotfiles-dev#536's own repro: git init + nothing else, directory named after a
+	# dotfiles-linux-dev#536's own repro: git init + nothing else, directory named after a
 	# declared alias with no remote at all (basename fallback). Before the fix this
 	# produced a mirror with the RIGHT title and ZERO entries; after the fix it must
 	# produce no file at all, with a stated reason.
@@ -180,8 +180,8 @@ lesson() {
 	grep -qF "shared-finding.md" "$REPO/.specs/_lessons/blueprintx-lessons.md"
 }
 
-@test "an Origin carrying an issue ref (dotfiles-dev#344) is included" {
-	lesson "$BX_STORE" "issue-ref" "dotfiles-dev#344 (closed not-planned), #345 filed"
+@test "an Origin carrying an issue ref (dotfiles-linux-dev#344) is included" {
+	lesson "$BX_STORE" "issue-ref" "dotfiles-linux-dev#344 (closed not-planned), #345 filed"
 	run bash "$GEN" "$REPO"
 	[ "$status" -eq 0 ]
 	grep -qF "issue-ref.md" "$REPO/.specs/_lessons/blueprintx-lessons.md"
@@ -190,7 +190,7 @@ lesson() {
 @test "a repo cited after the comma as a SOURCE is not treated as the Origin" {
 	FC="$TEST_TMP/filings-cvm"
 	mkdir -p "$FC"
-	lesson "$BX_STORE" "cited-source" "dotfiles-dev#126 / PR #127, from filings-cvm #180."
+	lesson "$BX_STORE" "cited-source" "dotfiles-linux-dev#126 / PR #127, from filings-cvm #180."
 	run bash "$GEN" "$FC"
 	[ "$status" -eq 0 ]
 	run grep -qF "cited-source.md" "$FC/.specs/_lessons/blueprintx-lessons.md"
@@ -270,7 +270,7 @@ lesson() {
 	[[ "$output" != *"RETIRED mirror"* ]]
 }
 
-# --- dotfiles-dev#536 follow-up: a registered store that isn't on disk ---------
+# --- dotfiles-linux-dev#536 follow-up: a registered store that isn't on disk ---------
 # A store missing entirely (renamed, moved, never installed) must fail loudly when
 # this repo IS one of its declared targets — never silently report success having
 # written nothing, which is indistinguishable from "zero lessons yet" on disk.

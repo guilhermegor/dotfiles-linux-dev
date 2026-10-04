@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit tests for ai_clients/claude/hooks/lib/reviewer_ledger.sh -- the SQLite
-# ledger of reviewer asks and accepted findings by class (dotfiles-dev#488).
+# ledger of reviewer asks and accepted findings by class (dotfiles-linux-dev#488).
 #
 # Every test points REVIEWER_LEDGER_DB at a per-test tmp file so a run never
 # touches the real ~/.claude/reviewer_ledger.db.

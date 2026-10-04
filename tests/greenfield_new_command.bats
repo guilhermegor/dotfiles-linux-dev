@@ -2,7 +2,7 @@
 #
 # Unit tests for ai_clients/claude/commands/greenfield-new.md
 #
-# Static content checks pinning dotfiles-dev#363: /greenfield-new must file
+# Static content checks pinning dotfiles-linux-dev#363: /greenfield-new must file
 # backlog items from named keys, never from a positional prompt list (the
 # same defect class as guilhermegor/blueprintx#481, where an unattended
 # scaffold run pipes answers by POSITION and a new prompt silently shifts

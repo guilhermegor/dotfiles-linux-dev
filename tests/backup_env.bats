@@ -4,7 +4,7 @@
 # present, ~/.config/rclone/rclone.conf) into ONE gpg-encrypted archive and
 # must never write a plaintext copy to the backup drive. The passphrase is
 # fed to gpg over stdin (--passphrase-fd 0), never as a CLI argument
-# (dotfiles-dev#367).
+# (dotfiles-linux-dev#367).
 #
 # zenity/gpg/notify-send are stubbed on PATH — no real GUI, no real
 # encryption, no real backup drive is ever touched.

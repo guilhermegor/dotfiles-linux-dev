@@ -7,7 +7,7 @@
 # frozen into a fixture file: three of the six cases turn on "is the stated wait still running",
 # which a fixed timestamp answers correctly only on the day it was written.
 #
-# The cases below are the ones that found real defects (dotfiles-dev#433, #473, #538):
+# The cases below are the ones that found real defects (dotfiles-linux-dev#433, #473, #538):
 #   1. a live-shaped page where an unrelated notice is NEWEST and masks a running limit;
 #   2. the wrapper/sibling pair, where the newer of the two carries no stated wait;
 #   3. a stated wait that has already expired;
@@ -15,17 +15,17 @@
 #   5. a forge 403 body — parses as JSON, is not a comment page;
 #   6. garbage that is not JSON at all;
 #   7. the SAME two-notice shape as case 1's chat/review split, fed in GitHub's real,
-#      oldest-first REST order — pins dotfiles-dev#473 (an older CHAT-quota notice read as
+#      oldest-first REST order — pins dotfiles-linux-dev#473 (an older CHAT-quota notice read as
 #      "newest" masks a newer, still-running REVIEW limit);
 #   8. the eligibility ("fewer than 10 stars") notice alone reports ASK-ONLY, never plain
-#      FREE — the slot is free, but nothing will ever use it unasked (dotfiles-dev#538);
+#      FREE — the slot is free, but nothing will ever use it unasked (dotfiles-linux-dev#538);
 #   9. the eligibility notice does not mask a REAL, concurrent rate limit (a manual
 #      `@coderabbitai review` ask can still get rate-limited on an ineligible repo);
 #  10. a comment shaped in a way the parser cannot make sense of (an unparseable
 #      timestamp) prints UNKNOWN, never a silent FREE default.
 #  11. an ineligible repo stays ASK-ONLY past any older limit notice that is expired,
-#      superseded by a completed review, or chat-only (dotfiles-dev#538 review, 3 cases).
-#  12. a non-empty GraphQL-shaped page (author/createdAt) — pins dotfiles-dev#544: a real
+#      superseded by a completed review, or chat-only (dotfiles-linux-dev#538 review, 3 cases).
+#  12. a non-empty GraphQL-shaped page (author/createdAt) — pins dotfiles-linux-dev#544: a real
 #      BUSY page read as FREE because none of its field names are the REST ones this
 #      module reads. Must print UNKNOWN, never FREE.
 #  13. an empty page — a repo with no comments legitimately has no notice and must still

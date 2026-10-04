@@ -2,7 +2,7 @@
 #
 # Unit tests for ai_clients/claude/hooks/review_fanout_guard.sh — the Stop hook that refuses
 # to end a dev-loop round which had open PRs needing a reviewer and started no review agent
-# (dotfiles-dev#480).
+# (dotfiles-linux-dev#480).
 #
 # Two properties are asserted, and the second is the one that keeps a guard alive:
 #

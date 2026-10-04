@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Asserts .github/ISSUE_TEMPLATE/ exists and requires the declared file surface
-# dispatch_plan.py reads (dotfiles-dev#535). Without this template no issue filed here ever
+# dispatch_plan.py reads (dotfiles-linux-dev#535). Without this template no issue filed here ever
 # carries a ```surface block, which is what made every open issue read UNDECLARED at once.
 #
 # Run locally:  bats tests/            (install with: sudo apt-get install -y bats)

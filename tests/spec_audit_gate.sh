@@ -2,7 +2,7 @@
 #
 # tests/spec_audit_gate.sh
 #
-# CI gate (dotfiles-dev#305): a MECHANICAL verdict on whether a feature spec under
+# CI gate (dotfiles-linux-dev#305): a MECHANICAL verdict on whether a feature spec under
 # .specs/features/<name>/ is aligned with its tests. exit 0 = aligned. exit 1 = the
 # exact list of what is missing, one finding per line, each citing file:line.
 #
@@ -26,7 +26,7 @@
 # (s:writing-plans) but no spec.md is the older, still-valid two-skill
 # workflow that pre-dates s:work-breakdown -- it never produces a spec.md at
 # all, by design. `check_feature()` treats that shape as aligned rather than
-# SECTION_MISSING (dotfiles-dev#375: every feature migrated from
+# SECTION_MISSING (dotfiles-linux-dev#375: every feature migrated from
 # docs/superpowers/ is exactly this shape).
 #
 # The id syntax below is this gate's OWN minimal convention: .specs/CLAUDE.md
@@ -48,7 +48,7 @@
 # A test references an acceptance criterion by putting the literal tag
 # `@AC-<n>` anywhere in a file under --tests-dir (default: tests/).
 #
-# Grammar parsed out of <feature-dir>/progress.md (dotfiles-dev#313) -- a THREE-state
+# Grammar parsed out of <feature-dir>/progress.md (dotfiles-linux-dev#313) -- a THREE-state
 # checkbox list, one entry per markdown list item:
 #   `- [ ] ...`  to do
 #   `- [~] ...`  IN PROGRESS  <- the whole point: the state git cannot represent
@@ -217,7 +217,7 @@ check_feature() {
         # ponytail: spec.md is s:work-breakdown's output, but .specs/CLAUDE.md also
         # documents an older, still-valid shape -- design.md (s:brainstorming) +
         # plan.md (s:writing-plans) with no spec.md ever produced. Discovered
-        # 2026-09-14 (dotfiles-dev#375) migrating docs/superpowers/ into real
+        # 2026-09-14 (dotfiles-linux-dev#375) migrating docs/superpowers/ into real
         # .specs/features/ dirs: every one of those pre-dates work-breakdown and
         # is exactly this shape, so a blanket "spec.md missing" finding would fire
         # on legitimate features forever. Only flag when the dir has neither

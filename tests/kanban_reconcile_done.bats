@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for ai_clients/claude/hooks/lib/kanban_reconcile_done.sh (dotfiles-dev#556)
+# Unit tests for ai_clients/claude/hooks/lib/kanban_reconcile_done.sh (dotfiles-linux-dev#556)
 #
 # Same fixture shape as tests/kanban_reconcile.bats: a fake `gh` script first on PATH answers
 # `project list` / `project field-list` / `project item-list` / `project item-edit` / the

@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Unit test for CLAUDE_AUTOCOMPACT_PCT_OVERRIDE in ai_clients/claude/settings.json
-# (dotfiles-dev#406). Fails if the key is absent or not set to "70" — the
+# (dotfiles-linux-dev#406). Fails if the key is absent or not set to "70" — the
 # measured trigger point ("compact once 70% of the window is used", per the
 # installed binary's own threshold function) documented in
 # ai_clients/claude/config/CLAUDE.md's Compaction section.

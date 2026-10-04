@@ -3,7 +3,7 @@
 # Parity between the hooks REGISTERED in ai_clients/claude/settings.json and the hooks
 # INSTALLED by install_hooks() in ai_clients/claude/lib/hooks.sh.
 #
-# Why this exists (dotfiles-dev#266): pr_self_assign.sh was registered in settings.json by
+# Why this exists (dotfiles-linux-dev#266): pr_self_assign.sh was registered in settings.json by
 # #153/PR #212 and had its own passing unit test (tests/pr_self_assign.bats) -- but no
 # copy_hook_file call, so it was never copied to ~/.claude/hooks/. Claude Code was told to
 # invoke a path that did not exist, on every PR creation, and nothing reported it: the deploy
@@ -11,7 +11,7 @@
 # prove the hook is DEPLOYED.
 #
 # Both directions are asserted: registered => installed (below), AND installed => registered
-# (dotfiles-dev#458). The second gap shipped in PR #452: rtk_worktree_passthrough.sh was
+# (dotfiles-linux-dev#458). The second gap shipped in PR #452: rtk_worktree_passthrough.sh was
 # installed by hooks.sh, had its own passing bats suite, and settings.json still invoked
 # `rtk hook claude` directly -- no PreToolUse payload ever reached it. An installed file
 # nothing references looks identical to a working hook from every place a test previously
@@ -32,9 +32,9 @@ setup() {
 # Hooks installed by hooks.sh but intentionally not registered as a hook entry in
 # settings.json. Any entry here must carry a one-line reason.
 ORPHAN_ALLOWLIST=(
-    # Manual/periodic report (dotfiles-dev#441), run by hand or by a
+    # Manual/periodic report (dotfiles-linux-dev#441), run by hand or by a
     # /session-closeout-style flow -- never triggered by a live event. Was
-    # tested and documented but not even INSTALLED until dotfiles-dev#532.
+    # tested and documented but not even INSTALLED until dotfiles-linux-dev#532.
     "pr_body_orphan_check.sh"
 )
 

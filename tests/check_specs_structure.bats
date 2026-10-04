@@ -186,7 +186,7 @@ run_gate() {
     [[ "$output" == *"aligned"* ]]
 }
 
-# --- the two holes the ladder review found (dotfiles-dev#453) ----------------
+# --- the two holes the ladder review found (dotfiles-linux-dev#453) ----------------
 #
 # Both are the same shape as the top-level DANGLING-symlink case above, in
 # places the earlier fix did not reach: an entry the gate cannot SEE is an

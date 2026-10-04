@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Unit tests for ai_clients/claude/hooks/rtk_worktree_passthrough.sh (dotfiles-dev#417).
+# Unit tests for ai_clients/claude/hooks/rtk_worktree_passthrough.sh (dotfiles-linux-dev#417).
 #
 # Strategy:
 #   - The hook is a pure stdin->stdout/exit-code filter: feed a PreToolUse payload, assert what

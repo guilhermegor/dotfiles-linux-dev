@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# dotfiles-dev#484: jetmartin.bats was installed by hand (never in
+# dotfiles-linux-dev#484: jetmartin.bats was installed by hand (never in
 # .vscode/extensions.txt) and .gitlint had no files.associations entry, so
 # both were lost on a fresh install. This asserts both are declared, and
 # that no "*.bats" association was added alongside the extension -- that
