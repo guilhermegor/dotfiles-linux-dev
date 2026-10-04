@@ -278,6 +278,19 @@ reviewed_fixture() {
     [[ "$output" == *"unanswered ladder finding (comment channel)"* ]]
 }
 
+@test "comment channel: every ladder runtime's marker is recognised, not only qwen/codex (#626)" {
+    # A runtime missing from the marker regex makes its finding invisible -- the
+    # gate then reads an unanswered [P2] as clean. Each rung the ladder can
+    # resolve must be recognised here.
+    local rt
+    for rt in qwen codex kimi coderabbit copilot claude; do
+        body="Fallback review — runtime: $rt, model: default (selected by: live-probe)"$'\n\n## Findings\n\n- [P2] unhandled error path'
+        run_comment_filter "$(ladder_comment_fixture MEMBER "$body")"
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"unanswered ladder finding (comment channel)"* ]]
+    done
+}
+
 @test "comment channel: a ladder review carrying no findings is clean" {
     body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\n\nNo issues found in this diff.'
     run_comment_filter "$(ladder_comment_fixture MEMBER "$body")"
