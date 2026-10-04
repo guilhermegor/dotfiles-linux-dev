@@ -210,7 +210,9 @@ _rung_probe() {
 		return $?
 	fi
 	shift 2
-	timeout "${REVIEWER_LADDER_PROBE_TIMEOUT:-30}" "$@" 2>/dev/null
+	# </dev/null: a CLI in -p mode reads a non-TTY stdin and waits forever on an
+	# open pipe (a background caller), so the probe always hit its timeout.
+	timeout "${REVIEWER_LADDER_PROBE_TIMEOUT:-30}" "$@" 2>/dev/null </dev/null
 }
 
 _kimi_entitlement_probe() {
@@ -713,7 +715,7 @@ _run_runtime_review() {
 		[ -n "$diff" ] || return 1
 		prompt="Review PR #$pr_number. Report concrete bugs and risks as a markdown list with file:line. Diff:"$'\n'"$diff"
 		if [ "$runtime" = "kimi" ]; then
-			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" kimi -p "$prompt"
+			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" kimi -p "$prompt" </dev/null
 		elif [ "$runtime" = "claude" ]; then
 			# NO tools at all, no MCP: the diff is already in the prompt, and it is
 			# untrusted PR content. With Read/Grep/Glob, an injected instruction
@@ -721,9 +723,9 @@ _run_runtime_review() {
 			# review body would publish it (#624 review). Measured: with these
 			# flags a "Read /etc/hostname" request answers that no tool exists.
 			(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
-				claude -p "$prompt" "${LADDER_CLAUDE_FLAGS[@]}")
+				claude -p "$prompt" "${LADDER_CLAUDE_FLAGS[@]}" </dev/null)
 		else
-			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" copilot -s -p "$prompt"
+			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" copilot -s -p "$prompt" </dev/null
 		fi
 		;;
 	*)

@@ -1263,6 +1263,23 @@ SH
     [ "$(cat "$BATS_TEST_TMPDIR/claude.pwd")" = "$wd" ]
 }
 
+@test "the claude probe passes when the caller's stdin is an open pipe (#634)" {
+    # A CLI in -p mode reads a non-TTY stdin to EOF; under a background caller
+    # that pipe never closes, so the probe used to time out every time.
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    cat >"$BATS_TEST_TMPDIR/bin/claude" <<'SH'
+#!/bin/bash
+cat >/dev/null
+echo OK
+SH
+    chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+    unset REVIEWER_LADDER_CLAUDE_PROBE
+    export REVIEWER_LADDER_PROBE_TIMEOUT=3
+    run bash -c "source '$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/reviewer_ladder.sh'; sleep 10 | _claude_entitlement_probe"
+    [ "$status" -eq 0 ]
+}
+
 @test "a diff larger than MAX_ARG_STRLEN still reaches the CLI rung (#634)" {
     # The prompt is one argv string; the kernel refuses any single argument over
     # 131072 bytes with E2BIG before the CLI starts. Measured on blueprintx#552.
