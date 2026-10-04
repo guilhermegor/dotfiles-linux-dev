@@ -237,7 +237,11 @@ _gate_comment_findings_filter() {
        # judged by this same filter. Same head never supersedes.
        and (((((.body // "") | split("\n")[0]) | test($marker)) | not)
             or (((.authorAssociation // "") | test("^(OWNER|MEMBER|COLLABORATOR)$"))
-                and ((((.body // "") | split("\n"))[1] // "x") != ((($lc.body // "") | split("\n"))[1] // "y"))))))
+                # Both second lines must BE head lines: a marker with no/garbled head line must
+                # not "differ" its way into superseding a finding.
+                and ((((.body // "") | split("\n"))[1] // "") | startswith("Reviewed head: "))
+                and ((($lc.body // "") | split("\n"))[1] // "") as $fh | ($fh | startswith("Reviewed head: "))
+                and ((((.body // "") | split("\n"))[1] // "") != ((($lc.body // "") | split("\n"))[1] // ""))))))
    | length) as $answers
 | if $answers == 0 then "  unanswered ladder finding (comment channel)" else empty end
 JQ

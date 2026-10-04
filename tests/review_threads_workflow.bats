@@ -63,11 +63,12 @@ PY
     [ "$output" -eq 1 ]
 }
 
-@test "all four outcomes publish: two success, two failure" {
+@test "all five outcomes publish: two success, three failure" {
     run grep -c 'report success' "$RUN_SCRIPT"
     [ "$output" -eq 2 ]
+    # three failures: no reviewer, gate status, and (#620) an unanswered finding on an out-of-scope PR
     run grep -c 'report failure' "$RUN_SCRIPT"
-    [ "$output" -eq 2 ]
+    [ "$output" -eq 3 ]
 }
 
 @test "issue_comment is still a trigger — #431's fix is not undone by this one" {

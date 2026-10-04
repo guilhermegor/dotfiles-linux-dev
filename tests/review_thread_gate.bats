@@ -708,6 +708,20 @@ JSON
     [ -z "$output" ]
 }
 
+@test "comment channel #620: a later marker with NO head line does not supersede a finding" {
+    body=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\nReviewed head: aaa\n\n- [P2] x'
+    later=$'Fallback review — runtime: codex, model: gpt-5 (selected by: probe)\n\nNo issues found, '"$LONG_BODY"
+    run_comment_filter "$(ladder_comment_fixture MEMBER "$body" guilhermegor "$later")"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"unanswered ladder finding"* ]]
+}
+
+@test "workflow #620: an unreadable gate fails the out-of-scope skip closed" {
+    wf="$BATS_TEST_DIRNAME/../.github/workflows/review_threads.yml"
+    run grep -c 'GATE_STATUS" != "unreadable"' "$wf"
+    [ "$output" -ge 1 ]
+}
+
 @test "workflow #620: the out-of-scope skip is gated on no unanswered finding" {
     wf="$BATS_TEST_DIRNAME/../.github/workflows/review_threads.yml"
     run grep -c 'GATE_STATUS" != "problems"' "$wf"

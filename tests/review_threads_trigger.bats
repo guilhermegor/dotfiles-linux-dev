@@ -176,7 +176,7 @@ run_step() {
     : > "$CHECK_RUN_OUT"
     run env GH_TOKEN=x OWNER=o REPO=r PR_NUMBER=5 EVENT_NAME=issue_comment \
         COMMENT_AUTHOR=x COMMENT_BODY=x REPO_ROOT="$REPO_ROOT" SCRIPT="$SCRIPT" \
-        CHECK_RUN_OUT="$CHECK_RUN_OUT" \
+        CHECK_RUN_OUT="$CHECK_RUN_OUT" ZERO="$ZERO_THREADS" \
         bash -c '
             cd "$REPO_ROOT" || exit 1
             gh() {
@@ -184,6 +184,7 @@ run_step() {
                     *check-runs*)     cat > "$CHECK_RUN_OUT" ;;
                     *"/pulls/"*)      echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" ;;
                     *"--json files"*) echo "README.md" ;;
+                    *graphql*)        echo "$ZERO" ;;
                     *) return 1 ;;
                 esac
             }
@@ -377,7 +378,7 @@ gate_requires() {
     : > "$CHECK_RUN_OUT"
     run env GH_TOKEN=x OWNER=o REPO=r PR_NUMBER=5 EVENT_NAME=issue_comment \
         COMMENT_AUTHOR=x COMMENT_BODY=x REPO_ROOT="$REPO_ROOT" SCRIPT="$SCRIPT" \
-        CHECK_RUN_OUT="$CHECK_RUN_OUT" \
+        CHECK_RUN_OUT="$CHECK_RUN_OUT" ZERO="$ZERO_THREADS" \
         bash -c '
             cd "$REPO_ROOT" || exit 1
             gh() {
@@ -385,6 +386,7 @@ gate_requires() {
                     *check-runs*)     cat > "$CHECK_RUN_OUT" ;;
                     *"/pulls/"*)      echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" ;;
                     *"--json files"*) printf ".vscode/extensions.txt\n.vscode/settings.json\ntests/x.bats\n" ;;
+                    *graphql*)        echo "$ZERO" ;;
                     *) return 1 ;;
                 esac
             }
