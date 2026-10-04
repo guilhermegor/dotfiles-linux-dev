@@ -235,9 +235,14 @@ _copilot_entitlement_probe() {
 # strictly LAST rung. It is only reached when every cheaper rung failed its
 # probe, and the probe itself is a one-word call. A session/usage limit or auth
 # error exits non-zero or prints no OK, so the rung is skipped.
+#
+# A headless reviewer must not run the operator's session hooks: inside a repo
+# they walk every worktree and read the board, measured at >60s per call, so the
+# 30s probe always timed out and the rung never fired (#634). 3.3s without them.
+LADDER_CLAUDE_FLAGS=(--settings '{"disableAllHooks":true}' --tools "" --strict-mcp-config)
 _claude_entitlement_probe() {
 	local out
-	out="$(_rung_probe claude REVIEWER_LADDER_CLAUDE_PROBE claude -p "reply with the single word OK")" || return 1
+	out="$(_rung_probe claude REVIEWER_LADDER_CLAUDE_PROBE claude -p "reply with the single word OK" "${LADDER_CLAUDE_FLAGS[@]}")" || return 1
 	[[ "$out" == *OK* ]]
 }
 
@@ -716,7 +721,7 @@ _run_runtime_review() {
 			# review body would publish it (#624 review). Measured: with these
 			# flags a "Read /etc/hostname" request answers that no tool exists.
 			(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
-				claude -p "$prompt" --tools "" --strict-mcp-config)
+				claude -p "$prompt" "${LADDER_CLAUDE_FLAGS[@]}")
 		else
 			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" copilot -s -p "$prompt"
 		fi

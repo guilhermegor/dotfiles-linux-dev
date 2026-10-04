@@ -1253,6 +1253,7 @@ SH
     [ "$status" -eq 0 ]
     grep -qF -- '[--tools][]' "$BATS_TEST_TMPDIR/claude.argv"
     grep -qF -- '[--strict-mcp-config]' "$BATS_TEST_TMPDIR/claude.argv"
+    grep -qF -- '[--settings][{"disableAllHooks":true}]' "$BATS_TEST_TMPDIR/claude.argv"
     run grep -E -- '--allowedTools|--dangerously|bypassPermissions|--permission-mode' "$BATS_TEST_TMPDIR/claude.argv"
     [ "$status" -ne 0 ]
     # the run happened inside the PR checkout, even when the caller sits elsewhere
