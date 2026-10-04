@@ -440,3 +440,17 @@ EOF
     [ "$status" -eq 2 ]
     [[ "$output" == *"no review fan-out planner"* ]]
 }
+
+@test "the block message surfaces the ladder tag so the reader routes it without asking" {
+    loop_invoked
+    cat >"$PLAN" <<'EOF'
+{"rung":{"status":"ok","runtime":"qwen","model":"qwen3-coder-plus","signal":"configured-default"},
+ "dispatchable":[{"pr":620,"head":"e1319925c49d","checks":{},"ladder":"bot-skipped"},
+                 {"pr":621,"head":"abcdef0123456","checks":{},"ladder":null}],
+ "excluded":[]}
+EOF
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#620"*"[ladder: bot-skipped]"*"run_fallback_review"* ]]
+    [[ "$output" != *"#621"*"[ladder:"* ]]
+}
