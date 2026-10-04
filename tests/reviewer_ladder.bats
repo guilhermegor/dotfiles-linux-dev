@@ -1226,15 +1226,15 @@ _cli_run_harness() {
     [[ "$output" == *"rung claude skipped"* ]]
 }
 
-@test "claude review denies every write-capable tool and runs inside the PR checkout" {
-    # --allowedTools alone only PRE-APPROVES on top of the owner's settings
-    # allow list, so the read-only guarantee is the DENY list; and Read/Grep
-    # must see the verified PR checkout, not the caller's cwd (#628 review).
+@test "claude review gets no tools and no MCP, and runs inside the PR checkout" {
+    # The diff in the prompt is untrusted PR content: any tool -- even Read --
+    # would let an injected instruction fetch a credential into the posted
+    # review (#624 review). So the run gets an EMPTY tool set, not a deny list.
     mkdir -p "$BATS_TEST_TMPDIR/bin"
     cat >"$BATS_TEST_TMPDIR/bin/claude" <<SH
 #!/bin/bash
 printf '%s\n' "\$PWD" >"$BATS_TEST_TMPDIR/claude.pwd"
-printf '%s\n' "\$*" >>"$BATS_TEST_TMPDIR/claude.argv"
+printf '[%s]' "\$@" >>"$BATS_TEST_TMPDIR/claude.argv"
 echo "1 finding"
 SH
     chmod +x "$BATS_TEST_TMPDIR/bin/claude"
@@ -1251,11 +1251,9 @@ SH
     cd "$wd"
     run _run_runtime_review claude default "" 7 "$wd"
     [ "$status" -eq 0 ]
-    local tool
-    for tool in Bash Edit Write MultiEdit NotebookEdit; do
-        grep -qE -- "--disallowedTools [^ ]*\b$tool\b" "$BATS_TEST_TMPDIR/claude.argv"
-    done
-    run grep -E -- '--dangerously|bypassPermissions|--permission-mode' "$BATS_TEST_TMPDIR/claude.argv"
+    grep -qF -- '[--tools][]' "$BATS_TEST_TMPDIR/claude.argv"
+    grep -qF -- '[--strict-mcp-config]' "$BATS_TEST_TMPDIR/claude.argv"
+    run grep -E -- '--allowedTools|--dangerously|bypassPermissions|--permission-mode' "$BATS_TEST_TMPDIR/claude.argv"
     [ "$status" -ne 0 ]
     # the run happened inside the PR checkout, even when the caller sits elsewhere
     cd "$BATS_TEST_TMPDIR"

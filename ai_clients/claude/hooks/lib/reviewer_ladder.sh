@@ -494,7 +494,8 @@ _pr_reviews_json() {
 		"$REVIEWER_LADDER_REVIEWS_CMD" "$owner" "$repo" "$pr_number"
 		return $?
 	fi
-	gh api "repos/$owner/$repo/pulls/$pr_number/reviews?per_page=100" 2>/dev/null || echo '[]'
+	gh api --paginate "repos/$owner/$repo/pulls/$pr_number/reviews?per_page=100" 2>/dev/null |
+		jq -s 'add // []' 2>/dev/null || echo '[]'
 }
 
 # _pr_head_committed_at OWNER REPO PR_NUMBER
@@ -706,16 +707,13 @@ _run_runtime_review() {
 		if [ "$runtime" = "kimi" ]; then
 			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" kimi -p "$prompt"
 		elif [ "$runtime" = "claude" ]; then
-			# READ-ONLY: --allowedTools only PRE-APPROVES on top of the owner's
-			# settings.json allow list (which permits git commit, Edit, ...), so
-			# it restricts nothing on its own; the --disallowedTools deny list is
-			# what enforces read-only, since deny always wins. Run inside the
-			# verified PR-head checkout so Read/Grep see the PR, not whatever
-			# directory the ladder was invoked from (#628 review).
+			# NO tools at all, no MCP: the diff is already in the prompt, and it is
+			# untrusted PR content. With Read/Grep/Glob, an injected instruction
+			# could read ~/.config/ladder/app.pem or any credential and the
+			# review body would publish it (#624 review). Measured: with these
+			# flags a "Read /etc/hostname" request answers that no tool exists.
 			(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
-				claude -p "$prompt" \
-				--allowedTools "Read,Grep,Glob" \
-				--disallowedTools "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task")
+				claude -p "$prompt" --tools "" --strict-mcp-config)
 		else
 			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" copilot -s -p "$prompt"
 		fi
