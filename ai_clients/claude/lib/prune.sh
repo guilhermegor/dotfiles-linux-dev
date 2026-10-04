@@ -88,7 +88,7 @@ _prune_file_artifacts() {
     done
 
     local reply
-    read -r -p "Remove these? They are recoverable from git history. [y/N] " reply || reply=""
+    read -r -p "Remove these? They are recoverable from git history. [y/N] " reply || [[ -n "$reply" ]] || reply=""
     if [[ ! "$reply" =~ ^[Yy]$ ]]; then
         print_status "info" "Left in place — nothing removed"
         return 0
@@ -162,7 +162,7 @@ prune_settings_keys() {
     done
 
     local reply
-    read -r -p "Remove these from $settings_file? They are recoverable from git history. [y/N] " reply || reply=""
+    read -r -p "Remove these from $settings_file? They are recoverable from git history. [y/N] " reply || [[ -n "$reply" ]] || reply=""
     if [[ ! "$reply" =~ ^[Yy]$ ]]; then
         print_status "info" "Left in place — nothing removed"
         return 0

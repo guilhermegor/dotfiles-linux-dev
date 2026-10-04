@@ -167,7 +167,7 @@ _install_notesnook() {
             docs_dir="$HOME/Documents"
         fi
         local default_sync_root="$docs_dir/Notesnook"
-        read -rp "Notesnook sync folder [$default_sync_root]: " sync_root || sync_root=""
+        read -rp "Notesnook sync folder [$default_sync_root]: " sync_root || [[ -n "$sync_root" ]] || sync_root=""
         sync_root="${sync_root:-$default_sync_root}"
     fi
     sync_root="${sync_root/#\~/$HOME}"
