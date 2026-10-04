@@ -26,6 +26,13 @@ setup() {
     export -f _default_fake_head_sha
     export HEAD_SHA
     export REVIEWER_LADDER_HEAD_SHA_CMD=_default_fake_head_sha
+
+    # dotfiles-linux-dev#626: the kimi/coderabbit/copilot rungs default to
+    # unavailable so no test ever reaches a real binary on the host.
+    _default_rung_down() { return 1; }
+    export REVIEWER_LADDER_KIMI_PROBE=_default_rung_down
+    export REVIEWER_LADDER_CODERABBIT_PROBE=_default_rung_down
+    export REVIEWER_LADDER_COPILOT_PROBE=_default_rung_down
 }
 
 # The head every already-covered fixture below reviewed (dotfiles-linux-dev#564).
@@ -934,4 +941,100 @@ _make_bare_remote_with_pr() {
     [ "$status" -eq 1 ]
     [[ "$output" != *"SHOULD NOT RUN"* ]]
     [[ "$output" != *"SHOULD NOT POST"* ]]
+}
+
+# --- kimi / coderabbit / copilot rungs (dotfiles-linux-dev#626) ----------------
+
+# Fake CLI on PATH. MODE: ok | forbidden (403, exit 1) | quota (exit 1) | hang.
+# Every invocation's argv is appended to $BATS_TEST_TMPDIR/<name>.argv.
+_fake_cli() {
+    local name="$1" mode="$2"
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    cat >"$BATS_TEST_TMPDIR/bin/$name" <<SH
+#!/bin/bash
+echo "\$*" >>"$BATS_TEST_TMPDIR/$name.argv"
+case "$mode" in
+ok) echo OK ;;
+forbidden) echo "403 subscription does not have access" >&2; exit 1 ;;
+quota) echo "quota exhausted" >&2; exit 1 ;;
+hang) sleep 30 ;;
+esac
+SH
+    chmod +x "$BATS_TEST_TMPDIR/bin/$name"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+}
+
+_only_cli_rungs() {
+    export REVIEWER_LADDER_QWEN_SETTINGS=/nonexistent
+    export REVIEWER_LADDER_CODEX_CACHE=/nonexistent
+    unset REVIEWER_LADDER_KIMI_PROBE REVIEWER_LADDER_CODERABBIT_PROBE REVIEWER_LADDER_COPILOT_PROBE
+    export REVIEWER_LADDER_PROBE_TIMEOUT=1
+}
+
+@test "kimi rung is selected when its live probe passes" {
+    _only_cli_rungs
+    _fake_cli kimi ok
+    _fake_cli coderabbit forbidden
+    _fake_cli copilot forbidden
+    resolve_fallback_reviewer
+    [ "$LADDER_RUNTIME" = "kimi" ]
+}
+
+@test "coderabbit rung is selected when its probe passes and kimi is down" {
+    _only_cli_rungs
+    _fake_cli kimi forbidden
+    _fake_cli coderabbit ok
+    _fake_cli copilot forbidden
+    resolve_fallback_reviewer
+    [ "$LADDER_RUNTIME" = "coderabbit" ]
+}
+
+@test "copilot rung is selected when kimi and coderabbit are down" {
+    _only_cli_rungs
+    _fake_cli kimi quota
+    _fake_cli coderabbit quota
+    _fake_cli copilot ok
+    resolve_fallback_reviewer
+    [ "$LADDER_RUNTIME" = "copilot" ]
+}
+
+@test "each new rung is skipped on 403, quota and timeout, one log line each" {
+    _only_cli_rungs
+    _fake_cli kimi forbidden
+    _fake_cli coderabbit quota
+    _fake_cli copilot hang
+    run resolve_fallback_reviewer
+    [ "$status" -eq 1 ]
+    [ "$(grep -c 'rung kimi skipped' <<<"$output")" -eq 1 ]
+    [ "$(grep -c 'rung coderabbit skipped' <<<"$output")" -eq 1 ]
+    [ "$(grep -c 'rung copilot skipped' <<<"$output")" -eq 1 ]
+}
+
+@test "full ladder falls through all five rungs to no rung available" {
+    _only_cli_rungs
+    _fake_cli kimi forbidden
+    _fake_cli coderabbit forbidden
+    _fake_cli copilot forbidden
+    export REVIEWER_LADDER_HEAD_SHA_CMD=_default_fake_head_sha
+    run run_fallback_review o r 1 CLEAN 0 99999 '[]'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no rung available"* ]]
+}
+
+@test "coderabbit invocation never carries --use-credits or an api key" {
+    _fake_cli coderabbit ok
+    _fake_cli kimi ok
+    local wd="$BATS_TEST_TMPDIR/wd"
+    git init -q "$wd"
+    export REVIEWER_LADDER_BASE=HEAD
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q --allow-empty -m x
+    export REVIEWER_LADDER_BASE=master
+    git -C "$wd" branch -M master
+    run _run_runtime_review coderabbit default "" 7 "$wd"
+    grep -q -- '--agent --base' "$BATS_TEST_TMPDIR/coderabbit.argv"
+    run grep -e '--use-credits' -e '--api-key' "$BATS_TEST_TMPDIR/coderabbit.argv"
+    [ "$status" -ne 0 ]
+    # only comments may mention the flag; no code line of the lib may
+    run bash -c "grep -v '^[[:space:]]*#' '$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/reviewer_ladder.sh' | grep -e '--use-credits' -e '--api-key'"
+    [ "$status" -ne 0 ]
 }
