@@ -193,33 +193,121 @@ resolve_qwen_model() {
 	return 0
 }
 
+# --- kimi / coderabbit / copilot rungs (dotfiles-linux-dev#626) -----------------
+#
+# Owner policy: every installed reviewer is a rung, and a rung is NEVER removed
+# because it is currently paywalled — it fails its live probe and the ladder
+# falls through. NEVER SPEND MONEY: no paid/credits flag (coderabbit's
+# `--use-credits`) and no pay-per-use API key is ever passed or configured here.
+# These CLIs expose no model list, so the model slug is the CLI's own default.
+
+# _rung_probe RUNTIME OVERRIDE_VAR CMD...
+# Runs a bounded live probe; REVIEWER_LADDER_<RT>_PROBE overrides it for tests.
+_rung_probe() {
+	local override="${!2:-}"
+	if [ -n "$override" ]; then
+		"$override" "$1"
+		return $?
+	fi
+	shift 2
+	timeout "${REVIEWER_LADDER_PROBE_TIMEOUT:-30}" "$@" 2>/dev/null
+}
+
+_kimi_entitlement_probe() {
+	local out
+	out="$(_rung_probe kimi REVIEWER_LADDER_KIMI_PROBE kimi -p "reply with the single word OK")" || return 1
+	[[ "$out" == *OK* ]]
+}
+
+# `coderabbit review --usage` is the cheapest authenticated call: it reads the
+# billing period and starts no review, so it consumes nothing.
+_coderabbit_entitlement_probe() {
+	_rung_probe coderabbit REVIEWER_LADDER_CODERABBIT_PROBE coderabbit review --usage >/dev/null
+}
+
+_copilot_entitlement_probe() {
+	local out
+	out="$(_rung_probe copilot REVIEWER_LADDER_COPILOT_PROBE copilot -s -p "reply with the single word OK")" || return 1
+	[[ "$out" == *OK* ]]
+}
+
+# claude (dotfiles-linux-dev#628): the ONE paid service the owner accepts, so the
+# strictly LAST rung. It is only reached when every cheaper rung failed its
+# probe, and the probe itself is a one-word call. A session/usage limit or auth
+# error exits non-zero or prints no OK, so the rung is skipped.
+_claude_entitlement_probe() {
+	local out
+	out="$(_rung_probe claude REVIEWER_LADDER_CLAUDE_PROBE claude -p "reply with the single word OK")" || return 1
+	[[ "$out" == *OK* ]]
+}
+
 # --- the ladder ------------------------------------------------------------
 
+# LADDER_CLI_RUNGS: the single-model CLI rungs below qwen and codex, in order.
+LADDER_CLI_RUNGS="kimi coderabbit copilot claude"
+
 # resolve_fallback_reviewer
-# Tries qwen, then codex — the two rungs below the primary review bot. Sets
-# LADDER_RUNTIME (qwen|codex|none), LADDER_MODEL, LADDER_SIGNAL,
-# LADDER_FALLBACK_MODELS (qwen only). Returns 1 with LADDER_RUNTIME=none when
-# neither rung resolves — the ladder falls through, it never guesses a name.
+# Tries qwen, codex, then kimi, coderabbit, copilot — the rungs below the
+# primary review bot. Sets LADDER_RUNTIME (qwen|codex|kimi|coderabbit|copilot|
+# none), LADDER_MODEL, LADDER_SIGNAL, LADDER_FALLBACK_MODELS (qwen only).
+# A rung that fails resolution/probe is skipped in one log line. Returns 1 with
+# LADDER_RUNTIME=none ("no rung available") when none resolves — the ladder
+# falls through, it never guesses a name.
 resolve_fallback_reviewer() {
 	LADDER_RUNTIME="none"
 	LADDER_MODEL=""
 	LADDER_SIGNAL=""
 	LADDER_FALLBACK_MODELS=""
 
-	if resolve_qwen_model; then
+	# LADDER_SKIP_RUNGS: rungs already ruled out for the rest of this
+	# invocation — those whose review FAILED (run_fallback_review appends them,
+	# so a probe that only proves login — coderabbit's `--usage` — can never pin
+	# the ladder to a rate-limited rung) and those whose resolution/probe failed
+	# (appended here, so a fall-through re-resolve never re-runs a probe that
+	# already failed — each costs up to REVIEWER_LADDER_PROBE_TIMEOUT, #627 review).
+	local skip=" ${LADDER_SKIP_RUNGS:-} "
+
+	if [[ "$skip" == *" qwen "* ]]; then
+		print_status "info" "rung qwen excluded earlier this run"
+	elif resolve_qwen_model; then
 		LADDER_RUNTIME="qwen"
 		LADDER_MODEL="$QWEN_MODEL"
 		LADDER_SIGNAL="$QWEN_MODEL_SIGNAL"
 		LADDER_FALLBACK_MODELS="$QWEN_FALLBACK_MODELS"
 		return 0
+	else
+		print_status "info" "rung qwen skipped: no entitled model"
+		LADDER_SKIP_RUNGS="${LADDER_SKIP_RUNGS:-} qwen"
 	fi
 
-	if resolve_codex_model; then
+	if [[ "$skip" == *" codex "* ]]; then
+		print_status "info" "rung codex excluded earlier this run"
+	elif resolve_codex_model; then
 		LADDER_RUNTIME="codex"
 		LADDER_MODEL="$CODEX_MODEL"
 		LADDER_SIGNAL="$CODEX_MODEL_SIGNAL"
 		return 0
+	else
+		print_status "info" "rung codex skipped: no entitled model"
+		LADDER_SKIP_RUNGS="${LADDER_SKIP_RUNGS:-} codex"
 	fi
+
+	local rung
+	for rung in $LADDER_CLI_RUNGS; do
+		if [[ "$skip" == *" $rung "* ]]; then
+			print_status "info" "rung $rung excluded earlier this run"
+			continue
+		fi
+		if "_${rung}_entitlement_probe"; then
+			LADDER_RUNTIME="$rung"
+			LADDER_MODEL="default"
+			LADDER_SIGNAL="live-probe"
+			[ "$rung" = "claude" ] && LADDER_SIGNAL="last-resort"
+			return 0
+		fi
+		print_status "info" "rung $rung skipped: probe failed (401/403, quota, expired login or timeout)"
+		LADDER_SKIP_RUNGS="${LADDER_SKIP_RUNGS:-} $rung"
+	done
 
 	return 1
 }
@@ -541,6 +629,45 @@ _run_runtime_review() {
 		# this output verbatim as the review comment.
 		qwen -m "$model" "${fb_args[@]}" review run "$pr_number"
 		;;
+	coderabbit)
+		# Reviews the verified PR-head checkout against the base. Never
+		# `--use-credits` or any paid flag (#626: no rung may spend money).
+		local cr_base
+		cr_base="$(cd "$workdir" && _review_base_ref)" || {
+			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
+			return 1
+		}
+		(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
+			coderabbit review --agent --base "$cr_base")
+		;;
+	kimi | copilot | claude)
+		# No review subcommand: hand the verified checkout's diff in the prompt,
+		# so no tool permission (and no --yolo/--allow-all) is ever needed.
+		local rv_base diff prompt
+		rv_base="$(cd "$workdir" && _review_base_ref)" || {
+			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
+			return 1
+		}
+		diff="$(git -C "$workdir" diff "${rv_base}...HEAD" | head -c 200000)"
+		[ -n "$diff" ] || return 1
+		prompt="Review PR #$pr_number. Report concrete bugs and risks as a markdown list with file:line. Diff:"$'\n'"$diff"
+		if [ "$runtime" = "kimi" ]; then
+			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" kimi -p "$prompt"
+		elif [ "$runtime" = "claude" ]; then
+			# READ-ONLY: --allowedTools only PRE-APPROVES on top of the owner's
+			# settings.json allow list (which permits git commit, Edit, ...), so
+			# it restricts nothing on its own; the --disallowedTools deny list is
+			# what enforces read-only, since deny always wins. Run inside the
+			# verified PR-head checkout so Read/Grep see the PR, not whatever
+			# directory the ladder was invoked from (#628 review).
+			(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
+				claude -p "$prompt" \
+				--allowedTools "Read,Grep,Glob" \
+				--disallowedTools "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task")
+		else
+			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" copilot -s -p "$prompt"
+		fi
+		;;
 	*)
 		return 1
 		;;
@@ -611,43 +738,59 @@ run_fallback_review() {
 	# the stack, so a dry run never reaches the real `codex`/`qwen` binaries.
 	# `true` accepts every candidate, which is exactly "unprobed".
 	local REVIEWER_LADDER_CODEX_PROBE="${REVIEWER_LADDER_CODEX_PROBE:-}" \
-		REVIEWER_LADDER_QWEN_PROBE="${REVIEWER_LADDER_QWEN_PROBE:-}"
+		REVIEWER_LADDER_QWEN_PROBE="${REVIEWER_LADDER_QWEN_PROBE:-}" \
+		REVIEWER_LADDER_KIMI_PROBE="${REVIEWER_LADDER_KIMI_PROBE:-}" \
+		REVIEWER_LADDER_CODERABBIT_PROBE="${REVIEWER_LADDER_CODERABBIT_PROBE:-}" \
+		REVIEWER_LADDER_COPILOT_PROBE="${REVIEWER_LADDER_COPILOT_PROBE:-}" \
+		REVIEWER_LADDER_CLAUDE_PROBE="${REVIEWER_LADDER_CLAUDE_PROBE:-}"
 	if [ "$dry_run" = "1" ]; then
 		: "${REVIEWER_LADDER_CODEX_PROBE:=true}"
 		: "${REVIEWER_LADDER_QWEN_PROBE:=true}"
+		: "${REVIEWER_LADDER_KIMI_PROBE:=true}"
+		: "${REVIEWER_LADDER_CODERABBIT_PROBE:=true}"
+		: "${REVIEWER_LADDER_COPILOT_PROBE:=true}"
+		: "${REVIEWER_LADDER_CLAUDE_PROBE:=true}"
 	fi
 
-	if ! resolve_fallback_reviewer; then
-		print_status "warning" "no fallback rung resolved (qwen and codex both unavailable)"
-		return 1
-	fi
-
-	local attribution
-	attribution="$(ladder_attribution_line "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_SIGNAL" "$head_sha")"
-
-	if [ "$dry_run" = "1" ]; then
-		print_status "info" "DRY RUN (candidates unprobed) — would probe, then post to PR #$pr_number: $attribution"
-		return 0
-	fi
-
-	# Only codex reads the working tree (issue #487) — qwen's own
-	# `review run PR_NUMBER` already fetches the PR itself. Resolving a
-	# worktree only when it is actually needed keeps qwen's rung free of a
-	# fetch+worktree round trip it has no use for.
-	local workdir="." worktree_dir=""
-	if [ "$LADDER_RUNTIME" = "codex" ]; then
-		if ! _checkout_pr_worktree "$owner" "$repo" "$pr_number"; then
-			print_status "error" "PR #$pr_number: cannot check out a verified head for codex — refusing to review"
+	# A rung whose probe passed but whose REVIEW fails (non-zero exit) or
+	# returns nothing is appended to LADDER_SKIP_RUNGS and the ladder resolves
+	# again — it never stops at the first rung that merely proved it is logged
+	# in, and an empty review is never posted as a clean one (#626 review).
+	local LADDER_SKIP_RUNGS="${LADDER_SKIP_RUNGS:-}" attribution findings
+	while :; do
+		if ! resolve_fallback_reviewer; then
+			print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable)"
 			return 1
 		fi
-		workdir="$PR_WORKTREE_DIR"
-		worktree_dir="$PR_WORKTREE_DIR"
-	fi
 
-	local findings rc=0
-	findings="$(_run_runtime_review "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_FALLBACK_MODELS" "$pr_number" "$workdir")" || rc=1
-	[ -n "$worktree_dir" ] && _teardown_pr_worktree "$worktree_dir"
-	[ "$rc" -eq 0 ] || return 1
+		attribution="$(ladder_attribution_line "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_SIGNAL" "$head_sha")"
+
+		if [ "$dry_run" = "1" ]; then
+			print_status "info" "DRY RUN (candidates unprobed) — would probe, then post to PR #$pr_number: $attribution"
+			return 0
+		fi
+
+		# qwen's own `review run PR_NUMBER` fetches the PR itself (issue #487);
+		# every other rung reads a verified PR-head checkout.
+		local workdir="." worktree_dir=""
+		if [[ " codex $LADDER_CLI_RUNGS " == *" $LADDER_RUNTIME "* ]]; then
+			if ! _checkout_pr_worktree "$owner" "$repo" "$pr_number"; then
+				print_status "error" "PR #$pr_number: cannot check out a verified head for $LADDER_RUNTIME — refusing to review"
+				return 1
+			fi
+			workdir="$PR_WORKTREE_DIR"
+			worktree_dir="$PR_WORKTREE_DIR"
+		fi
+
+		local rc=0
+		findings="$(_run_runtime_review "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_FALLBACK_MODELS" "$pr_number" "$workdir")" || rc=1
+		[ -n "$worktree_dir" ] && _teardown_pr_worktree "$worktree_dir"
+		if [ "$rc" -eq 0 ] && [ -n "${findings//[[:space:]]/}" ]; then
+			break
+		fi
+		print_status "info" "rung $LADDER_RUNTIME skipped: review failed or returned nothing"
+		LADDER_SKIP_RUNGS="$LADDER_SKIP_RUNGS $LADDER_RUNTIME"
+	done
 
 	local body
 	body="$attribution"$'\n\n'"$findings"
