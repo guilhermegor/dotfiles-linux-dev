@@ -163,7 +163,7 @@ jobs:
             # chars, so a verbose fallback review reaches it. The verdict must
             # not depend on how much the reviewer had to say.
             first_line=${COMMENT_BODY%%$'\n'*}
-            ladder_marker_re='^Fallback review — runtime: (qwen|codex), model: .+ \(selected by: .+\)$'
+            ladder_marker_re='^Fallback review — runtime: (qwen|codex|kimi|coderabbit|copilot|claude), model: .+ \(selected by: .+\)$'
             # dotfiles-linux-dev#564: the marker's own SECOND line must name this head, the
             # same test ladder_already_covered and the thread gate apply. Otherwise a
             # review of an older commit that lands after a push credits the new head.
@@ -284,7 +284,7 @@ jobs:
                     | select(.created_at > $since)
                     | select((.author_association // "") | test("^(OWNER|MEMBER|COLLABORATOR)$"))
                     | select(((.body // "") | split("\n")[0])
-                        | test("^Fallback review — runtime: (qwen|codex), model: .+ \\(selected by: .+\\)$"))
+                        | test("^Fallback review — runtime: (qwen|codex|kimi|coderabbit|copilot|claude), model: .+ \\(selected by: .+\\)$"))
                     | select(((((.body // "") | split("\n"))[1] // "") == ("Reviewed head: " + $head_sha)))
                   ] | length')"
                 if [ "${ladder_marker_count:-0}" -gt 0 ]; then
