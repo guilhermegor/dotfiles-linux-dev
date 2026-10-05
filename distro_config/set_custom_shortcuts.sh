@@ -3,6 +3,10 @@
 # shellcheck source=../lib/common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
 
+# Slots custom0..custom<N-1> are owned by this script; keep in sync with the
+# set_individual_keybinding calls (tests/custom_shortcuts_slots.bats enforces it).
+MANAGED_SLOT_COUNT=15
+
 # function to check if a keybinding conflicts with a GNOME default binding.
 # Custom bindings are skipped — this script fully owns and overwrites that
 # array, so existing custom slots are never real conflicts.
@@ -84,6 +88,19 @@ set_individual_keybinding() {
     gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${index}/ name "$name"
     gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${index}/ command "$command"
     gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${index}/ binding "$binding"
+}
+
+# function to blank the binding of every managed slot before reassigning.
+# gsd-media-keys refuses a grab while another slot still holds the accelerator
+# and never retries (dotfiles-linux-dev#653), so no binding may be held twice
+# mid-run; writing an identical value also emits no change, so blank first to
+# force a real change event (and a fresh grab) on every slot.
+clear_managed_bindings() {
+    local i
+    print_status info "Clearing bindings of managed slots so gsd re-grabs them..."
+    for ((i = 0; i < MANAGED_SLOT_COUNT; i++)); do
+        gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${i}/" binding ""
+    done
 }
 
 # function to create the copy-path script
@@ -458,8 +475,9 @@ set_all_keybindings() {
     # and 7..15 renumbered down; an earlier run left it bound in dconf, so reset it.
     dconf reset -f /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom15/
 
+    clear_managed_bindings
     set_keybindings_array
-    
+
     # Set individual keybindings
     set_individual_keybinding 0 "Open File Manager" "nautilus --new-window" "<Super>e"
     set_individual_keybinding 1 "Restart PC" "systemctl reboot" "<Super>r"
