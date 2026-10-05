@@ -228,6 +228,23 @@ plant_ok_file() {
     [[ "$output" != *"pem.md"* ]]
 }
 
+@test "secret guard refuses a token near the start of a large file (SIGPIPE case)" {
+    plant_ok_file
+    { printf 'k=%s\n' "$(fake_token)"; head -c 300000 /dev/zero | tr '\0' 'x'; printf '\n'; } \
+        >"$CLAUDE_CONFIG_DIR/memory/big.md"
+    assert_planted_not_committed "big.md"
+}
+
+@test "secret guard refuses a token near the start of a large file via the hook entry point" {
+    plant_ok_file
+    { printf 'k=%s\n' "$(fake_token)"; head -c 300000 /dev/zero | tr '\0' 'x'; printf '\n'; } \
+        >"$CLAUDE_CONFIG_DIR/memory/big.md"
+    run bash "$SYNC" push --hook </dev/null
+    [ "$status" -eq 0 ]
+    run remote_files
+    [[ "$output" != *"big.md"* ]]
+}
+
 @test "secret guard catches a secret edit to an already-tracked file" {
     plant_ok_file
     run bash "$SYNC" push

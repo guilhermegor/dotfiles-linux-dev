@@ -101,14 +101,25 @@ unmerged_files() { g diff --name-only --diff-filter=U 2>/dev/null; }
 # planted token was committed anyway (security review, #655). Paths are NUL-
 # delimited end to end. Prints NUL-delimited file names only, never the matched
 # text (the report must not echo the secret it found).
+#
+# Never decide on a pipeline status: `cat-file | grep -q` under pipefail reads a
+# MATCH as 141 (grep exits early, the writer takes SIGPIPE) once the file passes the
+# pipe buffer, i.e. fail-open. The blob goes to a temp file first and ONLY grep's
+# own status counts: 1 = clean, anything else (match, read error, grep error) =
+# flagged, so an unknown outcome blocks the commit.
 staged_secret_files() {
-    local path
+    local path scan rc
+    scan="$(mktemp)" || return 1
     while IFS= read -r -d '' path; do
-        if g cat-file blob ":0:$path" 2>/dev/null |
-            grep -aEq -e "$TOKEN_RE" -e "${PK_BEGIN}[A-Z ]*${PK_END}"; then
+        if ! g cat-file blob ":0:$path" >"$scan" 2>/dev/null; then
             printf '%s\0' "$path"
+            continue
         fi
+        grep -aEq -e "$TOKEN_RE" -e "${PK_BEGIN}[A-Z ]*${PK_END}" "$scan"
+        rc=$?
+        [ "$rc" -eq 1 ] || printf '%s\0' "$path"
     done < <(g diff --cached --name-only -z --no-renames --diff-filter=ACMRT 2>/dev/null)
+    rm -f "$scan"
 }
 
 report_forward() {
