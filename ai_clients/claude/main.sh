@@ -14,6 +14,7 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 source "$SCRIPT_DIR/lib/prerequisites.sh"
 source "$SCRIPT_DIR/lib/settings.sh"
 source "$SCRIPT_DIR/lib/hooks.sh"
+source "$SCRIPT_DIR/lib/state_sync.sh"
 source "$SCRIPT_DIR/lib/marketplaces.sh"
 source "$SCRIPT_DIR/lib/plugins.sh"
 source "$SCRIPT_DIR/lib/slash_commands.sh"
@@ -99,6 +100,7 @@ STEPS=(
     "profiles|Install cheap-brain session profiles (deepseek, ...)"
     "claude_mem|Configure claude-mem mode"
     "prune|Prune orphaned artifacts (asks before removing)"
+    "state_sync|Link private AI-state repo (memories, tasks, specs) + ai-state-sync command"
 )
 
 dispatch_step() {
@@ -119,6 +121,7 @@ dispatch_step() {
         profiles)       install_profiles ;;
         claude_mem)     configure_claude_mem ;;
         prune)          prune_orphans ;;
+        state_sync)     setup_state_sync ;;
         *) print_status "error" "Unknown step: $key"; return 1 ;;
     esac
 }
