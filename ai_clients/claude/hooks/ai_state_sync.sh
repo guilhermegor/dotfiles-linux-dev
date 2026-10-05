@@ -93,22 +93,22 @@ configure_repo() {
 
 unmerged_files() { g diff --name-only --diff-filter=U 2>/dev/null; }
 
-# First secret-looking ADDED line per staged file; prints the file names only,
-# never the matched text (the report must not echo the secret it found).
+# Scan exactly what `git commit` will record: the STAGED BLOB of every added /
+# modified / copied / renamed path, whole file, bytes as stored. Not the diff text:
+# a diff scan is blind to binary-classified files (no "+" lines), and a path it
+# parses out of `+++ b/<name>` is quoted/tab-suffixed for names with spaces or
+# non-ASCII, which then fails to match the real path when it is unstaged -- a
+# planted token was committed anyway (security review, #655). Paths are NUL-
+# delimited end to end. Prints NUL-delimited file names only, never the matched
+# text (the report must not echo the secret it found).
 staged_secret_files() {
-    local file="" line content
-    while IFS= read -r line; do
-        case "$line" in
-            '+++ '*) file="${line#+++ b/}" ;;
-            '+'*)
-                content="${line#+}"
-                if [[ "$content" =~ $TOKEN_RE ]] ||
-                    [[ "$content" == *"$PK_BEGIN"*"$PK_END"* ]]; then
-                    printf '%s\n' "$file"
-                fi
-                ;;
-        esac
-    done < <(g diff --cached -U0 --no-color 2>/dev/null) | sort -u
+    local path
+    while IFS= read -r -d '' path; do
+        if g cat-file blob ":0:$path" 2>/dev/null |
+            grep -aEq -e "$TOKEN_RE" -e "${PK_BEGIN}[A-Z ]*${PK_END}"; then
+            printf '%s\0' "$path"
+        fi
+    done < <(g diff --cached --name-only -z --no-renames --diff-filter=ACMRT 2>/dev/null)
 }
 
 report_forward() {
@@ -166,16 +166,21 @@ $conflicts"
 # Commit whitelisted changes minus any file the secret guard flags.
 commit_changes() {
     g add -A >/dev/null 2>&1 || return 1
-    local flagged
-    flagged="$(staged_secret_files)"
-    if [ -n "$flagged" ]; then
-        local f
-        while IFS= read -r f; do
-            g reset -q -- "$f" >/dev/null 2>&1
-        done <<<"$flagged"
-        SECRET_HELD="$(printf '%s' "$flagged" | tr '\n' ' ')"
+    local flagged=() f
+    mapfile -d '' flagged < <(staged_secret_files)
+    if [ "${#flagged[@]}" -gt 0 ]; then
+        for f in "${flagged[@]}"; do
+            GIT_LITERAL_PATHSPECS=1 g reset -q -- "$f" >/dev/null 2>&1
+        done
+        SECRET_HELD="$(printf '%s ' "${flagged[@]}")"
         report_forward "SECRET GUARD held back these files (not committed, not pushed); remove the secret, they sync on the next run:
-$flagged"
+$(printf '%s\n' "${flagged[@]}")"
+        # Fail closed: if any flagged path is somehow still staged, commit nothing.
+        mapfile -d '' flagged < <(staged_secret_files)
+        if [ "${#flagged[@]}" -gt 0 ]; then
+            g reset -q >/dev/null 2>&1
+            return 1
+        fi
     fi
     g diff --cached --quiet && return 0
     g commit -q -m "chore(state): sync $(hostname -s 2>/dev/null || echo host) $(date -u +%FT%TZ)" >/dev/null 2>&1

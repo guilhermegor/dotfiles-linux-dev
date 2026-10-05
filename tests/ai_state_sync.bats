@@ -175,7 +175,71 @@ fake_token() { printf 'ghp_%s' "$(printf 'A%.0s' $(seq 1 36))"; }
     [[ "$output" != *"$(fake_token)"* ]]
 }
 
-# --- hooks never block --------------------------------------------------------------
+# Each shape below slipped past a guard that parsed `git diff` text: the staged blob is what
+# gets committed, so the guard must scan that, with NUL-safe paths.
+assert_planted_not_committed() {
+    local planted="$1"
+    run bash "$SYNC" push
+    [ "$status" -ne 0 ]
+    run remote_files
+    [[ "$output" == *"memory/ok.md"* ]]
+    [[ "$output" != *"$planted"* ]]
+    run git --git-dir="$AI_STATE_GIT_DIR" log --all --name-only
+    [[ "$output" != *"$planted"* ]]
+}
+
+plant_ok_file() {
+    run bash "$SYNC" setup
+    mkdir -p "$CLAUDE_CONFIG_DIR/memory"
+    printf 'fine\n' >"$CLAUDE_CONFIG_DIR/memory/ok.md"
+}
+
+@test "secret guard catches a token in a file whose name has spaces" {
+    plant_ok_file
+    printf 'k=%s\n' "$(fake_token)" >"$CLAUDE_CONFIG_DIR/memory/my notes.md"
+    assert_planted_not_committed "my notes"
+}
+
+@test "secret guard catches a token in a file with a non-ASCII name" {
+    plant_ok_file
+    printf 'k=%s\n' "$(fake_token)" >"$CLAUDE_CONFIG_DIR/memory/anotação.md"
+    assert_planted_not_committed "anota"
+}
+
+@test "secret guard catches a token in a file with glob characters in its name" {
+    plant_ok_file
+    printf 'k=%s\n' "$(fake_token)" >"$CLAUDE_CONFIG_DIR/memory/[a]*.md"
+    assert_planted_not_committed "[a]"
+}
+
+@test "secret guard catches a token inside a binary file" {
+    plant_ok_file
+    { printf '\000\001\002'; printf 'k=%s' "$(fake_token)"; printf '\000\377'; } \
+        >"$CLAUDE_CONFIG_DIR/memory/blob.md"
+    assert_planted_not_committed "blob.md"
+}
+
+@test "secret guard catches a CRLF file and a PEM private key" {
+    plant_ok_file
+    printf 'k=%s\r\nmore\r\n' "$(fake_token)" >"$CLAUDE_CONFIG_DIR/memory/crlf.md"
+    printf -- '-----BEGIN RSA %s-----\r\nabc\r\n' "PRIVATE KEY" >"$CLAUDE_CONFIG_DIR/memory/pem.md"
+    assert_planted_not_committed "crlf.md"
+    run remote_files
+    [[ "$output" != *"pem.md"* ]]
+}
+
+@test "secret guard catches a secret edit to an already-tracked file" {
+    plant_ok_file
+    run bash "$SYNC" push
+    [ "$status" -eq 0 ]
+    printf 'k=%s\n' "$(fake_token)" >>"$CLAUDE_CONFIG_DIR/memory/ok.md"
+    run bash "$SYNC" push
+    [ "$status" -ne 0 ]
+    run git --git-dir="$AI_STATE_GIT_DIR" log --all -p
+    [[ "$output" != *"$(fake_token)"* ]]
+}
+
+# --- hooks never block--------------------------------------------------------------
 
 @test "hook push exits 0 and stays silent when the remote is unreachable" {
     run bash "$SYNC" setup
