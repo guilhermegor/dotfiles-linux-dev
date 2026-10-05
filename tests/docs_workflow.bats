@@ -11,7 +11,11 @@
 setup() {
     ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
     WF="$ROOT/.github/workflows/docs.yml"
-    python3 -c 'import yaml' 2>/dev/null || skip "PyYAML not available"
+    if ! python3 -c 'import yaml' 2>/dev/null; then
+        # A gate that cannot run must not pass silently in CI.
+        [ -z "${CI:-}" ] || { echo "PyYAML missing in CI" >&2; return 1; }
+        skip "PyYAML not available"
+    fi
 }
 
 wf() {
