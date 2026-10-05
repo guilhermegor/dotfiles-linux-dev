@@ -245,6 +245,80 @@ plant_ok_file() {
     [[ "$output" != *"big.md"* ]]
 }
 
+# --- fail closed: an unknown outcome refuses the commit/push --------------------------
+#
+# The guard returns 0 only on a positive, completed "clean" verdict. Each test stubs ONE
+# command the guard decides on to fail and proves nothing is published.
+
+# stub_git <substring of the git args to fail on> [exit code]: wrapper on a private PATH dir.
+stub_git() {
+    mkdir -p "$T/stubs"
+    printf '#!/bin/bash\nif [[ "$*" == *"%s"* ]]; then exit %s; fi\nexec %s "$@"\n' \
+        "$1" "${2:-128}" "$(command -v git)" >"$T/stubs/git"
+    chmod +x "$T/stubs/git"
+}
+
+stub_cmd() { # stub_cmd <name> <exit code>
+    mkdir -p "$T/stubs"
+    printf '#!/bin/bash\nexit %s\n' "$2" >"$T/stubs/$1"
+    chmod +x "$T/stubs/$1"
+}
+
+push_with_stubs() {
+    PATH="$T/stubs:$PATH" run bash "$SYNC" push
+    [ "$status" -ne 0 ]
+    run remote_files
+    [[ "$output" != *"memory/ok.md"* ]]
+}
+
+@test "fail closed: a failed staged-file listing is not read as 'nothing to scan'" {
+    plant_ok_file
+    stub_git "diff --cached --name-only"
+    push_with_stubs
+}
+
+@test "fail closed: an unreadable staged blob is flagged, not treated as clean" {
+    plant_ok_file
+    stub_git "cat-file blob"
+    push_with_stubs
+}
+
+@test "fail closed: a grep error (exit 2) is not read as 'no match'" {
+    plant_ok_file
+    stub_cmd grep 2
+    push_with_stubs
+}
+
+@test "fail closed: no temp file means no verdict, so no commit" {
+    plant_ok_file
+    stub_cmd mktemp 1
+    push_with_stubs
+}
+
+@test "fail closed: failing to tell what is staged does not fall through to commit" {
+    plant_ok_file
+    stub_git "diff --cached --quiet" 2
+    push_with_stubs
+}
+
+@test "fail closed: a failed scan of what would be pushed refuses the push" {
+    plant_ok_file
+    stub_git "ls-tree -r -z"
+    push_with_stubs
+}
+
+@test "a leftover local commit holding a token is refused at push, not published" {
+    plant_ok_file
+    printf 'k=%s\n' "$(fake_token)" >"$CLAUDE_CONFIG_DIR/memory/manual.md"
+    git --git-dir="$AI_STATE_GIT_DIR" --work-tree="$CLAUDE_CONFIG_DIR" add memory/manual.md
+    git --git-dir="$AI_STATE_GIT_DIR" --work-tree="$CLAUDE_CONFIG_DIR" commit -q -m manual
+    run bash "$SYNC" push
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"push refused"* ]]
+    run remote_files
+    [ -z "$output" ]
+}
+
 @test "secret guard catches a secret edit to an already-tracked file" {
     plant_ok_file
     run bash "$SYNC" push

@@ -44,6 +44,7 @@ BRANCH="main"
 HOOK=0 # 1 under --hook: always exit 0, speak only on a pull conflict
 MODE=""
 SECRET_HELD=""
+REFUSAL=""
 HANDOFF="$CLAUDE_DIR/session-audit/ai-state-sync.md"
 
 # Whitelist, never a blacklist: ignore everything at the top level, re-include
@@ -107,19 +108,65 @@ unmerged_files() { g diff --name-only --diff-filter=U 2>/dev/null; }
 # pipe buffer, i.e. fail-open. The blob goes to a temp file first and ONLY grep's
 # own status counts: 1 = clean, anything else (match, read error, grep error) =
 # flagged, so an unknown outcome blocks the commit.
-staged_secret_files() {
-    local path scan rc
-    scan="$(mktemp)" || return 1
+#
+# Contract (fail closed): every guard_* function returns 0 ONLY on a positive,
+# completed "clean" verdict. 1 = flagged (FLAGGED holds the paths), 2 = the scan could
+# not complete (listing failed, no temp file, ...). Callers treat anything but 0 as
+# "do not commit / do not push". No status is ever swallowed, and no list is built
+# through a process substitution whose own failure would read as "empty = clean".
+FLAGGED=()
+
+# scan_blobs <NUL-delimited path listing file> <blob prefix>
+scan_blobs() {
+    local listing="$1" prefix="$2" path scan rc
+    FLAGGED=()
+    scan="$(mktemp)" || return 2
     while IFS= read -r -d '' path; do
-        if ! g cat-file blob ":0:$path" >"$scan" 2>/dev/null; then
-            printf '%s\0' "$path"
+        if ! g cat-file blob "$prefix$path" >"$scan" 2>/dev/null; then
+            FLAGGED+=("$path") # unreadable blob: unknown, so refuse
             continue
         fi
         grep -aEq -e "$TOKEN_RE" -e "${PK_BEGIN}[A-Z ]*${PK_END}" "$scan"
         rc=$?
-        [ "$rc" -eq 1 ] || printf '%s\0' "$path"
-    done < <(g diff --cached --name-only -z --no-renames --diff-filter=ACMRT 2>/dev/null)
+        [ "$rc" -eq 1 ] || FLAGGED+=("$path") # 0 = match; >=2 = grep error
+    done <"$listing"
     rm -f "$scan"
+    [ "${#FLAGGED[@]}" -eq 0 ]
+}
+
+# guard_staged: what the next `git commit` would record.
+guard_staged() {
+    local listing rc
+    listing="$(mktemp)" || return 2
+    if ! g diff --cached --name-only -z --no-renames --diff-filter=ACMRT >"$listing" 2>/dev/null; then
+        rm -f "$listing"
+        return 2
+    fi
+    scan_blobs "$listing" ":0:"
+    rc=$?
+    rm -f "$listing"
+    return "$rc"
+}
+
+# guard_unpushed: what a push would publish, including commits this run did not make
+# (a manual commit, a leftover from an earlier run) that never passed guard_staged.
+# Only the net tree difference vs origin is scanned, not intermediate commits.
+guard_unpushed() {
+    local listing rc failed=0
+    listing="$(mktemp)" || return 2
+    if g rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null 2>&1; then
+        g diff --name-only -z --no-renames --diff-filter=ACMRT "origin/$BRANCH" HEAD >"$listing" 2>/dev/null || failed=1
+    else
+        g ls-tree -r -z --name-only HEAD >"$listing" 2>/dev/null || failed=1
+    fi
+    if [ "$failed" -ne 0 ]; then
+        rm -f "$listing"
+        return 2
+    fi
+    scan_blobs "$listing" "HEAD:"
+    rc=$?
+    rm -f "$listing"
+    return "$rc"
 }
 
 report_forward() {
@@ -176,25 +223,35 @@ $conflicts"
 
 # Commit whitelisted changes minus any file the secret guard flags.
 commit_changes() {
-    g add -A >/dev/null 2>&1 || return 1
-    local flagged=() f
-    mapfile -d '' flagged < <(staged_secret_files)
-    if [ "${#flagged[@]}" -gt 0 ]; then
-        for f in "${flagged[@]}"; do
+    g add -A >/dev/null 2>&1 || { REFUSAL="git add failed"; return 1; }
+    local f rc blocked
+    guard_staged
+    rc=$?
+    if [ "$rc" -eq 1 ]; then
+        blocked=("${FLAGGED[@]}")
+        for f in "${blocked[@]}"; do
             GIT_LITERAL_PATHSPECS=1 g reset -q -- "$f" >/dev/null 2>&1
         done
-        SECRET_HELD="$(printf '%s ' "${flagged[@]}")"
+        SECRET_HELD="$(printf '%s ' "${blocked[@]}")"
         report_forward "SECRET GUARD held back these files (not committed, not pushed); remove the secret, they sync on the next run:
-$(printf '%s\n' "${flagged[@]}")"
-        # Fail closed: if any flagged path is somehow still staged, commit nothing.
-        mapfile -d '' flagged < <(staged_secret_files)
-        if [ "${#flagged[@]}" -gt 0 ]; then
-            g reset -q >/dev/null 2>&1
-            return 1
-        fi
+$(printf '%s\n' "${blocked[@]}")"
+        guard_staged # re-verify: anything still flagged means the unstage failed
+        rc=$?
     fi
-    g diff --cached --quiet && return 0
-    g commit -q -m "chore(state): sync $(hostname -s 2>/dev/null || echo host) $(date -u +%FT%TZ)" >/dev/null 2>&1
+    if [ "$rc" -ne 0 ]; then
+        g reset -q >/dev/null 2>&1 # unknown or still flagged: commit nothing at all
+        REFUSAL="secret scan did not return a clean verdict (status $rc); nothing committed"
+        report_forward "$REFUSAL"
+        return 1
+    fi
+    g diff --cached --quiet
+    case $? in
+        0) return 0 ;;                        # nothing staged
+        1) ;;                                 # changes: fall through to commit
+        *) REFUSAL="could not tell what is staged"; return 1 ;;
+    esac
+    g commit -q -m "chore(state): sync $(hostname -s 2>/dev/null || echo host) $(date -u +%FT%TZ)" >/dev/null 2>&1 ||
+        { REFUSAL="git commit failed"; return 1; }
 }
 
 commits_ahead() {
@@ -218,12 +275,13 @@ $unmerged"
         finish 1 "unmerged files block syncing: $unmerged"
     fi
     rm -f "$HANDOFF" 2>/dev/null || true # re-evaluated from scratch every run
-    commit_changes || finish 1 "commit failed"
+    commit_changes || finish 1 "commit refused: $REFUSAL"
     [ -n "$SECRET_HELD" ] && { held=" Secret guard held back: $SECRET_HELD"; rc=1; }
 
     if [ "$(commits_ahead)" -eq 0 ]; then
         finish "$rc" "nothing to push.$held"
     fi
+    guard_unpushed || finish 1 "push refused: the secret scan of what would be published did not come back clean (see $HANDOFF)"
     if ! push_head; then
         # Remote moved ahead: rebase once; a conflict is reported, never resolved.
         if net git --git-dir="$AI_STATE_GIT_DIR" --work-tree="$AI_STATE_WORK_TREE" \
