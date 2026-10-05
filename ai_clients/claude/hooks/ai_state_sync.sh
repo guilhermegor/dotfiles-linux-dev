@@ -36,7 +36,18 @@ set -uo pipefail
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 AI_STATE_REPO="${AI_STATE_REPO:-guilhermegor/ai-clients-state}"
-AI_STATE_REMOTE="${AI_STATE_REMOTE:-git@github.com:${AI_STATE_REPO}.git}"
+# Default remote follows gh's configured protocol (gh's credential helper
+# authenticates https); https when gh is absent or the call fails.
+default_remote() {
+    local proto
+    proto="$(gh config get git_protocol 2>/dev/null)" || proto=""
+    if [ "$proto" = "ssh" ]; then
+        printf 'git@github.com:%s.git' "$AI_STATE_REPO"
+    else
+        printf 'https://github.com/%s.git' "$AI_STATE_REPO"
+    fi
+}
+AI_STATE_REMOTE="${AI_STATE_REMOTE:-$(default_remote)}"
 AI_STATE_GIT_DIR="${AI_STATE_GIT_DIR:-$HOME/.ai-clients-state/claude.git}"
 AI_STATE_WORK_TREE="${AI_STATE_WORK_TREE:-$CLAUDE_DIR}"
 AI_STATE_TIMEOUT="${AI_STATE_TIMEOUT:-20}"

@@ -894,6 +894,11 @@ last), rewritten on every run so a whitelist change deploys with the hooks.
 config (which trackers the owner's repos use), this repo is public, and a deployed copy
 would need a per-machine override anyway.
 
+**Default remote follows `gh config get git_protocol`**: https gives
+`https://github.com/<repo>.git` (gh's credential helper authenticates it), ssh gives the
+SSH form, and https is the fallback when gh is absent or fails. An explicit
+`AI_STATE_REMOTE` always wins.
+
 **Secret guard**: token shapes and PEM keys only (same patterns as
 `commit_secret_guard.sh`, kept in sync by hand). A flagged file is unstaged and reported
 by NAME (never the value); the rest still syncs. A password-assignment heuristic was

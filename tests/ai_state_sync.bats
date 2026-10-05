@@ -398,6 +398,42 @@ push_with_stubs() {
     grep -q '<<<<<<<' "$CLAUDE_CONFIG_DIR/memory/MEMORY.md"
 }
 
+# --- default remote follows gh's git protocol ---------------------------------------------
+
+# Source the script's definitions (minus the final `main` call) under a stubbed gh and
+# print the resolved AI_STATE_REMOTE.
+resolved_remote() { # <gh stub body>
+    mkdir -p "$T/ghstub"
+    printf '#!/bin/bash\n%s\n' "$1" >"$T/ghstub/gh"
+    chmod +x "$T/ghstub/gh"
+    sed '/^main "\$@"/d' "$SYNC" >"$T/defs.sh"
+    PATH="$T/ghstub:$PATH" bash -c "source '$T/defs.sh'; printf %s \"\$AI_STATE_REMOTE\""
+}
+
+@test "default remote is https when gh git_protocol is https" {
+    unset AI_STATE_REMOTE
+    run resolved_remote 'echo https'
+    [ "$output" = "https://github.com/guilhermegor/ai-clients-state.git" ]
+}
+
+@test "default remote is ssh when gh git_protocol is ssh" {
+    unset AI_STATE_REMOTE
+    run resolved_remote 'echo ssh'
+    [ "$output" = "git@github.com:guilhermegor/ai-clients-state.git" ]
+}
+
+@test "default remote falls back to https when gh fails" {
+    unset AI_STATE_REMOTE
+    run resolved_remote 'exit 1'
+    [ "$output" = "https://github.com/guilhermegor/ai-clients-state.git" ]
+}
+
+@test "an explicit AI_STATE_REMOTE wins over gh's protocol" {
+    export AI_STATE_REMOTE="$T/explicit.git"
+    run resolved_remote 'echo ssh'
+    [ "$output" = "$T/explicit.git" ]
+}
+
 @test "pull without the repo set up says how to set it up" {
     run bash "$SYNC" pull
     [ "$status" -ne 0 ]
