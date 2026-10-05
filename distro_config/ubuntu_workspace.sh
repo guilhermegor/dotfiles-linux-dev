@@ -278,7 +278,7 @@ configure_dock() {
     done
     
     # 6. VS Code
-    for app in 'code_code.desktop' 'code.desktop' 'visual-studio-code.desktop'; do
+    for app in 'com.microsoft.VSCode.desktop' 'code_code.desktop' 'code.desktop' 'visual-studio-code.desktop'; do
         if result=$(find_desktop_file "$app"); then
             favorites+=("'$result'")
             break

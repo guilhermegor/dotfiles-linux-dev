@@ -139,7 +139,9 @@ teardown() {
     [[ "$fn_body" == *'/var/lib/flatpak/exports/share/applications/$app_name'* ]]
 }
 
-@test "organize_app_folders places the real VS Code launcher and drops the renamed-away code.desktop id" {
+# #638 supersedes the original placement assertion: VS Code now lives in the dock,
+# so the folder run must place NEITHER its real launcher nor the pre-rename id.
+@test "organize_app_folders places neither the real VS Code launcher nor the renamed-away code.desktop id" {
     mkdir -p "$HOME/.local/share/applications"
     # The launcher the installed .deb actually ships.
     : > "$HOME/.local/share/applications/com.microsoft.VSCode.desktop"
@@ -151,7 +153,7 @@ teardown() {
     run organize_app_folders
     [ "$status" -eq 0 ]
 
-    [[ "$output" == *"'com.microsoft.VSCode.desktop'"* ]]
+    [[ "$output" != *"'com.microsoft.VSCode.desktop'"* ]]
     [[ "$output" != *"'code.desktop'"* ]]
 }
 
@@ -334,4 +336,30 @@ teardown() {
         [[ "$output" == *"already installed"* ]]
         [[ "$output" != *"apt-get install"* ]]
     done
+}
+
+# Issue #638: VS Code is pinned in the dock next to the Terminal, not filed in
+# the Code app folder. The registry keeps its desktop id (empty folder = no
+# folder), and configure_dock must resolve the id the installer really produces.
+
+@test "install_vscode has no gnome_folder, so it is in no app folder" {
+    local entry fn _label folder _desktop
+    for entry in "${INSTALL_REGISTRY[@]}"; do
+        IFS=':' read -r fn _label folder _desktop <<< "$entry"
+        [ "$fn" = "install_vscode" ] || continue
+        [ -z "$folder" ]
+        return 0
+    done
+    return 1
+}
+
+@test "configure_dock pins the com.microsoft.VSCode id directly before the Terminal" {
+    mkdir -p "$HOME/.local/share/applications"
+    : > "$HOME/.local/share/applications/com.microsoft.VSCode.desktop"
+    : > "$HOME/.local/share/applications/org.gnome.Terminal.desktop"
+
+    run configure_dock
+    [ "$status" -eq 0 ]
+
+    [[ "$output" == *"'com.microsoft.VSCode.desktop','org.gnome.Terminal.desktop'"* ]]
 }
