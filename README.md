@@ -156,6 +156,20 @@ not restored — a backed-up value may already be expired):
    `gh secret set GH_REVIEW_TRIGGER_PAT --body "$GH_REVIEW_TRIGGER_PAT"` on
    the target repo succeeds.
 
+### 📚 Documentation site
+
+The docs are a MkDocs Material site versioned with mike (`dev`, alias `latest`),
+single-sourced from this README and the area `CLAUDE.md` files.
+
+```bash
+make docs_serve    # live preview on :8000
+make docs_build    # strict build, same as CI
+make enable_pages  # once, AFTER the first deploy created gh-pages (no-op before)
+```
+
+First-deploy order: merge to `master` → the `docs` workflow creates `gh-pages` →
+run `make enable_pages` to serve Pages from that branch.
+
 ### Alternative Installation Methods
 
 **Option 1: Step-by-Step with Makefile**

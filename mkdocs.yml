@@ -1,0 +1,73 @@
+site_name: dotfiles-linux-dev
+site_description: Bash-based Linux dotfiles and system-setup toolkit
+repo_url: https://github.com/guilhermegor/dotfiles-linux-dev
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - AI clients: ai-clients.md
+  - Espanso: espanso.md
+  - Shortcuts: shortcuts.md
+  - Storage & backups: storage.md
+  - Runbooks:
+      - rclone mount migration: rclone-mount-migration-360.md
+      - Permissions by directory: permissions-by-directory-163.md
+      - Reviewer ledger: reviewer_ledger.md
+  - Publishing these docs: publishing-docs.md
+  - Changelog: changelog.md
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/white-balance-sunny
+        name: Switch to light mode
+  features:
+    - search.suggest
+    - search.highlight
+
+plugins:
+  - search
+
+# mike drives Material's version dropdown (docs.yml deploys `dev` + the `latest` alias).
+extra:
+  version:
+    provider: mike
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - tables
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  # Pages single-source tracked files (README, area CLAUDE.md, CHANGELOG.md) through
+  # `--8<-- "<repo-root path>"` includes, so the site cannot drift from them.
+  - pymdownx.snippets:
+      base_path:
+        - .
+      check_paths: true
+
+# Included files keep their repo-relative links (e.g. `ai_clients/CLAUDE.md`), which are
+# not docs pages; report them as info instead of failing the strict build.
+validation:
+  links:
+    not_found: info
+    absolute_links: info
+    unrecognized_links: info
+  anchors: info
+
+# exclude_docs uses .gitignore syntax: no inline comments, keep each on its own line.
+exclude_docs: |
+  # internal records, not published
+  backlog/
+  # docs/ authoring guidance
+  CLAUDE.md
