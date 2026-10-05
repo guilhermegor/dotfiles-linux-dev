@@ -21,7 +21,7 @@
 - [IRPF Download Utility](distro_config/irpf_download.sh) - Brazilian tax software downloader (`make irpf_download`)
 - [Bash Profile Loader](code_editors/bash_profile_snippet.sh) - Ensure login shells load `~/.bashrc` (`make bash_profile`)
 - [Starship + Bash Setup](code_editors/setup_starship_bash.sh) - Installs Starship with plain-text symbols, Bash integration, autocomplete, and rollback targets (`make starship_setup`)
-- [rclone On-Demand Cloud Mount](distro_config/install_lib/sharing.sh) - Installs `rclone`, writes the `rclone.conf` skeleton and a systemd user mount unit (creating the mount point, default `~/OneDrive`, but never enabling the unit or running the interactive `rclone config` wizard), replacing Insync's full local mirror — remote name, region, account kind, and mount point are asked in Custom Installation only, defaulted silently otherwise — see [docs/rclone-mount-migration-360.md](docs/rclone-mount-migration-360.md) for the operator runbook
+- [rclone On-Demand Cloud Mount](distro_config/install_lib/sharing.sh) - Installs `rclone`, writes the `rclone.conf` skeleton and a systemd user mount unit (creating the mount point, default `~/OneDrive`, never running the interactive `rclone config` wizard; `make rclone_mount` enables and verifies the mount, also offered as a `[y/N]` step in the installer), replacing Insync's full local mirror — remote name, region, account kind, and mount point are asked in Custom Installation only, defaulted silently otherwise — see [docs/rclone-mount-migration-360.md](docs/rclone-mount-migration-360.md) for the operator runbook
 
 ### 🔧 Hardware Drivers
 

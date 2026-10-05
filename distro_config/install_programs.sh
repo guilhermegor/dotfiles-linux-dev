@@ -238,12 +238,19 @@ prompt_rclone_choices() {
 }
 
 # Write the rclone.conf skeleton and the mount unit right after the binary
-# installs — the operator-work steps (browser sign-in, systemctl enable)
-# still never run automatically; see install_rclone_config/
-# install_rclone_mount_unit in install_lib/sharing.sh.
+# installs; enabling the mount is offered as an explicit [y/N] step (#647) —
+# never automatic, and skipped without a TTY. See install_rclone_config/
+# install_rclone_mount_unit/enable_rclone_mount_unit in install_lib/sharing.sh.
 run_rclone_followups() {
     install_rclone_config
     install_rclone_mount_unit
+
+    [ -t 0 ] || return 0
+    local answer
+    read -r -p "Enable and start the rclone mount now? [y/N]: " answer
+    case "$answer" in
+        [yY]*) enable_rclone_mount_unit ;;
+    esac
 }
 
 run_full_installation() {

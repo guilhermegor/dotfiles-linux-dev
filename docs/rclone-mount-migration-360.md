@@ -140,9 +140,14 @@ precondition fails.
 - **Choosing the mount point path** — the operator (or the Custom Installation questions) picks
   where the mount lives; it must not be `~/Insync` until step 4 above has run.
   `install_rclone_mount_unit` creates the directory once it's chosen, but never chooses it.
-- **`systemctl --user daemon-reload` and `systemctl --user enable --now rclone-<remote>.service`**
-  — `install_rclone_mount_unit` only writes the unit file and prints these two commands; the
-  operator runs them after reviewing the generated unit.
+- **Enabling the unit** — `install_rclone_mount_unit` only writes the unit file. After reviewing
+  it, `make rclone_mount` (`enable_rclone_mount_unit [remote] [mountpoint]`, issue #647) runs
+  `systemctl --user daemon-reload` + `enable --now`. It refuses unless the unit exists, the remote
+  answers `rclone lsd <remote>: --max-depth 1` (present and authenticated), and the mount point
+  is an existing empty directory other than `~/Insync`; then it waits (`RCLONE_MOUNT_WAIT`, default
+  30 s) for `mountpoint -q` and prints the last `journalctl --user -u` lines if the mount never
+  appears. Already enabled, active and mounted is a no-op. `run_rclone_followups` offers the same
+  step as a `[y/N]` prompt (interactive runs only).
 - **The actual `INSYNC_CONFIRM_DELETE=1` run** — deleting 1.3 T of the owner's data is a
   human decision, not a default.
 - **Verifying the cache ceiling holds** — read a file larger than 10 G through the mount, then

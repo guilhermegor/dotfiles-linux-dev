@@ -4,9 +4,8 @@
 # in distro_config/install_lib/sharing.sh substitutes {{REMOTE}} and
 # {{MOUNTPOINT}} and writes the result to
 # ~/.config/systemd/user/rclone-<remote>.service. That helper only WRITES
-# the file; enabling and starting it is the operator's call:
-#   systemctl --user daemon-reload
-#   systemctl --user enable --now rclone-<remote>.service
+# the file; enable_rclone_mount_unit (`make rclone_mount`, #647) does
+# daemon-reload + enable --now and verifies the mount.
 #
 # {{REMOTE}} must already exist in ~/.config/rclone/rclone.conf (via the
 # interactive `rclone config` — never run by this repo's tooling).
