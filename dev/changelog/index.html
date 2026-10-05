@@ -1,0 +1,1438 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Bash-based Linux dotfiles and system-setup toolkit">
+      
+      
+      
+      
+        <link rel="prev" href="../publishing-docs/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Changelog - dotfiles-linux-dev</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#unreleased" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="dotfiles-linux-dev" class="md-header__button md-logo" aria-label="dotfiles-linux-dev" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dotfiles-linux-dev
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Changelog
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m3.55 19.09 1.41 1.41 1.8-1.79-1.42-1.42M12 6c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6c0-3.32-2.69-6-6-6m8 7h3v-2h-3m-2.76 7.71 1.8 1.79 1.41-1.41-1.79-1.8M20.45 5l-1.41-1.4-1.8 1.79 1.42 1.42M13 1h-2v3h2M6.76 5.39 4.96 3.6 3.55 5l1.79 1.81zM1 13h3v-2H1m12 9h-2v3h2"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/guilhermegor/dotfiles-linux-dev" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="dotfiles-linux-dev" class="md-nav__button md-logo" aria-label="dotfiles-linux-dev" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dotfiles-linux-dev
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/guilhermegor/dotfiles-linux-dev" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai-clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../espanso/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Espanso
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../shortcuts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shortcuts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage & backups
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rclone-mount-migration-360/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    rclone mount migration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../permissions-by-directory-163/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions by directory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reviewer_ledger/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reviewer ledger
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../publishing-docs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Publishing these docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unreleased
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Unreleased">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#feat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Feat
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#refactor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Refactor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#perf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Perf
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unreleased
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Unreleased">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#feat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Feat
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#refactor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Refactor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#perf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Perf
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+  <h1>Changelog</h1>
+
+<h2 id="unreleased">Unreleased<a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h3 id="feat">Feat<a class="headerlink" href="#feat" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>docs</strong>: publish a versioned MkDocs site via mike (#659) (#660)</li>
+<li><strong>rclone</strong>: add enable_rclone_mount_unit and make rclone_mount (#648)</li>
+<li><strong>ai_clients</strong>: post ladder reviews as a GitHub App identity (#625)</li>
+<li><strong>hooks</strong>: add claude last-resort ladder rung (#629)</li>
+<li><strong>ladder</strong>: wire kimi, coderabbit CLI and copilot as fall-through rungs (#627)</li>
+<li><strong>distro_config</strong>: add GSmartControl and nvtop to Monitoring (#597) (#610)</li>
+<li><strong>distro_config</strong>: install CoolerControl + a Monitoring app folder (#602)</li>
+<li><strong>hooks</strong>: declare a board registry the roadmap reconciler sweeps (#595)</li>
+<li><strong>distro_config</strong>: install MailViewer from Flathub (#592)</li>
+<li><strong>distro_config</strong>: install Flutter SDK with FVM (#590)</li>
+<li><strong>install</strong>: add install_codexbar for the Codex usage/spend tray (#568)</li>
+<li><strong>hooks</strong>: tag roadmap_unblock reports with blocker kind (#547)</li>
+<li><strong>dev-loop</strong>: dispatch every non-colliding issue, enforced (#526)</li>
+<li><strong>hooks</strong>: deterministic review fan-out, planner plus Stop guard (#527)</li>
+<li><strong>hooks</strong>: warn when a retired docs/ lesson mirror is still present (#525)</li>
+<li><strong>hooks</strong>: SQLite ledger of reviewer asks and findings (#521)</li>
+<li><strong>greenfield</strong>: file backlog items from named keys (#519)</li>
+<li><strong>skills</strong>: add s:intake orchestrator skill (#422) (#522)</li>
+<li><strong>settings</strong>: set CLAUDE_AUTOCOMPACT_PCT_OVERRIDE to 70 (#495)</li>
+<li><strong>orphaned-issues</strong>: add zero-PR-mention surface scan (#499)</li>
+<li><strong>hooks</strong>: dispatch_plan computes the non-colliding set (DRAFT) (#476)</li>
+<li><strong>hooks</strong>: add once-per-session reviewer-rung probe (#486)</li>
+<li><strong>skills</strong>: s:intake-plan for the concurrent dispatch set (#469)</li>
+<li><strong>skills</strong>: s:intake-discover — find work never filed as an issue (#468)</li>
+<li><strong>mcp</strong>: install the official Axiom MCP server (#459)</li>
+<li><strong>gnome</strong>: sloppy focus with auto-raise pinned off (#478) (#483)</li>
+<li><strong>hooks</strong>: classify GitHub API budget vs CodeRabbit quota (#407) (#440)</li>
+<li><strong>skills</strong>: s:intake-refine classify score place unrefined issues (#470)</li>
+<li><strong>dev-loop</strong>: detect orphaned issues via PR-mention-without-link (#471)</li>
+<li><strong>skills</strong>: intake-shipped content-tests deliverables vs origin (#460)</li>
+<li><strong>hooks</strong>: slot classifier + a Stop hook that refuses a no-dispatch round (#433) (#439)</li>
+<li><strong>dev-loop</strong>: reviewer fallback ladder for step 4b (#444) (#446)</li>
+<li><strong>dev-loop</strong>: a deterministic DISPATCH guard (#400)</li>
+<li><strong>hooks</strong>: re-run worktree rescue fan-out after quota gap (#389)</li>
+<li><strong>hooks</strong>: reconcile roadmap Status on last blocker close (#376)</li>
+<li><strong>storage</strong>: encrypt env backup bundle with gpg symmetric (#373)</li>
+<li><strong>hooks</strong>: enforce issue templates on gh issue create/edit (#371)</li>
+<li><strong>sharing</strong>: guided rclone setup — config questions + mount folder (#372)</li>
+<li><strong>storage</strong>: choose zip level 0-9 on the Super+B backup screen (#370)</li>
+<li><strong>sharing</strong>: rclone on-demand mount + insync removal (#360) (#361)</li>
+<li><strong>claude</strong>: capture lessons at round end, route for any repo (#358)</li>
+<li><strong>ai_clients</strong>: add Qwen, Copilot and Kimi client configs (#355)</li>
+<li><strong>claude</strong>: deterministic free-surface gate for dev-loop dispatch (#349)</li>
+<li><strong>rules</strong>: HTTP status codes by name, not by number (#335)</li>
+<li><strong>skill</strong>: acceptance criteria must name an observable, in s:test (#328)</li>
+<li><strong>specs</strong>: report a stale in-progress tracker as a gate finding (#326)</li>
+<li><strong>specs</strong>: a gate that gives a mechanical verdict on a feature (#323)</li>
+<li><strong>skill</strong>: size the spec to the work in work-breakdown (#322)</li>
+<li><strong>hooks</strong>: classify dirty worktrees at session start (#321)</li>
+<li><strong>specs</strong>: define the .specs/ layout and redirect spec output to it (#320)</li>
+<li><strong>skill</strong>: add s:spike for throwaway design questions (#309)</li>
+<li><strong>distro</strong>: order app folders alphabetically by display name (#300)</li>
+<li><strong>settings</strong>: prune stale enabledPlugins keys from the live file (#288)</li>
+<li><strong>claude</strong>: one macro comment rule, pointed at not restated (#279)</li>
+<li><strong>coding</strong>: add install_kimi via the official npm package (#277)</li>
+<li><strong>issue</strong>: require a point score before filing an issue (#273)</li>
+<li><strong>dev-loop</strong>: ask a human reviewer before escalating to the bot (#269)</li>
+<li><strong>dev-loop</strong>: harness for worktree isolation and early commits (#264)</li>
+<li><strong>distro</strong>: add install_gimp and install_figma (#262)</li>
+<li><strong>skills</strong>: add s:bdd and s:py-bdd (#261)</li>
+<li><strong>ai_clients</strong>: bridge global CLAUDE.md to agent-agnostic AGENTS.md (#259)</li>
+<li><strong>ai_clients</strong>: add codex client for make ai_clients (#144, #146) (#255)</li>
+<li><strong>distro</strong>: swap Solaar for openlogi as the Logitech HID++ manager (#245)</li>
+<li><strong>skills</strong>: SQL/DB skill family — agnostic, ORM, SQLAlchemy, migrations (#244)</li>
+<li><strong>claude</strong>: add Prisma Migrate skill for TypeScript stack (#242)</li>
+<li><strong>skills</strong>: testing skill family — s:test, s:py-hypothesis, s:py-unit-test (#241)</li>
+<li><strong>skills</strong>: add story-score uncertainty scoring skill (#240)</li>
+<li><strong>skills</strong>: add s:work-breakdown, splitting on file count too (#238)</li>
+<li><strong>dev-loop</strong>: skill arms its own schedules on invocation (#222)</li>
+<li><strong>ci</strong>: add CodeRabbit review-discipline workflows (#218)</li>
+<li><strong>distro</strong>: install poetry via pipx during provisioning (#215)</li>
+<li><strong>hooks</strong>: assign every opened PR to its author (#212)</li>
+<li><strong>claude</strong>: register the Notion MCP server in the installer (#209)</li>
+<li><strong>vscode</strong>: add the Marp extension to the extension list (#210)</li>
+<li><strong>claude</strong>: scope permissions by directory allowlist (#164)</li>
+<li><strong>claude</strong>: SubagentStop sweep and uncommitted-worktree guard (#168)</li>
+<li><strong>claude</strong>: s:dev-loop — the six-step development loop (#169)</li>
+<li><strong>hooks</strong>: surface outstanding fan-out state at session start (#161)</li>
+<li><strong>claude</strong>: ship the DeepSeek cheap-brain session profile (#155)</li>
+<li><strong>hooks</strong>: close the review-thread loop in the harness (#126) (#127)</li>
+<li><strong>install-coding</strong>: add install_codex to the AI client registry (#152)</li>
+<li><strong>issue</strong>: route delegation on oracle strength, not on afk (#150)</li>
+<li><strong>install</strong>: add install_coderabbit to the coding installer</li>
+<li><strong>install</strong>: add install_headroom to the coding installer</li>
+<li><strong>issue</strong>: resolve tracker per repo, type tickets, split hierarchy</li>
+<li><strong>install</strong>: add SoundCloud, Google Keep and Instapaper PWAs</li>
+<li><strong>hooks</strong>: capture audit diffs issues to lessons, both directions</li>
+<li><strong>hooks</strong>: RELEASE DUE nudge on main sync (#53)</li>
+<li><strong>hooks</strong>: add /wrap-up capture audit + SessionEnd handoff net</li>
+<li><strong>kanban</strong>: auto-move the card on branch open and PR open</li>
+<li><strong>release</strong>: add /release skill + shipped-diff dispatch guard</li>
+<li><strong>hooks</strong>: make branch-issue guard tracker-agnostic (github + linear)</li>
+<li><strong>hooks</strong>: verify the PR took the commits after a git push</li>
+<li><strong>hooks</strong>: block a branch that traces to no tracked issue</li>
+<li><strong>hooks</strong>: auto-wrap the commit body to 72 chars before gitlint</li>
+<li><strong>claude</strong>: add s:shape-up shaping skill</li>
+<li><strong>claude</strong>: add permission allowlist + destructive command guard</li>
+<li><strong>distro</strong>: group Slack, Telegram, Thunderbird in Social folder</li>
+<li><strong>claude</strong>: pre-commit guard blocking staged secrets</li>
+<li><strong>claude</strong>: register Linear MCP server (OAuth, user scope)</li>
+<li><strong>claude</strong>: pre-gate guards for protected branch and artifact writes</li>
+<li><strong>claude</strong>: resume an existing issue from /issue</li>
+<li><strong>claude</strong>: pre-gate guard for over-long commit titles</li>
+<li><strong>claude</strong>: add lesson-capture checkpoint hook on PR/issue create</li>
+<li><strong>claude</strong>: add /issue command to author issue, card, branch</li>
+<li><strong>ai_clients</strong>: add second confirm before .env restore</li>
+<li><strong>claude</strong>: add PR-template-guard PreToolUse hook</li>
+<li><strong>ai_clients</strong>: add faster-whisper speech-to-text installer</li>
+<li><strong>plugins</strong>: enable claude-mem and context-mode plugins</li>
+<li><strong>plugins</strong>: enable ponytail in enabledPlugins map</li>
+<li><strong>plugins</strong>: bootstrap ponytail lazy-senior-dev plugin</li>
+<li><strong>yubikey</strong>: add Gscriptor to Security folder + offer workspace reorg</li>
+<li><strong>drivers</strong>: auto-detect FIDO-only YubiKey and offer to enable CCID</li>
+<li><strong>workspace</strong>: place Yubico Authenticator in Security app-folder</li>
+<li><strong>make</strong>: add setup_yubikey target</li>
+<li><strong>drivers</strong>: add YubiKey setup driver</li>
+<li><strong>install</strong>: install gitlint + local commit-msg hook</li>
+<li><strong>claude</strong>: SessionStart hook injecting cross-project context</li>
+<li><strong>vscode</strong>: hide secondary side bar by default in new windows</li>
+<li><strong>vscode</strong>: hide .keep placeholder files in explorer</li>
+<li><strong>storage</strong>: zip external SSD backups instead of rsync mirror</li>
+<li><strong>vscode</strong>: install terminal Nerd Font for statusLine icons</li>
+<li><strong>vscode</strong>: install mechatroner.rainbow-csv extension</li>
+<li><strong>shortcuts</strong>: open claudestatus dashboard maximized</li>
+<li><strong>claudestatus</strong>: plan tiers + API-first billing (Cloudflare-free)</li>
+<li><strong>vscode</strong>: bind Ctrl+K Ctrl+T to Run Test Task</li>
+<li><strong>ai_clients</strong>: add notesnook MCP install and registration</li>
+<li><strong>espanso</strong>: auto-switch to default branch in git_sync_origin</li>
+<li><strong>ai_clients</strong>: add patch_claudestatus Makefile target and script</li>
+<li><strong>espanso</strong>: handle no-upstream local branches in git_sync_origin</li>
+<li><strong>install</strong>: add Mousam weather app via Flatpak</li>
+<li><strong>espanso</strong>: detect main/master and guard unpushed in gitpull_safe</li>
+<li><strong>espanso</strong>: add git_sync_origin to sync local branches with origin</li>
+<li><strong>make</strong>: add ASCII banner and CI/test infrastructure</li>
+<li><strong>ai_clients</strong>: prompt to restore .env before installs</li>
+<li><strong>ai_clients</strong>: widen brand-design into 3-tier design family</li>
+<li><strong>install</strong>: add OBS Studio installer and fix GNOME folder tags</li>
+<li><strong>skills</strong>: add s:brand-color-system token generator</li>
+<li><strong>skills</strong>: add s:brand-interview adaptive questionnaire</li>
+<li><strong>setup</strong>: add shellcheck installer to vcs tools</li>
+<li>add Gitleaks installer, JS rules, and tutoring probes</li>
+<li><strong>tutoring</strong>: add warning triage to review flow</li>
+<li><strong>distro_config</strong>: add Asunder and HandBrake media installers</li>
+<li><strong>storage</strong>: also snapshot ~/.claude/plans and .env</li>
+<li><strong>storage</strong>: include tasks/lessons.md in memory snapshot</li>
+<li><strong>claude</strong>: add session persistence and phased review to tutoring</li>
+<li><strong>claude</strong>: add step review protocol to tutoring command</li>
+<li>enhance claudestatus dashboard and gh-protect-branch</li>
+<li><strong>espanso</strong>: add sole-maintainer bypass to gh_protect_branch</li>
+<li><strong>claude</strong>: enhance tutoring command with context interview</li>
+<li><strong>claude</strong>: add tutoring slash command</li>
+<li><strong>espanso</strong>: add gh_protect_branch package</li>
+<li><strong>distro_config</strong>: add Balena Etcher and Ventoy install steps</li>
+<li><strong>claude</strong>: add a:gh-resolve-reviews agent and companion skills</li>
+<li><strong>claude</strong>: add a:brand-design agent and skills</li>
+<li><strong>settings.json</strong>: updated terminal.integrated.defaultColumns: 118</li>
+<li>add claude-mem, NewsFlash, Valor Digital, and ErrorLens</li>
+<li><strong>claude</strong>: expand py-pr report to full PR description template</li>
+<li><strong>distro_config</strong>: add install_blueprintx to toolchains menu</li>
+<li><strong>espanso</strong>: add gpg_apt_generate package for APT GPG key setup</li>
+<li><strong>distro_config</strong>: add option to sync npm globals across nvm</li>
+<li><strong>distro_config</strong>: add nvm multi-version npm global install</li>
+<li><strong>gh-fix-ci</strong>: dual-model phases, sqlite state, context-mode, --help</li>
+<li><strong>distro_config</strong>: add SQLite install and enforce install checklist</li>
+<li><strong>claude</strong>: add gh-fix-ci spec, plan, and settings env var</li>
+<li><strong>claude</strong>: add a:gh-fix-ci agent for PR CI fix loop</li>
+<li><strong>claude</strong>: add s:gh-read-ci skill for CI log parsing</li>
+<li><strong>claude</strong>: Add bootstrap_plugin and context-mode plugin</li>
+<li><strong>claude</strong>: Add PreToolUse rtk hook for Bash commands</li>
+<li><strong>distro_config</strong>: Add 4K Video Downloader Plus to custom install menu</li>
+<li><strong>distro_config</strong>: add Media folder, move VLC from Utilitários</li>
+<li><strong>distro_config</strong>: add 4K Video Downloader Plus installer</li>
+<li><strong>act</strong>: Add Docker socket discovery and ubuntu-only matrix flag</li>
+<li><strong>rtk</strong>: Wire init into installer and add @RTK.md to CLAUDE template</li>
+<li><strong>distro_config</strong>: Add RTK (Rust Token Killer) installer</li>
+<li><strong>act</strong>: Add act installer, command, and fix-py skill</li>
+<li><strong>claude</strong>: Add sound notification hook on user action wait</li>
+<li><strong>browsers</strong>: Add Opera, Vivaldi, Edge, Brave installers and folder</li>
+<li><strong>toolchains</strong>: Add Qwen Code installation support</li>
+<li><strong>storage</strong>: Compress env backups with gzip</li>
+<li><strong>set_custom_shortcuts</strong>: current claude auth account</li>
+<li><strong>ai_clients/claude/settings.json</strong>: notification hook added</li>
+<li><strong>claude</strong>: Add markdown-readme skill for Python README generation</li>
+<li><strong>claudestatus</strong>: install and set shortcut to see the usage per account</li>
+<li><strong>claude</strong>: Add demote_plugin_from_user_scope and enforce removals</li>
+<li><strong>distro_config</strong>: Add Google Tasks PWA and update app folder config</li>
+<li><strong>distro_config</strong>: Add rofi-based shortcut cheat-sheet popup</li>
+<li><strong>py-standards</strong>: updated wording for documenting raises in docstring, determining that only errors raised in the current function/method should be written, not imported ones</li>
+<li><strong>distro_config</strong>: Wire backup/restore scripts into GNOME shortcuts (11-14)</li>
+<li><strong>storage</strong>: Add restore_memory zenity script with safety backup</li>
+<li><strong>storage</strong>: Add restore_env zenity script with conflict resolution</li>
+<li><strong>storage</strong>: Add export_memory zenity script for ~/.claude snapshot</li>
+<li><strong>storage</strong>: Add backup_env zenity script for all ~/github repos</li>
+<li><strong>drives</strong>: Redesign SSD backup with zenity GUI and fix rsync error</li>
+<li><strong>docs</strong>: Add CLAUDE.md for all script dirs and SSD backup shortcut</li>
+<li><strong>commands</strong>: Add optional git tag step to commit-code</li>
+<li><strong>skills</strong>: Add bash-create skill and draft/reviewer to create-pr</li>
+<li><strong>ai_clients</strong>: Add create-pr skill, CLAUDE.md, and agent updates</li>
+<li><strong>commands</strong>: Add restore-env slash command</li>
+<li><strong>commands</strong>: Add backup-env slash command</li>
+<li><strong>claude</strong>: Set default model aliases for auto-upgrading</li>
+<li>changed py-dev and py-fix agents' models to sonnet in order to asses performance in a lighter model</li>
+<li><strong>claude</strong>: Add memory backup/restore commands and .env setup</li>
+<li><strong>distro</strong>: Add Dim Completed Calendar Events GNOME extension</li>
+<li><strong>distro</strong>: Add Notion Calendar as Chrome PWA</li>
+<li><strong>distro</strong>: Add Google Calendar as Chrome PWA</li>
+<li><strong>distro</strong>: Remove Morgen calendar app from setup</li>
+<li><strong>distro</strong>: Replace Routine with Morgen calendar app</li>
+<li><strong>distro</strong>: Replace Morgen with Routine calendar app</li>
+<li><strong>skills</strong>: Add top-down method ordering rule to py-standards</li>
+<li><strong>claude</strong>: Add branch-summary and dep-py slash commands</li>
+<li><strong>claude</strong>: Register anthropics/skills marketplace</li>
+<li><strong>claude</strong>: Add py-debug skill and py-fix, py-pr, py-onboard agents</li>
+<li><strong>claude</strong>: Add py-dev pipeline agent with install infrastructure</li>
+<li><strong>skills</strong>: Add py-review, py-audit, py-perf, and py-migrate skills</li>
+<li><strong>skills</strong>: Add py-doc skill for mkdocs page generation</li>
+<li><strong>skills</strong>: add py-refactor skill with ruff.toml-first linting</li>
+<li><strong>claude</strong>: add skills installation step</li>
+<li><strong>init</strong>: Add interactive .env setup step to make init</li>
+<li><strong>claude</strong>: promote global permissions from settings.local.json</li>
+<li><strong>claude</strong>: add clean-code plugin</li>
+<li><strong>claude</strong>: add senior-prompt-engineer plugin</li>
+<li><strong>claude</strong>: add supabase-postgres-best-practices plugin</li>
+<li><strong>claude</strong>: add skill plugins to installation and settings</li>
+<li><strong>claude</strong>: add tavily MCP server installation</li>
+<li><strong>claude</strong>: add MCP server installation step</li>
+<li><strong>claude</strong>: allow grep commands in permissions</li>
+<li><strong>claude</strong>: add LSP plugins for JSON, YAML, and TOML</li>
+<li><strong>claude</strong>: add LSP plugins for web, databases, and markup languages</li>
+<li><strong>claude</strong>: add codex-plugin-cc and copilot-plugin-cc plugins</li>
+<li><strong>ai_clients</strong>: add top-level router with auto-discovery and two-level menu</li>
+<li><strong>ai_clients</strong>: add shared utils.sh with colors and print_status</li>
+<li>claude setup added</li>
+<li>.vscode/settings.json changes to the terminal - fontSize, defaultLocation, opensMaximized preserve</li>
+<li>firsttris.vscode-jest-runner added to vscode extensions</li>
+<li>added extension bierner.markdow-mermaid to vscode</li>
+<li>new github espanso recipe to replace all the commits from a new branch to the last one of the main; changed recipe names of git pull main and new branch after git pull main to more explainable shortcuts</li>
+<li>espanso recipe for git pull branch creation updated</li>
+<li>added fastfetch to install_programs.sh utilities</li>
+<li>ssh list of available keys added as recipe to espanso</li>
+<li>vscode/settings.json replaced the global file, in order to sync configurations accross dev environments</li>
+<li>anthropic claude code added to vs code extensions</li>
+<li>starship added for bash terminal layout configuration</li>
+<li>add a dev folder in order to make testes</li>
+<li>git pull added to espanso recipes</li>
+<li>install toolchains with claude code</li>
+<li>organizeImports true for jsx and js files in .vscode/settings.json</li>
+<li>expolorer compactFolders false added to .vscode/settings.json</li>
+<li>added organizeImports for codeActionsOnSave for js, ts, jsx, tsx files</li>
+<li>breadCrumbs enabled true in .vscode/settings.json</li>
+<li>.vscode/settings.json editorGlyphMargin and activityBar changed</li>
+<li>.vscode/settings.json added language-specific settings</li>
+<li>added OM themes to the vscode configuration and set as default</li>
+<li>added shortcut for characters map - super + c</li>
+<li>auto rename tag extension added to vs code</li>
+<li>css module added to vscode extensions</li>
+<li>ctrl + shift + esc shortcut applied to open mission center</li>
+<li>ubuntu workspace updated to drop function remove thunderbird completely</li>
+<li>thunderbird added to install programs</li>
+<li>morgen calendar added to instal programs</li>
+<li>sqlite extension added to vscode setup</li>
+<li>added killport recipe for espanso</li>
+<li>prisma.prisma extension of vscode added to vscode.sh</li>
+<li>added even better toml to vscode default extensions</li>
+<li>pgadmin moved from dash to dev folder</li>
+<li>cursor style block applied to every file</li>
+<li>cursor style in vscode changed to block</li>
+<li>mount disks added to drives</li>
+<li>added reload extension to vscode</li>
+<li>vscode extensions prettier and rest client added</li>
+<li>nestjs installation in install_toolchains</li>
+<li>bash profile updated to run source ~/.bashrc everytime a new terminal is openned</li>
+<li>linear app logo image in the apps installed session updated</li>
+<li>espanso shortcut for git reset</li>
+<li>git reset shortcut to espanso</li>
+<li>linear app added to install_programs</li>
+<li>today, time, now shorcuts added to espanso</li>
+<li>shortcuts available</li>
+<li>ipv4 and hostname catchers added as shortcuts</li>
+<li>espanso added to installation and :sshgen shortcut added to espanso folder for packages installation</li>
+<li>nvm added to install_toolchains</li>
+<li>github copilot cli added</li>
+<li>tabsize changed to 2</li>
+<li>vscode restore added</li>
+<li>vscode configuration - save all shortcut and default extensions installation</li>
+<li>cleanup system stop packagekitd temporarily</li>
+<li>vitals configuration created in ubuntu_workspace bash file</li>
+<li>extensions manager moved to utilities folder</li>
+<li>vitals added to install programs</li>
+<li>super + k to kill insync due to high cpu consumption, in order to avoid slowing down the machine when performance is needed</li>
+<li>npx installtion through npm</li>
+<li>typescript added to install toolchains</li>
+<li>cursor installation updated to harcode version 2.2</li>
+<li>setup_keyboard - added 3 layouts and cdilla configuration to en2 layout</li>
+<li>install toolchains added - created file and makefile recipe</li>
+<li>ollama installation</li>
+<li>neovim added to install programs and ubuntu workspace</li>
+<li>pinta added to install programs and ubuntu workspace</li>
+<li>rustdesk added to install programs and ubuntu workspace</li>
+<li>ubuntu workspace - miro chrome app added to dev folder</li>
+<li>ubuntu workspace - set app isolation</li>
+<li>slack added to installation and dev folder</li>
+<li>ubuntu workspae - add flameshot to Utilitários folder</li>
+<li>flameshot added to install_programs.sh</li>
+<li>volumes and connected devices hidden from dock</li>
+<li>added insync to sharing folder in the ubuntu_workspace.sh</li>
+<li>added insync download and installation to install_programs.sh</li>
+<li>thunderbird email cliente removed and miro app moved to DEV folder</li>
+<li>ubuntu workspace added folder organization to apps</li>
+<li>dock auto-hide and mouse natural direction</li>
+<li>miro and localsend added</li>
+<li>first commit</li>
+</ul>
+<h3 id="fix">Fix<a class="headerlink" href="#fix" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>shortcuts</strong>: clear managed bindings before reassigning slots (#654)</li>
+<li><strong>rclone</strong>: suggest restart only for functional unit changes (#652)</li>
+<li><strong>rclone</strong>: make mount unit idempotent and enable it in make run (#650)</li>
+<li><strong>workspace</strong>: pin VS Code in the dock instead of the Code app folder (#639)</li>
+<li><strong>ai_clients</strong>: keep ladder CLI prompts under MAX_ARG_STRLEN (#635)</li>
+<li><strong>hooks</strong>: keep ladder findings red past the scope skip (#623)</li>
+<li><strong>ai_clients</strong>: keep a partial last-line answer on EOF (#621)</li>
+<li><strong>hooks</strong>: ladder fires on the review backlog (#616) (#618)</li>
+<li><strong>ai_clients</strong>: take prompt defaults on EOF instead of aborting (#619)</li>
+<li><strong>hooks</strong>: give both dispatch guards a measured 60s planner timeout (#612)</li>
+<li><strong>hooks</strong>: page the planners board read so it survives &gt;20 PRs (#605)</li>
+<li><strong>hooks</strong>: dispatch_plan shares dead-worktree gate with free_surface (#576)</li>
+<li><strong>hooks</strong>: read attached -b/-F/-l/-R short flags in gh_cmd_match (#611)</li>
+<li><strong>hooks</strong>: bind fallback-review marker credit to head SHA (#588)</li>
+<li><strong>hooks</strong>: honour merged PRs in fan-out never-pushed check (#606) (#609)</li>
+<li><strong>sharing</strong>: make uninstall_insync runnable as documented (#599) (#608)</li>
+<li><strong>hooks</strong>: kanban_lifecycle follows gh pr create --head, not HEAD (#594)</li>
+<li><strong>hooks</strong>: reconcile closed issues' cards to Done (#589)</li>
+<li><strong>hooks</strong>: add ASK-ONLY slot state for sub-10-star repos (#573)</li>
+<li><strong>hooks</strong>: GraphQL fallback for gh project board throttle (#567) (#581)</li>
+<li><strong>hooks</strong>: fail closed on GraphQL-shaped slot_classify input (#587)</li>
+<li><strong>hooks</strong>: report never-pushed commits in worktree fan-out (#586)</li>
+<li><strong>claude</strong>: verify PR-to-issue link after gh pr create (#585) (#593)</li>
+<li><strong>hooks</strong>: catch gh failures in review_fanout_plan instead of a trace (#584)</li>
+<li><strong>sharing</strong>: check local-to-remote direction before insync delete (#583)</li>
+<li><strong>hooks</strong>: cross-agent budget for step 4b's one-ask cap (#580)</li>
+<li><strong>hooks</strong>: let a failed dispatch become resolved in the guard (#562)</li>
+<li><strong>hooks</strong>: distinguish delegated review threads from ignored (#574)</li>
+<li><strong>hooks</strong>: gate subagent_stop_sweep on dev agent types (#575)</li>
+<li><strong>hooks</strong>: gh_budget detects the secondary rate limit (#559)</li>
+<li><strong>hooks</strong>: dispatch_plan excludes blocked issues (#569)</li>
+<li><strong>install</strong>: correct VS Code registry id to the renamed launcher (#570)</li>
+<li><strong>hooks</strong>: stop counting dead worktrees as live writers (#566)</li>
+<li><strong>hooks</strong>: anchor fallback-review marker credit to the PR head (#561)</li>
+<li><strong>hooks</strong>: install pr_body_orphan_check.sh, close parity gap (#558)</li>
+<li><strong>hooks</strong>: unify surface-token matcher on fnmatch (#549) (#557)</li>
+<li><strong>hooks</strong>: default reviewer ladder to REST, not GraphQL (#554)</li>
+<li><strong>hooks</strong>: add issue template, fix sweep/planner disagreement (#542)</li>
+<li><strong>hooks</strong>: drop commits from review fan-out PR_FIELDS query (#539)</li>
+<li><strong>ci</strong>: give the ladder marker a history path too (#553)</li>
+<li><strong>hooks</strong>: planner reads its repo slug locally, not via GraphQL (#545)</li>
+<li><strong>hooks</strong>: dispatch collision is agent-vs-agent, not open-PR (#523)</li>
+<li><strong>hooks</strong>: prune stale open-threads-nudge cache entries (#514)</li>
+<li><strong>hooks</strong>: latch the SubagentStop sweep on a real 403 (#511)</li>
+<li><strong>hooks</strong>: gate distinguishes unreviewed from clean (#520)</li>
+<li><strong>dev-loop</strong>: reviewer slot readability + missing tracker (#513)</li>
+<li><strong>ci</strong>: narrow the review-threads gate filter to match the trigger (#515)</li>
+<li><strong>hooks</strong>: dispatch guard sees /dev-loop and async agents (#404) (#500)</li>
+<li><strong>hooks</strong>: gate reads the ladder's comment channel, not threads only (#497)</li>
+<li><strong>hooks</strong>: slot_classify sorts roster by timestamp, not list order (#494)</li>
+<li><strong>dispatch-plan</strong>: flag issues an open PR names but never closes (#506)</li>
+<li><strong>hooks</strong>: deploy clears the hook cache it made stale (#507)</li>
+<li><strong>ci</strong>: republish the review-threads gate onto a pushed head (#509)</li>
+<li><strong>dev-loop</strong>: round priority — required checks, resume gap, drain (#510)</li>
+<li><strong>reviewer-ladder</strong>: codex checks out and verifies the PR head (#496)</li>
+<li><strong>hooks</strong>: split running CheckRun from unbounded PENDING status (#498)</li>
+<li><strong>specs</strong>: allowlist + validator for .specs/ (#442, #443) (#453)</li>
+<li><strong>vscode</strong>: [python] insertSpaces + detectIndentation for PEP 8 (#466)</li>
+<li><strong>hooks</strong>: merge guard lets --auto through, read off real argv (#465)</li>
+<li><strong>hooks</strong>: pushed means origin/<branch> exists, not any upstream (#464)</li>
+<li><strong>hooks</strong>: stop recommending .git/ for PR body scratch files (#454)</li>
+<li><strong>hooks</strong>: resolve prose blockers in roadmap_unblock (#450)</li>
+<li><strong>hooks</strong>: re-verify a cached nudge PR is still open (#423) (#438)</li>
+<li><strong>hooks</strong>: free_classify_files fails closed, not open, unset (#437)</li>
+<li><strong>install</strong>: openlogi vendor route is linux-x64, not linux-amd64 (#434)</li>
+<li><strong>sweep</strong>: a 403 must read UNKNOWN, not "no open PRs" (#409)</li>
+<li><strong>hooks</strong>: block reviewing a PR against a stale local ref (#474)</li>
+<li><strong>ci</strong>: gate accepts ladder fallback review as reviewer report (#455)</li>
+<li><strong>ci</strong>: publish the review verdict onto the PR head commit (#482)</li>
+<li><strong>hooks</strong>: kanban In-review reconcile from open PRs each round (#463)</li>
+<li><strong>hooks</strong>: pass git through unrewritten in isolated worktrees (#452)</li>
+<li><strong>reviewer-ladder</strong>: codex review takes --base; status never mute (#449)</li>
+<li><strong>sweep</strong>: measure unpushed against @{upstream}, not origin/$b (#412)</li>
+<li><strong>ci</strong>: fire review_threads gate on a clean CodeRabbit review (#447)</li>
+<li><strong>dev-loop</strong>: a pushed stash reads as a snapshot, not a branch (#403)</li>
+<li><strong>hooks</strong>: widen open-threads nudge from branch to repo (#401)</li>
+<li><strong>free-surface</strong>: one orphan branch disabled DISPATCH entirely (#395)</li>
+<li><strong>workspace</strong>: 11 apps sit in two GNOME folders at once (#394)</li>
+<li><strong>workspace</strong>: unpin Postman, Docker and Chrome from the dock (#393)</li>
+<li><strong>lessons</strong>: generate .specs/_lessons/ mirrors, drop hand-write (#388)</li>
+<li><strong>template</strong>: make the PR template's issue row use Closes (#385)</li>
+<li><strong>hooks</strong>: block merge on a still-running reviewer check (#384)</li>
+<li><strong>dev-loop</strong>: pace reviewer ask by window, not round (#382)</li>
+<li><strong>hooks</strong>: paginate blockers, write roadmap Status last (#378)</li>
+<li><strong>storage</strong>: never pre-fill a backup destination that no longer exists (#362)</li>
+<li><strong>hooks</strong>: sweep every linked worktree, not only agent-* ones (#359)</li>
+<li>place Figma and other apps whose registry desktop id was wrong (#357)</li>
+<li>refresh third-party apt signing keys on every run (#354)</li>
+<li>refresh the GitHub CLI apt signing key on every run (#352)</li>
+<li>npm globals target only installed nvm versions; CodeRabbit hang (#351)</li>
+<li>failed installs no longer report total success (#350)</li>
+<li><strong>claude</strong>: detect ai_clients/claude vs ~/.claude deploy drift (#348)</li>
+<li>drop calendar-uninstall entry from Full Installation registry (#347)</li>
+<li>run install_coding unattended — no prompts in install libs, no TUI hang (#341)</li>
+<li>let interactive prompts read a full line, not one character (#338)</li>
+<li><strong>hooks</strong>: fail closed when a review-gate jq filter aborts (#332)</li>
+<li><strong>hooks</strong>: bind the comment before index() in the review-thread gate (#330)</li>
+<li><strong>hooks</strong>: share one git-commit matcher across the three guards (#325)</li>
+<li><strong>hooks</strong>: the checkpoint stated a join rule the audit does not use (#316)</li>
+<li><strong>make</strong>: permissions skips sourced libs, stops dirtying the tree (#314)</li>
+<li><strong>ci</strong>: ask CodeRabbit over REST, and check the token first (#319)</li>
+<li><strong>make</strong>: stop asking the ai_clients menu twice per run (#311)</li>
+<li><strong>storage</strong>: snapshot all of ~/.claude, not an allowlist of seven (#301)</li>
+<li><strong>make</strong>: a failing target no longer aborts the rest of make run (#299)</li>
+<li><strong>lib</strong>: probe connectivity over HTTP, not ICMP (#297)</li>
+<li><strong>distro</strong>: clean pre-existing orphaned app-folder definitions (#295)</li>
+<li><strong>distro</strong>: reset orphaned app-folder defs before folder-children write (#294)</li>
+<li><strong>hooks</strong>: a non-empty shipped diff must prove a semantic change (#290)</li>
+<li><strong>claude</strong>: stop /issue mandating text its own guard blocks (#287)</li>
+<li><strong>ai_clients</strong>: qualify repo commands with absolute cd + git ref (#289)</li>
+<li><strong>hooks</strong>: emit the completeness table in any repo (#282)</li>
+<li><strong>hooks</strong>: catch wrapped destructive commands, and test both ways (#281)</li>
+<li><strong>hooks</strong>: derive the release bump only from commits since the tag (#280)</li>
+<li><strong>env</strong>: repo .env is the source, ~/.claude/.env is generated (#275)</li>
+<li><strong>hooks</strong>: anchor destructive_command_guard to a command start (#260)</li>
+<li><strong>hooks</strong>: install pr_self_assign.sh, and gate the class (#267)</li>
+<li><strong>env</strong>: document CODERABBIT_TRIGGER_PAT in .env.example (#265)</li>
+<li><strong>distro</strong>: configure_dock merges instead of replacing favourites (#263)</li>
+<li><strong>hooks</strong>: name the outside-project-dir cause in pr_template_guard (#251)</li>
+<li><strong>dev-loop</strong>: rescue quota kills and dispatch collisions correctly (#249)</li>
+<li><strong>ci</strong>: skip the CodeRabbit ask when the PAT is absent (#253)</li>
+<li><strong>rules</strong>: python indent style is spaces, not tabs (#230) (#239)</li>
+<li><strong>dev-loop</strong>: reviewer-slot step classifies quota and drops ack polling (#243)</li>
+<li><strong>install</strong>: guard menu read loops against EOF spin (#219)</li>
+<li><strong>ci</strong>: silence SC2153 on env-provided OWNER and REPO (#220)</li>
+<li><strong>hooks</strong>: pr_template_guard scopes to gh pr and resolves --repo (#214)</li>
+<li><strong>hooks</strong>: branch guard joins backslash-continued git commands (#213)</li>
+<li><strong>claude</strong>: add --quick path so /issue's column derivation runs (#211)</li>
+<li><strong>hooks</strong>: release_due_nudge watches gh pr merge too (#208)</li>
+<li><strong>rules</strong>: remove repo-layout fact from global Python rule (#206)</li>
+<li><strong>hooks</strong>: kanban_lifecycle never moves a closed issue's card (#202)</li>
+<li><strong>skills</strong>: mandate Source: field in lesson mirror entries (#201)</li>
+<li><strong>hooks</strong>: guard measures -F- heredoc title (#140) (#200)</li>
+<li><strong>hooks</strong>: protected_branch_guard resolves the action's target repo (#199)</li>
+<li><strong>claude</strong>: session audit no longer counts delivered lessons (#198)</li>
+<li><strong>claude</strong>: s:release cuts by default, matching s:dev-loop (#191)</li>
+<li><strong>audit</strong>: Status como declaracao e limite explicito de issues (#129)</li>
+<li><strong>settings</strong>: stop denying Read on .env.example templates</li>
+<li><strong>commit-code</strong>: verify HEAD moved before pushing a commit</li>
+<li><strong>hooks</strong>: pr_template_guard fails loud on an unresolved --body-file</li>
+<li><strong>hooks</strong>: gate download-and-execute guard on network-fetch source</li>
+<li><strong>hooks</strong>: branch guard fails open on a foreign tracker id</li>
+<li><strong>hooks</strong>: semver newline so release_dispatch_guard advisory fires</li>
+<li><strong>skills</strong>: point py-* at the post-#66 py-standards path</li>
+<li><strong>installer</strong>: install skills as <name>/SKILL.md + prune orphans</li>
+<li><strong>hooks</strong>: install release_due_nudge.sh (#62)</li>
+<li><strong>hooks</strong>: audit skips same-repo mirror + bullet-less Tier/Origin</li>
+<li><strong>hooks</strong>: guards decide on the target, not surrounding text (#54)</li>
+<li><strong>hooks</strong>: reflow the commit body per paragraph, not per line</li>
+<li><strong>kanban</strong>: document board-workflow setup and guard duplicate boards</li>
+<li><strong>claude</strong>: resolve real body-file past a title that echoes the flag</li>
+<li><strong>claude</strong>: parse quoted --body-file in pr_template_guard hook</li>
+<li><strong>yubikey</strong>: handle FIDO-only Security Key Series correctly</li>
+<li><strong>install</strong>: commit the commit-msg hook executable</li>
+<li><strong>install</strong>: make pgAdmin repo setup idempotent</li>
+<li><strong>githooks</strong>: make commit-msg hook executable</li>
+<li><strong>install</strong>: pip+pipx bootstrapper + brew-first gitlint</li>
+<li><strong>vscode</strong>: stop installing built-in Copilot extensions</li>
+<li><strong>vscode</strong>: force terminal DOM renderer to stop dropped glyphs</li>
+<li><strong>claudestatus</strong>: separate reset marker from percentage in usage</li>
+<li><strong>claudestatus</strong>: widen Session/Weekly columns so reset times fit</li>
+<li><strong>vscode</strong>: strip JSONC in verify/summary reads too</li>
+<li><strong>vscode</strong>: parse JSONC settings so jq stops crashing the setup</li>
+<li><strong>claudestatus</strong>: make storageState patch apply to live installs</li>
+<li><strong>claudestatus</strong>: inject fixed billing + display on install</li>
+<li><strong>git_sync_origin</strong>: ignore untracked files in clean-tree guard</li>
+<li><strong>claudestatus</strong>: stop storageState clobbering the billing session</li>
+<li><strong>ai_clients</strong>: use XDG Documents dir for notesnook sync default</li>
+<li><strong>ai_clients</strong>: adapt .env restore default to file existence</li>
+<li><strong>ai_clients</strong>: resolve node path and default notesnook sync dir</li>
+<li><strong>ai_clients</strong>: make notesnook MCP install non-blocking</li>
+<li><strong>git_sync_origin</strong>: detect squash/rebase-merged branches</li>
+<li><strong>ci</strong>: install gitlint-core instead of gitlint meta-package</li>
+<li><strong>skills</strong>: improve brand-interview question clarity and coverage</li>
+<li><strong>scripts</strong>: resolve shellcheck warning-level findings</li>
+<li><strong>distro_config</strong>: fix Balena Etcher repo name and Ventoy tar path</li>
+<li><strong>distro_config</strong>: correct Balena Etcher and Ventoy install methods</li>
+<li><strong>claude</strong>: Require explicit user approval for all git commit and push</li>
+<li><strong>distro_config</strong>: show nvm versions before multi-install prompt</li>
+<li><strong>claude</strong>: route gh and git commands through rtk proxy</li>
+<li><strong>claude</strong>: remove spurious fence in gh-fix-ci checkpoint</li>
+<li><strong>claude</strong>: add checkpoint and clarify loop state in gh-fix-ci</li>
+<li><strong>claude</strong>: clarify s:gh-read-ci skill inputs and output format</li>
+<li><strong>distro_config</strong>: replace trap RETURN with explicit tmp cleanup</li>
+<li><strong>distro_config</strong>: improve 4K Video Downloader Plus installer robustness</li>
+<li><strong>ubuntu_workspace</strong>: Enable workspace switching on all displays</li>
+<li><strong>storage</strong>: Address final code review findings</li>
+<li><strong>distro_config</strong>: Update keybindings array comment count to 15</li>
+<li><strong>storage</strong>: Guard against glob metacharacters in project names in restore_memory</li>
+<li><strong>storage</strong>: Use directory test instead of ls for source check in restore_env</li>
+<li><strong>storage</strong>: Fix orphaned dialog, name collision, path-space risk in export_memory</li>
+<li><strong>storage</strong>: Fix temp file race, whitespace trim, process sub in backup_env</li>
+<li><strong>commands</strong>: Clarify hook-bypass question sequencing in commit-code</li>
+<li><strong>commands</strong>: Ask hook-bypass as separate question in commit-code</li>
+<li><strong>commands</strong>: Improve defaults and length report in commit-code</li>
+<li><strong>commands</strong>: Address code review issues in restore-env</li>
+<li><strong>commands</strong>: Address code review issues in backup-env</li>
+<li><strong>distro</strong>: Add custom icon to Google Calendar PWA installer</li>
+<li><strong>skills</strong>: Abort py-doc if mkdocs.yml does not exist</li>
+<li><strong>skills</strong>: Use pre-increment to avoid set -e abort on first iteration</li>
+<li><strong>claude</strong>: treat missing plugin cache as warning, not fatal error</li>
+<li><strong>ai_clients</strong>: show interactive menu instead of running all non-interactively</li>
+<li><strong>ai_clients</strong>: use mapfile for client discovery, discover once, add section banners</li>
+<li><strong>ai_clients</strong>: declare shared vars readonly to prevent re-source clobbering</li>
+<li>espanso/datetime/package.yml</li>
+<li>espanso/datetime/package.yml</li>
+</ul>
+<h3 id="refactor">Refactor<a class="headerlink" href="#refactor" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>lessons</strong>: store names a repo, resolve by remote, not basename (#546)</li>
+<li><strong>gnome</strong>: move SoundCloud from dock to Media app folder (#435)</li>
+<li><strong>specs</strong>: migrate docs/superpowers into .specs/features (#381)</li>
+<li><strong>make</strong>: run the network-free targets before the installs (#310)</li>
+<li><strong>ci</strong>: rename the review trigger PAT to name its issuer (#286)</li>
+<li><strong>distro</strong>: group GNOME app folders by artifact produced (#284)</li>
+<li><strong>skills</strong>: rename s:wrap-up to s:session-closeout (#246)</li>
+<li><strong>skills</strong>: rename s:shape-up to s:problem-framing (#247)</li>
+<li><strong>skills</strong>: split release into release-py + generic release</li>
+<li><strong>claude</strong>: move tutoring + lesson-capture prose to skills</li>
+<li><strong>claude</strong>: move language-common coding rules to a rules file</li>
+<li>rename make init target to make run</li>
+<li><strong>distro_config</strong>: English folder names, DBeaver to DEV</li>
+<li><strong>setup</strong>: split install scripts into registry-driven libs</li>
+<li><strong>claude</strong>: rename act command to act-py</li>
+<li><strong>claude</strong>: Extract rule content into standalone source files</li>
+<li>Merge drives/ into storage/ and remove empty folder</li>
+<li><strong>claude</strong>: Extract CLAUDE.md content to external config file</li>
+<li><strong>skills</strong>: Rename create-pr to gh-create-pr, add naming std</li>
+<li><strong>claude</strong>: Add type namespace prefixes to skills, agents, and commands</li>
+<li><strong>claude</strong>: Extract slash commands into standalone markdown files</li>
+<li><strong>skills</strong>: Extract shared standards and add py-create skill</li>
+<li><strong>claude</strong>: load base settings from settings.json file</li>
+<li><strong>claude</strong>: remove lib/utils.sh superseded by ai_clients/lib/utils.sh</li>
+<li><strong>claude</strong>: source shared ai_clients/lib/utils.sh; define CLAUDE_DIR locally</li>
+<li><strong>ai_clients</strong>: move claude setup from code_editors to ai_clients module</li>
+<li>data folder changed name to assets</li>
+</ul>
+<h3 id="perf">Perf<a class="headerlink" href="#perf" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>hooks</strong>: skip the planner's dead open-PR held-set read (#613)</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

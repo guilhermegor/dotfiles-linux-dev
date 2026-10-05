@@ -1,0 +1,2078 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Bash-based Linux dotfiles and system-setup toolkit">
+      
+      
+      
+      
+      
+        <link rel="next" href="getting-started/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>dotfiles-linux-dev</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#dotfiles-linux-dev" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="." title="dotfiles-linux-dev" class="md-header__button md-logo" aria-label="dotfiles-linux-dev" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            dotfiles-linux-dev
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Home
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m3.55 19.09 1.41 1.41 1.8-1.79-1.42-1.42M12 6c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6c0-3.32-2.69-6-6-6m8 7h3v-2h-3m-2.76 7.71 1.8 1.79 1.41-1.41-1.79-1.8M20.45 5l-1.41-1.4-1.8 1.79 1.42 1.42M13 1h-2v3h2M6.76 5.39 4.96 3.6 3.55 5l1.79 1.81zM1 13h3v-2H1m12 9h-2v3h2"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/guilhermegor/dotfiles-linux-dev" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="." title="dotfiles-linux-dev" class="md-nav__button md-logo" aria-label="dotfiles-linux-dev" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    dotfiles-linux-dev
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/guilhermegor/dotfiles-linux-dev" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="." class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#key-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ✨ Key Features
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="✨ Key Features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#system-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🛠️ System Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🛠️ System Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#distribution-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Distribution Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware-drivers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🔧 Hardware Drivers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🔧 Hardware Drivers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#peripheral-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peripheral Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storage-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        💾 Storage Management
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="💾 Storage Management">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#drive-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Drive Operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operating-system-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🖥️ Operating System Management
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🖥️ Operating System Management">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#virtualization-os-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Virtualization &amp; OS Tools
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storage-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage Analysis
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-started" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🚀 Getting Started
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🚀 Getting Started">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#quick-start-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ⚡ Quick Start (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#important-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        📋 Important Notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#machine-secrets-never-in-this-public-repo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🔐 Machine Secrets (never in this public repo)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#documentation-site" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        📚 Documentation site
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#alternative-installation-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alternative Installation Methods
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🧪 Running Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🧪 Running Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#using-makefile-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using Makefile (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#direct-script-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Direct Script Execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        📂 Project Structure
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ⚙️ Configuration Workflow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="⚙️ Configuration Workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommended-workflow-using-make-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommended Workflow (Using make run)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#alternative-step-by-step-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alternative: Step-by-Step Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#available-make-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🎯 Available Make Commands
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🎯 Available Make Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Start
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#system-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        System Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware-drivers_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware Drivers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storage-management_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#os-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OS Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batch Operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Utilities
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#authors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        👨‍💻 Authors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#license" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        📜 License
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acknowledgments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🙌 Acknowledgments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#useful-links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🔗 Useful Links
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="ai-clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="espanso/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Espanso
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="shortcuts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shortcuts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage & backups
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="rclone-mount-migration-360/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    rclone mount migration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="permissions-by-directory-163/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permissions by directory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="reviewer_ledger/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reviewer ledger
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="publishing-docs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Publishing these docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#key-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ✨ Key Features
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="✨ Key Features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#system-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🛠️ System Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🛠️ System Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#distribution-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Distribution Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware-drivers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🔧 Hardware Drivers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🔧 Hardware Drivers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#peripheral-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peripheral Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storage-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        💾 Storage Management
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="💾 Storage Management">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#drive-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Drive Operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operating-system-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🖥️ Operating System Management
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🖥️ Operating System Management">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#virtualization-os-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Virtualization &amp; OS Tools
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storage-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage Analysis
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-started" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🚀 Getting Started
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🚀 Getting Started">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#quick-start-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ⚡ Quick Start (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#important-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        📋 Important Notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#machine-secrets-never-in-this-public-repo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🔐 Machine Secrets (never in this public repo)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#documentation-site" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        📚 Documentation site
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#alternative-installation-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alternative Installation Methods
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🧪 Running Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🧪 Running Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#using-makefile-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using Makefile (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#direct-script-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Direct Script Execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        📂 Project Structure
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ⚙️ Configuration Workflow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="⚙️ Configuration Workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommended-workflow-using-make-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommended Workflow (Using make run)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#alternative-step-by-step-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alternative: Step-by-Step Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#available-make-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🎯 Available Make Commands
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="🎯 Available Make Commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Start
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#system-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        System Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware-drivers_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware Drivers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storage-management_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#os-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OS Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batch Operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Utilities
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#authors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        👨‍💻 Authors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#license" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        📜 License
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acknowledgments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🙌 Acknowledgments
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#useful-links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🔗 Useful Links
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="dotfiles-linux-dev">dotfiles-linux-dev <img src="https://upload.wikimedia.org/wikipedia/commons/3/35/Tux.svg" align="right" width="120" style="border-radius: 15px;" alt="Linux Penguin"><a class="headerlink" href="#dotfiles-linux-dev" title="Permanent link">&para;</a></h1>
+<p><a href="https://www.repostatus.org/#active"><img alt="Project Status: Active – The project has reached a stable, usable state and is being actively developed." src="https://www.repostatus.org/badges/latest/active.svg" /></a>
+<img alt="Shell Version" src="https://img.shields.io/badge/shell-Bash%20%7C%20Zsh-blue.svg" />
+<img alt="License" src="https://img.shields.io/badge/license-MIT-green.svg" />
+<img alt="Open Issues" src="https://img.shields.io/github/issues/guilhermegor/dotfiles-linux-dev" />
+<img alt="Contributions Welcome" src="https://img.shields.io/badge/contributions-welcome-darkgreen.svg" /></p>
+<p><strong>dotfiles-linux-dev</strong> is a comprehensive initialization and configuration toolkit for Linux distributions. It provides automated setup scripts for system configuration, driver installation, storage management, and development environment setup.</p>
+<p><strong>🎯 Features a powerful Makefile</strong> for easy command execution and workflow automation - no need to remember complex script paths!</p>
+<h2 id="key-features">✨ Key Features<a class="headerlink" href="#key-features" title="Permanent link">&para;</a></h2>
+<h3 id="system-configuration">🛠️ System Configuration<a class="headerlink" href="#system-configuration" title="Permanent link">&para;</a></h3>
+<h4 id="distribution-setup"><strong>Distribution Setup</strong><a class="headerlink" href="#distribution-setup" title="Permanent link">&para;</a></h4>
+<ul>
+<li><a href="distro_config/install_programs.sh">Install Programs</a> - Automated installation of essential programs (<code>make install_programs</code>)</li>
+<li><a href="distro_config/ubuntu_workspace.sh">Ubuntu Workspace Setup</a> - Ubuntu-specific workspace configuration (<code>make ubuntu_workspace</code>)</li>
+<li><a href="distro_config/set_custom_shortcuts.sh">Custom Shortcuts</a> - Custom keyboard and application shortcuts (<code>make set_shortcuts</code>)</li>
+<li><a href="distro_config/irpf_download.sh">IRPF Download Utility</a> - Brazilian tax software downloader (<code>make irpf_download</code>)</li>
+<li><a href="code_editors/bash_profile_snippet.sh">Bash Profile Loader</a> - Ensure login shells load <code>~/.bashrc</code> (<code>make bash_profile</code>)</li>
+<li><a href="code_editors/setup_starship_bash.sh">Starship + Bash Setup</a> - Installs Starship with plain-text symbols, Bash integration, autocomplete, and rollback targets (<code>make starship_setup</code>)</li>
+<li><a href="distro_config/install_lib/sharing.sh">rclone On-Demand Cloud Mount</a> - Installs <code>rclone</code>, writes the <code>rclone.conf</code> skeleton and a systemd user mount unit (creating the mount point, default <code>~/OneDrive</code>, never running the interactive <code>rclone config</code> wizard; <code>make rclone_mount</code> enables and verifies the mount, and the installer runs it unattended — re-runs on an already-mounted machine are a no-op), replacing Insync's full local mirror — remote name, region, account kind, and mount point are asked in Custom Installation only, defaulted silently otherwise — see <a href="docs/rclone-mount-migration-360.md">docs/rclone-mount-migration-360.md</a> for the operator runbook</li>
+</ul>
+<h3 id="hardware-drivers">🔧 Hardware Drivers<a class="headerlink" href="#hardware-drivers" title="Permanent link">&para;</a></h3>
+<h4 id="peripheral-configuration"><strong>Peripheral Configuration</strong><a class="headerlink" href="#peripheral-configuration" title="Permanent link">&para;</a></h4>
+<ul>
+<li><a href="drivers/bluetooth_adapter.sh">Bluetooth Adapter</a> - Bluetooth driver setup and configuration (<code>make setup_bluetooth</code>)</li>
+<li><a href="drivers/setup_keyboard.sh">Keyboard Configuration</a> - Custom keyboard layout and settings (<code>make setup_keyboard</code>)</li>
+<li><a href="drivers/mouse.sh">Mouse Configuration</a> - Mouse driver and sensitivity settings (<code>make setup_mouse</code>)</li>
+<li><a href="drivers/tplink_wifi_adapter.sh">WiFi Adapter</a> - TP-Link WiFi adapter driver installation (<code>make setup_wifi</code>)</li>
+</ul>
+<p><strong>Quick setup:</strong> Run <code>make setup_all_drivers</code> to configure all hardware at once.</p>
+<h3 id="storage-management">💾 Storage Management<a class="headerlink" href="#storage-management" title="Permanent link">&para;</a></h3>
+<h4 id="drive-operations"><strong>Drive Operations</strong><a class="headerlink" href="#drive-operations" title="Permanent link">&para;</a></h4>
+<ul>
+<li><a href="storage/check_legitimity.sh">Legitimacy Check</a> - Drive authenticity and integrity verification (<code>make check_drive_legitimacy</code>)</li>
+<li><a href="storage/data_recovery.sh">Data Recovery</a> - Data recovery tools and procedures (<code>make data_recovery</code>)</li>
+<li><a href="storage/format_hard.sh">Hard Format</a> - Complete drive formatting (<code>make format_hard</code>)</li>
+<li><a href="storage/format_neat.sh">Neat Format</a> - Quick and clean formatting (<code>make format_neat</code>)</li>
+<li><a href="storage/vault.sh">Vault Management</a> - Secure storage vault setup (<code>make vault_setup</code>)</li>
+</ul>
+<p><strong>Quick setup:</strong> Run <code>make storage_setup</code> for complete storage configuration.</p>
+<h3 id="operating-system-management">🖥️ Operating System Management<a class="headerlink" href="#operating-system-management" title="Permanent link">&para;</a></h3>
+<h4 id="virtualization-os-tools"><strong>Virtualization &amp; OS Tools</strong><a class="headerlink" href="#virtualization-os-tools" title="Permanent link">&para;</a></h4>
+<ul>
+<li><a href="os/isos_os_manager.sh">ISO OS Manager</a> - ISO file and operating system management (<code>make manage_isos</code>)</li>
+<li><a href="os/vm_creator.sh">VM Creator</a> - Virtual machine creation utility (<code>make create_vm</code>)</li>
+<li><a href="os/vm_launcher.sh">VM Launcher</a> - Virtual machine management and launch (<code>make launch_vm</code>)</li>
+</ul>
+<p><strong>Quick setup:</strong> Run <code>make vm_setup</code> to configure the complete VM environment.</p>
+<h4 id="storage-analysis"><strong>Storage Analysis</strong><a class="headerlink" href="#storage-analysis" title="Permanent link">&para;</a></h4>
+<ul>
+<li><a href="storage/storage_hiato.sh">Storage Hiato</a> - Storage gap analysis and monitoring (<code>make storage_analysis</code>)</li>
+</ul>
+<h2 id="getting-started">🚀 Getting Started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h2>
+<h3 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Linux Distribution</strong> (Ubuntu, Debian, or compatible)</li>
+<li><strong>Bash Shell</strong> 4.0+</li>
+<li><strong>Sudo Privileges</strong> for system-wide installations</li>
+</ul>
+<h3 id="quick-start-recommended">⚡ Quick Start (Recommended)<a class="headerlink" href="#quick-start-recommended" title="Permanent link">&para;</a></h3>
+<p>Get your Linux system configured in seconds:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>sudo<span class="w"> </span>apt<span class="w"> </span>update<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>sudo<span class="w"> </span>apt<span class="w"> </span>upgrade<span class="w"> </span>-y<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>sudo<span class="w"> </span>apt-get<span class="w"> </span>update
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>dkms<span class="w"> </span>git<span class="w"> </span>-y
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>mkdir<span class="w"> </span>~/github
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nb">cd</span><span class="w"> </span>~/github
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/guilhermegor/dotfiles-linux-dev.git
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="nb">cd</span><span class="w"> </span>dotfiles-linux-dev
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>make<span class="w"> </span>run
+</code></pre></div></p>
+<h3 id="important-notes">📋 Important Notes<a class="headerlink" href="#important-notes" title="Permanent link">&para;</a></h3>
+<p><strong>⚠️ Administrator Privileges Required</strong></p>
+<p>During the setup process, you will be prompted to enter your system password multiple times. This is necessary to execute commands with administrator privileges (sudo) for system-wide configurations and installations.</p>
+<p><strong>⌨️ Navigation Tips</strong></p>
+<ul>
+<li>Use <strong>Tab</strong> key to navigate between options in interactive menus</li>
+<li>Use <strong>Arrow keys</strong> (↑/↓) to move through selection lists</li>
+<li>Press <strong>Enter</strong> to confirm your selection</li>
+<li>Press <strong>Spacebar</strong> to toggle checkboxes (when applicable)</li>
+</ul>
+<p><strong>💡 Setup Tips</strong></p>
+<ul>
+<li>Ensure you have a <strong>stable internet connection</strong> before starting</li>
+<li>The initial setup may take <strong>10-20 minutes</strong> depending on your system</li>
+<li>It's recommended to <strong>close unnecessary applications</strong> during installation</li>
+<li>If prompted to restart any services, choose <strong>Yes</strong> to ensure proper configuration</li>
+</ul>
+<p><strong>🔄 What to Expect</strong></p>
+<p>The <code>make run</code> command will:
+- ✅ Set executable permissions for all scripts
+- ✅ Install essential programs
+- ✅ Download IRPF (Brazilian tax software)
+- ✅ Configure custom shortcuts
+- ✅ Set up Ubuntu workspace</p>
+<p>After <code>make run</code> completes, you can optionally run:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>setup_all_drivers<span class="w">    </span><span class="c1"># Configure all hardware</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>make<span class="w"> </span>storage_setup<span class="w">        </span><span class="c1"># Setup storage management</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>make<span class="w"> </span>vm_setup<span class="w">            </span><span class="c1"># Configure virtual machines</span>
+</code></pre></div></p>
+<p><strong>Contributing to this repo?</strong> Enable the local commit-message linter once so
+gitlint catches title/body length violations <em>before</em> you push (the same check
+runs in CI):
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>install_coding<span class="w">   </span><span class="c1"># installs gitlint (among other dev tools)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>make<span class="w"> </span>git_hooks<span class="w">        </span><span class="c1"># points core.hooksPath at .githooks (gitlint commit-msg)</span>
+</code></pre></div></p>
+<h3 id="machine-secrets-never-in-this-public-repo">🔐 Machine Secrets (never in this public repo)<a class="headerlink" href="#machine-secrets-never-in-this-public-repo" title="Permanent link">&para;</a></h3>
+<p>This repo is <strong>public</strong>, so no credential value ever lives in it — only the
+<em>mechanism</em> to reproduce one on a fresh machine. The project-root <code>.env</code>
+(git-ignored, documented by <code>.env.example</code>) is the <strong>single authored source
+of truth</strong>. <code>make run</code> / <code>make setup_env</code> (via <code>distro_config/setup_env.sh</code>)
+<strong>generates</strong> <code>~/.claude/.env</code> from it — a derived copy, never hand-edited —
+then appends a guarded block to <code>~/.bashrc</code> that sources <code>~/.claude/.env</code> and
+exports every key it finds, so a value set once in the project <code>.env</code> is
+visible to <code>gh</code>, to scaffolded projects, and to any tool that reads the
+environment. <code>~/.claude/.env</code> keeps its own path (outside every repo's
+working tree) so the shell still works if this repo moves or is deleted; it
+is regenerated on every <code>setup_env.sh</code> run, so it cannot drift from the
+project <code>.env</code>. Both files are written mode <code>600</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Purpose</th>
+<th>Scopes</th>
+<th>Consumers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GH_REVIEW_TRIGGER_PAT</code></td>
+<td>User PAT so CodeRabbit answers a review request — it silently ignores bot-authored (<code>GITHUB_TOKEN</code>) comments</td>
+<td>Fine-grained PAT, <strong>All repositories</strong>, <code>Pull requests: Read and write</code></td>
+<td><code>.github/workflows/coderabbit_trigger.yml</code> in <code>blueprintx</code> and every project it scaffolds</td>
+</tr>
+<tr>
+<td><code>CLAUDE_BACKUP_DIR</code></td>
+<td>Default target dir for <code>/backup-env</code> / <code>/restore-env</code></td>
+<td>n/a (local path)</td>
+<td><code>ai_clients/claude/commands/backup-env.md</code>, <code>restore-env.md</code>, <code>storage/backup_env.sh</code>, <code>storage/restore_env.sh</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Re-minting <code>GH_REVIEW_TRIGGER_PAT</code> on a new/lost machine</strong> (a PAT is re-minted,
+not restored — a backed-up value may already be expired):
+1. github.com/settings/tokens → generate a new fine-grained token with the
+   scopes above.
+2. <code>echo 'GH_REVIEW_TRIGGER_PAT=&lt;value&gt;' &gt;&gt; .env</code> (project-root <code>.env</code> —
+   create it first with <code>cp .env.example .env</code> if it doesn't exist yet).
+3. <code>make setup_env</code> to regenerate <code>~/.claude/.env</code> from it, then
+   <code>source ~/.bashrc</code> (or open a new shell).
+4. Verify: <code>[ -n "$GH_REVIEW_TRIGGER_PAT" ] &amp;&amp; echo "set"</code> — and that
+   <code>gh secret set GH_REVIEW_TRIGGER_PAT --body "$GH_REVIEW_TRIGGER_PAT"</code> on
+   the target repo succeeds.</p>
+<h3 id="documentation-site">📚 Documentation site<a class="headerlink" href="#documentation-site" title="Permanent link">&para;</a></h3>
+<p>The docs are a MkDocs Material site versioned with mike (<code>dev</code>, alias <code>latest</code>),
+single-sourced from this README and the area <code>CLAUDE.md</code> files.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>docs_serve<span class="w">    </span><span class="c1"># live preview on :8000</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>make<span class="w"> </span>docs_build<span class="w">    </span><span class="c1"># strict build, same as CI</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>make<span class="w"> </span>enable_pages<span class="w">  </span><span class="c1"># once, AFTER the first deploy created gh-pages (no-op before)</span>
+</code></pre></div>
+<p>First-deploy order: merge to <code>master</code> → the <code>docs</code> workflow creates <code>gh-pages</code> →
+run <code>make enable_pages</code> to serve Pages from that branch.</p>
+<h3 id="alternative-installation-methods">Alternative Installation Methods<a class="headerlink" href="#alternative-installation-methods" title="Permanent link">&para;</a></h3>
+<p><strong>Option 1: Step-by-Step with Makefile</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/guilhermegor/dotfiles-linux-dev.git
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nb">cd</span><span class="w"> </span>dotfiles-linux-dev
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Make all scripts executable</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>make<span class="w"> </span>permissions
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1"># Run complete system setup</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>make<span class="w"> </span>full_setup
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="c1"># Or view all available commands</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>make<span class="w"> </span><span class="nb">help</span>
+</code></pre></div></p>
+<p><strong>Option 2: Direct Script Execution</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Install specific components</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>chmod<span class="w"> </span>+x<span class="w"> </span>distro_config/install_programs.sh
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>bash<span class="w"> </span>distro_config/install_programs.sh
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># Configure hardware</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>chmod<span class="w"> </span>+x<span class="w"> </span>drivers/*.sh
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>bash<span class="w"> </span>drivers/tplink_wifi_adapter.sh
+</code></pre></div></p>
+<h2 id="running-configuration">🧪 Running Configuration<a class="headerlink" href="#running-configuration" title="Permanent link">&para;</a></h2>
+<h3 id="using-makefile-recommended">Using Makefile (Recommended)<a class="headerlink" href="#using-makefile-recommended" title="Permanent link">&para;</a></h3>
+<p>View all available commands:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>make<span class="w"> </span><span class="nb">help</span>
+</code></pre></div></p>
+<p>Run complete initial setup:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>make<span class="w"> </span>run
+</code></pre></div></p>
+<p>Run full system setup:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>make<span class="w"> </span>full_setup
+</code></pre></div></p>
+<p>Run individual components:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Hardware setup</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>make<span class="w"> </span>setup_wifi
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>make<span class="w"> </span>setup_bluetooth
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>make<span class="w"> </span>setup_keyboard
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="c1"># Storage setup</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>make<span class="w"> </span>format_neat
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>make<span class="w"> </span>storage_analysis
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="c1"># System setup</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>make<span class="w"> </span>ubuntu_workspace
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>make<span class="w"> </span>install_programs
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>make<span class="w"> </span>install_toolchains
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>make<span class="w"> </span>starship_setup
+<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>make<span class="w"> </span>vscode_setup
+<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a>make<span class="w"> </span>install_espanso_packages
+<a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a>make<span class="w"> </span>bash_profile
+</code></pre></div></p>
+<h3 id="direct-script-execution">Direct Script Execution<a class="headerlink" href="#direct-script-execution" title="Permanent link">&para;</a></h3>
+<p>Alternatively, execute scripts directly:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Hardware setup</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>bash<span class="w"> </span>drivers/bluetooth_adapter.sh
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>bash<span class="w"> </span>drivers/setup_keyboard.sh
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="c1"># Storage setup</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>bash<span class="w"> </span>storage/format_neat.sh
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>bash<span class="w"> </span>storage/storage_hiato.sh
+</code></pre></div></p>
+<h2 id="project-structure">📂 Project Structure<a class="headerlink" href="#project-structure" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>dotfiles-linux-dev/
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>│
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>├── 📋 Makefile                   # Automation recipes for all scripts
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>│
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>├── 📁 distro_config/             # Distribution configuration
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>│   ├── 📦 install_programs.sh    # Program installation script
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>│   ├── 🧰 install_toolchains.sh  # Toolchains installation script
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>│   ├── 📥 irpf_download.sh       # Tax software downloader
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>│   ├── ⌨️ set_custom_shortcuts.sh # Custom shortcuts configuration
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>│   └── 🖥️ ubuntu_workspace.sh    # Ubuntu workspace setup
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>│
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>├── 📁 code_editors/              # Code editors setup
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>│   ├── 🧩 vscode.sh               # VS Code setup
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>│   ├── ♻️ vscode_restore.sh       # VS Code restore
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>│   ├── 🤖 claude_setup.sh         # Claude Code global settings and plugins
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>│   ├── 🐚 bash_profile_snippet.sh # Ensure ~/.bash_profile loads ~/.bashrc
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a>│   └── ⭐ setup_starship_bash.sh  # Starship prompt + Bash integration
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a>│
+<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a>├── 📁 drivers/                   # Hardware driver configurations
+<a id="__codelineno-11-20" name="__codelineno-11-20" href="#__codelineno-11-20"></a>│   ├── 📡 bluetooth_adapter.sh   # Bluetooth setup
+<a id="__codelineno-11-21" name="__codelineno-11-21" href="#__codelineno-11-21"></a>│   ├── ⌨️ setup_keyboard.sh      # Keyboard configuration
+<a id="__codelineno-11-22" name="__codelineno-11-22" href="#__codelineno-11-22"></a>│   ├── 🖱️ mouse.sh               # Mouse settings
+<a id="__codelineno-11-23" name="__codelineno-11-23" href="#__codelineno-11-23"></a>│   └── 📶 tplink_wifi_adapter.sh # WiFi adapter setup
+<a id="__codelineno-11-24" name="__codelineno-11-24" href="#__codelineno-11-24"></a>│
+<a id="__codelineno-11-25" name="__codelineno-11-25" href="#__codelineno-11-25"></a>├── 📁 espanso/                   # Espanso packages
+<a id="__codelineno-11-26" name="__codelineno-11-26" href="#__codelineno-11-26"></a>│   ├── 📦 datetime/              # Date/time shortcuts
+<a id="__codelineno-11-27" name="__codelineno-11-27" href="#__codelineno-11-27"></a>│   ├── 📦 git_reset/             # Git reset shortcut
+<a id="__codelineno-11-28" name="__codelineno-11-28" href="#__codelineno-11-28"></a>│   ├── 📦 hostname_catcher/      # Hostname shortcuts
+<a id="__codelineno-11-29" name="__codelineno-11-29" href="#__codelineno-11-29"></a>│   ├── 📦 ipv4_catcher/          # IPv4 shortcuts
+<a id="__codelineno-11-30" name="__codelineno-11-30" href="#__codelineno-11-30"></a>│   ├── 📦 shortcuts/             # List shortcuts
+<a id="__codelineno-11-31" name="__codelineno-11-31" href="#__codelineno-11-31"></a>│   └── 📦 ssh_generate/          # SSH key generator
+<a id="__codelineno-11-32" name="__codelineno-11-32" href="#__codelineno-11-32"></a>│
+<a id="__codelineno-11-33" name="__codelineno-11-33" href="#__codelineno-11-33"></a>├── 📁 os/                        # OS management tools
+<a id="__codelineno-11-34" name="__codelineno-11-34" href="#__codelineno-11-34"></a>│   ├── 💿 isos_os_manager.sh     # ISO file management
+<a id="__codelineno-11-35" name="__codelineno-11-35" href="#__codelineno-11-35"></a>│   ├── 🖥️ vm_creator.sh          # VM creation utility
+<a id="__codelineno-11-36" name="__codelineno-11-36" href="#__codelineno-11-36"></a>│   └── 🚀 vm_launcher.sh         # VM management
+<a id="__codelineno-11-37" name="__codelineno-11-37" href="#__codelineno-11-37"></a>│
+<a id="__codelineno-11-38" name="__codelineno-11-38" href="#__codelineno-11-38"></a>├── 📁 storage/                   # Storage management &amp; analytics
+<a id="__codelineno-11-39" name="__codelineno-11-39" href="#__codelineno-11-39"></a>│   ├── 🔍 check_legitimity.sh    # Drive legitimacy verification
+<a id="__codelineno-11-40" name="__codelineno-11-40" href="#__codelineno-11-40"></a>│   ├── 💾 data_recovery.sh       # Data recovery tools
+<a id="__codelineno-11-41" name="__codelineno-11-41" href="#__codelineno-11-41"></a>│   ├── 🗑️ format_hard.sh         # Complete formatting
+<a id="__codelineno-11-42" name="__codelineno-11-42" href="#__codelineno-11-42"></a>│   ├── 🧹 format_neat.sh         # Quick formatting
+<a id="__codelineno-11-43" name="__codelineno-11-43" href="#__codelineno-11-43"></a>│   ├── 💿 mount_disks.sh         # Auto-mount partitions
+<a id="__codelineno-11-44" name="__codelineno-11-44" href="#__codelineno-11-44"></a>│   ├── 🔒 vault.sh               # Secure vault management
+<a id="__codelineno-11-45" name="__codelineno-11-45" href="#__codelineno-11-45"></a>│   ├── ☁️  backup_external_ssd.sh # GUI SSD backup to cloud folder
+<a id="__codelineno-11-46" name="__codelineno-11-46" href="#__codelineno-11-46"></a>│   └── 📊 storage_hiato.sh       # Storage capacity analysis
+<a id="__codelineno-11-47" name="__codelineno-11-47" href="#__codelineno-11-47"></a>│
+<a id="__codelineno-11-48" name="__codelineno-11-48" href="#__codelineno-11-48"></a>└── 📖 README.md                  # Project documentation
+</code></pre></div>
+<h2 id="configuration-workflow">⚙️ Configuration Workflow<a class="headerlink" href="#configuration-workflow" title="Permanent link">&para;</a></h2>
+<h3 id="recommended-workflow-using-make-run">Recommended Workflow (Using <code>make run</code>)<a class="headerlink" href="#recommended-workflow-using-make-run" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong>Clone and Initialize (One Command)</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="w">   </span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/guilhermegor/dotfiles-linux-dev.git
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">   </span><span class="nb">cd</span><span class="w"> </span>dotfiles-linux-dev
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">   </span>make<span class="w"> </span>run
+</code></pre></div></p>
+</li>
+<li>
+<p><strong>Optional: Additional Configuration</strong></p>
+</li>
+</ol>
+<p>After <code>make run</code> completes, optionally configure:</p>
+<p><strong>Hardware Configuration</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="w">   </span>make<span class="w"> </span>setup_all_drivers
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">   </span><span class="c1"># Or individually:</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">   </span>make<span class="w"> </span>setup_wifi
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">   </span>make<span class="w"> </span>setup_bluetooth
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">   </span>make<span class="w"> </span>setup_keyboard
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">   </span>make<span class="w"> </span>setup_mouse
+</code></pre></div></p>
+<p><strong>Storage Setup</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="w">   </span>make<span class="w"> </span>storage_setup
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">   </span><span class="c1"># Or individually:</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">   </span>make<span class="w"> </span>format_neat
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">   </span>make<span class="w"> </span>vault_setup
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">   </span>make<span class="w"> </span>storage_analysis
+</code></pre></div></p>
+<p><strong>Virtualization Environment</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="w">   </span>make<span class="w"> </span>vm_setup
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">   </span><span class="c1"># Or individually:</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">   </span>make<span class="w"> </span>manage_isos
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">   </span>make<span class="w"> </span>create_vm
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">   </span>make<span class="w"> </span>launch_vm
+</code></pre></div></p>
+<h3 id="alternative-step-by-step-configuration">Alternative: Step-by-Step Configuration<a class="headerlink" href="#alternative-step-by-step-configuration" title="Permanent link">&para;</a></h3>
+<ol>
+<li>
+<p><strong>Setup Permissions</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="w">   </span>make<span class="w"> </span>permissions
+</code></pre></div></p>
+</li>
+<li>
+<p><strong>Complete System Setup (All-in-One)</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="w">   </span>make<span class="w"> </span>full_setup
+</code></pre></div></p>
+</li>
+<li>
+<p><strong>Or Individual Configuration:</strong></p>
+</li>
+</ol>
+<p><strong>Software Installation</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="w">   </span>make<span class="w"> </span>install_programs
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">   </span>make<span class="w"> </span>ubuntu_workspace
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">   </span>make<span class="w"> </span>set_shortcuts
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">   </span>make<span class="w"> </span>irpf_download
+</code></pre></div></p>
+<p><strong>Hardware Configuration</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="w">   </span>make<span class="w"> </span>setup_all_drivers
+</code></pre></div></p>
+<p><strong>Storage Setup</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="w">   </span>make<span class="w"> </span>storage_setup
+</code></pre></div></p>
+<p><strong>Virtualization Environment</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="w">   </span>make<span class="w"> </span>vm_setup
+</code></pre></div></p>
+<h2 id="available-make-commands">🎯 Available Make Commands<a class="headerlink" href="#available-make-commands" title="Permanent link">&para;</a></h2>
+<p>Run <code>make help</code> to see all available commands, or check these common recipes:</p>
+<h3 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make run</code> - <strong>Complete initial setup (RECOMMENDED)</strong> - Sets permissions and configures all system essentials</li>
+</ul>
+<h3 id="system-setup">System Setup<a class="headerlink" href="#system-setup" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make install_programs</code> - Install essential programs</li>
+<li><code>make install_toolchains</code> - Install development toolchains</li>
+<li><code>make ubuntu_workspace</code> - Configure Ubuntu workspace</li>
+<li><code>make set_shortcuts</code> - Set custom keyboard shortcuts</li>
+<li><code>make irpf_download</code> - Download Brazilian tax software</li>
+<li><code>make vscode_setup</code> - Configure VS Code</li>
+<li><code>make vscode_restore</code> - Restore VS Code configuration</li>
+<li><code>make install_espanso_packages</code> - Install Espanso packages</li>
+</ul>
+<h3 id="hardware-drivers_1">Hardware Drivers<a class="headerlink" href="#hardware-drivers_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make setup_all_drivers</code> - Setup all hardware drivers at once</li>
+<li><code>make setup_bluetooth</code> - Setup Bluetooth adapter</li>
+<li><code>make setup_keyboard</code> - Configure keyboard</li>
+<li><code>make setup_mouse</code> - Configure mouse</li>
+<li><code>make setup_wifi</code> - Setup TP-Link WiFi adapter</li>
+</ul>
+<h3 id="storage-management_1">Storage Management<a class="headerlink" href="#storage-management_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make storage_setup</code> - Complete storage setup</li>
+<li><code>make check_drive_legitimacy</code> - Check drive authenticity</li>
+<li><code>make data_recovery</code> - Run data recovery tools</li>
+<li><code>make format_hard</code> - Complete drive formatting</li>
+<li><code>make format_neat</code> - Quick formatting</li>
+<li><code>make vault_setup</code> - Setup secure vault</li>
+<li><code>make storage_analysis</code> - Storage monitoring</li>
+</ul>
+<h3 id="os-management">OS Management<a class="headerlink" href="#os-management" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make vm_setup</code> - Complete VM setup</li>
+<li><code>make manage_isos</code> - Manage ISO files</li>
+<li><code>make create_vm</code> - Create virtual machine</li>
+<li><code>make launch_vm</code> - Launch virtual machine</li>
+</ul>
+<h3 id="batch-operations">Batch Operations<a class="headerlink" href="#batch-operations" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make full_setup</code> - Complete system setup (programs + drivers)</li>
+<li><code>make hardware_setup</code> - Setup all hardware drivers</li>
+<li><code>make storage_setup</code> - Complete storage configuration</li>
+<li><code>make vm_setup</code> - Setup virtual machine environment</li>
+<li><code>make editors_setup</code> - Setup code editors</li>
+</ul>
+<h3 id="utilities">Utilities<a class="headerlink" href="#utilities" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>make permissions</code> - Make all scripts executable</li>
+<li><code>make check_status</code> - Check system and scripts status</li>
+<li><code>make list_scripts</code> - List all available bash scripts</li>
+<li><code>make clean</code> - Clean temporary files</li>
+<li><code>make help</code> - Show all available commands</li>
+</ul>
+<h2 id="authors">👨‍💻 Authors<a class="headerlink" href="#authors" title="Permanent link">&para;</a></h2>
+<p><strong>Guilherme Rodrigues</strong><br />
+<a href="https://github.com/guilhermegor"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-guilhermegor-181717?style=flat&amp;logo=github" /></a><br />
+<a href="https://www.linkedin.com/in/guilhermegor/"><img alt="LinkedIn" src="https://img.shields.io/badge/LinkedIn-Guilherme_Rodrigues-0077B5?style=flat&amp;logo=linkedin" /></a></p>
+<h2 id="license">📜 License<a class="headerlink" href="#license" title="Permanent link">&para;</a></h2>
+<p>This project is licensed under the MIT License - see the <a href="LICENSE">LICENSE</a> file for details.</p>
+<h2 id="acknowledgments">🙌 Acknowledgments<a class="headerlink" href="#acknowledgments" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Inspired by various Linux distribution setup scripts and automation tools</li>
+<li>Thanks to the Linux community for best practices and configuration examples</li>
+</ul>
+<h2 id="useful-links">🔗 Useful Links<a class="headerlink" href="#useful-links" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="https://github.com/guilhermegor/dotfiles-linux-dev">GitHub Repository</a></li>
+<li><a href="https://github.com/guilhermegor/dotfiles-linux-dev/issues">Issue Tracker</a></li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["search.suggest", "search.highlight"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
