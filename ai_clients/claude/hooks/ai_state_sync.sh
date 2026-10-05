@@ -34,6 +34,12 @@
 # AI_STATE_TIMEOUT (seconds per network call, default 20).
 set -uo pipefail
 
+# A caller that is itself inside a git hook or wrapper can export these. --git-dir and
+# --work-tree override GIT_DIR/GIT_WORK_TREE but NOT GIT_INDEX_FILE or
+# GIT_OBJECT_DIRECTORY, so a leaked index would stage into the wrong repo.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 AI_STATE_REPO="${AI_STATE_REPO:-guilhermegor/ai-clients-state}"
 # Default remote follows gh's configured protocol (gh's credential helper
@@ -161,23 +167,42 @@ guard_staged() {
 
 # guard_unpushed: what a push would publish, including commits this run did not make
 # (a manual commit, a leftover from an earlier run) that never passed guard_staged.
-# Only the net tree difference vs origin is scanned, not intermediate commits.
+# Every unpushed commit is scanned, not only the net tree: a token added in one
+# commit and removed in a later one is absent from the net diff yet still lands in
+# the remote's history (CodeRabbit, #658). `-m` diffs a merge against each parent,
+# so content a merge itself introduces is scanned too.
 guard_unpushed() {
-    local listing rc failed=0
-    listing="$(mktemp)" || return 2
+    local commits listing commit range rc=0
     if g rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null 2>&1; then
-        g diff --name-only -z --no-renames --diff-filter=ACMRT "origin/$BRANCH" HEAD >"$listing" 2>/dev/null || failed=1
+        range="origin/$BRANCH..HEAD"
     else
-        g ls-tree -r -z --name-only HEAD >"$listing" 2>/dev/null || failed=1
+        range="HEAD"
     fi
-    if [ "$failed" -ne 0 ]; then
-        rm -f "$listing"
+    commits="$(mktemp)" || return 2
+    listing="$(mktemp)" || { rm -f "$commits"; return 2; }
+    if ! g rev-list "$range" >"$commits" 2>/dev/null; then
+        rm -f "$commits" "$listing"
         return 2
     fi
-    scan_blobs "$listing" "HEAD:"
-    rc=$?
-    rm -f "$listing"
+    while IFS= read -r commit; do
+        if ! g diff-tree -r -m -z --no-commit-id --name-only --no-renames \
+            --diff-filter=ACMRT --root "$commit" >"$listing" 2>/dev/null; then
+            rc=2
+            break
+        fi
+        scan_blobs "$listing" "$commit:"
+        case $? in
+            0) ;;
+            1) rc=1; break ;;
+            *) rc=2; break ;;
+        esac
+    done <"$commits"
+    rm -f "$commits" "$listing"
     return "$rc"
+}
+
+rebase_in_progress() {
+    [ -d "$AI_STATE_GIT_DIR/rebase-merge" ] || [ -d "$AI_STATE_GIT_DIR/rebase-apply" ]
 }
 
 report_forward() {
@@ -279,6 +304,13 @@ mode_push() {
     [ -d "$AI_STATE_GIT_DIR" ] || not_set_up
     configure_repo
     local unmerged held="" rc=0 msg
+    # Staged conflict resolutions clear "unmerged" while the rebase is still stopped,
+    # so the unmerged check alone would let a half-finished rebase be committed.
+    if rebase_in_progress; then
+        msg="a rebase is in progress in $AI_STATE_GIT_DIR; finish it with: git --git-dir=$AI_STATE_GIT_DIR --work-tree=$AI_STATE_WORK_TREE rebase --continue (or --abort), then sync again"
+        report_forward "$msg"
+        finish 1 "$msg"
+    fi
     unmerged="$(unmerged_files)"
     if [ -n "$unmerged" ]; then
         report_forward "Unmerged AI-state files block syncing; resolve them in $AI_STATE_WORK_TREE:

@@ -301,10 +301,53 @@ push_with_stubs() {
     push_with_stubs
 }
 
+# The publish scan now lists each unpushed commit's files with diff-tree (#658 review);
+# it used ls-tree on the net tree before, so the stub follows the command, not the intent.
 @test "fail closed: a failed scan of what would be pushed refuses the push" {
     plant_ok_file
-    stub_git "ls-tree -r -z"
+    stub_git "diff-tree -r -m"
     push_with_stubs
+}
+
+@test "fail closed: failing to list the unpushed commits refuses the push" {
+    plant_ok_file
+    stub_git "rev-list HEAD"
+    push_with_stubs
+}
+
+@test "a token added then removed in unpushed commits is refused, not published in history" {
+    plant_ok_file
+    local gd=(--git-dir="$AI_STATE_GIT_DIR" --work-tree="$CLAUDE_CONFIG_DIR")
+    printf 'k=%s\n' "$(fake_token)" >"$CLAUDE_CONFIG_DIR/memory/leak.md"
+    git "${gd[@]}" add memory/leak.md
+    git "${gd[@]}" commit -q -m add-token
+    rm "$CLAUDE_CONFIG_DIR/memory/leak.md"
+    git "${gd[@]}" add -A
+    git "${gd[@]}" commit -q -m remove-token
+    run bash "$SYNC" push
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"push refused"* ]]
+    run git --git-dir="$AI_STATE_REMOTE" log --all -p
+    [[ "$output" != *"$(fake_token)"* ]]
+}
+
+@test "push refuses while a rebase is stopped, even with no unmerged files" {
+    plant_ok_file
+    mkdir -p "$AI_STATE_GIT_DIR/rebase-merge"
+    run bash "$SYNC" push
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"rebase is in progress"* ]]
+    run remote_files
+    [ -z "$output" ]
+}
+
+@test "an inherited GIT_INDEX_FILE does not redirect what push stages" {
+    plant_ok_file
+    GIT_INDEX_FILE="$T/foreign.index" run bash "$SYNC" push
+    [ "$status" -eq 0 ]
+    [ ! -e "$T/foreign.index" ]
+    run remote_files
+    [[ "$output" == *"memory/ok.md"* ]]
 }
 
 @test "a leftover local commit holding a token is refused at push, not published" {
