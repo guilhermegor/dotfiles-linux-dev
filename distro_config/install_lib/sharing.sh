@@ -600,8 +600,8 @@ install_rclone_config() {
     fi
 }
 
-# Write (never enable or start) a systemd USER unit for an rclone mount,
-# creating the mount point when it is absent.
+# Write (never enable or start — see enable_rclone_mount_unit) a systemd USER
+# unit for an rclone mount, creating the mount point when it is absent.
 #   install_rclone_mount_unit [remote-name] [mountpoint]
 #
 # Args fall back to RCLONE_REMOTE/RCLONE_MOUNT_POINT (env, set by the Custom
@@ -609,11 +609,11 @@ install_rclone_config() {
 # `${1-...}` (no colon) so an explicitly empty arg is kept, not defaulted —
 # callers relying on the "usage" error below still get it.
 #
-# Enabling/starting the mount is operator work (issue #360): the operator
-# must have already run `rclone config` for <remote-name>, and reviewing the
-# generated unit before it goes live is the whole point of not auto-enabling
-# it. Never registered in INSTALL_REGISTRY — Full Installation should not
-# silently claim a mount point without the operator picking one first.
+# Enabling/starting the mount is a separate, explicit step (issue #647,
+# enable_rclone_mount_unit / `make rclone_mount`): this function only writes,
+# so the unit can be reviewed before it goes live. Never registered in
+# INSTALL_REGISTRY — Full Installation should not silently claim a mount point
+# without the operator picking one first.
 install_rclone_mount_unit() {
     local remote="${1-${RCLONE_REMOTE:-onedrive}}"
     local mountpoint="${2-${RCLONE_MOUNT_POINT:-$HOME/OneDrive}}"
@@ -670,9 +670,83 @@ install_rclone_mount_unit() {
         "$template_file" > "$unit_file" || return 1
 
     print_status "success" "Wrote $unit_file"
-    print_status "info" "Not enabled or started — review it, then run:"
-    print_status "config" "  systemctl --user daemon-reload"
-    print_status "config" "  systemctl --user enable --now rclone-${remote}.service"
+    print_status "info" "Not enabled or started — review it, then run: make rclone_mount"
+}
+
+# Enable and start the unit written by install_rclone_mount_unit, then verify
+# the mount actually appeared (issue #647).
+#   enable_rclone_mount_unit [remote-name] [mountpoint]
+#
+# Same RCLONE_REMOTE/RCLONE_MOUNT_POINT fallbacks as install_rclone_mount_unit.
+# Refuses unless the unit file exists, the remote answers a cheap read (so
+# "present in rclone.conf" and "authenticated" are proven together), and the
+# mount point is an existing empty directory that is not ~/Insync. An
+# already enabled + active + mounted unit is left alone. RCLONE_MOUNT_WAIT
+# bounds the post-start wait for the mount, in seconds (default 30).
+enable_rclone_mount_unit() {
+    local remote="${1-${RCLONE_REMOTE:-onedrive}}"
+    local mountpoint="${2-${RCLONE_MOUNT_POINT:-$HOME/OneDrive}}"
+    local unit="rclone-${remote}.service"
+    local unit_file="$HOME/.config/systemd/user/$unit"
+
+    if [ -z "$remote" ] || [ -z "$mountpoint" ]; then
+        print_status "error" "Usage: enable_rclone_mount_unit <remote-name> <mountpoint>"
+        return 1
+    fi
+
+    if [ ! -f "$unit_file" ]; then
+        print_status "error" "$unit_file not found — run install_rclone_mount_unit first"
+        return 1
+    fi
+
+    if systemctl --user is-enabled --quiet "$unit" 2>/dev/null \
+        && systemctl --user is-active --quiet "$unit" 2>/dev/null \
+        && mountpoint -q "$mountpoint"; then
+        print_status "success" "$unit is already enabled, active and mounted at $mountpoint"
+        return 0
+    fi
+
+    if ! command_exists rclone; then
+        print_status "error" "rclone is not installed — run install_rclone first"
+        return 1
+    fi
+
+    if [ "$mountpoint" = "$HOME/Insync" ]; then
+        print_status "error" "Refusing to mount over $HOME/Insync (issue #360)"
+        return 1
+    fi
+
+    if [ ! -d "$mountpoint" ]; then
+        print_status "error" "Mount point $mountpoint is not an existing directory"
+        return 1
+    fi
+    if [ -n "$(find "$mountpoint" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+        print_status "error" "Refusing to mount over $mountpoint — it is not empty"
+        return 1
+    fi
+
+    if ! timeout 60 rclone lsd "${remote}:" --max-depth 1 >/dev/null 2>&1; then
+        print_status "error" "Remote '${remote}:' is missing or not authenticated"
+        print_status "config" "Run: rclone config reconnect ${remote}:"
+        return 1
+    fi
+
+    run_or_echo systemctl --user daemon-reload || return 1
+    run_or_echo systemctl --user enable --now "$unit" || return 1
+
+    local waited=0 limit="${RCLONE_MOUNT_WAIT:-30}"
+    while [ "$waited" -lt "$limit" ]; do
+        if mountpoint -q "$mountpoint"; then
+            print_status "success" "$unit enabled; $mountpoint is mounted"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    print_status "error" "$mountpoint was not mounted within ${limit}s — last journal lines:"
+    journalctl --user -u "$unit" -n 20 --no-pager >&2 || true
+    return 1
 }
 
 # ============================================================================

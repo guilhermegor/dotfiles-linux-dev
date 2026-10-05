@@ -48,7 +48,7 @@ run:  ## Complete initial setup (RECOMMENDED first-time entry point)
 
 ##@ System Setup
 
-.PHONY: setup_env install_programs install_coding irpf_download set_shortcuts ubuntu_workspace vscode_setup vscode_restore bash_profile starship_setup starship_menu starship_undo_previous starship_undo_original
+.PHONY: setup_env install_programs rclone_mount install_coding irpf_download set_shortcuts ubuntu_workspace vscode_setup vscode_restore bash_profile starship_setup starship_menu starship_undo_previous starship_undo_original
 
 setup_env:  ## Prompt to create .env from .env.example
 	@bash distro_config/setup_env.sh
@@ -56,6 +56,9 @@ setup_env:  ## Prompt to create .env from .env.example
 install_programs:  ## Install desktop apps (browsers, productivity, media, sharing, VM)
 	@echo "Installing essential programs..."
 	@bash distro_config/install_programs.sh
+
+rclone_mount:  ## Enable + start the rclone mount unit (after install_programs wrote it)
+	@bash -c 'source distro_config/install_lib/_common.sh && source distro_config/install_lib/sharing.sh && enable_rclone_mount_unit'
 
 install_coding:  ## Install coding env (languages, editors, databases, AI CLIs)
 	@echo "Installing coding environment (languages, editors, databases, AI CLIs)..."
