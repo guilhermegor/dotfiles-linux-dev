@@ -680,8 +680,21 @@ install_rclone_mount_unit() {
         return 0
     fi
 
+    # A comment-only diff must not suggest a restart: it remounts the live
+    # mount (open files, pending VFS uploads) for no functional change (#651).
+    local comment_only=0
+    if [ -f "$unit_file" ] \
+        && [ "$(grep -Ev '^[[:space:]]*(#|$)' "$unit_file")" = "$(grep -Ev '^[[:space:]]*(#|$)' <<< "$rendered")" ]; then
+        comment_only=1
+    fi
+
     run_or_echo mkdir -p "$unit_dir"
     printf '%s\n' "$rendered" > "$unit_file" || return 1
+
+    if [ "$comment_only" -eq 1 ]; then
+        print_status "success" "Wrote $unit_file (updated comments only)"
+        return 0
+    fi
 
     print_status "success" "Wrote $unit_file"
     if [ "$already_mounted" -eq 1 ]; then

@@ -40,7 +40,10 @@ cache ceiling replaces a 1.3 T mirror.
   it is absent**. Refuses (does not warn) when `<mountpoint>` already exists, is non-empty and is
   not a live mount of the unit, and always refuses `~/Insync` regardless of emptiness. Idempotent
   (#649): when `<mountpoint>` is already a live mount of the unit it reports "already mounted",
-  rewrites the unit file only if its content would change, and returns 0. Never enables or starts the unit. Args
+  rewrites the unit file only if its content would change, and returns 0. It suggests
+  `systemctl --user restart` only for a functional change; a comment-only diff (comment and
+  blank lines ignored on both sides) is rewritten silently as "updated comments only" (#651), since
+  a restart remounts the live mount. Never enables or starts the unit. Args
   fall back to `RCLONE_REMOTE` / `RCLONE_MOUNT_POINT`, then to `onedrive` / `~/OneDrive` (issue
   #365) — so `install_rclone_mount_unit` with no arguments reproduces the `mkdir -p ~/OneDrive`
   + `install_rclone_mount_unit onedrive ~/OneDrive` sequence that was previously done by hand.

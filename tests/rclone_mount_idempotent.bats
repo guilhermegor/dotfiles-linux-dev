@@ -67,6 +67,38 @@ go_live() {
     grep -q "ExecStart" "$UNIT"
 }
 
+@test "comment-only change while mounted rewrites silently, no restart hint (#651)" {
+    install_rclone_mount_unit
+    go_live
+    sed -i '1s/.*/# a different header comment/' "$UNIT"
+    echo "# trailing comment" >> "$UNIT"
+    run install_rclone_mount_unit
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"updated comments only"* ]]
+    [[ "$output" != *"restart"* ]]
+    run grep -q "a different header comment" "$UNIT"
+    [ "$status" -ne 0 ]
+}
+
+@test "changed ExecStart while mounted still prints the restart hint (#651)" {
+    install_rclone_mount_unit
+    go_live
+    sed -i 's|^ExecStart=.*|ExecStart=/bin/false|' "$UNIT"
+    run install_rclone_mount_unit
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"systemctl --user restart rclone-onedrive.service"* ]]
+    run grep -q "/bin/false" "$UNIT"
+    [ "$status" -ne 0 ]
+}
+
+@test "identical unit while mounted reports already up to date (#651)" {
+    install_rclone_mount_unit
+    go_live
+    run install_rclone_mount_unit
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"already up to date"* ]]
+}
+
 @test "install unit still refuses a non-empty directory that is not a live mount" {
     touch "$HOME/OneDrive/precious.txt"
     run install_rclone_mount_unit
