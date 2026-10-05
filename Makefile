@@ -290,6 +290,25 @@ test:  ## Run the bats unit test suite (tests/) — local parity with CI
 	@bash tests/bats_negation_gate.sh
 	@bats tests/
 
+##@ Documentation
+
+.PHONY: docs_serve docs_build enable_pages
+
+docs_serve:  ## Serve the MkDocs site locally with live reload (:8000)
+	@poetry install --with docs --no-root
+	@poetry run cz changelog
+	@poetry run mkdocs serve -a 0.0.0.0:8000 --livereload
+
+docs_build:  ## Strict MkDocs build (same check CI runs)
+	@poetry install --with docs --no-root
+	@poetry run cz changelog
+	@poetry run mkdocs build --strict
+
+enable_pages:  ## Point GitHub Pages at gh-pages (no-op until the first docs deploy created it)
+	@bash lib/enable_pages.sh
+
+##@ Utilities
+
 lessons_mirror:  ## Regenerate this repo's git-ignored lesson mirrors (.specs/_lessons/) from the global stores
 	@bash ai_clients/claude/hooks/lib/generate_lesson_mirrors.sh "$(CURDIR)"
 

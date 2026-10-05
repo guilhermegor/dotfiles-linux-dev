@@ -1,0 +1,1 @@
+--8<-- "espanso/CLAUDE.md"
