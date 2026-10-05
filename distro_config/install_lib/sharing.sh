@@ -633,7 +633,15 @@ install_rclone_mount_unit() {
         return 1
     fi
 
-    if [ -e "$mountpoint" ]; then
+    local unit_name="rclone-${remote}.service"
+    local already_mounted=0
+    # A live mount of this unit lists the remote's folders, so the emptiness
+    # guard below would misread it as an occupied directory (#649).
+    if mountpoint -q "$mountpoint" 2>/dev/null \
+        && systemctl --user is-active --quiet "$unit_name" 2>/dev/null; then
+        already_mounted=1
+        print_status "info" "$mountpoint is already mounted by $unit_name"
+    elif [ -e "$mountpoint" ]; then
         if [ ! -d "$mountpoint" ]; then
             print_status "error" "$mountpoint exists and is not a directory"
             return 1
@@ -647,29 +655,39 @@ install_rclone_mount_unit() {
         run_or_echo mkdir -p "$mountpoint" || return 1
     fi
 
-    local repo_root template_file unit_dir unit_file
+    local repo_root template_file unit_dir unit_file rendered
     repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || return 1
     template_file="$repo_root/distro_config/dotfiles/rclone/rclone-mount.service.template"
     unit_dir="$HOME/.config/systemd/user"
-    unit_file="$unit_dir/rclone-${remote}.service"
+    unit_file="$unit_dir/$unit_name"
 
     if [ ! -f "$template_file" ]; then
         print_status "error" "Template not found: $template_file"
         return 1
     fi
 
-    run_or_echo mkdir -p "$unit_dir"
-
     # Substitute only from [Unit] onward — the header comments above it use
     # the same {{REMOTE}}/{{MOUNTPOINT}} tokens to document the placeholders
     # themselves, and a blanket substitution made every generated unit's
     # header read "substitutes onedrive and /home/.../OneDrive..." (#365).
-    sed \
+    rendered="$(sed \
         -e "/^\[Unit\]/,\$ s|{{REMOTE}}|${remote}|g" \
         -e "/^\[Unit\]/,\$ s|{{MOUNTPOINT}}|${mountpoint}|g" \
-        "$template_file" > "$unit_file" || return 1
+        "$template_file")" || return 1
+
+    if [ -f "$unit_file" ] && [ "$(cat "$unit_file")" = "$rendered" ]; then
+        print_status "success" "$unit_file is already up to date"
+        return 0
+    fi
+
+    run_or_echo mkdir -p "$unit_dir"
+    printf '%s\n' "$rendered" > "$unit_file" || return 1
 
     print_status "success" "Wrote $unit_file"
+    if [ "$already_mounted" -eq 1 ]; then
+        print_status "info" "Unit changed while mounted — apply with: systemctl --user restart $unit_name"
+        return 0
+    fi
     print_status "info" "Not enabled or started — review it, then run: make rclone_mount"
 }
 

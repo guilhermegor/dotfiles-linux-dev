@@ -238,19 +238,15 @@ prompt_rclone_choices() {
 }
 
 # Write the rclone.conf skeleton and the mount unit right after the binary
-# installs; enabling the mount is offered as an explicit [y/N] step (#647) —
-# never automatic, and skipped without a TTY. See install_rclone_config/
-# install_rclone_mount_unit/enable_rclone_mount_unit in install_lib/sharing.sh.
+# installs, then enable the mount unattended — no prompt, TTY or not (#649).
+# enable_rclone_mount_unit's own guards make that safe: an unauthenticated
+# remote prints its refusal + `rclone config` hint and returns 1, which is
+# swallowed here so the rest of the install carries on.
 run_rclone_followups() {
     install_rclone_config
     install_rclone_mount_unit
-
-    [ -t 0 ] || return 0
-    local answer
-    read -r -p "Enable and start the rclone mount now? [y/N]: " answer
-    case "$answer" in
-        [yY]*) enable_rclone_mount_unit ;;
-    esac
+    enable_rclone_mount_unit </dev/null \
+        || print_status "warning" "rclone mount not enabled — fix the above, then run: make rclone_mount"
 }
 
 run_full_installation() {

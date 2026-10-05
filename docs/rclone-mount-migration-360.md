@@ -37,8 +37,10 @@ cache ceiling replaces a 1.3 T mirror.
 - `install_rclone_mount_unit [remote] [mountpoint]` (same file) — writes
   `~/.config/systemd/user/rclone-<remote>.service` from the repo-tracked template at
   `distro_config/dotfiles/rclone/rclone-mount.service.template`, **creating `<mountpoint>` when
-  it is absent**. Refuses (does not warn) when `<mountpoint>` already exists and is non-empty,
-  and always refuses `~/Insync` regardless of emptiness. Never enables or starts the unit. Args
+  it is absent**. Refuses (does not warn) when `<mountpoint>` already exists, is non-empty and is
+  not a live mount of the unit, and always refuses `~/Insync` regardless of emptiness. Idempotent
+  (#649): when `<mountpoint>` is already a live mount of the unit it reports "already mounted",
+  rewrites the unit file only if its content would change, and returns 0. Never enables or starts the unit. Args
   fall back to `RCLONE_REMOTE` / `RCLONE_MOUNT_POINT`, then to `onedrive` / `~/OneDrive` (issue
   #365) — so `install_rclone_mount_unit` with no arguments reproduces the `mkdir -p ~/OneDrive`
   + `install_rclone_mount_unit onedrive ~/OneDrive` sequence that was previously done by hand.
@@ -146,8 +148,10 @@ precondition fails.
   answers `rclone lsd <remote>: --max-depth 1` (present and authenticated), and the mount point
   is an existing empty directory other than `~/Insync`; then it waits (`RCLONE_MOUNT_WAIT`, default
   30 s) for `mountpoint -q` and prints the last `journalctl --user -u` lines if the mount never
-  appears. Already enabled, active and mounted is a no-op. `run_rclone_followups` offers the same
-  step as a `[y/N]` prompt (interactive runs only).
+  appears. Already enabled, active and mounted is a no-op. `run_rclone_followups` runs the same
+  step unattended in `make run` (#649) — no prompt, TTY or not; a refusal (for example an
+  unauthenticated remote, with its `rclone config reconnect` hint) only warns and the rest of
+  the install carries on.
 - **The actual `INSYNC_CONFIRM_DELETE=1` run** — deleting 1.3 T of the owner's data is a
   human decision, not a default.
 - **Verifying the cache ceiling holds** — read a file larger than 10 G through the mount, then
