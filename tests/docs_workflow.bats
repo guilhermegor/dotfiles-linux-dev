@@ -27,6 +27,18 @@ print(eval(sys.argv[2], {"wf": wf}))
 PY
 }
 
+# #664: the deploy job holds contents:write, so a mutable third-party tag there is
+# arbitrary code with a push token. Only GitHub-owned actions are allowed.
+@test "every action used is GitHub-owned (no third-party uses:)" {
+    run wf '[s["uses"] for j in wf["jobs"].values() for s in j["steps"] if "uses" in s and not s["uses"].startswith("actions/")]'
+    [ "$output" = "[]" ]
+}
+
+@test "the build job's checkout does not persist credentials" {
+    run wf '[s.get("with",{}).get("persist-credentials") for s in wf["jobs"]["build"]["steps"] if s.get("uses","").startswith("actions/checkout")]'
+    [ "$output" = "[False]" ]
+}
+
 @test "triggers cover push and pull_request" {
     run wf '" ".join(sorted(wf["on"]))'
     [ "$output" = "pull_request push" ]

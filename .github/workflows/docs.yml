@@ -22,14 +22,17 @@ jobs:
         with:
           # Full history so `cz changelog` sees the tags.
           fetch-depth: 0
+          # This job never pushes; keep the token out of .git/config.
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      - uses: snok/install-poetry@v1
-        with:
-          virtualenvs-in-project: true
+      # No third-party action (#664): pipx ships on GitHub runners, and the
+      # pin matches the Poetry that generated poetry.lock.
+      - name: Install Poetry
+        run: pipx install poetry==2.4.3
 
       - name: Install docs dependencies
         run: poetry install --with docs --no-root
@@ -62,9 +65,8 @@ jobs:
         with:
           python-version: "3.x"
 
-      - uses: snok/install-poetry@v1
-        with:
-          virtualenvs-in-project: true
+      - name: Install Poetry
+        run: pipx install poetry==2.4.3
 
       - name: Install docs dependencies
         run: poetry install --with docs --no-root
