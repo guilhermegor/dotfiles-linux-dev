@@ -98,9 +98,24 @@ setup() {
     [ "$status" -ne 0 ]
 }
 
-@test "the ask list spells env the same way the deny list does" {
-    run jq -e '.permissions.ask | index("Bash(env:*)")' "$SETTINGS"
+# dotfiles-linux-dev#644: auto mode alone gates commands. Every ask rule overrode the
+# classifier, so the list is empty, and the key stays present: the deploy merge
+# (`jq '. * $base'`) replaces the live array only when source defines it.
+@test "the ask list is present and empty, so no rule overrides auto mode" {
+    run jq -e '.permissions | has("ask") and (.ask == [])' "$SETTINGS"
     [ "$status" -eq 0 ]
+}
+
+@test "defaultMode is auto" {
+    run jq -e '.permissions.defaultMode == "auto"' "$SETTINGS"
+    [ "$status" -eq 0 ]
+}
+
+# With no `ask` carve-out left, a blanket Bash(sed:*) allow would let `sed -i`
+# rewrite files with no prompt in any mode.
+@test "allow list does NOT contain the blanket Bash(sed:*) form" {
+    run jq -e '.permissions.allow | index("Bash(sed:*)")' "$SETTINGS"
+    [ "$status" -ne 0 ]
 }
 
 @test "deny list contains Bash(cat /proc/*/environ)" {

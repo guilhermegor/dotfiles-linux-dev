@@ -28,14 +28,18 @@ smaller still (a single step: deliver the shared AGENTS.md).
 
 ## Permissions model (`claude/settings.json`)
 
-`defaultMode` is `default` — the `allow`/`ask`/`deny` lists are matched by string
-prefix and are the whole truth (no `auto`-mode classifier; uncovered commands
-prompt, `deny` always wins). The buckets follow one rule: read-only / reversible →
-`allow` (no prompt); outward-facing or irreversible-ish (`git push`, `gh pr merge`,
-`sudo`, installs) → `ask` (harness prompts); secrets + `rm -rf ~|/` + `chmod -R 777`
-→ `deny` (hard block). The contents are self-documenting in the file; the three
-non-obvious points below are **not**, and a future audit must not relitigate them
-(dotfiles-linux-dev#68):
+`defaultMode` is `auto` — the auto-mode classifier decides every command not
+covered by `allow` or `deny` (dotfiles-linux-dev#644, owner decision 2026-10-04).
+The buckets: read-only / reversible → `allow` (no prompt, no classifier call);
+secrets + `rm -rf ~|/` + `chmod -R 777` → `deny` (hard block, always wins);
+everything else, `git push` / `gh pr merge` / `sudo` / installs included → the
+classifier. **`ask` is deliberately `[]`:** every `ask` rule *overrides* auto mode
+("Ask rule … overrides auto mode for this command"), and 72 of them made routine
+`python3` / `rm` / `cp` prompt constantly. Keep the key present and empty — the
+deploy merge (`jq '. * $base'`) replaces the live array only when source defines
+it, so deleting the key would leave the old live list in force. The contents are
+self-documenting in the file; the non-obvious points below are **not**, and a
+future audit must not relitigate them (dotfiles-linux-dev#68, #644):
 
 1. **Dual-list every git/gh entry in bare AND `rtk` form.** The `rtk hook claude`
    PreToolUse hook rewrites `git …` → `rtk git …` at execution, but the model is
@@ -64,9 +68,15 @@ non-obvious points below are **not**, and a future audit must not relitigate the
    Note `claude -p` does **not** enforce these deny rules, so it cannot be used to
    test them; and settings do not hot-reload mid-session.
 
-4. **No prose "never commit/push" rule** (in this doc or the global CLAUDE.md). That
-   was a probabilistic instruction; it is replaced by `commit`→`allow`,
-   `push`→`ask`. Re-adding it duplicates the gate and brings back the friction.
+4. **No prose "never commit/push" rule** (in this doc or the global CLAUDE.md), and
+   **no `ask` entries.** `commit` is in `allow`; `push`/`merge` are left to the
+   auto-mode classifier (#644). A prose rule is probabilistic, and an `ask` entry
+   overrides the classifier and brings the prompt friction back.
+
+5. **No blanket `Bash(sed:*)` in `allow`.** It used to be safe only because
+   `ask`'s `Bash(sed -i:*)` carved in-place edits back out; with `ask` empty, it
+   would let `sed -i` rewrite files with no prompt. Read-only `sed` goes through
+   the classifier like any other uncovered command.
 
 ## Body-template guards: PR and issue
 
