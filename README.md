@@ -142,10 +142,15 @@ project `.env`. Both files are written mode `600`.
 | Key | Purpose | Scopes | Consumers |
 |---|---|---|---|
 | `GH_REVIEW_TRIGGER_PAT` | User PAT so CodeRabbit answers a review request — it silently ignores bot-authored (`GITHUB_TOKEN`) comments | Fine-grained PAT, **All repositories**, `Pull requests: Read and write` | `.github/workflows/coderabbit_trigger.yml` in `blueprintx` and every project it scaffolds |
-| `CLAUDE_BACKUP_DIR` | Default target dir for `/backup-env` / `/restore-env` | n/a (local path) | `ai_clients/claude/commands/backup-env.md`, `restore-env.md`, `storage/backup_env.sh`, `storage/restore_env.sh` |
+
+**Where secrets live.** Variable *names* live in `.env.example` (committed).
+Values live in a password manager of your choosing — this repo does not depend
+on any particular one. The real `.env` is machine-local and is **not backed
+up**: it dies with the OS install, by design, and you re-create it from
+`.env.example` plus your password manager.
 
 **Re-minting `GH_REVIEW_TRIGGER_PAT` on a new/lost machine** (a PAT is re-minted,
-not restored — a backed-up value may already be expired):
+not restored):
 1. github.com/settings/tokens → generate a new fine-grained token with the
    scopes above.
 2. `echo 'GH_REVIEW_TRIGGER_PAT=<value>' >> .env` (project-root `.env` —

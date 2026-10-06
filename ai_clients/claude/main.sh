@@ -25,7 +25,6 @@ source "$SCRIPT_DIR/../lib/shared_agents_md.sh"
 source "$SCRIPT_DIR/lib/rules.sh"
 source "$SCRIPT_DIR/lib/mcp_servers.sh"
 source "$SCRIPT_DIR/lib/profiles.sh"
-source "$SCRIPT_DIR/lib/env.sh"
 source "$SCRIPT_DIR/lib/claude_mem.sh"
 source "$SCRIPT_DIR/lib/prune.sh"
 
@@ -87,7 +86,6 @@ run_plugins() {
 STEPS=(
     "settings|Configure settings.json"
     "hooks|Install hook scripts (SessionStart context, ...)"
-    "env|Configure .env (backup path, etc.)"
     "slash_commands|Install custom slash commands"
     "skills|Install user skills"
     "agents|Install pipeline agents"
@@ -108,7 +106,6 @@ dispatch_step() {
     case "$key" in
         settings)       configure_settings ;;
         hooks)          install_hooks ;;
-        env)            configure_env ;;
         slash_commands) install_slash_commands ;;
         skills)         install_skills ;;
         agents)         install_agents ;;

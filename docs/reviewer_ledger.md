@@ -50,9 +50,8 @@ re-reading every finding, so pick a real class when one applies.
 
 **Not in the repo.** The database is `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/reviewer_ledger.db`
 by default (override with `REVIEWER_LEDGER_DB`, which every test in
-`tests/reviewer_ledger.bats` does to a tmp file) — covered by the existing
-`backup_env`/external-drive backup, versioning it would churn on every
-round.
+`tests/reviewer_ledger.bats` does to a tmp file) — machine-local and not
+backed up; versioning it would churn on every round.
 
 ## CLI
 

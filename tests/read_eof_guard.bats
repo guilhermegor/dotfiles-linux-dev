@@ -41,61 +41,6 @@ eof_run() {
     ' _ "$REPO_ROOT_REAL/$1" "${@:2}" </dev/null
 }
 
-# ── env.sh ───────────────────────────────────────────────────────────────────
-
-@test "configure_env keeps the existing backup dir on EOF" {
-    STUBS='_write_env_file() { echo "WROTE:$2" >> "$TMP_DIR/written"; }'
-    echo "CLAUDE_BACKUP_DIR=/keep/me" > "$CLAUDE_DIR/.env"
-
-    run eof_run ai_clients/claude/lib/env.sh configure_env
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Kept existing CLAUDE_BACKUP_DIR"* ]]
-    [ "$(cat "$TMP_DIR/written")" = "WROTE:/keep/me" ]
-}
-
-@test "configure_env skips the backup dir on EOF when none is set" {
-    STUBS='_write_env_file() { echo "WROTE:$2" >> "$TMP_DIR/written"; }'
-
-    run eof_run ai_clients/claude/lib/env.sh configure_env
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"No backup path provided"* ]]
-    [ "$(cat "$TMP_DIR/written")" = "WROTE:" ]
-}
-
-@test "configure_env does not mkdir an unanswered path on EOF" {
-    STUBS='_write_env_file() { echo "WROTE:$2" >> "$TMP_DIR/written"; }'
-    # First prompt answered by a stub, only the create-dir prompt sees EOF.
-    local missing="$TMP_DIR/never-created"
-    run bash -c '
-        set -e
-        source "'"$REPO_ROOT_REAL"'/ai_clients/claude/lib/env.sh"
-        print_status() { echo "[$1] $2"; }
-        _write_env_file() { echo "WROTE:$2"; }
-        CLAUDE_DIR="'"$CLAUDE_DIR"'"
-        { echo "'"$missing"'"; } | configure_env
-    '
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Directory not created"* ]]
-    [ ! -e "$missing" ]
-}
-
-@test "configure_env keeps a partial last-line answer 'n' on EOF" {
-    echo "CLAUDE_BACKUP_DIR=/keep/me" > "$CLAUDE_DIR/.env"
-    export HOME CLAUDE_DIR TMP_DIR
-
-    # printf without a trailing newline: read returns 1 yet has set the answer to "n".
-    run bash -c '
-        set -e
-        source "'"$REPO_ROOT_REAL"'/ai_clients/claude/lib/env.sh"
-        print_status() { echo "[$1] $2"; }
-        _write_env_file() { echo "WROTE:$2"; }
-        printf n | configure_env
-    '
-    [ "$status" -eq 0 ]
-    [[ "$output" != *"Kept existing CLAUDE_BACKUP_DIR"* ]]
-    [[ "$output" == *"No backup path provided"* ]]
-}
-
 # ── claude_mem.sh ────────────────────────────────────────────────────────────
 
 @test "configure_claude_mem keeps the existing mode on EOF" {
@@ -149,33 +94,4 @@ eof_run() {
     [[ "$output" == *"nothing removed"* ]]
     [ -f "$CLAUDE_DIR/commands/orphan.md" ]
     [ "$(jq -r '.enabledPlugins | has("stale@m")' "$CLAUDE_DIR/settings.json")" = "true" ]
-}
-
-# ── restore_env_prompt.sh ────────────────────────────────────────────────────
-
-@test "prompt_restore_env declines on EOF when .env exists" {
-    STUBS=:
-    REPO_ROOT="$TMP_DIR/repo"
-    mkdir -p "$REPO_ROOT" "$HOME/.local/bin"
-    touch "$REPO_ROOT/.env"
-    printf '#!/bin/bash\ntouch "%s/ran"\n' "$TMP_DIR" > "$HOME/.local/bin/restore-env.sh"
-    chmod +x "$HOME/.local/bin/restore-env.sh"
-
-    run eof_run ai_clients/lib/restore_env_prompt.sh prompt_restore_env
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Skipping .env restore."* ]]
-    [ ! -e "$TMP_DIR/ran" ]
-}
-
-@test "prompt_restore_env declines on EOF when .env is absent" {
-    STUBS=:
-    REPO_ROOT="$TMP_DIR/repo"
-    mkdir -p "$REPO_ROOT" "$HOME/.local/bin"
-    printf '#!/bin/bash\ntouch "%s/ran"\n' "$TMP_DIR" > "$HOME/.local/bin/restore-env.sh"
-    chmod +x "$HOME/.local/bin/restore-env.sh"
-
-    run eof_run ai_clients/lib/restore_env_prompt.sh prompt_restore_env
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Skipping .env restore."* ]]
-    [ ! -e "$TMP_DIR/ran" ]
 }

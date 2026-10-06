@@ -2,7 +2,7 @@
 #
 # Unit tests for ai_clients/lib/shared_agents_md.sh
 #
-# Strategy (same pattern as tests/restore_env_prompt.bats):
+# Strategy (stub print_status, sandbox HOME):
 #   - Stub `print_status` BEFORE sourcing the helper so no real lib/common.sh
 #     dependency is needed, and its output is captured for assertions.
 #   - The helper resolves its own source file relative to its OWN location
