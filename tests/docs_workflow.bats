@@ -113,3 +113,46 @@ GH
     run grep -c -e '-X' "$BATS_TEST_TMPDIR/gh.log"
     [ "$output" = "0" ]
 }
+
+# #662: `gh repo view` is GraphQL; under a rate limit it fails, and that empty answer
+# used to be reported as "No GitHub remote resolved" with exit 0.
+@test "enable_pages resolves the repo from origin when gh repo view fails" {
+    mkdir -p "$BATS_TEST_TMPDIR/bin" "$BATS_TEST_TMPDIR/clone"
+    cat > "$BATS_TEST_TMPDIR/bin/gh" <<'GH'
+#!/bin/bash
+echo "$*" >> "$GH_LOG"
+case "$*" in
+    "auth status") exit 0 ;;
+    "repo view"*) exit 1 ;;
+    "api repos/o/r/branches/gh-pages") exit 0 ;;
+    "api repos/o/r/pages --jq .source.branch") exit 1 ;;
+    "api -X POST repos/o/r/pages --input -") cat >/dev/null; exit 0 ;;
+    *) exit 1 ;;
+esac
+GH
+    chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+    git -C "$BATS_TEST_TMPDIR/clone" init -q
+    git -C "$BATS_TEST_TMPDIR/clone" remote add origin https://github.com/o/r.git
+    cd "$BATS_TEST_TMPDIR/clone"
+    run env GH_LOG="$BATS_TEST_TMPDIR/gh.log" PATH="$BATS_TEST_TMPDIR/bin:$PATH" \
+        bash "$ROOT/lib/enable_pages.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"now serves 'gh-pages' for o/r"* ]]
+    grep -q -- '-X POST repos/o/r/pages' "$BATS_TEST_TMPDIR/gh.log"
+}
+
+@test "enable_pages fails loudly when no repo can be resolved" {
+    mkdir -p "$BATS_TEST_TMPDIR/bin" "$BATS_TEST_TMPDIR/norepo"
+    cat > "$BATS_TEST_TMPDIR/bin/gh" <<'GH'
+#!/bin/bash
+case "$*" in
+    "auth status") exit 0 ;;
+    *) exit 1 ;;
+esac
+GH
+    chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+    cd "$BATS_TEST_TMPDIR/norepo"
+    run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash "$ROOT/lib/enable_pages.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Could not resolve the GitHub repo"* ]]
+}
