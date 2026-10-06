@@ -869,6 +869,50 @@ before removing, and never touches a top-level key or any key not listed —
 adding a key to `SETTINGS_PRUNE_KEYS` is an explicit claim that source is the
 full authority for everything under it.
 
+## AI-state sync (`hooks/ai_state_sync.sh`, dotfiles-linux-dev#655)
+
+Authored `~/.claude` state that no deploy step reproduces lives in a **private** repo
+(`AI_STATE_REPO`, default `guilhermegor/ai-clients-state`), one script with three
+subcommands and two callers:
+
+| Caller | Invocation | Behaviour |
+|---|---|---|
+| `SessionStart` hook | `ai_state_sync.sh pull --hook` | bounded `pull --rebase --autostash`; offline is silent; prints only a conflict |
+| `SessionEnd` hook | `ai_state_sync.sh push --hook` | secret guard, commit, push; always exit 0 |
+| Shortcut / terminal | `~/.local/bin/ai-state-sync pull\|push` | same code, prints the outcome, `notify-send` without a TTY, non-zero on failure |
+| Step `state_sync` | `ai_state_sync.sh setup` | clone + materialise; refuses to overwrite a divergent live file; no remote means the `gh repo create --private` hint and nothing else |
+
+**Work-tree, not symlinks.** The git dir lives at `~/.ai-clients-state/claude.git` with
+`--work-tree=~/.claude`. Symlinking `memory/`, `projects/*/memory/` etc. would need a
+link per project dir (a project created tomorrow is unlinked until a re-run), would
+replace real directories on a fresh machine, and degrades on Windows. The work-tree
+needs no link at all. Membership is the whitelist in the git dir's `info/exclude`
+(`/*` then explicit `!` entries; `*.jsonl`, `.env*`, `.credentials.json` re-denied
+last), rewritten on every run so a whitelist change deploys with the hooks.
+
+**`issue-trackers.conf` lives in the state repo**, not here: it is owner-specific
+config (which trackers the owner's repos use), this repo is public, and a deployed copy
+would need a per-machine override anyway.
+
+**Default remote follows `gh config get git_protocol`**: https gives
+`https://github.com/<repo>.git` (gh's credential helper authenticates it), ssh gives the
+SSH form, and https is the fallback when gh is absent or fails. An explicit
+`AI_STATE_REMOTE` always wins.
+
+**Secret guard**: token shapes and PEM keys only (same patterns as
+`commit_secret_guard.sh`, kept in sync by hand). A flagged file is unstaged and reported
+by NAME (never the value); the rest still syncs. A password-assignment heuristic was
+left out on purpose: it would false-positive on memory prose and wedge the sync.
+
+**Conflicts are never resolved.** A push whose rebase conflicts is aborted (local
+commits kept); a pull conflict leaves git's markers. Both write
+`~/.claude/session-audit/ai-state-sync.md`, which the next `pull --hook` prints.
+
+**Extension point (#656)**: `AI_STATE_GIT_DIR`, `AI_STATE_WORK_TREE` and `WHITELIST` are
+the only per-client inputs; codex/qwen/copilot state is a second invocation, not a
+change to the modes. Keyboard-shortcut wiring (`distro_config/set_custom_shortcuts.sh`)
+is a separate follow-up.
+
 ## Deployment
 
 ```bash

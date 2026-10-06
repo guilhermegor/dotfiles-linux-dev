@@ -156,6 +156,22 @@ not restored — a backed-up value may already be expired):
    `gh secret set GH_REVIEW_TRIGGER_PAT --body "$GH_REVIEW_TRIGGER_PAT"` on
    the target repo succeeds.
 
+### 🧠 AI state across machines (private repo)
+
+Authored Claude Code state (`~/.claude/memory`, `projects/*/memory`, `tasks`, `specs`,
+`plans`, `issue-trackers.conf`) syncs through a **private** GitHub repo
+(`AI_STATE_REPO`, default `guilhermegor/ai-clients-state`). Credentials, `.env`,
+plugins, caches and session transcripts are never included (whitelist, not blacklist).
+
+```bash
+gh repo create guilhermegor/ai-clients-state --private   # once, ever
+./ai_clients/claude/main.sh hooks settings state_sync     # on each machine
+```
+
+Sessions then pull on start and commit + push on exit, automatically. Outside a
+session (or from a keyboard shortcut) run `ai-state-sync pull` / `ai-state-sync push`.
+Conflicts are reported, never auto-resolved. Details: `ai_clients/CLAUDE.md`.
+
 ### 📚 Documentation site
 
 The docs are a MkDocs Material site versioned with mike (`dev`, alias `latest`),

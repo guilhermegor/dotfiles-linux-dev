@@ -201,6 +201,11 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/session_start_context.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai_state_sync.sh\" pull --hook",
+            "timeout": 30
           }
         ]
       }
@@ -211,6 +216,11 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/session_capture_audit.sh\" --handoff"
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai_state_sync.sh\" push --hook",
+            "timeout": 60
           }
         ]
       }
