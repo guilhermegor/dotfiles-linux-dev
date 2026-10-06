@@ -721,6 +721,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ai-state-sync-hooksai_state_syncsh-dotfiles-linux-dev655" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI-state sync (hooks/ai_state_sync.sh, dotfiles-linux-dev#655)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#deployment" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1400,6 +1411,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ai-state-sync-hooksai_state_syncsh-dotfiles-linux-dev655" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI-state sync (hooks/ai_state_sync.sh, dotfiles-linux-dev#655)
+      
+    </span>
+  </a>
   
 </li>
       
@@ -2485,6 +2507,66 @@ marketplace stopped shipping it). It diffs only inside those named keys, asks
 before removing, and never touches a top-level key or any key not listed —
 adding a key to <code>SETTINGS_PRUNE_KEYS</code> is an explicit claim that source is the
 full authority for everything under it.</p>
+<h2 id="ai-state-sync-hooksai_state_syncsh-dotfiles-linux-dev655">AI-state sync (<code>hooks/ai_state_sync.sh</code>, dotfiles-linux-dev#655)<a class="headerlink" href="#ai-state-sync-hooksai_state_syncsh-dotfiles-linux-dev655" title="Permanent link">&para;</a></h2>
+<p>Authored <code>~/.claude</code> state that no deploy step reproduces lives in a <strong>private</strong> repo
+(<code>AI_STATE_REPO</code>, default <code>guilhermegor/ai-clients-state</code>), one script with three
+subcommands and two callers:</p>
+<table>
+<thead>
+<tr>
+<th>Caller</th>
+<th>Invocation</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SessionStart</code> hook</td>
+<td><code>ai_state_sync.sh pull --hook</code></td>
+<td>bounded <code>pull --rebase --autostash</code>; offline is silent; prints only a conflict</td>
+</tr>
+<tr>
+<td><code>SessionEnd</code> hook</td>
+<td><code>ai_state_sync.sh push --hook</code></td>
+<td>secret guard, commit, push; always exit 0</td>
+</tr>
+<tr>
+<td>Shortcut / terminal</td>
+<td><code>~/.local/bin/ai-state-sync pull\|push</code></td>
+<td>same code, prints the outcome, <code>notify-send</code> without a TTY, non-zero on failure</td>
+</tr>
+<tr>
+<td>Step <code>state_sync</code></td>
+<td><code>ai_state_sync.sh setup</code></td>
+<td>clone + materialise; refuses to overwrite a divergent live file; no remote means the <code>gh repo create --private</code> hint and nothing else</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Work-tree, not symlinks.</strong> The git dir lives at <code>~/.ai-clients-state/claude.git</code> with
+<code>--work-tree=~/.claude</code>. Symlinking <code>memory/</code>, <code>projects/*/memory/</code> etc. would need a
+link per project dir (a project created tomorrow is unlinked until a re-run), would
+replace real directories on a fresh machine, and degrades on Windows. The work-tree
+needs no link at all. Membership is the whitelist in the git dir's <code>info/exclude</code>
+(<code>/*</code> then explicit <code>!</code> entries; <code>*.jsonl</code>, <code>.env*</code>, <code>.credentials.json</code> re-denied
+last), rewritten on every run so a whitelist change deploys with the hooks.</p>
+<p><strong><code>issue-trackers.conf</code> lives in the state repo</strong>, not here: it is owner-specific
+config (which trackers the owner's repos use), this repo is public, and a deployed copy
+would need a per-machine override anyway.</p>
+<p><strong>Default remote follows <code>gh config get git_protocol</code></strong>: https gives
+<code>https://github.com/&lt;repo&gt;.git</code> (gh's credential helper authenticates it), ssh gives the
+SSH form, and https is the fallback when gh is absent or fails. An explicit
+<code>AI_STATE_REMOTE</code> always wins.</p>
+<p><strong>Secret guard</strong>: token shapes and PEM keys only (same patterns as
+<code>commit_secret_guard.sh</code>, kept in sync by hand). A flagged file is unstaged and reported
+by NAME (never the value); the rest still syncs. A password-assignment heuristic was
+left out on purpose: it would false-positive on memory prose and wedge the sync.</p>
+<p><strong>Conflicts are never resolved.</strong> A push whose rebase conflicts is aborted (local
+commits kept); a pull conflict leaves git's markers. Both write
+<code>~/.claude/session-audit/ai-state-sync.md</code>, which the next <code>pull --hook</code> prints.</p>
+<p><strong>Extension point (#656)</strong>: <code>AI_STATE_GIT_DIR</code>, <code>AI_STATE_WORK_TREE</code> and <code>WHITELIST</code> are
+the only per-client inputs; codex/qwen/copilot state is a second invocation, not a
+change to the modes. Keyboard-shortcut wiring (<code>distro_config/set_custom_shortcuts.sh</code>)
+is a separate follow-up.</p>
 <h2 id="deployment">Deployment<a class="headerlink" href="#deployment" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>make<span class="w"> </span>ai_clients<span class="w">        </span><span class="c1"># interactive menu (choose steps individually)</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># or via main.sh directly:</span>
