@@ -172,17 +172,9 @@ precondition fails.
 
 The tree is not only data; other things hold paths into it. Found on this machine:
 
-- **Super+B (Backup External SSDs)** — `~/.config/backup-external-ssd.conf` holds
-  `LAST_DEST=~/Insync/<account>/OneDrive/Workspace/!BACKUP/External Storage`.
-  After step 4 that path is gone, and the backup script's `mkdir -p` would happily re-create it on
-  the local disk and write the archive there — a backup that looks cloud-bound and is not.
-  `storage/backup_external_ssd.sh` now refuses to pre-fill a destination whose parent no longer
-  exists and says so in the prompt, so the migration surfaces as a question instead of a silent
-  local write. Point it at the new mount path on the first run after migrating.
 - ⚠️ **Do not write large archives through the mount.** `--vfs-cache-max-size 10G` bounds the
-  cache, and a write larger than the ceiling has nowhere to land. For the SSD backup, write the
-  zip to local scratch and `rclone move` it to the remote, rather than zipping straight into the
-  mount point.
+  cache, and a write larger than the ceiling has nowhere to land. Write archives to local scratch and
+  `rclone move` them to the remote, rather than zipping straight into the mount point.
 
 Before running step 4, grep for other holders:
 

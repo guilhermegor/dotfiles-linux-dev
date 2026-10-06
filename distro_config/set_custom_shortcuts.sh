@@ -5,7 +5,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
 
 # Slots custom0..custom<N-1> are owned by this script; keep in sync with the
 # set_individual_keybinding calls (tests/custom_shortcuts_slots.bats enforces it).
-MANAGED_SLOT_COUNT=15
+MANAGED_SLOT_COUNT=16
 
 # function to check if a keybinding conflicts with a GNOME default binding.
 # Custom bindings are skipped — this script fully owns and overwrites that
@@ -74,7 +74,8 @@ set_keybindings_array() {
     '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom11/', \
     '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom12/', \
     '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom13/', \
-    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom14/']"
+    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom14/', \
+    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom15/']"
 }
 
 # function to set individual keybindings
@@ -157,28 +158,6 @@ EOF
     
     print_status success "Enhanced copy-path script created successfully!"
     print_status success "Nautilus integration set up automatically!"
-}
-
-# function to install the external SSD backup script to ~/.local/bin
-create_backup_script() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local src_script="$script_dir/../storage/backup_external_ssd.sh"
-    local dest_script="$HOME/.local/bin/backup-external-ssd.sh"
-
-    print_status info "Installing backup-external-ssd.sh to $dest_script..."
-
-    mkdir -p "$HOME/.local/bin"
-
-    if [ ! -f "$src_script" ]; then
-        print_status error "Source script not found: $src_script"
-        return 1
-    fi
-
-    cp "$src_script" "$dest_script"
-    chmod +x "$dest_script"
-
-    print_status success "Backup script installed at $dest_script"
 }
 
 # function to install backup-env.sh to ~/.local/bin
@@ -447,7 +426,7 @@ set_all_keybindings() {
     print_status success "Configuring GNOME custom keybindings..."
     
     # Define the keybindings we'll be using
-    local bindings=("<Super>e" "<Super>r" "<Super>t" "<Super><Ctrl>s" "<Ctrl><Shift>c" "<Ctrl><Shift>v" "<Ctrl><Shift>Escape" "<Super>c" "<Super>b" "<Super>j" "<Super><Shift>e" "<Super><Shift>m" "<Super><Alt>e" "<Super><Alt>m" "<Super><Shift>u")
+    local bindings=("<Super>e" "<Super>r" "<Super>t" "<Super><Ctrl>s" "<Ctrl><Shift>c" "<Ctrl><Shift>v" "<Ctrl><Shift>Escape" "<Super>c" "<Super><Shift>b" "<Super>j" "<Super><Shift>e" "<Super><Shift>m" "<Super><Alt>e" "<Super><Alt>m" "<Super><Shift>u" "<Super><Alt>b")
     
     # Ask user if they want to verify conflicts
     read -p "Do you want to verify for shortcut conflicts before proceeding? [Y/n] " -r
@@ -464,16 +443,11 @@ set_all_keybindings() {
     create_copy_path_script
     
     # Create the backup script and install to ~/.local/bin
-    create_backup_script
     create_backup_env_script
     create_export_memory_script
     create_restore_env_script
     create_restore_memory_script
     create_show_shortcuts_script
-
-    # custom15 was the last slot before the Super+K Kill Insync binding was removed
-    # and 7..15 renumbered down; an earlier run left it bound in dconf, so reset it.
-    dconf reset -f /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom15/
 
     clear_managed_bindings
     set_keybindings_array
@@ -487,13 +461,14 @@ set_all_keybindings() {
     set_individual_keybinding 5 "Paste File Path" "$HOME/.local/bin/copy-path.sh --paste" "<Ctrl><Shift>v"
     set_individual_keybinding 6 "Gerenciador de Tarefas" "flatpak run io.missioncenter.MissionCenter" "<Ctrl><Shift>Escape"
     set_individual_keybinding 7 "Open Characters" "gnome-characters" "<Super>c"
-    set_individual_keybinding 8 "Backup External SSDs" "$HOME/.local/bin/backup-external-ssd.sh" "<Super>b"
+    set_individual_keybinding 8 "Back Up AI State" "$HOME/.local/bin/ai-state-sync push" "<Super><Shift>b"
     set_individual_keybinding 9 "Show All Shortcuts" "$HOME/.local/bin/show-shortcuts.sh" "<Super>j"
     set_individual_keybinding 10 "Backup Env Files" "$HOME/.local/bin/backup-env.sh" "<Super><Shift>e"
     set_individual_keybinding 11 "Export Claude Memory" "$HOME/.local/bin/export-memory.sh" "<Super><Shift>m"
     set_individual_keybinding 12 "Restore Env Files" "$HOME/.local/bin/restore-env.sh" "<Super><Alt>e"
     set_individual_keybinding 13 "Restore Claude Memory" "$HOME/.local/bin/restore-memory.sh" "<Super><Alt>m"
     set_individual_keybinding 14 "Claude Usage Dashboard" "$HOME/.local/bin/claudestatus-dashboard.sh" "<Super><Shift>u"
+    set_individual_keybinding 15 "Restore AI State" "$HOME/.local/bin/ai-state-sync pull" "<Super><Alt>b"
 
     print_status success "All keybindings have been configured successfully!"
     print_status warning "You can now use:"
@@ -501,12 +476,13 @@ set_all_keybindings() {
     print_status warning "  - Ctrl+Shift+V anywhere to paste the paths"
     print_status warning "  - Ctrl+Shift+Esc to open Task Manager"
     print_status warning "  - Super+C to open GNOME Characters"
-    print_status warning "  - Super+B to back up external SSDs to the BKP cloud-sync drive"
+    print_status warning "  - Super+Shift+B to back up AI state (ai-state-sync push)"
     print_status warning "  - Super+J to open the shortcut cheat-sheet (rofi popup)"
     print_status warning "  - Super+Shift+E to back up .env files from all ~/github repos"
     print_status warning "  - Super+Shift+M to export Claude Code memory to backup"
     print_status warning "  - Super+Alt+E to restore .env files from backup"
     print_status warning "  - Super+Alt+M to restore Claude Code memory from backup"
+    print_status warning "  - Super+Alt+B to restore AI state (ai-state-sync pull; a conflict is reported, never resolved)"
     print_status warning "  - Super+Shift+U to open the Claude usage dashboard (claudestatus)"
     print_status warning "Shell aliases added to ~/.bashrc (reload with: source ~/.bashrc):"
     print_status warning "  - cs            → claudestatus (usage dashboard)"

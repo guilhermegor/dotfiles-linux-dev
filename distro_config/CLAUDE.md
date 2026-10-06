@@ -192,7 +192,7 @@ alone.
 
 0. Bump `MANAGED_SLOT_COUNT` at the top of the script.
 
-1. Add the binding string (e.g. `"<Super>b"`) to the `bindings` array in `set_all_keybindings`.
+1. Add the binding string (e.g. `"<Super><Shift>b"`) to the `bindings` array in `set_all_keybindings`.
 2. Append `'/org/.../custom<N>/'` to `set_keybindings_array` (increment `N`).
 3. Call `set_individual_keybinding <N> "<label>" "<command>" "<binding>"`.
 4. If the command needs a helper script, create it in `$HOME/.local/bin/` and call it from
@@ -207,3 +207,10 @@ path, which stays bound on machines that already ran the script.
 `tests/custom_shortcuts_slots.bats` enforces array/call parity.
 
 Binding syntax (GDK format): `<Super>`, `<Ctrl>`, `<Shift>`, `<Alt>` + key.
+
+### AI-state shortcuts
+
+Super+Shift+B runs `~/.local/bin/ai-state-sync push` and Super+Alt+B runs `ai-state-sync pull`
+(installed by the `state_sync` step, #655; #657). The CLI notifies via `notify-send` when it has no
+TTY, including on a pull conflict, which is never auto-resolved. The old Super+B (external SSD
+backup) is retired.
