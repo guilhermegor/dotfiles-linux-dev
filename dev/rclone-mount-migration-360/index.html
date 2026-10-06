@@ -1064,17 +1064,9 @@ precondition fails.</p>
 <h2 id="machine-state-that-points-into-insync-migrate-it-before-step-4">Machine state that points into <code>~/Insync</code> — migrate it before step 4<a class="headerlink" href="#machine-state-that-points-into-insync-migrate-it-before-step-4" title="Permanent link">&para;</a></h2>
 <p>The tree is not only data; other things hold paths into it. Found on this machine:</p>
 <ul>
-<li><strong>Super+B (Backup External SSDs)</strong> — <code>~/.config/backup-external-ssd.conf</code> holds
-  <code>LAST_DEST=~/Insync/&lt;account&gt;/OneDrive/Workspace/!BACKUP/External Storage</code>.
-  After step 4 that path is gone, and the backup script's <code>mkdir -p</code> would happily re-create it on
-  the local disk and write the archive there — a backup that looks cloud-bound and is not.
-  <code>storage/backup_external_ssd.sh</code> now refuses to pre-fill a destination whose parent no longer
-  exists and says so in the prompt, so the migration surfaces as a question instead of a silent
-  local write. Point it at the new mount path on the first run after migrating.</li>
 <li>⚠️ <strong>Do not write large archives through the mount.</strong> <code>--vfs-cache-max-size 10G</code> bounds the
-  cache, and a write larger than the ceiling has nowhere to land. For the SSD backup, write the
-  zip to local scratch and <code>rclone move</code> it to the remote, rather than zipping straight into the
-  mount point.</li>
+  cache, and a write larger than the ceiling has nowhere to land. Write archives to local scratch and
+  <code>rclone move</code> them to the remote, rather than zipping straight into the mount point.</li>
 </ul>
 <p>Before running step 4, grep for other holders:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>grep<span class="w"> </span>-rIl<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/Insync"</span><span class="w"> </span>~/.config<span class="w"> </span>~/.local/share<span class="w"> </span>~/.local/bin<span class="w"> </span><span class="m">2</span>&gt;/dev/null

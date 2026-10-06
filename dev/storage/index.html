@@ -492,17 +492,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#backup-script-backup_external_ssdsh" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Backup script (backup_external_ssd.sh)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#encrypted-env-backup-backup_envsh-restore_envsh" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -784,17 +773,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#backup-script-backup_external_ssdsh" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Backup script (backup_external_ssd.sh)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#encrypted-env-backup-backup_envsh-restore_envsh" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -874,10 +852,6 @@ backup, and capacity analysis.</p>
 <td>Verify drive health via SMART data</td>
 </tr>
 <tr>
-<td><code>backup_external_ssd.sh</code></td>
-<td>GUI-driven <code>.zip</code> backup of a mounted SSD to a cloud folder</td>
-</tr>
-<tr>
 <td><code>backup_env.sh</code></td>
 <td>GUI-driven, gpg-encrypted backup of git-ignored <code>.env</code> files + <code>rclone.conf</code></td>
 </tr>
@@ -901,25 +875,6 @@ backup, and capacity analysis.</p>
 <li>Mounted media lives under <code>/media/$USER/&lt;drive-name&gt;/</code>.</li>
 <li><strong>Diagnostic / read-only scripts</strong> (<code>storage_hiato.sh</code>) must never write to <code>/dev/*</code>
   or modify partition tables. Require root with <code>[ "$(id -u)" -ne 0 ]</code> guard.</li>
-</ul>
-<h2 id="backup-script-backup_external_ssdsh">Backup script (<code>backup_external_ssd.sh</code>)<a class="headerlink" href="#backup-script-backup_external_ssdsh" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Uses <code>zenity</code> GUI dialogs — works from the GNOME Super+B keybinding without a terminal.</li>
-<li>Prompts for the source drive (from mounted drives), the cloud destination path, and
-  the zip compression level, in that order.</li>
-<li>Destination path and compression level are saved to
-  <code>~/.config/backup-external-ssd.conf</code> (<code>LAST_DEST=</code>, <code>LAST_ZIP_LEVEL=</code>) between runs.</li>
-<li>Destination structure: <code>&lt;cloud_path&gt;/&lt;source_drive_name&gt;/&lt;yyyymmdd_hhmmss&gt;.zip</code></li>
-<li>Archives the drive into a single compressed <code>.zip</code> (<code>zip -r -y -q -N</code>, excluding
-  <code>lost+found</code>) streamed directly from the source — no uncompressed mirror is staged,
-  so each run leaves one compact file instead of a full duplicate of the drive.</li>
-<li>Compression level is chosen on a <code>zenity --list --radiolist</code> of zip's own 0-9
-  levels (0 = store/fastest, 6 = balanced/default, 9 = maximum/slowest) — never a
-  slider or a percentage. <code>DEFAULT_ZIP_LEVEL=6</code> is the fallback used when the saved
-  value is missing or not a single digit 0-9; every level is lossless, higher only
-  trades CPU time for a smaller archive. Cancelling the list aborts the backup
-  cleanly, same as cancelling the destination prompt.</li>
-<li>Requires <code>zip</code> (<code>sudo apt install zip</code>); the script aborts with a dialog if missing.</li>
 </ul>
 <h2 id="encrypted-env-backup-backup_envsh-restore_envsh">Encrypted env backup (<code>backup_env.sh</code> / <code>restore_env.sh</code>)<a class="headerlink" href="#encrypted-env-backup-backup_envsh-restore_envsh" title="Permanent link">&para;</a></h2>
 <ul>
