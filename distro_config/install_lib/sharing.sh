@@ -867,6 +867,9 @@ uninstall_insync() {
     # remote as source, a file Insync never uploaded still passes and then
     # gets deleted). --size-only skips hashing 1.3 T from disk, which would
     # otherwise run silently for hours inside this $(...) capture.
+    # --onedrive-expose-onenote-files: rclone hides OneNote notebooks (package
+    # items) by default, so every .one/.onetoc2 read as "missing on the remote"
+    # and step 2 refused forever (#667). Other backends ignore the flag.
     local log_dir="."
     [ -n "${LOG_FILE:-}" ] && log_dir="$(dirname "$LOG_FILE")"
     local missing_on_dst_file="$log_dir/uninstall_insync_missing_on_dst.txt"
@@ -874,6 +877,7 @@ uninstall_insync() {
     print_status "info" "Step 2/5: comparing local '$account_dir' against remote '$remote:' (read-only)..."
     local check_output check_rc
     check_output=$(rclone check "$account_dir" "$remote:" --one-way --size-only \
+        --onedrive-expose-onenote-files \
         --missing-on-dst "$missing_on_dst_file" --differ "$differ_file" 2>&1)
     check_rc=$?
     echo "$check_output" >> "$LOG_FILE"
@@ -912,7 +916,7 @@ uninstall_insync() {
     # Step 5: re-check the remote after deletion. Proof, not assurance.
     print_status "info" "Step 5/5: re-checking remote counts after deletion..."
     local lsjson_output lsjson_rc
-    lsjson_output=$(rclone lsjson "$remote:" --stat 2>&1)
+    lsjson_output=$(rclone lsjson "$remote:" --stat --onedrive-expose-onenote-files 2>&1)
     lsjson_rc=$?
     echo "$lsjson_output" >> "$LOG_FILE"
     if [ "$lsjson_rc" -ne 0 ]; then
