@@ -43,3 +43,9 @@ __pycache__/
 
 # PR body scratch files staged for `gh pr create --body-file`
 .git-pr-*.md
+
+# MkDocs build output/cache and the CHANGELOG.md `cz changelog` regenerates at docs
+# build time (never committed, #659)
+site/
+.cache/
+CHANGELOG.md

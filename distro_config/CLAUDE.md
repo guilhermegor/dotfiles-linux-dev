@@ -182,7 +182,15 @@ Bindings are managed through three layers:
    `command`, and `binding` for `custom<index>`.
 3. **`verify_keybindings`** — checks for conflicts before applying.
 
+`clear_managed_bindings` runs before any assignment and blanks the `binding` of every slot
+`custom0..custom<MANAGED_SLOT_COUNT-1>`. gsd-media-keys refuses a grab while another slot still
+holds the accelerator and never retries, and re-writing an identical value emits no change, so
+without the blank pass a renumber leaves shortcuts dead (#653). Slots outside the range are left
+alone.
+
 ### Adding a new shortcut
+
+0. Bump `MANAGED_SLOT_COUNT` at the top of the script.
 
 1. Add the binding string (e.g. `"<Super>b"`) to the `bindings` array in `set_all_keybindings`.
 2. Append `'/org/.../custom<N>/'` to `set_keybindings_array` (increment `N`).

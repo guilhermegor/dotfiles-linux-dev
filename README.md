@@ -172,6 +172,20 @@ Sessions then pull on start and commit + push on exit, automatically. Outside a
 session (or from a keyboard shortcut) run `ai-state-sync pull` / `ai-state-sync push`.
 Conflicts are reported, never auto-resolved. Details: `ai_clients/CLAUDE.md`.
 
+### 📚 Documentation site
+
+The docs are a MkDocs Material site versioned with mike (`dev`, alias `latest`),
+single-sourced from this README and the area `CLAUDE.md` files.
+
+```bash
+make docs_serve    # live preview on :8000
+make docs_build    # strict build, same as CI
+make enable_pages  # once, AFTER the first deploy created gh-pages (no-op before)
+```
+
+First-deploy order: merge to `master` → the `docs` workflow creates `gh-pages` →
+run `make enable_pages` to serve Pages from that branch.
+
 ### Alternative Installation Methods
 
 **Option 1: Step-by-Step with Makefile**

@@ -1,0 +1,87 @@
+name: docs
+
+# Strict MkDocs build on every push and PR; deploy to gh-pages (mike) only on
+# pushes to master. GitHub Pages must serve the gh-pages branch: run
+# `make enable_pages` once, after the first deploy has created it.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: strict build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history so `cz changelog` sees the tags.
+          fetch-depth: 0
+          # This job never pushes; keep the token out of .git/config.
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # No third-party action (#664): pipx ships on GitHub runners, and the
+      # pin matches the Poetry that generated poetry.lock.
+      - name: Install Poetry
+        run: pipx install poetry==2.4.3
+
+      - name: Install docs dependencies
+        run: poetry install --with docs --no-root
+
+      # Built fresh, never committed (CHANGELOG.md is git-ignored).
+      - name: Regenerate CHANGELOG.md
+        run: poetry run cz changelog
+
+      - name: Build site (strict)
+        run: poetry run mkdocs build --strict
+
+  deploy:
+    name: deploy (mike)
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    # Two deploys must never race on gh-pages.
+    concurrency:
+      group: docs-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Poetry
+        run: pipx install poetry==2.4.3
+
+      - name: Install docs dependencies
+        run: poetry install --with docs --no-root
+
+      - name: Regenerate CHANGELOG.md
+        run: poetry run cz changelog
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Deploy dev (alias latest)
+        env:
+          DOCS_VERSION: dev
+        run: |
+          poetry run mike deploy --push --update-aliases "$DOCS_VERSION" latest
+          poetry run mike set-default --push latest
