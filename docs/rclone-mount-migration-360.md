@@ -90,6 +90,13 @@ precondition fails.
    not a real gap) and 106 local-only conflicts ("edited locally, deleted in cloud"), which
    `rclone check` lists as missing on the remote. Decide about the conflicts in Insync's UI
    first — they are the files most likely to be the only copy.
+
+   OneNote notebooks (`.one` / `.onetoc2`) are a second false gap. rclone's OneDrive backend
+   hides them unless `--onedrive-expose-onenote-files` is passed. Without the flag, every
+   notebook is listed as missing on the remote, however many times it is re-uploaded
+   (measured: 85 files; issue #667). `uninstall_insync` passes the flag to step 2's check and
+   step 5's re-check, and other backends ignore it. Add the flag to any manual check too:
+   `rclone check <account-dir> <remote>: --one-way --size-only --onedrive-expose-onenote-files`.
 1. **Quit Insync and disable it from starting.** `uninstall_insync` calls `insync quit`, then
    polls `pgrep insync` once a second for up to `INSYNC_QUIT_TIMEOUT` seconds (default 30).
    `insync quit` returns 0 yet can be ignored while the daemon is busy — measured: the main

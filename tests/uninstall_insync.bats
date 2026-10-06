@@ -219,6 +219,14 @@ teardown() {
     grep -qF "check $ACCOUNT_DIR gdrive: --one-way --size-only" "$RCLONE_LOG"
 }
 
+# #667: without this flag rclone hides OneNote notebooks, so every .one/.onetoc2 reads as
+# "missing on the remote" and step 2 refuses forever on any account that has notebooks.
+@test "uninstall_insync's rclone check exposes OneNote notebooks" {
+    run uninstall_insync gdrive "$ACCOUNT_DIR"
+    [ "$status" -eq 0 ]
+    grep -E "^check .*--onedrive-expose-onenote-files" "$RCLONE_LOG"
+}
+
 @test "uninstall_insync's rclone check never passes --dry-run" {
     run uninstall_insync gdrive "$ACCOUNT_DIR"
     [ "$status" -eq 0 ]
