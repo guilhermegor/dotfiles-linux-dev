@@ -313,7 +313,6 @@ dotfiles-linux-dev/
 │   ├── 🧹 format_neat.sh         # Quick formatting
 │   ├── 💿 mount_disks.sh         # Auto-mount partitions
 │   ├── 🔒 vault.sh               # Secure vault management
-│   ├── ☁️  backup_external_ssd.sh # GUI SSD backup to cloud folder
 │   └── 📊 storage_hiato.sh       # Storage capacity analysis
 │
 └── 📖 README.md                  # Project documentation

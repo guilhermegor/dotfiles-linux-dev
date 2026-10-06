@@ -20,11 +20,13 @@ SCRIPT="${BATS_TEST_DIRNAME}/../distro_config/set_custom_shortcuts.sh"
     [ "$status" -ne 0 ]
 }
 
-@test "stale custom15 dconf path is reset before the array is set" {
-    reset_line=$(grep -n 'dconf reset -f .*custom15/' "$SCRIPT" | cut -d: -f1)
-    call_line=$(grep -nE '^ +set_keybindings_array$' "$SCRIPT" | cut -d: -f1)
-    [ -n "$reset_line" ]
-    [ "$reset_line" -lt "$call_line" ]
+@test "Super+B is retired; AI-state push/pull bind to Super+Shift+B / Super+Alt+B (#657)" {
+    run grep -nE '"<Super>b"|backup-external-ssd' "$SCRIPT"
+    [ "$status" -ne 0 ]
+    run grep -F 'ai-state-sync push" "<Super><Shift>b"' "$SCRIPT"
+    [ "$status" -eq 0 ]
+    run grep -F 'ai-state-sync pull" "<Super><Alt>b"' "$SCRIPT"
+    [ "$status" -eq 0 ]
 }
 
 # --- #653: clear every managed binding before assigning (stubbed gsettings/dconf) ---
