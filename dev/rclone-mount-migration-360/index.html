@@ -988,7 +988,13 @@ precondition fails.</p>
    207 symlink upload errors (<code>rclone check</code> skips symlinks without <code>-L</code>/<code>-l</code>, so those are
    not a real gap) and 106 local-only conflicts ("edited locally, deleted in cloud"), which
    <code>rclone check</code> lists as missing on the remote. Decide about the conflicts in Insync's UI
-   first — they are the files most likely to be the only copy.
+   first — they are the files most likely to be the only copy.</p>
+<p>OneNote notebooks (<code>.one</code> / <code>.onetoc2</code>) are a second false gap. rclone's OneDrive backend
+   hides them unless <code>--onedrive-expose-onenote-files</code> is passed. Without the flag, every
+   notebook is listed as missing on the remote, however many times it is re-uploaded
+   (measured: 85 files; issue #667). <code>uninstall_insync</code> passes the flag to step 2's check and
+   step 5's re-check, and other backends ignore it. Add the flag to any manual check too:
+   <code>rclone check &lt;account-dir&gt; &lt;remote&gt;: --one-way --size-only --onedrive-expose-onenote-files</code>.
 1. <strong>Quit Insync and disable it from starting.</strong> <code>uninstall_insync</code> calls <code>insync quit</code>, then
    polls <code>pgrep insync</code> once a second for up to <code>INSYNC_QUIT_TIMEOUT</code> seconds (default 30).
    <code>insync quit</code> returns 0 yet can be ignored while the daemon is busy — measured: the main
