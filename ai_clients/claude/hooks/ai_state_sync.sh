@@ -343,14 +343,16 @@ DUMP_DIR_NAME="state-dump"
 # capture a torn state. An absent DB or a failed export is skipped, never fatal,
 # and the previous dump is kept rather than truncated.
 export_sqlite_dumps() {
-    local name db snap dump
+    local name db snap snapdir dump
     [ -n "$AI_STATE_SQLITE" ] || return 0
     command -v sqlite3 >/dev/null 2>&1 || return 0
     mkdir -p "$AI_STATE_WORK_TREE/$DUMP_DIR_NAME" || return 0
     for name in $AI_STATE_SQLITE; do
         db="$AI_STATE_WORK_TREE/$name"
         [ -s "$db" ] || continue
-        snap="$(mktemp -u)" # .backup wants a path that does not exist yet
+        # Private dir: a predictable /tmp path could be pre-planted as a symlink.
+        snapdir="$(mktemp -d)" || continue
+        snap="$snapdir/snapshot.db"
         dump="$AI_STATE_WORK_TREE/$DUMP_DIR_NAME/${name%.sqlite}.sql"
         if sqlite3 "$db" ".backup '$snap'" >/dev/null 2>&1 &&
             sqlite3 "$snap" .dump >"$dump.tmp" 2>/dev/null; then
@@ -359,7 +361,7 @@ export_sqlite_dumps() {
             rm -f "$dump.tmp"
             say "could not export $name; keeping the previous dump"
         fi
-        rm -f "$snap"
+        rm -rf "$snapdir"
     done
 }
 
@@ -391,8 +393,7 @@ restore_sqlite_dumps() {
             rc=1
             continue
         fi
-        tmp="$db.restore.$$"
-        rm -f "$tmp"
+        tmp="$(mktemp "$db.restore.XXXXXX")" || { rc=1; continue; }
         if sqlite3 "$tmp" <"$dump" >/dev/null 2>&1; then
             rm -f "$db-wal" "$db-shm"
             mv -f "$tmp" "$db"

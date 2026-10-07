@@ -177,6 +177,13 @@ Sessions then pull on start and commit + push on exit, automatically. Outside a
 session (or from a keyboard shortcut) run `ai-state-sync pull` / `ai-state-sync push`.
 Conflicts are reported, never auto-resolved. Details: `ai_clients/CLAUDE.md`.
 
+Codex's memory (`~/.codex/memories_1.sqlite`, `goals_1.sqlite`) rides the same repo on
+its own `codex` branch, as **text dumps** (`state-dump/*.sql`) taken from a sqlite
+online-backup snapshot, never as binary files. The `state_sync` step restores them only
+into an absent or empty DB and refuses otherwise. `auth.json` and everything else in
+`~/.codex` is never synced; `~/.qwen`, `~/.copilot` and `~/.kimi-code` hold no authored
+state beyond the `AGENTS.md` that `make ai_clients` deploys.
+
 ### 📚 Documentation site
 
 The docs are a MkDocs Material site versioned with mike (`dev`, alias `latest`),
