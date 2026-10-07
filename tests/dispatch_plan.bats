@@ -404,6 +404,7 @@ PY
     mkdir -p "$TEST_TMP/hooks/lib"
     : >"$TEST_TMP/hooks/lib/foo_handler.py"
     : >"$TEST_TMP/hooks/lib/bar_handler.py"
+    /usr/bin/git add -A && /usr/bin/git commit -q -m fixture  # the universe is tracked files (#672)
     stub_gh "[$(issue_json 7 'hooks/lib/*_handler.py')]"
     run_planner
     [ "$status" -eq 0 ]
@@ -426,6 +427,7 @@ PY
     : >"$TEST_TMP/docs/a.md"
     : >"$TEST_TMP/docs/sub/b.md"
     : >"$TEST_TMP/docs/sub/deep/c.md"
+    /usr/bin/git add -A && /usr/bin/git commit -q -m fixture  # the universe is tracked files (#672)
     stub_gh "[$(issue_json 30 'docs/**')]"
     run_planner
     [ "$status" -eq 0 ]
@@ -440,6 +442,7 @@ PY
     mkdir -p "$TEST_TMP/docs/sub"
     : >"$TEST_TMP/docs/a.md"
     : >"$TEST_TMP/docs/sub/b.md"
+    /usr/bin/git add -A && /usr/bin/git commit -q -m fixture  # the universe is tracked files (#672)
     stub_gh "[$(issue_json 31 'docs/*')]"
     run_planner
     [ "$status" -eq 0 ]
@@ -811,4 +814,75 @@ print(json.dumps({"d": plan["dispatchable"], "x": [e["issue"] for e in plan["exc
 	[[ "$output" == *'"d": []'* ]]
 	[[ "$output" == *'"x": [77]'* ]]
 	[[ "$output" == *'"unreadable": true'* ]]
+}
+
+# --- dotfiles-linux-dev#672: the file universe comes from git, not a filesystem walk -----------
+
+@test "a glob token sees tracked files only: ignored and nested untracked trees stay out" {
+	mkdir -p "$TEST_TMP/src" "$TEST_TMP/.venv/lib" "$TEST_TMP/.claude/worktrees/agent-x/src" "$TEST_TMP/scratch/deep"
+	: >"$TEST_TMP/src/tracked.py"
+	printf '.venv/\n.claude/worktrees/\n' >"$TEST_TMP/.gitignore"
+	/usr/bin/git add .gitignore src/tracked.py
+	/usr/bin/git commit -q -m "tracked"
+	: >"$TEST_TMP/src/untracked.py"
+	: >"$TEST_TMP/.venv/lib/junk.py"
+	: >"$TEST_TMP/.claude/worktrees/agent-x/src/copy.py"
+	for i in $(seq 1 50); do : >"$TEST_TMP/scratch/deep/n$i.py"; done
+	stub_gh "[$(issue_json 72 '*.py')]"
+	run_planner
+	[ "$status" -eq 0 ]
+	# pre-fix: rglob("*") walked every tree, so the surface carried junk.py, copy.py, the
+	# untracked file and all 50 files of the nested untracked scratch/ tree.
+	[ "$(field '.dispatchable[0].surface | join(",")')" = "src/tracked.py" ]
+}
+
+@test "the listing ignores inherited GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE overrides" {
+	mkdir -p "$TEST_TMP/src"
+	: >"$TEST_TMP/src/a.py"
+	/usr/bin/git add src/a.py
+	/usr/bin/git commit -q -m "tracked"
+	run env GIT_INDEX_FILE="$BATS_TEST_TMPDIR/bogus.index" GIT_DIR="$BATS_TEST_TMPDIR/nowhere" \
+		GIT_WORK_TREE="$BATS_TEST_TMPDIR" python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+from pathlib import Path
+print(",".join(dispatch_plan._walk_repo_files(Path(sys.argv[2]))))
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib" "$TEST_TMP"
+	[ "$status" -eq 0 ]
+	[ "$output" = "src/a.py" ]
+}
+
+@test "the file universe is listed once per run, however many issues carry a glob token" {
+	mkdir -p "$TEST_TMP/src"
+	: >"$TEST_TMP/src/a.py"
+	/usr/bin/git add src/a.py
+	/usr/bin/git commit -q -m "tracked"
+	run python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+from pathlib import Path
+root = Path(".").resolve()
+for _ in range(3):
+    dispatch_plan.expand_tokens(["src/*"], root, [])
+print(dispatch_plan._walk_repo_files.cache_info().misses)
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+	[ "$status" -eq 0 ]
+	[ "$output" = "1" ]
+}
+
+@test "a glob token outside a git repo fails loudly rather than reading an empty tree" {
+	local plain
+	plain="$(mktemp -d)"
+	: >"$plain/a.py"
+	run python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+from pathlib import Path
+dispatch_plan.expand_tokens(["*.py"], Path(sys.argv[2]), [])
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib" "$plain"
+	rm -rf "$plain"
+	[ "$status" -ne 0 ]
 }
