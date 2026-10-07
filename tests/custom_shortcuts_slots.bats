@@ -15,6 +15,16 @@ SCRIPT="${BATS_TEST_DIRNAME}/../distro_config/set_custom_shortcuts.sh"
     [ "$paths" = "$expected" ]
 }
 
+@test "MANAGED_SLOT_COUNT equals the number of set_individual_keybinding calls" {
+    n=$(grep -cE '^ +set_individual_keybinding [0-9]+' "$SCRIPT")
+    [ "$(grep -oE '^MANAGED_SLOT_COUNT=[0-9]+' "$SCRIPT" | cut -d= -f2)" -eq "$n" ]
+}
+
+@test "memory/.env backup shortcuts (Super+{Shift,Alt}+{M,E}) are retired (#669)" {
+    run grep -nE '<Super><(Shift|Alt)>[me]"|backup-env|restore-env|export-memory|restore-memory' "$SCRIPT"
+    [ "$status" -ne 0 ]
+}
+
 @test "the removed Super+K Kill Insync shortcut is gone" {
     run grep -nE '<Super>k|Kill Insync"' "$SCRIPT"
     [ "$status" -ne 0 ]
@@ -65,7 +75,9 @@ STUB
     n=$(grep -cE '^ +set_individual_keybinding [0-9]+' "$SCRIPT")
     last_clear=$(grep -nE '^binding [0-9]+ $' "$STATE/calls.log" | tail -1 | cut -d: -f1)
     first_assign=$(grep -nE '^binding [0-9]+ .+' "$STATE/calls.log" | head -1 | cut -d: -f1)
-    [ "$(grep -cE '^binding [0-9]+ $' "$STATE/calls.log")" -eq "$n" ]
+    cleared=$(grep -oE '^CLEARED_SLOT_COUNT=[0-9]+' "$SCRIPT" | cut -d= -f2)
+    [ "$cleared" -ge "$n" ]
+    [ "$(grep -cE '^binding [0-9]+ $' "$STATE/calls.log")" -eq "$cleared" ]
     [ "$last_clear" -lt "$first_assign" ]
 }
 
@@ -80,5 +92,21 @@ STUB
     run bash "$SCRIPT" <<< "n"
     [ "$status" -eq 0 ]
     [ ! -s "$STATE/dups.log" ]
-    [ "$(cat "$STATE/slot_10")" = '<Super><Shift>e' ]
+    [ "$(cat "$STATE/slot_10")" = '<Super><Shift>u' ]
+}
+
+@test "retired M/E slots left in dconf are blanked, none survives a run (#669)" {
+    setup_stubs
+    printf '%s' '<Super><Alt>e' > "$STATE/slot_12"
+    printf '%s' '<Super><Alt>m' > "$STATE/slot_13"
+    printf '%s' '<Super><Shift>u' > "$STATE/slot_14"
+    printf '%s' '<Super><Alt>b' > "$STATE/slot_15"
+    run bash "$SCRIPT" <<< "n"
+    [ "$status" -eq 0 ]
+    [ ! -s "$STATE/dups.log" ]
+    for i in 12 13 14 15; do
+        [ -z "$(cat "$STATE/slot_$i")" ]
+    done
+    [ "$(cat "$STATE/slot_10")" = '<Super><Shift>u' ]
+    [ "$(cat "$STATE/slot_11")" = '<Super><Alt>b' ]
 }

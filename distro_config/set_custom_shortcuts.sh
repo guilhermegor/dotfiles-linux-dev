@@ -347,7 +347,7 @@ set_all_keybindings() {
     print_status success "Configuring GNOME custom keybindings..."
     
     # Define the keybindings we'll be using
-    local bindings=("<Super>e" "<Super>r" "<Super>t" "<Super><Ctrl>s" "<Ctrl><Shift>c" "<Ctrl><Shift>v" "<Ctrl><Shift>Escape" "<Super>c" "<Super><Shift>b" "<Super>j" "<Super><Shift>e" "<Super><Shift>m" "<Super><Alt>e" "<Super><Alt>m" "<Super><Shift>u" "<Super><Alt>b")
+    local bindings=("<Super>e" "<Super>r" "<Super>t" "<Super><Ctrl>s" "<Ctrl><Shift>c" "<Ctrl><Shift>v" "<Ctrl><Shift>Escape" "<Super>c" "<Super><Shift>b" "<Super>j" "<Super><Shift>u" "<Super><Alt>b")
     
     # Ask user if they want to verify conflicts
     read -p "Do you want to verify for shortcut conflicts before proceeding? [Y/n] " -r
