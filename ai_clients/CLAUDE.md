@@ -893,10 +893,36 @@ left out on purpose: it would false-positive on memory prose and wedge the sync.
 commits kept); a pull conflict leaves git's markers. Both write
 `~/.claude/session-audit/ai-state-sync.md`, which the next `pull --hook` prints.
 
-**Extension point (#656)**: `AI_STATE_GIT_DIR`, `AI_STATE_WORK_TREE` and `WHITELIST` are
-the only per-client inputs; codex/qwen/copilot state is a second invocation, not a
-change to the modes. Keyboard-shortcut wiring (`distro_config/set_custom_shortcuts.sh`)
-is a separate follow-up.
+**Extension point (#656)**: `AI_STATE_GIT_DIR`, `AI_STATE_WORK_TREE`, `WHITELIST`,
+`BRANCH` and `AI_STATE_SQLITE` are the per-client inputs, selected by `AI_STATE_CLIENT`
+(`claude` default, `codex`); a client is a second invocation, not a change to the modes.
+
+**Codex (`AI_STATE_CLIENT=codex`)**: git dir `~/.ai-clients-state/codex.git`, work tree
+`${CODEX_HOME:-~/.codex}`, branch `codex` of the same private repo, handoff
+`session-audit/ai-state-sync-codex.md`. Whitelist is only `/state-dump/`; `auth.json`,
+`*.sqlite*`, `*.jsonl` are re-denied last. `push` first exports `memories_1.sqlite` and
+`goals_1.sqlite` (WAL mode) as `state-dump/<name>.sql`: sqlite's online `.backup` into a
+private `mktemp -d` snapshot, then `.dump` of the snapshot, so a running Codex never
+yields a torn copy; the dump then passes the same secret guard. Binary DBs are never
+committed. `setup` (step `state_sync`) restores a dump only when the target DB is absent,
+zero bytes, or has no user table; a populated DB is **refused** with a message and left
+untouched. The `SessionEnd` hook runs the codex push after the claude one.
+
+⚠️ **Contract: seed-only restore, one writer at a time.** Codex sync is a backup plus a
+first-machine seed, not a bidirectional merge. A populated DB is never updated from the
+remote, and two machines that both write Codex memory produce two competing versions of the
+same `.sql` file: the second `push` hits a rebase conflict, which is aborted and reported
+like any other conflict (never auto-resolved). Use Codex's memory on one machine at a time.
+To move it, stop on the old machine, delete the DBs on the new machine, and re-run
+`state_sync`. A row-level SQLite merge was considered and left out (#675 review): the DB
+schema belongs to Codex and can change under any update.
+
+**Clients with no invocation (measured 2026-10-07)**: `~/.qwen`, `~/.copilot`,
+`~/.kimi-code` carry no authored state beyond the deployed `AGENTS.md` (Qwen
+`settings.json` holds a live API key; Kimi `credentials/`, `oauth/` and session history
+are never synced). Rule for any future client: authored state only, never credentials,
+session history, caches or logs. Keyboard-shortcut wiring
+(`distro_config/set_custom_shortcuts.sh`) is a separate follow-up.
 
 ## Deployment
 

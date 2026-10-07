@@ -25,9 +25,15 @@
 # file ($CLAUDE_DIR/session-audit/ai-state-sync.md) that the next `pull` prints,
 # the same report-forward contract as session_capture_audit.sh --handoff.
 #
-# Extension point for codex/qwen/copilot state (#656): everything below is keyed
-# on AI_STATE_GIT_DIR + AI_STATE_WORK_TREE + WHITELIST; a second client is a
-# second invocation with those three set, no change to the modes.
+# Extension point (#656): everything below is keyed on AI_STATE_GIT_DIR +
+# AI_STATE_WORK_TREE + WHITELIST (+ BRANCH, AI_STATE_SQLITE); a second client is a
+# second invocation with those set, no change to the modes. AI_STATE_CLIENT=codex
+# is that invocation for ~/.codex: its own git dir and branch (`codex`) in the same
+# private repo, and the WAL-mode SQLite DBs exported as text dumps (never the
+# binary files) under <work tree>/state-dump/. push exports them from a sqlite
+# online-backup snapshot; setup restores them ONLY into an absent or empty DB.
+# ~/.qwen, ~/.copilot and ~/.kimi-code hold no authored state beyond the AGENTS.md
+# `make ai_clients` already deploys, so they have no invocation.
 #
 # Env: AI_STATE_REPO (default guilhermegor/ai-clients-state), AI_STATE_REMOTE
 # (full URL override, used by tests), AI_STATE_GIT_DIR, AI_STATE_WORK_TREE,
@@ -41,6 +47,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
     GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+AI_STATE_CLIENT="${AI_STATE_CLIENT:-claude}"
 AI_STATE_REPO="${AI_STATE_REPO:-guilhermegor/ai-clients-state}"
 # Default remote follows gh's configured protocol (gh's credential helper
 # authenticates https); https when gh is absent or the call fails.
@@ -54,20 +61,17 @@ default_remote() {
     fi
 }
 AI_STATE_REMOTE="${AI_STATE_REMOTE:-$(default_remote)}"
-AI_STATE_GIT_DIR="${AI_STATE_GIT_DIR:-$HOME/.ai-clients-state/claude.git}"
-AI_STATE_WORK_TREE="${AI_STATE_WORK_TREE:-$CLAUDE_DIR}"
 AI_STATE_TIMEOUT="${AI_STATE_TIMEOUT:-20}"
-BRANCH="main"
+AI_STATE_SQLITE="${AI_STATE_SQLITE:-}" # DB file names (relative to the work tree) to export/restore as text
 HOOK=0 # 1 under --hook: always exit 0, speak only on a pull conflict
 MODE=""
 SECRET_HELD=""
 REFUSAL=""
-HANDOFF="$CLAUDE_DIR/session-audit/ai-state-sync.md"
 
 # Whitelist, never a blacklist: ignore everything at the top level, re-include
 # named paths. Last match wins, so the trailing deny lines are a belt over the
 # braces for the "never credentials / transcripts" rule.
-WHITELIST='/*
+CLAUDE_WHITELIST='/*
 !/memory/
 !/tasks/
 !/specs/
@@ -82,6 +86,37 @@ WHITELIST='/*
 .env
 .env.*
 .credentials.json'
+
+# Codex: only the text dumps. auth.json (credential), logs, queues, caches and the
+# binary DBs themselves are never listed, and re-denied last.
+CODEX_WHITELIST='/*
+!/state-dump/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+auth.json
+*.jsonl'
+
+select_client() {
+    case "$AI_STATE_CLIENT" in
+        claude)
+            BRANCH="main"
+            HANDOFF="$CLAUDE_DIR/session-audit/ai-state-sync.md"
+            WHITELIST="$CLAUDE_WHITELIST"
+            AI_STATE_GIT_DIR="${AI_STATE_GIT_DIR:-$HOME/.ai-clients-state/claude.git}"
+            AI_STATE_WORK_TREE="${AI_STATE_WORK_TREE:-$CLAUDE_DIR}"
+            ;;
+        codex)
+            BRANCH="codex"
+            HANDOFF="$CLAUDE_DIR/session-audit/ai-state-sync-codex.md"
+            WHITELIST="$CODEX_WHITELIST"
+            AI_STATE_GIT_DIR="${AI_STATE_GIT_DIR:-$HOME/.ai-clients-state/codex.git}"
+            AI_STATE_WORK_TREE="${AI_STATE_WORK_TREE:-${CODEX_HOME:-$HOME/.codex}}"
+            AI_STATE_SQLITE="${AI_STATE_SQLITE:-memories_1.sqlite goals_1.sqlite}"
+            ;;
+        *) printf '[ai-state-sync] unknown AI_STATE_CLIENT: %s\n' "$AI_STATE_CLIENT"; exit 0 ;;
+    esac
+}
 
 # Same patterns as commit_secret_guard.sh (kept in sync by hand: that hook reads a
 # PreToolUse payload, so it cannot be reused here). Only unambiguous token shapes
@@ -300,6 +335,80 @@ push_head() {
         push -q origin "HEAD:$BRANCH" >/dev/null 2>&1
 }
 
+DUMP_DIR_NAME="state-dump"
+
+# Export every configured DB as a text dump taken from a consistent snapshot: the
+# sqlite online backup copies a WAL-mode DB (even while Codex has it open) into a
+# temp file, and THAT file is dumped. Copying the .sqlite/.wal files directly could
+# capture a torn state. An absent DB or a failed export is skipped, never fatal,
+# and the previous dump is kept rather than truncated. Contract: backup plus a
+# seed-only restore, one writer machine at a time; dumps are never merged
+# (ai_clients/CLAUDE.md, "AI-state sync").
+export_sqlite_dumps() {
+    local name db snap snapdir dump
+    [ -n "$AI_STATE_SQLITE" ] || return 0
+    command -v sqlite3 >/dev/null 2>&1 || return 0
+    mkdir -p "$AI_STATE_WORK_TREE/$DUMP_DIR_NAME" || return 0
+    for name in $AI_STATE_SQLITE; do
+        db="$AI_STATE_WORK_TREE/$name"
+        [ -s "$db" ] || continue
+        # Private dir: a predictable /tmp path could be pre-planted as a symlink.
+        snapdir="$(mktemp -d)" || continue
+        snap="$snapdir/snapshot.db"
+        dump="$AI_STATE_WORK_TREE/$DUMP_DIR_NAME/${name%.sqlite}.sql"
+        if sqlite3 "$db" ".backup '$snap'" >/dev/null 2>&1 &&
+            sqlite3 "$snap" .dump >"$dump.tmp" 2>/dev/null; then
+            mv -f "$dump.tmp" "$dump"
+        else
+            rm -f "$dump.tmp"
+            say "could not export $name; keeping the previous dump"
+        fi
+        rm -rf "$snapdir"
+    done
+}
+
+# True when the DB file is absent, zero bytes, or has no user table.
+db_is_empty() {
+    local db="$1" tables
+    [ -s "$db" ] || return 0
+    tables="$(sqlite3 "$db" "select count(*) from sqlite_master where type='table' and name not like 'sqlite_%'" 2>/dev/null)" || return 1
+    [ "$tables" = "0" ]
+}
+
+# Rebuild each DB from its dump, ONLY when the target is absent or empty. A
+# populated target is refused (rc 1) and left untouched: restoring over live
+# memory would silently lose rows.
+restore_sqlite_dumps() {
+    local name db dump tmp rc=0
+    [ -n "$AI_STATE_SQLITE" ] || return 0
+    for name in $AI_STATE_SQLITE; do
+        db="$AI_STATE_WORK_TREE/$name"
+        dump="$AI_STATE_WORK_TREE/$DUMP_DIR_NAME/${name%.sqlite}.sql"
+        [ -s "$dump" ] || continue
+        if ! command -v sqlite3 >/dev/null 2>&1; then
+            say "REFUSING to restore $name: sqlite3 is not installed"
+            rc=1
+            continue
+        fi
+        if ! db_is_empty "$db"; then
+            say "REFUSING to restore $name: $db already holds data. Move it aside, then re-run this step."
+            rc=1
+            continue
+        fi
+        tmp="$(mktemp "$db.restore.XXXXXX")" || { rc=1; continue; }
+        if sqlite3 "$tmp" <"$dump" >/dev/null 2>&1; then
+            rm -f "$db-wal" "$db-shm"
+            mv -f "$tmp" "$db"
+            say "restored $name from $DUMP_DIR_NAME/"
+        else
+            rm -f "$tmp"
+            say "could not restore $name from its dump"
+            rc=1
+        fi
+    done
+    return "$rc"
+}
+
 mode_push() {
     [ -d "$AI_STATE_GIT_DIR" ] || not_set_up
     configure_repo
@@ -318,6 +427,7 @@ $unmerged"
         finish 1 "unmerged files block syncing: $unmerged"
     fi
     rm -f "$HANDOFF" 2>/dev/null || true # re-evaluated from scratch every run
+    export_sqlite_dumps
     commit_changes || finish 1 "commit refused: $REFUSAL"
     [ -n "$SECRET_HELD" ] && { held=" Secret guard held back: $SECRET_HELD"; rc=1; }
 
@@ -384,6 +494,7 @@ mode_setup() {
         g checkout -q -f -B "$BRANCH" "origin/$BRANCH" >/dev/null 2>&1 || return 1
         g branch -q --set-upstream-to="origin/$BRANCH" "$BRANCH" >/dev/null 2>&1
         say "state restored from $AI_STATE_REMOTE into $AI_STATE_WORK_TREE"
+        restore_sqlite_dumps || return 1
     else
         say "remote is empty: the first SessionEnd (or a manual push) seeds it."
     fi
@@ -391,6 +502,7 @@ mode_setup() {
 
 main() {
     MODE="${1:-}"
+    select_client
     [ "${2:-}" = "--hook" ] && HOOK=1
     [ "$HOOK" = 1 ] && cat >/dev/null 2>&1 # drain the hook's JSON payload
     case "$MODE" in
