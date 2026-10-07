@@ -2529,10 +2529,33 @@ left out on purpose: it would false-positive on memory prose and wedge the sync.
 <p><strong>Conflicts are never resolved.</strong> A push whose rebase conflicts is aborted (local
 commits kept); a pull conflict leaves git's markers. Both write
 <code>~/.claude/session-audit/ai-state-sync.md</code>, which the next <code>pull --hook</code> prints.</p>
-<p><strong>Extension point (#656)</strong>: <code>AI_STATE_GIT_DIR</code>, <code>AI_STATE_WORK_TREE</code> and <code>WHITELIST</code> are
-the only per-client inputs; codex/qwen/copilot state is a second invocation, not a
-change to the modes. Keyboard-shortcut wiring (<code>distro_config/set_custom_shortcuts.sh</code>)
-is a separate follow-up.</p>
+<p><strong>Extension point (#656)</strong>: <code>AI_STATE_GIT_DIR</code>, <code>AI_STATE_WORK_TREE</code>, <code>WHITELIST</code>,
+<code>BRANCH</code> and <code>AI_STATE_SQLITE</code> are the per-client inputs, selected by <code>AI_STATE_CLIENT</code>
+(<code>claude</code> default, <code>codex</code>); a client is a second invocation, not a change to the modes.</p>
+<p><strong>Codex (<code>AI_STATE_CLIENT=codex</code>)</strong>: git dir <code>~/.ai-clients-state/codex.git</code>, work tree
+<code>${CODEX_HOME:-~/.codex}</code>, branch <code>codex</code> of the same private repo, handoff
+<code>session-audit/ai-state-sync-codex.md</code>. Whitelist is only <code>/state-dump/</code>; <code>auth.json</code>,
+<code>*.sqlite*</code>, <code>*.jsonl</code> are re-denied last. <code>push</code> first exports <code>memories_1.sqlite</code> and
+<code>goals_1.sqlite</code> (WAL mode) as <code>state-dump/&lt;name&gt;.sql</code>: sqlite's online <code>.backup</code> into a
+private <code>mktemp -d</code> snapshot, then <code>.dump</code> of the snapshot, so a running Codex never
+yields a torn copy; the dump then passes the same secret guard. Binary DBs are never
+committed. <code>setup</code> (step <code>state_sync</code>) restores a dump only when the target DB is absent,
+zero bytes, or has no user table; a populated DB is <strong>refused</strong> with a message and left
+untouched. The <code>SessionEnd</code> hook runs the codex push after the claude one.</p>
+<p>⚠️ <strong>Contract: seed-only restore, one writer at a time.</strong> Codex sync is a backup plus a
+first-machine seed, not a bidirectional merge. A populated DB is never updated from the
+remote, and two machines that both write Codex memory produce two competing versions of the
+same <code>.sql</code> file: the second <code>push</code> hits a rebase conflict, which is aborted and reported
+like any other conflict (never auto-resolved). Use Codex's memory on one machine at a time.
+To move it, stop on the old machine, delete the DBs on the new machine, and re-run
+<code>state_sync</code>. A row-level SQLite merge was considered and left out (#675 review): the DB
+schema belongs to Codex and can change under any update.</p>
+<p><strong>Clients with no invocation (measured 2026-10-07)</strong>: <code>~/.qwen</code>, <code>~/.copilot</code>,
+<code>~/.kimi-code</code> carry no authored state beyond the deployed <code>AGENTS.md</code> (Qwen
+<code>settings.json</code> holds a live API key; Kimi <code>credentials/</code>, <code>oauth/</code> and session history
+are never synced). Rule for any future client: authored state only, never credentials,
+session history, caches or logs. Keyboard-shortcut wiring
+(<code>distro_config/set_custom_shortcuts.sh</code>) is a separate follow-up.</p>
 <h2 id="deployment">Deployment<a class="headerlink" href="#deployment" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>make<span class="w"> </span>ai_clients<span class="w">        </span><span class="c1"># interactive menu (choose steps individually)</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># or via main.sh directly:</span>

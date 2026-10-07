@@ -1787,6 +1787,13 @@ plugins, caches and session transcripts are never included (whitelist, not black
 <p>Sessions then pull on start and commit + push on exit, automatically. Outside a
 session (or from a keyboard shortcut) run <code>ai-state-sync pull</code> / <code>ai-state-sync push</code>.
 Conflicts are reported, never auto-resolved. Details: <code>ai_clients/CLAUDE.md</code>.</p>
+<p>Codex's memory (<code>~/.codex/memories_1.sqlite</code>, <code>goals_1.sqlite</code>) rides the same repo on
+its own <code>codex</code> branch, as <strong>text dumps</strong> (<code>state-dump/*.sql</code>) taken from a sqlite
+online-backup snapshot, never as binary files. The <code>state_sync</code> step restores them only
+into an absent or empty DB and refuses otherwise. This is a backup plus a one-time seed,
+not a merge: use Codex's memory on one machine at a time (see <code>ai_clients/CLAUDE.md</code>). <code>auth.json</code> and everything else in
+<code>~/.codex</code> is never synced; <code>~/.qwen</code>, <code>~/.copilot</code> and <code>~/.kimi-code</code> hold no authored
+state beyond the <code>AGENTS.md</code> that <code>make ai_clients</code> deploys.</p>
 <h3 id="documentation-site">📚 Documentation site<a class="headerlink" href="#documentation-site" title="Permanent link">&para;</a></h3>
 <p>The docs are a MkDocs Material site versioned with mike (<code>dev</code>, alias <code>latest</code>),
 single-sourced from this README and the area <code>CLAUDE.md</code> files.</p>
