@@ -341,7 +341,9 @@ DUMP_DIR_NAME="state-dump"
 # sqlite online backup copies a WAL-mode DB (even while Codex has it open) into a
 # temp file, and THAT file is dumped. Copying the .sqlite/.wal files directly could
 # capture a torn state. An absent DB or a failed export is skipped, never fatal,
-# and the previous dump is kept rather than truncated.
+# and the previous dump is kept rather than truncated. Contract: backup plus a
+# seed-only restore, one writer machine at a time; dumps are never merged
+# (ai_clients/CLAUDE.md, "AI-state sync").
 export_sqlite_dumps() {
     local name db snap snapdir dump
     [ -n "$AI_STATE_SQLITE" ] || return 0

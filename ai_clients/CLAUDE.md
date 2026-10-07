@@ -908,6 +908,15 @@ committed. `setup` (step `state_sync`) restores a dump only when the target DB i
 zero bytes, or has no user table; a populated DB is **refused** with a message and left
 untouched. The `SessionEnd` hook runs the codex push after the claude one.
 
+⚠️ **Contract: seed-only restore, one writer at a time.** Codex sync is a backup plus a
+first-machine seed, not a bidirectional merge. A populated DB is never updated from the
+remote, and two machines that both write Codex memory produce two competing versions of the
+same `.sql` file: the second `push` hits a rebase conflict, which is aborted and reported
+like any other conflict (never auto-resolved). Use Codex's memory on one machine at a time.
+To move it, stop on the old machine, delete the DBs on the new machine, and re-run
+`state_sync`. A row-level SQLite merge was considered and left out (#675 review): the DB
+schema belongs to Codex and can change under any update.
+
 **Clients with no invocation (measured 2026-10-07)**: `~/.qwen`, `~/.copilot`,
 `~/.kimi-code` carry no authored state beyond the deployed `AGENTS.md` (Qwen
 `settings.json` holds a live API key; Kimi `credentials/`, `oauth/` and session history
