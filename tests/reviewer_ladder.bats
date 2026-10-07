@@ -1339,3 +1339,17 @@ _coderabbit_ndjson_run() {
     [ "$status" -ne 0 ]
     [ -z "$output" ]
 }
+
+@test "coderabbit rung passes plain-text output through unchanged" {
+    printf '%s\n' '- bin/a.sh:4 guard the push' '- bin/b.sh:9 quote the path' >"$BATS_TEST_TMPDIR/plain.txt"
+    _coderabbit_ndjson_run "$BATS_TEST_TMPDIR/plain.txt"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(cat "$BATS_TEST_TMPDIR/plain.txt")" ]
+}
+
+@test "coderabbit rung fails on blank output" {
+    printf '\n  \n' >"$BATS_TEST_TMPDIR/blank.txt"
+    _coderabbit_ndjson_run "$BATS_TEST_TMPDIR/blank.txt"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
