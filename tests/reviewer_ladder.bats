@@ -1305,3 +1305,51 @@ SH
     [ "$status" -eq 0 ]
     [ "$(cat "$BATS_TEST_TMPDIR/claude.promptlen")" -lt 131072 ]
 }
+
+# --- coderabbit NDJSON extraction (dotfiles-linux-dev#642) ----------------------
+
+_coderabbit_ndjson_run() {
+    local wd="$BATS_TEST_TMPDIR/wd"
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    printf '#!/bin/bash\ncat "%s"\n' "$1" >"$BATS_TEST_TMPDIR/bin/coderabbit"
+    chmod +x "$BATS_TEST_TMPDIR/bin/coderabbit"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+    git init -q "$wd"
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q --allow-empty -m x
+    git -C "$wd" branch -M master
+    export REVIEWER_LADDER_BASE=master
+    cd "$wd"
+    run _run_runtime_review coderabbit default "" 7 "$wd"
+}
+
+@test "coderabbit rung posts findings text, never raw NDJSON lines" {
+    _coderabbit_ndjson_run "$BATS_TEST_DIRNAME/fixtures/coderabbit_agent.ndjson"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'- **major** `bin/a.sh`: Review comment at @bin/a.sh around lines 4 - 9:'* ]]
+    [[ "$output" == *"Guard the push"* ]]
+    [[ "$output" == *"2 finding(s) across 2 reviewed file(s)."* ]]
+    [[ "$output" != *'"type"'* ]]
+    [[ "$output" != *"untrusted review data"* ]]
+    [[ "$output" != *"heartbeat"* ]]
+}
+
+@test "coderabbit rung fails when the stream holds no findings and no complete event" {
+    printf '%s\n' '{"type":"heartbeat","status":"reviewing"}' 'not json' >"$BATS_TEST_TMPDIR/empty.ndjson"
+    _coderabbit_ndjson_run "$BATS_TEST_TMPDIR/empty.ndjson"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "coderabbit rung passes plain-text output through unchanged" {
+    printf '%s\n' '- bin/a.sh:4 guard the push' '- bin/b.sh:9 quote the path' >"$BATS_TEST_TMPDIR/plain.txt"
+    _coderabbit_ndjson_run "$BATS_TEST_TMPDIR/plain.txt"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(cat "$BATS_TEST_TMPDIR/plain.txt")" ]
+}
+
+@test "coderabbit rung fails on blank output" {
+    printf '\n  \n' >"$BATS_TEST_TMPDIR/blank.txt"
+    _coderabbit_ndjson_run "$BATS_TEST_TMPDIR/blank.txt"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}

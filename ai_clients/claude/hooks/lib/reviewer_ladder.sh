@@ -697,8 +697,11 @@ _run_runtime_review() {
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
 			return 1
 		}
-		(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
-			coderabbit review --agent --base "$cr_base")
+		local cr_out
+		cr_out="$(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
+			coderabbit review --agent --base "$cr_base")" || return 1
+		# #642: --agent prints NDJSON events; post only the findings, never the stream.
+		_coderabbit_render_findings <<<"$cr_out"
 		;;
 	kimi | copilot | claude)
 		# No review subcommand: hand the verified checkout's diff in the prompt,
@@ -732,6 +735,33 @@ _run_runtime_review() {
 		return 1
 		;;
 	esac
+}
+
+# _coderabbit_render_findings — NDJSON (stdin) from `coderabbit review --agent`
+# to a markdown review on stdout (#642). Events seen live: review_context,
+# status, heartbeat, finding {severity,fileName,codegenInstructions}, and
+# complete {findings,reviewedFiles[]}. Non-JSON lines are dropped from a stream;
+# input with no JSON at all is plain text and passes through unchanged. Fails (so
+# the rung falls through) when a stream has neither a finding nor a complete
+# event, or the input is blank — never posts the raw stream or an empty review.
+_coderabbit_render_findings() {
+	local out
+	out="$(jq -rRs '
+		. as $raw
+		| [split("\n")[] | fromjson? | objects] as $ev
+		| [$ev[] | select(.type == "finding")] as $f
+		| ($ev | map(select(.type == "complete")) | last) as $c
+		# No JSON at all: plain-text output is already a readable review — pass it
+		# through. Only a parseable stream with nothing to post fails the rung.
+		| if ($ev | length) == 0 then ($raw | sub("\\s+$"; ""))
+		  elif ($f | length) == 0 and $c == null then empty else
+			([$f[] | "- **\(.severity)** `\(.fileName)`: "
+				+ ((.codegenInstructions // "") | sub("^[^\n]*\n\n"; ""))] | join("\n")),
+			(if $c then "\n\(($c.findings // ($f | length))) finding(s) across \(($c.reviewedFiles // []) | length) reviewed file(s)."
+			 else empty end)
+		  end')" || return 1
+	[ -n "$out" ] || return 1
+	printf '%s\n' "$out"
 }
 
 # _post_pr_review OWNER REPO PR_NUMBER BODY HEAD_SHA
