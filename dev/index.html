@@ -1758,16 +1758,15 @@ project <code>.env</code>. Both files are written mode <code>600</code>.</p>
 <td>Fine-grained PAT, <strong>All repositories</strong>, <code>Pull requests: Read and write</code></td>
 <td><code>.github/workflows/coderabbit_trigger.yml</code> in <code>blueprintx</code> and every project it scaffolds</td>
 </tr>
-<tr>
-<td><code>CLAUDE_BACKUP_DIR</code></td>
-<td>Default target dir for <code>/backup-env</code> / <code>/restore-env</code></td>
-<td>n/a (local path)</td>
-<td><code>ai_clients/claude/commands/backup-env.md</code>, <code>restore-env.md</code>, <code>storage/backup_env.sh</code>, <code>storage/restore_env.sh</code></td>
-</tr>
 </tbody>
 </table>
+<p><strong>Where secrets live.</strong> Variable <em>names</em> live in <code>.env.example</code> (committed).
+Values live in a password manager of your choosing — this repo does not depend
+on any particular one. The real <code>.env</code> is machine-local and is <strong>not backed
+up</strong>: it dies with the OS install, by design, and you re-create it from
+<code>.env.example</code> plus your password manager.</p>
 <p><strong>Re-minting <code>GH_REVIEW_TRIGGER_PAT</code> on a new/lost machine</strong> (a PAT is re-minted,
-not restored — a backed-up value may already be expired):
+not restored):
 1. github.com/settings/tokens → generate a new fine-grained token with the
    scopes above.
 2. <code>echo 'GH_REVIEW_TRIGGER_PAT=&lt;value&gt;' &gt;&gt; .env</code> (project-root <code>.env</code> —

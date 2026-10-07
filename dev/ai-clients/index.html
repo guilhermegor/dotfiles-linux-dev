@@ -494,17 +494,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-restore-env-prompt" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The restore-.env prompt
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#lesson-mirrors-specs_lessons" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1181,17 +1170,6 @@
     <span class="md-ellipsis">
       
         A gate's contract: a usable answer, not just a clean exit (dotfiles-linux-dev#398)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-restore-env-prompt" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The restore-.env prompt
       
     </span>
   </a>
@@ -1959,18 +1937,6 @@ originally tested only their internal sub-helpers (<code>_free_held_paths</code>
 <code>_gate_problems_filter</code>, …) and were extended to also call the top-level
 gate function (<code>gate_free_surface</code>, <code>gate_pr_thread_state</code>) directly, since
 a sub-helper passing proves nothing about the wiring above it.</p>
-<h2 id="the-restore-env-prompt">The restore-<code>.env</code> prompt<a class="headerlink" href="#the-restore-env-prompt" title="Permanent link">&para;</a></h2>
-<p><code>ai_clients/lib/restore_env_prompt.sh</code> defines <code>prompt_restore_env()</code>, which
-asks <code>[y/N]</code> whether to restore git-ignored <code>.env</code> files from an external
-backup drive. On yes it runs <code>~/.local/bin/restore-env.sh</code> if installed,
-otherwise falls back to the in-repo <code>storage/restore_env.sh</code>.</p>
-<p>It fires at the top of <code>ai_clients/main.sh</code>'s <code>main()</code>, and also as the
-<code>make restore_env_prompt</code> target, which <code>make run</code> runs <em>first</em> so that
-<code>install_programs</code> / <code>install_coding</code> can read restored <code>.env</code> values. The
-<code>run</code> target exports <code>DOTFILES_INIT_IN_PROGRESS=1</code>; <code>main.sh</code> checks it and
-skips its own prompt during a <code>run</code> invocation to avoid asking twice. This helper
-is <strong>not</strong> a <code>claude/main.sh</code> STEPS-registry step — it is client-agnostic and
-must run before client discovery.</p>
 <h2 id="lesson-mirrors-specs_lessons">Lesson mirrors (<code>.specs/_lessons/</code>)<a class="headerlink" href="#lesson-mirrors-specs_lessons" title="Permanent link">&para;</a></h2>
 <p>A lesson store (<code>~/.claude/memory/lessons*</code>) is global — it lives outside every repo. A
 <strong>mirror</strong> is a per-repo, git-ignored copy of the subset of a store whose <code>**Origin:**</code>

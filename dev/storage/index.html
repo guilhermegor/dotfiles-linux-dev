@@ -492,17 +492,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#encrypted-env-backup-backup_envsh-restore_envsh" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Encrypted env backup (backup_env.sh / restore_env.sh)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#adding-a-new-script" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -773,17 +762,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#encrypted-env-backup-backup_envsh-restore_envsh" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Encrypted env backup (backup_env.sh / restore_env.sh)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#adding-a-new-script" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -852,14 +830,6 @@ backup, and capacity analysis.</p>
 <td>Verify drive health via SMART data</td>
 </tr>
 <tr>
-<td><code>backup_env.sh</code></td>
-<td>GUI-driven, gpg-encrypted backup of git-ignored <code>.env</code> files + <code>rclone.conf</code></td>
-</tr>
-<tr>
-<td><code>restore_env.sh</code></td>
-<td>Decrypts and restores the bundle <code>backup_env.sh</code> produces</td>
-</tr>
-<tr>
 <td><code>storage_hiato.sh</code></td>
 <td>Detect SSDs, SATA/NVMe slots, report theoretical max capacity</td>
 </tr>
@@ -875,36 +845,6 @@ backup, and capacity analysis.</p>
 <li>Mounted media lives under <code>/media/$USER/&lt;drive-name&gt;/</code>.</li>
 <li><strong>Diagnostic / read-only scripts</strong> (<code>storage_hiato.sh</code>) must never write to <code>/dev/*</code>
   or modify partition tables. Require root with <code>[ "$(id -u)" -ne 0 ]</code> guard.</li>
-</ul>
-<h2 id="encrypted-env-backup-backup_envsh-restore_envsh">Encrypted env backup (<code>backup_env.sh</code> / <code>restore_env.sh</code>)<a class="headerlink" href="#encrypted-env-backup-backup_envsh-restore_envsh" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Reads <code>CLAUDE_BACKUP_DIR</code> from <code>~/.claude/.env</code>, same as <code>c:backup-env</code> /
-  <code>c:restore-env</code> — but this is a separate, zenity-driven, whole-machine flow
-  (scans every repo under <code>~/github</code>), not the per-repo slash command.</li>
-<li><code>backup_env.sh</code> lets the operator pick which git-ignored <code>.env</code> files (and,
-  when present, <code>~/.config/rclone/rclone.conf</code>) to include, then bundles them
-  into <strong>one</strong> tar and encrypts it with a symmetric passphrase
-  (<code>gpg --symmetric --cipher-algo AES256</code>), prompted twice via zenity's hidden
-  entry. The passphrase is fed to <code>gpg</code> over stdin (<code>--passphrase-fd 0</code>,
-  <code>--pinentry-mode loopback</code>) — it never appears in argv, <code>ps</code>, or shell
-  history. Only the resulting <code>env_bundle_&lt;timestamp&gt;.tar.gpg</code> is written
-  under <code>$CLAUDE_BACKUP_DIR/env_bundle/</code>; the script refuses to write
-  anything else there.</li>
-<li><strong>Migration:</strong> a pre-#367 backup left plaintext copies under
-  <code>$CLAUDE_BACKUP_DIR/env_files/</code> (gzip is compression, not encryption).
-  Every backup run reports any such files found, with exact paths, so the
-  owner can delete them by hand — they are never deleted automatically.</li>
-<li><code>restore_env.sh</code> decrypts the chosen bundle, restores each file mode <code>600</code>,
-  and never overwrites an existing file (it may hold a newer, working
-  secret) — a conflict is reported as skipped, not overwritten.</li>
-<li>After restoring <code>rclone.conf</code>, it runs a cheap <code>rclone lsd &lt;remote&gt;:
-  --max-depth 1</code> check. OneDrive refresh tokens expire after disuse, so a
-  failure here is expected, not an error — the summary points at
-  <code>rclone config reconnect &lt;remote&gt;:</code> instead of leaving a silently broken
-  mount.</li>
-<li>Never touches rclone's own config password on the live file — that would
-  encrypt the file the systemd mount unit (#361) reads at boot, which it has
-  no way to unlock.</li>
 </ul>
 <h2 id="adding-a-new-script">Adding a new script<a class="headerlink" href="#adding-a-new-script" title="Permanent link">&para;</a></h2>
 <ol>
