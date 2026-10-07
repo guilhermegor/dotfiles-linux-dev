@@ -24,5 +24,10 @@ setup_state_sync() {
         return 1
     fi
     install_ai_state_sync_command || return 1
-    CLAUDE_CONFIG_DIR="$CLAUDE_DIR" bash "$sync_script" setup </dev/null
+    CLAUDE_CONFIG_DIR="$CLAUDE_DIR" bash "$sync_script" setup </dev/null || return 1
+
+    # Codex's memories/goals DBs (#656): same script, second client. Restores the text
+    # dumps into an absent or empty DB only; a populated DB is refused, not overwritten.
+    print_status "section" "AI-STATE SYNC (codex memory DBs -> ${CODEX_HOME:-$HOME/.codex})"
+    AI_STATE_CLIENT=codex CLAUDE_CONFIG_DIR="$CLAUDE_DIR" bash "$sync_script" setup </dev/null
 }

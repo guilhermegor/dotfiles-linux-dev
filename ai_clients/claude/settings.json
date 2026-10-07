@@ -221,6 +221,11 @@
             "type": "command",
             "command": "bash \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai_state_sync.sh\" push --hook",
             "timeout": 60
+          },
+          {
+            "type": "command",
+            "command": "AI_STATE_CLIENT=codex bash \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/ai_state_sync.sh\" push --hook",
+            "timeout": 60
           }
         ]
       }
