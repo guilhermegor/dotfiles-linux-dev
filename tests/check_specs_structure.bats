@@ -108,7 +108,7 @@ run_gate() {
 
 @test "BAD_FEATURE_NAME: does not fire for a well-formed kebab-case feature" {
     write_claude_md
-    write_feature "restore-env"
+    write_feature "some-feature"
     run_gate
     [ "$status" -eq 0 ]
     [[ "$output" != *"BAD_FEATURE_NAME"* ]]

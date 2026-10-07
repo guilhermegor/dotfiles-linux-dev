@@ -32,7 +32,6 @@ made it testable:
 | the commit-title guard works | a `git commit` whose title exceeds `.gitlint`'s `title-max-length` exits 2 and prints the offending length; one under the limit exits 0; an unparseable payload exits 0 (fails open) | `tests/commit_title_length_guard.bats` |
 | connectivity is checked properly | `check_internet` returns 0/1 from an **HTTPS** probe, so a blocked `ping` cannot change the verdict; with neither `curl` nor `wget` present it reports the missing dependency instead of "no connection" | `tests/check_internet.bats` |
 | app folders are organised sensibly | folders come back ordered by resolved **display name**, case-insensitively — `Social` before `Sistema`, `Infra` before `IRPF` — and an unresolvable name falls back to the bare id, never to empty | `tests/app_folder_alpha_order.bats` |
-| the memory export skips what it should | the export is a denylist: an artifact type nobody enumerated is copied anyway, while credentials, rotated `*.backup_*` copies, and `security/agent-sdk-venv/` (but not `security/` itself) are absent | `tests/export_memory_coverage.bats` |
 
 The left column cannot fail a test — there is nothing in it to assert against. The right
 column can: each names an exit code, a value, a count, or a bound that a test body reads back

@@ -449,21 +449,6 @@ originally tested only their internal sub-helpers (`_free_held_paths`,
 gate function (`gate_free_surface`, `gate_pr_thread_state`) directly, since
 a sub-helper passing proves nothing about the wiring above it.
 
-## The restore-`.env` prompt
-
-`ai_clients/lib/restore_env_prompt.sh` defines `prompt_restore_env()`, which
-asks `[y/N]` whether to restore git-ignored `.env` files from an external
-backup drive. On yes it runs `~/.local/bin/restore-env.sh` if installed,
-otherwise falls back to the in-repo `storage/restore_env.sh`.
-
-It fires at the top of `ai_clients/main.sh`'s `main()`, and also as the
-`make restore_env_prompt` target, which `make run` runs *first* so that
-`install_programs` / `install_coding` can read restored `.env` values. The
-`run` target exports `DOTFILES_INIT_IN_PROGRESS=1`; `main.sh` checks it and
-skips its own prompt during a `run` invocation to avoid asking twice. This helper
-is **not** a `claude/main.sh` STEPS-registry step — it is client-agnostic and
-must run before client discovery.
-
 ## Lesson mirrors (`.specs/_lessons/`)
 
 A lesson store (`~/.claude/memory/lessons*`) is global — it lives outside every repo. A

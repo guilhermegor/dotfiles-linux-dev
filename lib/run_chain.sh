@@ -51,7 +51,6 @@ MAKE_BIN="${MAKE_BIN:-make}"
 if [ -z "${RUN_CHAIN_TARGETS+set}" ]; then
     RUN_CHAIN_TARGETS=(
         banner
-        restore_env_prompt
         permissions
         setup_env
         bash_profile

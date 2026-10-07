@@ -5,7 +5,12 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
 
 # Slots custom0..custom<N-1> are owned by this script; keep in sync with the
 # set_individual_keybinding calls (tests/custom_shortcuts_slots.bats enforces it).
-MANAGED_SLOT_COUNT=16
+# shellcheck disable=SC2034  # read by tests/custom_shortcuts_slots.bats
+MANAGED_SLOT_COUNT=12
+# Highest slot count this script ever managed. Slots MANAGED_SLOT_COUNT..CLEARED_SLOT_COUNT-1
+# are retired (Super+{Shift,Alt}+{E,M}, #669) but still blanked on every run so a
+# stale binding cannot survive in dconf on a machine set up before the retirement.
+CLEARED_SLOT_COUNT=16
 
 # function to check if a keybinding conflicts with a GNOME default binding.
 # Custom bindings are skipped — this script fully owns and overwrites that
@@ -71,11 +76,7 @@ set_keybindings_array() {
     '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom8/', \
     '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom9/', \
     '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom10/', \
-    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom11/', \
-    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom12/', \
-    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom13/', \
-    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom14/', \
-    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom15/']"
+    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom11/']"
 }
 
 # function to set individual keybindings
@@ -99,7 +100,7 @@ set_individual_keybinding() {
 clear_managed_bindings() {
     local i
     print_status info "Clearing bindings of managed slots so gsd re-grabs them..."
-    for ((i = 0; i < MANAGED_SLOT_COUNT; i++)); do
+    for ((i = 0; i < CLEARED_SLOT_COUNT; i++)); do
         gsettings set "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom${i}/" binding ""
     done
 }
@@ -158,86 +159,6 @@ EOF
     
     print_status success "Enhanced copy-path script created successfully!"
     print_status success "Nautilus integration set up automatically!"
-}
-
-# function to install backup-env.sh to ~/.local/bin
-create_backup_env_script() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local src_script="$script_dir/../storage/backup_env.sh"
-    local dest_script="$HOME/.local/bin/backup-env.sh"
-
-    print_status info "Installing backup-env.sh to $dest_script..."
-    mkdir -p "$HOME/.local/bin"
-
-    if [ ! -f "$src_script" ]; then
-        print_status error "Source script not found: $src_script"
-        return 1
-    fi
-
-    cp "$src_script" "$dest_script"
-    chmod +x "$dest_script"
-    print_status success "backup-env.sh installed at $dest_script"
-}
-
-# function to install export-memory.sh to ~/.local/bin
-create_export_memory_script() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local src_script="$script_dir/../storage/export_memory.sh"
-    local dest_script="$HOME/.local/bin/export-memory.sh"
-
-    print_status info "Installing export-memory.sh to $dest_script..."
-    mkdir -p "$HOME/.local/bin"
-
-    if [ ! -f "$src_script" ]; then
-        print_status error "Source script not found: $src_script"
-        return 1
-    fi
-
-    cp "$src_script" "$dest_script"
-    chmod +x "$dest_script"
-    print_status success "export-memory.sh installed at $dest_script"
-}
-
-# function to install restore-env.sh to ~/.local/bin
-create_restore_env_script() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local src_script="$script_dir/../storage/restore_env.sh"
-    local dest_script="$HOME/.local/bin/restore-env.sh"
-
-    print_status info "Installing restore-env.sh to $dest_script..."
-    mkdir -p "$HOME/.local/bin"
-
-    if [ ! -f "$src_script" ]; then
-        print_status error "Source script not found: $src_script"
-        return 1
-    fi
-
-    cp "$src_script" "$dest_script"
-    chmod +x "$dest_script"
-    print_status success "restore-env.sh installed at $dest_script"
-}
-
-# function to install restore-memory.sh to ~/.local/bin
-create_restore_memory_script() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local src_script="$script_dir/../storage/restore_memory.sh"
-    local dest_script="$HOME/.local/bin/restore-memory.sh"
-
-    print_status info "Installing restore-memory.sh to $dest_script..."
-    mkdir -p "$HOME/.local/bin"
-
-    if [ ! -f "$src_script" ]; then
-        print_status error "Source script not found: $src_script"
-        return 1
-    fi
-
-    cp "$src_script" "$dest_script"
-    chmod +x "$dest_script"
-    print_status success "restore-memory.sh installed at $dest_script"
 }
 
 # function to create the show-shortcuts rofi popup script
@@ -426,7 +347,7 @@ set_all_keybindings() {
     print_status success "Configuring GNOME custom keybindings..."
     
     # Define the keybindings we'll be using
-    local bindings=("<Super>e" "<Super>r" "<Super>t" "<Super><Ctrl>s" "<Ctrl><Shift>c" "<Ctrl><Shift>v" "<Ctrl><Shift>Escape" "<Super>c" "<Super><Shift>b" "<Super>j" "<Super><Shift>e" "<Super><Shift>m" "<Super><Alt>e" "<Super><Alt>m" "<Super><Shift>u" "<Super><Alt>b")
+    local bindings=("<Super>e" "<Super>r" "<Super>t" "<Super><Ctrl>s" "<Ctrl><Shift>c" "<Ctrl><Shift>v" "<Ctrl><Shift>Escape" "<Super>c" "<Super><Shift>b" "<Super>j" "<Super><Shift>u" "<Super><Alt>b")
     
     # Ask user if they want to verify conflicts
     read -p "Do you want to verify for shortcut conflicts before proceeding? [Y/n] " -r
@@ -442,11 +363,7 @@ set_all_keybindings() {
     # Create the enhanced copy-path script and set up Nautilus integration
     create_copy_path_script
     
-    # Create the backup script and install to ~/.local/bin
-    create_backup_env_script
-    create_export_memory_script
-    create_restore_env_script
-    create_restore_memory_script
+    # Install helper scripts to ~/.local/bin
     create_show_shortcuts_script
 
     clear_managed_bindings
@@ -463,12 +380,8 @@ set_all_keybindings() {
     set_individual_keybinding 7 "Open Characters" "gnome-characters" "<Super>c"
     set_individual_keybinding 8 "Back Up AI State" "$HOME/.local/bin/ai-state-sync push" "<Super><Shift>b"
     set_individual_keybinding 9 "Show All Shortcuts" "$HOME/.local/bin/show-shortcuts.sh" "<Super>j"
-    set_individual_keybinding 10 "Backup Env Files" "$HOME/.local/bin/backup-env.sh" "<Super><Shift>e"
-    set_individual_keybinding 11 "Export Claude Memory" "$HOME/.local/bin/export-memory.sh" "<Super><Shift>m"
-    set_individual_keybinding 12 "Restore Env Files" "$HOME/.local/bin/restore-env.sh" "<Super><Alt>e"
-    set_individual_keybinding 13 "Restore Claude Memory" "$HOME/.local/bin/restore-memory.sh" "<Super><Alt>m"
-    set_individual_keybinding 14 "Claude Usage Dashboard" "$HOME/.local/bin/claudestatus-dashboard.sh" "<Super><Shift>u"
-    set_individual_keybinding 15 "Restore AI State" "$HOME/.local/bin/ai-state-sync pull" "<Super><Alt>b"
+    set_individual_keybinding 10 "Claude Usage Dashboard" "$HOME/.local/bin/claudestatus-dashboard.sh" "<Super><Shift>u"
+    set_individual_keybinding 11 "Restore AI State" "$HOME/.local/bin/ai-state-sync pull" "<Super><Alt>b"
 
     print_status success "All keybindings have been configured successfully!"
     print_status warning "You can now use:"
@@ -478,10 +391,6 @@ set_all_keybindings() {
     print_status warning "  - Super+C to open GNOME Characters"
     print_status warning "  - Super+Shift+B to back up AI state (ai-state-sync push)"
     print_status warning "  - Super+J to open the shortcut cheat-sheet (rofi popup)"
-    print_status warning "  - Super+Shift+E to back up .env files from all ~/github repos"
-    print_status warning "  - Super+Shift+M to export Claude Code memory to backup"
-    print_status warning "  - Super+Alt+E to restore .env files from backup"
-    print_status warning "  - Super+Alt+M to restore Claude Code memory from backup"
     print_status warning "  - Super+Alt+B to restore AI state (ai-state-sync pull; a conflict is reported, never resolved)"
     print_status warning "  - Super+Shift+U to open the Claude usage dashboard (claudestatus)"
     print_status warning "Shell aliases added to ~/.bashrc (reload with: source ~/.bashrc):"

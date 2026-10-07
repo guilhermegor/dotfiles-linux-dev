@@ -22,7 +22,7 @@
 #
 # Storage: NOT in the repo (issue: "it is data, and versioning it churns on
 # every round"). Default path is ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/
-# reviewer_ledger.db, covered by the existing backup_env backup. Override
+# reviewer_ledger.db, machine-local and not backed up. Override
 # with REVIEWER_LEDGER_DB (tests point this at a tmp file).
 #
 # Usage (both sourced, for reviewer_ladder.sh's post path, and executed

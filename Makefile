@@ -15,8 +15,6 @@
 ##@ Quick Start
 
 .PHONY: run
-# Exported so ai_clients/main.sh skips its own restore-env prompt during the run.
-run: export DOTFILES_INIT_IN_PROGRESS=1
 run: export MAKE_BIN := $(MAKE)
 run:  ## Complete initial setup (RECOMMENDED first-time entry point)
 	@bash lib/run_chain.sh
@@ -187,7 +185,7 @@ storage_analysis:  ## SSD/NVMe slot analysis + theoretical max capacity report
 
 ##@ Batch Operations
 
-.PHONY: full_setup install_espanso_packages hardware_setup storage_setup vm_setup permissions ai_clients restore_env_prompt
+.PHONY: full_setup install_espanso_packages hardware_setup storage_setup vm_setup permissions ai_clients
 
 full_setup: permissions install_programs install_coding vscode_setup setup_all_drivers  ## Complete system setup (programs + coding + drivers)
 	@echo ""
@@ -256,8 +254,7 @@ permissions:  ## chmod +x every *.sh in the repo (skips sourced libs — see bel
 # Boring path-shaped exclusion, not a shebang/main() sniff (dotfiles-linux-dev#312):
 # skip every */lib/* dir under ai_clients/ plus the one top-level exception,
 # profile_functions.sh. Some files under */lib/* are legitimately executable
-# (already committed 755, e.g. ai_clients/lib/restore_env_prompt.sh is
-# dual-mode) — skipping them here is a harmless no-op since chmod would only
+# (already committed 755, e.g. a dual-mode lib script) — skipping them here is a harmless no-op since chmod would only
 # ever confirm a mode they already have. What this exclusion actually fixes
 # is the four sourced-only libs (review_thread_gate.sh, profiles.sh,
 # shared_agents_md.sh, profile_functions.sh) that git stores 644: without
@@ -266,9 +263,6 @@ permissions:  ## chmod +x every *.sh in the repo (skips sourced libs — see bel
 ai_clients:  ## Configure all AI clients (interactive menu: Claude Code, ...)
 	@echo "Configuring all AI clients (Claude, ...)..."
 	@bash ai_clients/main.sh
-
-restore_env_prompt:  ## Prompt to restore .env files from external backup
-	@bash ai_clients/lib/restore_env_prompt.sh || true
 
 ##@ Code Editors
 
