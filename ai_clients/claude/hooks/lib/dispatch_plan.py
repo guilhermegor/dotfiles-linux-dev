@@ -80,6 +80,7 @@ from __future__ import annotations
 import fnmatch
 import functools
 import json
+import os
 import re
 import subprocess
 import sys
@@ -518,25 +519,33 @@ def declared_surface(body: str) -> list[str]:
 	return [line.strip() for line in match.group(1).splitlines() if line.strip()]
 
 
+GIT_LOCATION_VARS = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"})
+
+
 @functools.cache
 def _walk_repo_files(root: Path) -> list[str]:
-	"""List the repo's files as root-relative paths: tracked plus untracked-not-ignored.
+	"""List the repo's tracked files as root-relative paths.
 
 	The one file universe both sides of ``expand_tokens`` match a glob token against with
 	``fnmatch`` — see that function's docstring for why ``root.glob`` was dropped. Asked of
 	git rather than ``rglob("*")``: a repo root can hold ignored trees (``.venv``, agent
 	worktrees under ``.claude/worktrees``) of ~10^5 files that are not repo files and made the
-	walk outlast the hook's timeout (dotfiles-linux-dev#672). Untracked-not-ignored files stay
-	in, since an issue's surface may name a file its own solution creates. Cached per ``root``
-	so the per-issue loop in ``build_plan`` pays for one listing. Raises
+	walk outlast the hook's timeout (dotfiles-linux-dev#672). Tracked only: an untracked,
+	unignored tree can be just as large, and a file an issue's own solution will create is
+	named by a literal token, which ``expand_tokens`` passes through without listing. The
+	``GIT_DIR``/``GIT_WORK_TREE``/``GIT_INDEX_FILE`` overrides are stripped so ``-C root``
+	alone picks the repository — a caller inside a git hook inherits them. Cached per
+	``root`` so the per-issue loop in ``build_plan`` pays for one listing. Raises
 	``CalledProcessError`` outside a git repo, like ``repo_root`` does.
 	"""
+	env = {k: v for k, v in os.environ.items() if k not in GIT_LOCATION_VARS}
 	listing = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
-		["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+		["git", "-C", str(root), "ls-files", "-z"],
 		capture_output=True,
 		text=True,
 		timeout=GH_TIMEOUT,
 		check=True,
+		env=env,
 	).stdout
 	# is_file() drops tracked-but-deleted paths and nested-repo directory entries.
 	return sorted({p for p in listing.split("\0") if p and (root / p).is_file()})
