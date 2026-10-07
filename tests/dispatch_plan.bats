@@ -812,3 +812,55 @@ print(json.dumps({"d": plan["dispatchable"], "x": [e["issue"] for e in plan["exc
 	[[ "$output" == *'"x": [77]'* ]]
 	[[ "$output" == *'"unreadable": true'* ]]
 }
+
+# --- dotfiles-linux-dev#672: the file universe comes from git, not a filesystem walk -----------
+
+@test "a glob token ignores git-ignored trees (.venv, worktrees) and keeps tracked + untracked files" {
+	mkdir -p "$TEST_TMP/src" "$TEST_TMP/.venv/lib" "$TEST_TMP/.claude/worktrees/agent-x/src"
+	: >"$TEST_TMP/src/tracked.py"
+	printf '.venv/\n.claude/worktrees/\n' >"$TEST_TMP/.gitignore"
+	/usr/bin/git add .gitignore src/tracked.py
+	/usr/bin/git commit -q -m "tracked"
+	: >"$TEST_TMP/src/untracked.py"
+	: >"$TEST_TMP/.venv/lib/junk.py"
+	: >"$TEST_TMP/.claude/worktrees/agent-x/src/copy.py"
+	stub_gh "[$(issue_json 72 '*.py')]"
+	run_planner
+	[ "$status" -eq 0 ]
+	# pre-fix: rglob("*") walked the ignored trees too, so the surface carried junk.py and copy.py.
+	[ "$(field '.dispatchable[0].surface | join(",")')" = "src/tracked.py,src/untracked.py" ]
+}
+
+@test "the file universe is listed once per run, however many issues carry a glob token" {
+	mkdir -p "$TEST_TMP/src"
+	: >"$TEST_TMP/src/a.py"
+	/usr/bin/git add src/a.py
+	/usr/bin/git commit -q -m "tracked"
+	run python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+from pathlib import Path
+root = Path(".").resolve()
+for _ in range(3):
+    dispatch_plan.expand_tokens(["src/*"], root, [])
+print(dispatch_plan._walk_repo_files.cache_info().misses)
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+	[ "$status" -eq 0 ]
+	[ "$output" = "1" ]
+}
+
+@test "a glob token outside a git repo fails loudly rather than reading an empty tree" {
+	local plain
+	plain="$(mktemp -d)"
+	: >"$plain/a.py"
+	run python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+from pathlib import Path
+dispatch_plan.expand_tokens(["*.py"], Path(sys.argv[2]), [])
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib" "$plain"
+	rm -rf "$plain"
+	[ "$status" -ne 0 ]
+}

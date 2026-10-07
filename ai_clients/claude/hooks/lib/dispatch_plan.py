@@ -78,6 +78,7 @@ planner re-derives. A native-blocker read failure is UNKNOWN and excluded, never
 from __future__ import annotations
 
 import fnmatch
+import functools
 import json
 import re
 import subprocess
@@ -517,17 +518,28 @@ def declared_surface(body: str) -> list[str]:
 	return [line.strip() for line in match.group(1).splitlines() if line.strip()]
 
 
+@functools.cache
 def _walk_repo_files(root: Path) -> list[str]:
-	"""List every file under ``root`` as a root-relative path, ``.git`` excluded.
+	"""List the repo's files as root-relative paths: tracked plus untracked-not-ignored.
 
-	The one walk both sides of ``expand_tokens`` match a glob token against with
-	``fnmatch`` — see that function's docstring for why ``root.glob`` was dropped.
+	The one file universe both sides of ``expand_tokens`` match a glob token against with
+	``fnmatch`` — see that function's docstring for why ``root.glob`` was dropped. Asked of
+	git rather than ``rglob("*")``: a repo root can hold ignored trees (``.venv``, agent
+	worktrees under ``.claude/worktrees``) of ~10^5 files that are not repo files and made the
+	walk outlast the hook's timeout (dotfiles-linux-dev#672). Untracked-not-ignored files stay
+	in, since an issue's surface may name a file its own solution creates. Cached per ``root``
+	so the per-issue loop in ``build_plan`` pays for one listing. Raises
+	``CalledProcessError`` outside a git repo, like ``repo_root`` does.
 	"""
-	return [
-		str(p.relative_to(root))
-		for p in root.rglob("*")
-		if p.is_file() and ".git" not in p.relative_to(root).parts
-	]
+	listing = subprocess.run(  # noqa: S603, S607 - fixed argv, no shell
+		["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+		capture_output=True,
+		text=True,
+		timeout=GH_TIMEOUT,
+		check=True,
+	).stdout
+	# is_file() drops tracked-but-deleted paths and nested-repo directory entries.
+	return sorted({p for p in listing.split("\0") if p and (root / p).is_file()})
 
 
 def expand_tokens(tokens: list[str], root: Path, held: list[str]) -> list[str]:
