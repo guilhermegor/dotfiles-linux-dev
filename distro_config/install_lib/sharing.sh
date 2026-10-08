@@ -957,6 +957,59 @@ install_clamav() {
 }
 
 # ============================================================================
+# FREE DOWNLOAD MANAGER
+# ============================================================================
+
+# Vendor's official .deb (linked from https://www.freedownloadmanager.org/
+# download-fdm-for-linux.htm, amd64 only). Freeware, not open source (#679).
+FDM_DEB_URL="https://files2.freedownloadmanager.org/6/latest/freedownloadmanager.deb"
+
+install_free_download_manager() {
+    print_status "section" "FREE DOWNLOAD MANAGER"
+
+    if dpkg-query -W -f='${Status}' freedownloadmanager 2>/dev/null | grep -q "install ok installed"; then
+        print_status "info" "Free Download Manager already installed"
+        return 0
+    fi
+
+    if [ "$PACKAGE_MANAGER" != "apt" ]; then
+        print_status "error" "Free Download Manager: unsupported distro (official .deb needs apt)"
+        return 1
+    fi
+
+    local arch
+    arch=$(dpkg --print-architecture 2>/dev/null || uname -m)
+    case "$arch" in
+        amd64|x86_64) ;;
+        *)
+            print_status "error" "Free Download Manager: unsupported architecture $arch (amd64 only)"
+            return 1
+            ;;
+    esac
+
+    print_status "info" "Installing Free Download Manager from the official .deb..."
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+
+    if ! { wget -O "$tmp_dir/freedownloadmanager.deb" "$FDM_DEB_URL" 2>>"$LOG_FILE" || \
+           run_or_echo curl -fL -o "$tmp_dir/freedownloadmanager.deb" "$FDM_DEB_URL" 2>>"$LOG_FILE"; }; then
+        rm -rf "$tmp_dir"
+        print_status "error" "Failed to download Free Download Manager from: $FDM_DEB_URL"
+        return 1
+    fi
+
+    if ! run_or_echo sudo apt-get install -y "$tmp_dir/freedownloadmanager.deb"; then
+        rm -rf "$tmp_dir"
+        print_status "error" "Free Download Manager installation failed"
+        return 1
+    fi
+
+    rm -rf "$tmp_dir"
+    print_status "success" "Free Download Manager installed"
+}
+
+# ============================================================================
 # REGISTRY
 # ============================================================================
 
@@ -969,6 +1022,7 @@ INSTALL_REGISTRY+=(
     # placement changes.
     "install_rustdesk:RustDesk Remote Desktop:Infra:rustdesk.desktop"
     "install_insync:Insync (Google Drive):Sharing:insync.desktop"
+    "install_free_download_manager:Free Download Manager:Sharing:freedownloadmanager.desktop"
     "install_rclone:rclone (on-demand cloud mount)::"
     "install_clamav:ClamAV Antivirus:Seguranca:clamtk.desktop"
 )
