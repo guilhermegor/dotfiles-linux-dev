@@ -1308,6 +1308,65 @@ SH
     [ "$(cat "$BATS_TEST_TMPDIR/claude.promptlen")" -lt 131072 ]
 }
 
+_partial_repo() {
+    local wd="$BATS_TEST_TMPDIR/wd"
+    git init -q "$wd"
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q --allow-empty -m x
+    git -C "$wd" branch -M master
+    git -C "$wd" branch base
+    if [ "$1" = big ]; then
+        head -c 300000 /dev/zero | tr '\0' 'a' | fold -w 100 >"$wd/f"
+    else
+        echo small >"$wd/f"
+    fi
+    git -C "$wd" add f
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q -m y
+    export REVIEWER_LADDER_BASE=base
+    cd "$wd"
+}
+
+_fake_claude_review() {
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    cat >"$BATS_TEST_TMPDIR/bin/claude" <<SH
+#!/bin/bash
+printf '%s\n' "\$2" >"$BATS_TEST_TMPDIR/claude.prompt"
+printf '1 finding\n## Verdict\nok\n'
+SH
+    chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+}
+
+@test "a truncated diff is flagged partial in the prompt and the posted review (#636)" {
+    _fake_claude_review
+    _partial_repo big
+    run _run_runtime_review claude default "" 7 "$BATS_TEST_TMPDIR/wd"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"diff truncated at 120000 of "*"this review covers only the first part"* ]]
+    grep -q "diff truncated at 120000 of" "$BATS_TEST_TMPDIR/claude.prompt"
+}
+
+@test "a diff under the cap carries no partial-review notice (#636)" {
+    _fake_claude_review
+    _partial_repo small
+    run _run_runtime_review claude default "" 7 "$BATS_TEST_TMPDIR/wd"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"truncated"* ]]
+}
+
+@test "coderabbit review is called with stdin closed (#636)" {
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    cat >"$BATS_TEST_TMPDIR/bin/coderabbit" <<'SH'
+#!/bin/bash
+if [ "$(readlink /proc/self/fd/0)" = /dev/null ]; then echo "stdin closed"; else echo "stdin open"; fi
+SH
+    chmod +x "$BATS_TEST_TMPDIR/bin/coderabbit"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+    _partial_repo small
+    run bash -c "source '$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/reviewer_ladder.sh'; sleep 3 | _run_runtime_review coderabbit default '' 7 '$BATS_TEST_TMPDIR/wd'"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"stdin closed"* ]]
+}
+
 # --- coderabbit NDJSON extraction (dotfiles-linux-dev#642) ----------------------
 
 _coderabbit_ndjson_run() {
