@@ -52,12 +52,14 @@ setup() {
     # reason (which is checked on purpose by its own tests below).
     export REVIEW_FANOUT_RUNG="qwen|qwen3-coder-plus|configured-default"
     unset REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
+    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC
 }
 
 teardown() {
     cd /
     rm -rf "$TEST_TMP"
     unset REVIEW_FANOUT_RUNG REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
+    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC
 }
 
 # ago SECONDS — an ISO-8601 UTC timestamp that many seconds in the past.
@@ -99,13 +101,18 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
         | {data: {repository: {pullRequests: {
             pageInfo: {hasNextPage: (($after + $first) < ($all | length)),
                        endCursor: (($after + $first) | tostring)},
-            nodes: [$page[] | {number, headRefOid, mergeStateStatus, isDraft,
+            nodes: [$page[] | {number, headRefOid, baseRefName: (.baseRefName // "master"), mergeStateStatus, isDraft,
                 reviews: {totalCount: (.reviewsTotal // ((.reviews // []) | length)),
                           nodes: (.reviews // [])},
                 comments: {totalCount: (.commentsTotal // ((.comments // []) | length)),
                            nodes: (.comments // [])},
                 commits: {nodes: [{commit: {statusCheckRollup:
                     {contexts: {nodes: (.statusCheckRollup // [])}}}}]}}]}}}}' "$FIXTURE"
+elif [ "$1" = "api" ] && [[ "$2" == */rules/branches/* ]]; then
+    [[ " ${GH_STRICT_RULESET:-} " == *" ${2##*/rules/branches/} "* ]] && echo true || echo false
+elif [ "$1" = "api" ] && [[ "$2" == */branches/*/protection/required_status_checks ]]; then
+    base="${2#*/branches/}"; base="${base%/protection/*}"
+    [[ " ${GH_STRICT_CLASSIC:-} " == *" $base "* ]] && echo true || echo false
 elif [ "$1" = "api" ]; then
     oid="${2##*/}"
     jq -r --arg oid "$oid" \
@@ -786,4 +793,80 @@ EOF
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable[0].ladder' <<<"$output")" = "null" ]
+}
+
+# --- dotfiles-linux-dev#646: serial drain under strict merges -----------------------------
+
+@test "strict ruleset: only the head of the merge queue is dispatchable (#646)" {
+    stub_gh_prs <<<"$(board_of 4)"
+    export GH_STRICT_RULESET=master
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.serial' <<<"$output")" = "true" ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1]" ]
+    [ "$(jq -r '.excluded | length' <<<"$output")" -eq 3 ]
+    [[ "$(reason_for 3)" == *"serial drain"*"#1 is next in the queue"* ]]
+}
+
+@test "classic branch protection strict is detected too (#646)" {
+    stub_gh_prs <<<"$(board_of 3)"
+    export GH_STRICT_CLASSIC=master
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1]" ]
+}
+
+@test "non-strict repo keeps the parallel fan-out (#646)" {
+    stub_gh_prs <<<"$(board_of 3)"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.serial' <<<"$output")" = "false" ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1,2,3]" ]
+}
+
+@test "REVIEW_FANOUT_SERIAL=1 declares serial without any API signal (#646)" {
+    stub_gh_prs <<<"$(board_of 3)"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1]" ]
+}
+
+@test "REVIEW_FANOUT_SERIAL=0 overrides a strict ruleset (#646)" {
+    stub_gh_prs <<<"$(board_of 3)"
+    export GH_STRICT_RULESET=master REVIEW_FANOUT_SERIAL=0
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1,2,3]" ]
+}
+
+# mixed_board -- PRs 1,3 target master, PRs 2,4 target release/1.0 (all unreviewed, an hour old).
+mixed_board() {
+    board_of 4 | jq '[.[] | .baseRefName = (if .number % 2 == 0 then "release/1.0" else "master" end)]'
+}
+
+@test "strict release branch + non-strict default: only the release PRs drain (#646)" {
+    stub_gh_prs <<<"$(mixed_board)"
+    export GH_STRICT_RULESET="release/1.0"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1,2,3]" ]
+    [[ "$(reason_for 4)" == *"merges into release/1.0"*"#2 is next"* ]]
+}
+
+@test "strict default + non-strict release branch: only the default's PRs drain (#646)" {
+    stub_gh_prs <<<"$(mixed_board)"
+    export GH_STRICT_RULESET="master"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1,2,4]" ]
+    [[ "$(reason_for 3)" == *"merges into master"*"#1 is next"* ]]
+}
+
+@test "strictness is read once per distinct base, not once per PR (#646)" {
+    stub_gh_prs <<<"$(mixed_board)"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(grep -c 'rules/branches/master' "$GH_LOG")" -eq 1 ]
+    [ "$(grep -c 'rules/branches/release/1.0' "$GH_LOG")" -eq 1 ]
 }
