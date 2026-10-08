@@ -531,6 +531,79 @@ def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None
 	return None
 
 
+def _gh_text(args: list[str]) -> str:
+	"""Return ``gh api <args>`` stdout, or "" on ANY failure (no auth, 404, timeout).
+
+	Unlike ``_run`` this never raises: it feeds ``merge_is_serial``, whose unreadable answer
+	must fall back to the parallel plan this module always produced, not fail the whole read.
+	"""
+	try:
+		return _run(["gh", "api", *args])
+	except (OSError, subprocess.SubprocessError):
+		return ""
+
+
+def merge_is_serial() -> bool:
+	"""True when merging is inherently serial, so a reviewer per PR is wasted work (#646).
+
+	Under a strict required-status-checks policy every merge puts every other PR behind and
+	updating a branch voids its review: reviews done in parallel are thrown away (blueprintx,
+	2026-10-04/05: 13 agents, 3 session limits and a weekly limit for 2 merges). The policy is
+	read from the effective RULESETS (``rules/branches``) AND classic branch protection --
+	classic said ``strict: false`` on the repo that motivated this, which was misleading.
+	``REVIEW_FANOUT_SERIAL=1|0`` declares it instead (a repo flag for a merge queue the API
+	cannot show). Unreadable => False: the pre-#646 parallel plan, never a guess at serial.
+	"""
+	declared = os.environ.get("REVIEW_FANOUT_SERIAL", "")
+	if declared in ("0", "1"):
+		return declared == "1"
+	branch = _gh_text(["repos/{owner}/{repo}", "--jq", ".default_branch"])
+	if not branch:
+		return False
+	ruleset = _gh_text(
+		[
+			f"repos/{{owner}}/{{repo}}/rules/branches/{branch}",
+			"--jq",
+			'[.[] | select(.type == "required_status_checks")'
+			" | .parameters.strict_required_status_checks_policy] | any",
+		]
+	)
+	if ruleset == "true":
+		return True
+	classic = _gh_text(
+		[
+			f"repos/{{owner}}/{{repo}}/branches/{branch}/protection/required_status_checks",
+			"--jq",
+			".strict",
+		]
+	)
+	return classic == "true"
+
+
+def drain_serially(dispatchable: list[dict], excluded: list[dict]) -> None:
+	"""Keep only the head of the merge queue (lowest PR number) dispatchable; exclude the rest.
+
+	In place. Each remaining PR gets a named reason -- the plan still judges every PR, it just
+	refuses to buy a review that the next merge will void. The legitimate state is "the next PR
+	in the queue has a review in flight", which ``review_fanout_guard.sh`` already honours.
+	"""
+	if len(dispatchable) < 2:
+		return
+	dispatchable.sort(key=lambda c: c["pr"])
+	first = dispatchable[0]["pr"]
+	for item in dispatchable[1:]:
+		excluded.append(
+			{
+				"pr": item["pr"],
+				"reason": (
+					f"serial drain: merges are strict-serial, so a review of this head is voided "
+					f"by the merge ahead of it -- #{first} is next in the queue and gets the reviewer"
+				),
+			}
+		)
+	dispatchable[:] = dispatchable[:1]
+
+
 def build_plan() -> dict:
 	"""Assemble the rung, the dispatchable set and the named exclusions for every open PR."""
 	prs = open_prs()
@@ -561,9 +634,12 @@ def build_plan() -> dict:
 			}
 		)
 
+	serial = bool(dispatchable) and merge_is_serial()
+	if serial:
+		drain_serially(dispatchable, excluded)
 	dispatchable.sort(key=lambda c: c["pr"])
 	excluded.sort(key=lambda c: c["pr"])
-	return {"rung": rung, "dispatchable": dispatchable, "excluded": excluded}
+	return {"rung": rung, "serial": serial, "dispatchable": dispatchable, "excluded": excluded}
 
 
 def main() -> int:

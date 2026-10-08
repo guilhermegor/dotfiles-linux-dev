@@ -52,12 +52,14 @@ setup() {
     # reason (which is checked on purpose by its own tests below).
     export REVIEW_FANOUT_RUNG="qwen|qwen3-coder-plus|configured-default"
     unset REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
+    unset REVIEW_FANOUT_SERIAL GH_DEFAULT_BRANCH GH_STRICT_RULESET GH_STRICT_CLASSIC
 }
 
 teardown() {
     cd /
     rm -rf "$TEST_TMP"
     unset REVIEW_FANOUT_RUNG REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
+    unset REVIEW_FANOUT_SERIAL GH_DEFAULT_BRANCH GH_STRICT_RULESET GH_STRICT_CLASSIC
 }
 
 # ago SECONDS — an ISO-8601 UTC timestamp that many seconds in the past.
@@ -106,6 +108,12 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
                            nodes: (.comments // [])},
                 commits: {nodes: [{commit: {statusCheckRollup:
                     {contexts: {nodes: (.statusCheckRollup // [])}}}}]}}]}}}}' "$FIXTURE"
+elif [ "$1" = "api" ] && [ "$2" = "repos/{owner}/{repo}" ]; then
+    echo "${GH_DEFAULT_BRANCH:-}"
+elif [ "$1" = "api" ] && [[ "$2" == */rules/branches/* ]]; then
+    echo "${GH_STRICT_RULESET:-false}"
+elif [ "$1" = "api" ] && [[ "$2" == */protection/required_status_checks ]]; then
+    echo "${GH_STRICT_CLASSIC:-false}"
 elif [ "$1" = "api" ]; then
     oid="${2##*/}"
     jq -r --arg oid "$oid" \
@@ -786,4 +794,50 @@ EOF
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable[0].ladder' <<<"$output")" = "null" ]
+}
+
+# --- dotfiles-linux-dev#646: serial drain under strict merges -----------------------------
+
+@test "strict ruleset: only the head of the merge queue is dispatchable (#646)" {
+    stub_gh_prs <<<"$(board_of 4)"
+    export GH_DEFAULT_BRANCH=master GH_STRICT_RULESET=true
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.serial' <<<"$output")" = "true" ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1]" ]
+    [ "$(jq -r '.excluded | length' <<<"$output")" -eq 3 ]
+    [[ "$(reason_for 3)" == *"serial drain"*"#1 is next in the queue"* ]]
+}
+
+@test "classic branch protection strict is detected too (#646)" {
+    stub_gh_prs <<<"$(board_of 3)"
+    export GH_DEFAULT_BRANCH=master GH_STRICT_CLASSIC=true
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1]" ]
+}
+
+@test "non-strict repo keeps the parallel fan-out (#646)" {
+    stub_gh_prs <<<"$(board_of 3)"
+    export GH_DEFAULT_BRANCH=master
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.serial' <<<"$output")" = "false" ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1,2,3]" ]
+}
+
+@test "REVIEW_FANOUT_SERIAL=1 declares serial without any API signal (#646)" {
+    stub_gh_prs <<<"$(board_of 3)"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1]" ]
+}
+
+@test "REVIEW_FANOUT_SERIAL=0 overrides a strict ruleset (#646)" {
+    stub_gh_prs <<<"$(board_of 3)"
+    export GH_DEFAULT_BRANCH=master GH_STRICT_RULESET=true REVIEW_FANOUT_SERIAL=0
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1,2,3]" ]
 }

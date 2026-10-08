@@ -65,6 +65,11 @@
 # acting on a wide plan; this hook deliberately implements no latch of its own and no cap of
 # its own — it reports the full assignable set and leaves the budget to the latch that owns it.
 #
+# SERIAL DRAIN (#646). When merging is strict-serial (a ruleset's
+# strict_required_status_checks_policy, or REVIEW_FANOUT_SERIAL=1) the planner lists only the
+# head of the merge queue as dispatchable and excludes the rest by name — a review of any
+# other PR is voided by the merge ahead of it. Decided in the planner; this hook only says so.
+#
 # Fails OPEN on everything it cannot resolve (no jq, no gh, no python3, no repo, no
 # transcript, a session that never ran the loop) — a guard that blocks on unrelated sessions
 # gets disabled, same rule as every sibling Stop hook here.
@@ -446,6 +451,11 @@ main() {
 		fi
 		echo "Reviewer rung: $(printf '%s' "$plan" | jq -r '.rung | "\(.status) \(.runtime) \(.model)"')"
 		echo
+		if [ "$(printf '%s' "$plan" | jq -r '.serial // false')" = "true" ]; then
+			echo "Serial drain (strict merges, #646): only the head of the merge queue is listed —"
+			echo "one reviewer at a time; the rest are excluded below until it merges."
+			echo
+		fi
 		echo "Needs a reviewer now (one agent per PR — N single-PR ladder calls, which is what"
 		echo "reviewer_ladder.sh's one-PR-per-invocation cap permits, never a loop inside one."
 		echo "Dispatch each with the Agent tool's name set to review-pr-<PR>, e.g."

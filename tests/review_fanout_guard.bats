@@ -454,3 +454,40 @@ EOF
     [[ "$output" == *"#620"*"[ladder: bot-skipped]"*"run_fallback_review"* ]]
     [[ "$output" != *"#621"*"[ladder:"* ]]
 }
+
+# --- dotfiles-linux-dev#646: serial drain ------------------------------------------
+
+plan_serial() {
+    cat >"$PLAN" <<'PLAN_EOF'
+{"rung":{"status":"ok","runtime":"qwen","model":"qwen3-coder-plus","signal":"configured-default"},
+ "serial":true,
+ "dispatchable":[{"pr":520,"head":"e1319925c49d","checks":{}}],
+ "excluded":[{"pr":521,"reason":"serial drain: #520 is next in the queue"}]}
+PLAN_EOF
+}
+
+@test "a serial plan blocks with the one queue head and says it is a serial drain" {
+    loop_invoked
+    plan_serial
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Serial drain"* ]]
+    [[ "$output" == *"#520"* ]]
+    [[ "$output" == *"#521  serial drain"* ]]
+}
+
+@test "a serial plan with the queue head's review agent in flight passes" {
+    loop_invoked
+    plan_serial
+    agent_dispatched toolu_1 review-pr-520
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a non-serial plan carries no serial-drain note" {
+    loop_invoked
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" != *"Serial drain"* ]]
+}
