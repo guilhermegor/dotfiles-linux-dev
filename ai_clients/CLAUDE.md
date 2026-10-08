@@ -951,6 +951,20 @@ make ai_clients        # interactive menu (choose steps individually)
 ./ai_clients/claude/main.sh all              # install everything
 ```
 
+### Stale-checkout guard (dotfiles-linux-dev#643)
+
+`ai_clients/lib/upstream_guard.sh` → `ai_clients_upstream_guard` runs first in
+`ai_clients/main.sh` and every client `main.sh`. It fetches, and **refuses** (exit 1)
+when `HEAD..@{upstream}` is non-empty: a deploy from a stale `master` once rewrote
+`~/.claude/hooks/lib/reviewer_ladder.sh` and silently reverted a merged fix.
+
+- Ahead or equal: allowed. Only behind is refused.
+- Escape hatch: `AI_CLIENTS_ALLOW_STALE=1 make ai_clients` (warns, deploys anyway).
+- Fetch fails (offline) or no upstream configured: **warns and proceeds** — a flaky
+  network must not wedge a deploy; the guard is only as fresh as the last fetch then.
+- The router exports `AI_CLIENTS_UPSTREAM_CHECKED=1` so child client scripts skip a
+  second fetch.
+
 ## Adding a new step to the orchestrator
 
 1. Create the lib function in `ai_clients/claude/lib/<step>.sh`

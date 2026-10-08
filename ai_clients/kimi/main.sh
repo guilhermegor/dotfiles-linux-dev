@@ -14,6 +14,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/../lib/utils.sh"
+source "$SCRIPT_DIR/../lib/upstream_guard.sh"
 source "$SCRIPT_DIR/../lib/shared_agents_md.sh"
 # KIMI_CODE_HOME is the CLI's own override env var (defaults to
 # ~/.kimi-code); respecting it here keeps the deploy target in sync with
@@ -91,6 +92,7 @@ interactive_menu() {
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 main() {
+    ai_clients_upstream_guard || exit 1
     print_status "section" "KIMI CODE CLI CONFIGURATION SCRIPT"
     print_status "info" "Log: $LOG_FILE"
     print_status "info" "Kimi dir: $KIMI_DIR"

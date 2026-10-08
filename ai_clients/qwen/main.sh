@@ -9,6 +9,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/../lib/utils.sh"
+source "$SCRIPT_DIR/../lib/upstream_guard.sh"
 source "$SCRIPT_DIR/../lib/shared_agents_md.sh"
 # Qwen Code has no documented override env var for its config directory
 # (unlike Codex's CODEX_HOME or Copilot's COPILOT_HOME) — ~/.qwen is its
@@ -86,6 +87,7 @@ interactive_menu() {
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 main() {
+    ai_clients_upstream_guard || exit 1
     print_status "section" "QWEN CODE CLI CONFIGURATION SCRIPT"
     print_status "info" "Log: $LOG_FILE"
     print_status "info" "Qwen dir: $QWEN_DIR"

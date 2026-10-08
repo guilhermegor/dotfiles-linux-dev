@@ -10,6 +10,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/../lib/utils.sh"
+source "$SCRIPT_DIR/../lib/upstream_guard.sh"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 source "$SCRIPT_DIR/lib/prerequisites.sh"
 source "$SCRIPT_DIR/lib/settings.sh"
@@ -179,6 +180,7 @@ interactive_menu() {
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 main() {
+    ai_clients_upstream_guard || exit 1
     print_status "section" "CLAUDE CODE CONFIGURATION SCRIPT"
     print_status "info" "Log: $LOG_FILE"
     print_status "info" "Claude dir: $CLAUDE_DIR"

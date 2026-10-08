@@ -13,6 +13,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/lib/utils.sh"
+source "$SCRIPT_DIR/lib/upstream_guard.sh"
 
 # Display name overrides: directory key → human label.
 # Add an entry here for each client whose directory name does not read well when capitalised.
@@ -101,6 +102,7 @@ interactive_menu() {
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 main() {
+    ai_clients_upstream_guard || exit 1
     local clients=()
     mapfile -t clients < <(discover_clients)
 
