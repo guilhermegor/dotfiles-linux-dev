@@ -9,6 +9,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/../lib/utils.sh"
+source "$SCRIPT_DIR/../lib/upstream_guard.sh"
 # CODEX_HOME is the CLI's own override env var (defaults to ~/.codex);
 # respecting it here keeps the deploy target in sync with what Codex reads.
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
@@ -88,6 +89,7 @@ interactive_menu() {
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 main() {
+    ai_clients_upstream_guard || exit 1
     print_status "section" "OPENAI CODEX CLI CONFIGURATION SCRIPT"
     print_status "info" "Log: $LOG_FILE"
     print_status "info" "Codex dir: $CODEX_DIR"
