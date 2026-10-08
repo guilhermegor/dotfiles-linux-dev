@@ -203,6 +203,33 @@ refresh_apt_keyring() {
     return "$rc"
 }
 
+# package_landed PKG — 0 when the package manager's own database lists PKG as installed.
+package_landed() {
+    case "$PACKAGE_MANAGER" in
+        apt)            [[ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" == "install ok installed" ]] ;;
+        dnf|yum|zypper) rpm -q "$1" &>/dev/null ;;
+        pacman)         pacman -Q "$1" &>/dev/null ;;
+        *)              return 1 ;;
+    esac
+}
+
+# install_packages_verified PKG... — run $INSTALL_CMD, and trust the package database over its
+# exit code. A pre-existing broken package (e.g. a kernel-module postinst failing) makes the
+# manager exit non-zero on EVERY invocation even when the requested packages unpacked and
+# configured fine (#632). Non-zero exit + every PKG present = success with a warning;
+# any PKG missing = the original failure.
+install_packages_verified() {
+    local rc=0 pkg
+    $INSTALL_CMD "$@" || rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    for pkg in "$@"; do
+        package_landed "$pkg" || return "$rc"
+    done
+    print_status "warning" "$INSTALL_CMD exited $rc but all requested packages are installed: $*"
+    print_status "warning" "Unrelated broken package state remains — check 'dpkg --audit' or the package manager."
+    return 0
+}
+
 install_package() {
     local package_name="$1"
     local debian_name="${2:-$package_name}"
@@ -210,10 +237,10 @@ install_package() {
     local arch_name="${4:-$package_name}"
 
     case "$PACKAGE_MANAGER" in
-        apt)        $INSTALL_CMD "$debian_name" ;;
-        dnf|yum)    $INSTALL_CMD "$fedora_name" ;;
-        pacman)     $INSTALL_CMD "$arch_name" ;;
-        zypper)     $INSTALL_CMD "$debian_name" ;;
+        apt)        install_packages_verified "$debian_name" ;;
+        dnf|yum)    install_packages_verified "$fedora_name" ;;
+        pacman)     install_packages_verified "$arch_name" ;;
+        zypper)     install_packages_verified "$debian_name" ;;
     esac
 }
 
