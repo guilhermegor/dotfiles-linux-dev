@@ -467,8 +467,33 @@ _review_base_ref() {
 	fi
 	# A name is not a ref: a typo in REVIEWER_LADDER_BASE or a dangling
 	# origin/HEAD must fail closed here, not inside `codex review`.
+	_refresh_base_ref "$base"
 	git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1 || return 1
 	printf '%s\n' "$base"
+}
+
+# _refresh_base_ref BASE
+# A reused worktree's `origin/<branch>` is whatever the last fetch left, so
+# every PR merged since then showed up in the diff as if the PR under review
+# had written it (#666: a one-line bump got Major findings on another PR's
+# code). Refreshes the remote-tracking ref itself — a bare `git fetch` that
+# only fills FETCH_HEAD would not move it. Best effort: an offline fetch keeps
+# the old ref rather than failing the rung. Override via
+# REVIEWER_LADDER_BASE_FETCH_CMD (REMOTE BRANCH) for tests.
+_refresh_base_ref() {
+	local base="$1" remote branch
+	[[ "$base" == */* ]] || return 0
+	remote="${base%%/*}"
+	branch="${base#*/}"
+	if [ -n "${REVIEWER_LADDER_BASE_FETCH_CMD:-}" ]; then
+		"$REVIEWER_LADDER_BASE_FETCH_CMD" "$remote" "$branch" || true
+		return 0
+	fi
+	git remote get-url "$remote" >/dev/null 2>&1 || return 0
+	timeout "${REVIEWER_LADDER_FETCH_TIMEOUT:-60}" git fetch --quiet "$remote" \
+		"+refs/heads/$branch:refs/remotes/$remote/$branch" 2>/dev/null ||
+		print_status "warning" "could not refresh $base — reviewing against the local copy" >&2
+	return 0
 }
 
 # _pr_head_sha OWNER REPO PR_NUMBER
@@ -716,7 +741,9 @@ _run_runtime_review() {
 		# before the CLI started (#634). 120000 leaves room for the prompt prefix.
 		diff="$(git -C "$workdir" diff "${rv_base}...HEAD" | head -c 120000)"
 		[ -n "$diff" ] || return 1
-		prompt="Review PR #$pr_number. Report concrete bugs and risks as a markdown list with file:line. Diff:"$'\n'"$diff"
+		prompt="Review PR #$pr_number. Report concrete bugs and risks as a markdown list with file:line."
+		[ "$runtime" = "claude" ] && prompt+=" End with a '## Verdict' section giving the overall result."
+		prompt+=" Diff:"$'\n'"$diff"
 		if [ "$runtime" = "kimi" ]; then
 			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" kimi -p "$prompt" </dev/null
 		elif [ "$runtime" = "claude" ]; then
@@ -725,8 +752,11 @@ _run_runtime_review() {
 			# could read ~/.config/ladder/app.pem or any credential and the
 			# review body would publish it (#624 review). Measured: with these
 			# flags a "Read /etc/hostname" request answers that no tool exists.
-			(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
-				claude -p "$prompt" "${LADDER_CLAUDE_FLAGS[@]}" </dev/null)
+			local cl_out
+			cl_out="$(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
+				claude -p "$prompt" "${LADDER_CLAUDE_FLAGS[@]}" </dev/null)" || return 1
+			_claude_require_verdict "$cl_out" || return 1
+			printf '%s\n' "$cl_out"
 		else
 			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" copilot -s -p "$prompt" </dev/null
 		fi
@@ -735,6 +765,20 @@ _run_runtime_review() {
 		return 1
 		;;
 	esac
+}
+
+# _claude_require_verdict OUTPUT
+# #666: a run that ended mid-investigation posted 59,857 chars of narration and
+# raw <invoke> blocks as the review. A review is only a review when it ends in
+# the '## Verdict' section the prompt asks for and carries no tool-call markup;
+# anything else fails the rung so the ladder falls through and posts nothing.
+_claude_require_verdict() {
+	local out="$1"
+	if [[ "$out" == *"<invoke "* || "$out" == *"<function_calls>"* ]] ||
+		! grep -qiE '^#{1,3}[[:space:]]*verdict' <<<"$out"; then
+		print_status "error" "claude output is not a finished review (no verdict section) — refusing to post it"
+		return 1
+	fi
 }
 
 # _coderabbit_render_findings — NDJSON (stdin) from `coderabbit review --agent`

@@ -7,6 +7,8 @@
 
 setup() {
     source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/reviewer_ladder.sh"
+    # #666: resolving the base refreshes origin/<base>; never over the network here.
+    export REVIEWER_LADDER_BASE_FETCH_CMD=true
     FIXTURES="$BATS_TEST_DIRNAME/fixtures/reviewer_ladder"
 
     # dotfiles-linux-dev#555: run_fallback_review now resolves the head's own commit
@@ -1235,7 +1237,7 @@ _cli_run_harness() {
 #!/bin/bash
 printf '%s\n' "\$PWD" >"$BATS_TEST_TMPDIR/claude.pwd"
 printf '[%s]' "\$@" >>"$BATS_TEST_TMPDIR/claude.argv"
-echo "1 finding"
+printf '1 finding\n## Verdict\nok\n'
 SH
     chmod +x "$BATS_TEST_TMPDIR/bin/claude"
     export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
@@ -1287,7 +1289,7 @@ SH
     cat >"$BATS_TEST_TMPDIR/bin/claude" <<SH
 #!/bin/bash
 printf '%s\n' "\${#2}" >"$BATS_TEST_TMPDIR/claude.promptlen"
-echo "1 finding"
+printf '1 finding\n## Verdict\nok\n'
 SH
     chmod +x "$BATS_TEST_TMPDIR/bin/claude"
     export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
@@ -1352,4 +1354,80 @@ _coderabbit_ndjson_run() {
     _coderabbit_ndjson_run "$BATS_TEST_TMPDIR/blank.txt"
     [ "$status" -ne 0 ]
     [ -z "$output" ]
+}
+
+# --- stale base and transcript-as-review (dotfiles-linux-dev#666) -----------------
+
+@test "the review base is refreshed from the remote, not left at the last fetch (#666)" {
+    unset REVIEWER_LADDER_BASE_FETCH_CMD
+    local remote="$BATS_TEST_TMPDIR/remote.git" wd="$BATS_TEST_TMPDIR/wd" other="$BATS_TEST_TMPDIR/other"
+    git init -q --bare -b main "$remote"
+    git clone -q "$remote" "$wd" 2>/dev/null
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q --allow-empty -m one
+    git -C "$wd" push -q origin HEAD:main
+    git -C "$wd" fetch -q origin
+    git clone -q "$remote" "$other" 2>/dev/null
+    git -C "$other" -c user.email=a@b -c user.name=t commit -q --allow-empty -m two
+    git -C "$other" push -q origin HEAD:main
+    local tip
+    tip="$(git -C "$other" rev-parse HEAD)"
+    [ "$(git -C "$wd" rev-parse origin/main)" != "$tip" ]
+    export REVIEWER_LADDER_BASE=origin/main
+    cd "$wd"
+    run _review_base_ref
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$wd" rev-parse origin/main)" = "$tip" ]
+}
+
+@test "an unreachable remote keeps the old base instead of failing the rung (#666)" {
+    unset REVIEWER_LADDER_BASE_FETCH_CMD
+    local wd="$BATS_TEST_TMPDIR/wd"
+    git init -q -b main "$wd"
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q --allow-empty -m one
+    git -C "$wd" remote add origin "$BATS_TEST_TMPDIR/nowhere.git"
+    git -C "$wd" update-ref refs/remotes/origin/main HEAD
+    export REVIEWER_LADDER_BASE=origin/main
+    cd "$wd"
+    run _review_base_ref
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"origin/main" ]]
+}
+
+_claude_review_with_output() {
+    local wd="$BATS_TEST_TMPDIR/wd"
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    printf '#!/bin/bash\ncat "%s"\n' "$1" >"$BATS_TEST_TMPDIR/bin/claude"
+    chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+    git init -q "$wd"
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q --allow-empty -m x
+    git -C "$wd" branch -M master
+    git -C "$wd" branch base
+    echo hi >"$wd/f"
+    git -C "$wd" add f
+    git -C "$wd" -c user.email=a@b -c user.name=t commit -q -m y
+    export REVIEWER_LADDER_BASE=base
+    cd "$wd"
+    run _run_runtime_review claude default "" 7 "$wd"
+}
+
+@test "claude rung refuses a tool-call transcript as the review (#666)" {
+    printf '%s\n' "I'll verify the diff against the actual worktree." '<invoke name="Bash">' '</invoke>' >"$BATS_TEST_TMPDIR/out.txt"
+    _claude_review_with_output "$BATS_TEST_TMPDIR/out.txt"
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"<invoke"* ]]
+}
+
+@test "claude rung refuses prose with no verdict section (#666)" {
+    printf '%s\n' "Looks fine, one nit in f." >"$BATS_TEST_TMPDIR/out.txt"
+    _claude_review_with_output "$BATS_TEST_TMPDIR/out.txt"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no verdict section"* ]]
+}
+
+@test "claude rung posts a finished review that ends in a verdict (#666)" {
+    printf '%s\n' "- f:1 nit" "## Verdict" "approve" >"$BATS_TEST_TMPDIR/out.txt"
+    _claude_review_with_output "$BATS_TEST_TMPDIR/out.txt"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"## Verdict"* ]]
 }
