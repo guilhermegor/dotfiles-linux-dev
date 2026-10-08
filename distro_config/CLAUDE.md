@@ -55,6 +55,15 @@ Each category file (e.g. `install_lib/browsers.sh`, `install_coding_lib/editors.
 
 Both orchestrators use `run_install` from `_common.sh`, which runs each `install_*` in a subshell. A failure inside one install does not abort the run — the failure is collected in `INSTALL_FAILURES` and reported at the end via `report_failures`.
 
+### Install success = packages landed, not exit code
+
+`install_package` (and `install_packages_verified` for multi-package calls) runs `$INSTALL_CMD`,
+and on a non-zero exit checks the package database (`dpkg-query -W -f='${Status}'` on apt,
+`rpm -q` on dnf/yum/zypper, `pacman -Q`). All requested packages present = success plus a warning
+about the leftover broken state; any missing = the original failure. A pre-existing broken package
+(e.g. a kernel-module postinst) otherwise fails every install that runs after it (#632). Use these
+instead of a bare `$INSTALL_CMD` for package-manager installs; `tests/install_package_verify.bats`.
+
 ### Registry validation
 
 Before any install runs, `validate_registry` (from `_common.sh`) checks that every function named in `INSTALL_REGISTRY` is actually defined. A typo or a missing source file fails loudly at startup, not mid-run.

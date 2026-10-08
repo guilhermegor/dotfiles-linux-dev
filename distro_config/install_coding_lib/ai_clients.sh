@@ -496,16 +496,16 @@ _codexbar_install_qt_runtime() {
         apt)
             local widgets_pkg="libqt6widgets6t64"
             apt-cache show libqt6widgets6t64 &>/dev/null || widgets_pkg="libqt6widgets6"
-            $INSTALL_CMD qml6-module-qtquick qml6-module-qtquick-controls \
+            install_packages_verified qml6-module-qtquick qml6-module-qtquick-controls \
                 qml6-module-qtquick-layouts qml6-module-qtquick-templates \
                 qml6-module-qtquick-window qml6-module-qtqml-workerscript \
                 "$widgets_pkg" libqt6svg6 qt6-wayland
             ;;
         dnf | yum)
-            $INSTALL_CMD qt6-qtbase qt6-qtdeclarative qt6-qtsvg qt6-qtwayland
+            install_packages_verified qt6-qtbase qt6-qtdeclarative qt6-qtsvg qt6-qtwayland
             ;;
         pacman)
-            $INSTALL_CMD qt6-base qt6-declarative qt6-svg qt6-wayland
+            install_packages_verified qt6-base qt6-declarative qt6-svg qt6-wayland
             ;;
         *)
             print_status "error" "No known Qt 6/QML runtime package set for package manager: $PACKAGE_MANAGER"
