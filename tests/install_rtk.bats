@@ -22,6 +22,8 @@ setup() {
     cat > "$TMP/bin/rtk" <<'STUB'
 #!/bin/bash
 [ "$1" = "init" ] || exit 0
+# Real rtk init -g exits 1 and writes nothing when ~/.claude is absent.
+[ -d "$HOME/.claude" ] || exit 1
 readlink /proc/self/fd/0 > "$TMP/stdin_target"
 case " $* " in
     *" --auto-patch "*) echo '"rtk hook claude"' >> "$HOME/.claude/settings.json" ;;
@@ -56,4 +58,11 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"already initialized"* ]]
     [ ! -e "$TMP/stdin_target" ]
+}
+
+@test "install_rtk initializes on a fresh machine with no ~/.claude yet" {
+    rm -rf "$HOME/.claude"
+    run install_rtk
+    [ "$status" -eq 0 ]
+    [ -f "$HOME/.claude/RTK.md" ]
 }

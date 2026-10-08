@@ -1132,8 +1132,11 @@ install_rtk() {
     # rtk_worktree_passthrough.sh, #417); --no-patch keeps rtk from appending a direct
     # hook that revives that deadlock. stdin is closed so rtk's telemetry prompt cannot
     # block the run behind the log redirect (#633). Guard on RTK.md, rtk's own artifact.
+    # rtk init -g exits 1 and writes nothing when ~/.claude is absent (measured), which is
+    # the fresh-machine case: install_rtk runs before make ai_clients creates it.
     if [ ! -f "$HOME/.claude/RTK.md" ]; then
         print_status "info" "Initializing RTK for Claude Code..."
+        mkdir -p "$HOME/.claude"
         if rtk init -g --no-patch </dev/null &>> "$LOG_FILE"; then
             print_status "success" "RTK initialized (hook is deployed by make ai_clients)"
         else
