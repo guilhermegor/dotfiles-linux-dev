@@ -729,6 +729,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Deployment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#stale-checkout-guard-dotfiles-linux-dev643" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stale-checkout guard (dotfiles-linux-dev#643)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1411,6 +1428,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Deployment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#stale-checkout-guard-dotfiles-linux-dev643" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stale-checkout guard (dotfiles-linux-dev#643)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2579,6 +2613,19 @@ session history, caches or logs. Keyboard-shortcut wiring
 <a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>./ai_clients/claude/main.sh<span class="w"> </span>agents<span class="w">           </span><span class="c1"># install only agents</span>
 <a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>./ai_clients/claude/main.sh<span class="w"> </span>all<span class="w">              </span><span class="c1"># install everything</span>
 </code></pre></div>
+<h3 id="stale-checkout-guard-dotfiles-linux-dev643">Stale-checkout guard (dotfiles-linux-dev#643)<a class="headerlink" href="#stale-checkout-guard-dotfiles-linux-dev643" title="Permanent link">&para;</a></h3>
+<p><code>ai_clients/lib/upstream_guard.sh</code> → <code>ai_clients_upstream_guard</code> runs first in
+<code>ai_clients/main.sh</code> and every client <code>main.sh</code>. It fetches, and <strong>refuses</strong> (exit 1)
+when <code>HEAD..@{upstream}</code> is non-empty: a deploy from a stale <code>master</code> once rewrote
+<code>~/.claude/hooks/lib/reviewer_ladder.sh</code> and silently reverted a merged fix.</p>
+<ul>
+<li>Ahead or equal: allowed. Only behind is refused.</li>
+<li>Escape hatch: <code>AI_CLIENTS_ALLOW_STALE=1 make ai_clients</code> (warns, deploys anyway).</li>
+<li>Fetch fails (offline) or no upstream configured: <strong>warns and proceeds</strong> — a flaky
+  network must not wedge a deploy; the guard is only as fresh as the last fetch then.</li>
+<li>The router exports <code>AI_CLIENTS_UPSTREAM_CHECKED=1</code> so child client scripts skip a
+  second fetch.</li>
+</ul>
 <h2 id="adding-a-new-step-to-the-orchestrator">Adding a new step to the orchestrator<a class="headerlink" href="#adding-a-new-step-to-the-orchestrator" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Create the lib function in <code>ai_clients/claude/lib/&lt;step&gt;.sh</code></li>
