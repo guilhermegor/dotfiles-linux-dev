@@ -390,11 +390,14 @@ its own.
 inherently serial: every merge puts all other PRs behind, and updating a branch voids its
 review, so a reviewer per PR is thrown away (blueprintx, 2026-10-04/05: 13 agents, 3 session
 limits and a weekly limit for 2 merges). `merge_is_serial()` reads the policy from the
-effective **rulesets** (`rules/branches/<default>`) *and* classic branch protection —
+effective **rulesets** (`rules/branches/<base>`) *and* classic branch protection —
 classic said `strict: false` on the repo that motivated this, so it cannot be the only
-source — or from `REVIEW_FANOUT_SERIAL=1|0` (declared; overrides the API). When serial, the
-plan lists only the lowest-numbered dispatchable PR (the queue head) and excludes the rest
-with a named `serial drain` reason, and emits `"serial": true`. The invariants hold: every
+source — or from `REVIEW_FANOUT_SERIAL=1|0` (declared for every base; overrides the API).
+Strictness is decided **per PR base branch** (`baseRefName`), one cached read pair per
+distinct base, never from the default branch alone. For each strict base the plan lists
+only its lowest-numbered dispatchable PR (that queue's head) and excludes the rest with a
+named `serial drain` reason; non-strict bases stay parallel. It emits `"serial": true` when
+any dispatchable PR sits on a strict base. The invariants hold: every
 PR still carries a reason, no bare override, and an unreadable policy falls back to the
 parallel plan, never to a guessed serial one. The guard needs no new branch — "the queue
 head has a `review-pr-<N>` agent in flight" is already its pass condition.

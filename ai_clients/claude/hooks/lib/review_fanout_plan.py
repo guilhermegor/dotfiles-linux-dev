@@ -131,7 +131,7 @@ OPEN_PR_LIST_CAP = 200
 # `totalCount` is requested so a window that dropped older entries is known, not assumed whole
 # (see `truncated_window`).
 PR_SELECTION = (
-	"number headRefOid mergeStateStatus isDraft "
+	"number headRefOid baseRefName mergeStateStatus isDraft "
 	"reviews(last:100){totalCount nodes{commit{oid}}} "
 	"comments(last:100){totalCount nodes{body createdAt author{login}}} "
 	"commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{"
@@ -229,7 +229,10 @@ def _flatten(node: dict) -> dict:
 		)
 	]
 	return {
-		**{k: node[k] for k in ("number", "headRefOid", "mergeStateStatus", "isDraft")},
+		**{
+			k: node[k]
+			for k in ("number", "headRefOid", "baseRefName", "mergeStateStatus", "isDraft")
+		},
 		"reviews": node["reviews"]["nodes"],
 		"comments": node["comments"]["nodes"],
 		"truncated": [
@@ -543,65 +546,84 @@ def _gh_text(args: list[str]) -> str:
 		return ""
 
 
-def merge_is_serial() -> bool:
-	"""True when merging is inherently serial, so a reviewer per PR is wasted work (#646).
+_SERIAL_CACHE: dict[str, bool] = {}
+
+
+def merge_is_serial(base: str) -> bool:
+	"""True when merging INTO ``base`` is inherently serial, so a reviewer per PR is wasted (#646).
 
 	Under a strict required-status-checks policy every merge puts every other PR behind and
 	updating a branch voids its review: reviews done in parallel are thrown away (blueprintx,
-	2026-10-04/05: 13 agents, 3 session limits and a weekly limit for 2 merges). The policy is
-	read from the effective RULESETS (``rules/branches``) AND classic branch protection --
-	classic said ``strict: false`` on the repo that motivated this, which was misleading.
-	``REVIEW_FANOUT_SERIAL=1|0`` declares it instead (a repo flag for a merge queue the API
-	cannot show). Unreadable => False: the pre-#646 parallel plan, never a guess at serial.
+	2026-10-04/05: 13 agents, 3 session limits and a weekly limit for 2 merges). Strictness is
+	per BASE branch -- a PR targeting ``release/x`` is governed by that branch's rules, not the
+	default's -- read from the effective RULESETS (``rules/branches``) AND classic branch
+	protection (classic said ``strict: false`` on the repo that motivated this). One read pair
+	per distinct base, memoised. ``REVIEW_FANOUT_SERIAL=1|0`` declares it for every base
+	instead (a merge queue the API cannot show). Unreadable => False: the pre-#646 parallel
+	plan, never a guess at serial.
 	"""
 	declared = os.environ.get("REVIEW_FANOUT_SERIAL", "")
 	if declared in ("0", "1"):
 		return declared == "1"
-	branch = _gh_text(["repos/{owner}/{repo}", "--jq", ".default_branch"])
-	if not branch:
+	if not base:
 		return False
+	if base in _SERIAL_CACHE:
+		return _SERIAL_CACHE[base]
 	ruleset = _gh_text(
 		[
-			f"repos/{{owner}}/{{repo}}/rules/branches/{branch}",
+			f"repos/{{owner}}/{{repo}}/rules/branches/{base}",
 			"--jq",
 			'[.[] | select(.type == "required_status_checks")'
 			" | .parameters.strict_required_status_checks_policy] | any",
 		]
 	)
-	if ruleset == "true":
-		return True
-	classic = _gh_text(
-		[
-			f"repos/{{owner}}/{{repo}}/branches/{branch}/protection/required_status_checks",
-			"--jq",
-			".strict",
-		]
-	)
-	return classic == "true"
+	strict = ruleset == "true"
+	if not strict:
+		strict = (
+			_gh_text(
+				[
+					f"repos/{{owner}}/{{repo}}/branches/{base}/protection/required_status_checks",
+					"--jq",
+					".strict",
+				]
+			)
+			== "true"
+		)
+	_SERIAL_CACHE[base] = strict
+	return strict
 
 
 def drain_serially(dispatchable: list[dict], excluded: list[dict]) -> None:
-	"""Keep only the head of the merge queue (lowest PR number) dispatchable; exclude the rest.
+	"""Per base branch, keep only the queue head (lowest PR number); exclude the rest, by name.
 
-	In place. Each remaining PR gets a named reason -- the plan still judges every PR, it just
-	refuses to buy a review that the next merge will void. The legitimate state is "the next PR
-	in the queue has a review in flight", which ``review_fanout_guard.sh`` already honours.
+	In place. Only PRs whose ``base`` is serial are touched; PRs on a non-serial base stay
+	parallel. Each drained PR gets a named reason -- the plan still judges every PR, it just
+	refuses to buy a review that the next merge into that base will void. The legitimate state
+	is "the next PR in the queue has a review in flight", which ``review_fanout_guard.sh``
+	already honours.
 	"""
-	if len(dispatchable) < 2:
-		return
-	dispatchable.sort(key=lambda c: c["pr"])
-	first = dispatchable[0]["pr"]
-	for item in dispatchable[1:]:
+	heads: dict[str, int] = {}
+	kept: list[dict] = []
+	for item in sorted(dispatchable, key=lambda c: c["pr"]):
+		base = item.get("base") or ""
+		if not merge_is_serial(base):
+			kept.append(item)
+			continue
+		if base not in heads:
+			heads[base] = item["pr"]
+			kept.append(item)
+			continue
 		excluded.append(
 			{
 				"pr": item["pr"],
 				"reason": (
-					f"serial drain: merges are strict-serial, so a review of this head is voided "
-					f"by the merge ahead of it -- #{first} is next in the queue and gets the reviewer"
+					f"serial drain: merges into {base} are strict-serial, so a review of "
+					f"this head is voided by the merge ahead of it -- #{heads[base]} is "
+					"next in the queue and gets the reviewer"
 				),
 			}
 		)
-	dispatchable[:] = dispatchable[:1]
+	dispatchable[:] = kept
 
 
 def build_plan() -> dict:
@@ -629,14 +651,14 @@ def build_plan() -> dict:
 			{
 				"pr": number,
 				"head": pr.get("headRefOid") or "",
+				"base": pr.get("baseRefName") or "",
 				"checks": check_states(pr.get("statusCheckRollup")),
 				"ladder": ladder_reason(pr, now),
 			}
 		)
 
-	serial = bool(dispatchable) and merge_is_serial()
-	if serial:
-		drain_serially(dispatchable, excluded)
+	drain_serially(dispatchable, excluded)
+	serial = any(merge_is_serial(c["base"]) for c in dispatchable)
 	dispatchable.sort(key=lambda c: c["pr"])
 	excluded.sort(key=lambda c: c["pr"])
 	return {"rung": rung, "serial": serial, "dispatchable": dispatchable, "excluded": excluded}
