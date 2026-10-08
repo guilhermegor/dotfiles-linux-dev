@@ -104,6 +104,14 @@ When asked to install any program, complete **all three steps** before reporting
 
 Never declare the task complete if any of these three steps is missing.
 
+### `install_rtk` never patches `settings.json`
+
+`install_rtk` runs `rtk init -g --no-patch </dev/null`: the PreToolUse hook is owned by
+`ai_clients/claude/settings.json` (wired through `rtk_worktree_passthrough.sh`), and rtk's
+`--auto-patch` would append a direct hook that revives the #417 worktree deadlock. stdin is
+closed because rtk asks a telemetry question on the terminal even when its output is
+redirected to the log (#633). The re-run guard is `~/.claude/RTK.md`, rtk's own artifact.
+
 ## Where to put a new install function
 
 | New install is… | Goes in |

@@ -1128,15 +1128,22 @@ install_rtk() {
         print_status "info" "rtk already installed"
     fi
 
-    if ! grep -q "rtk hook claude" "$HOME/.claude/settings.json" 2>/dev/null; then
+    # The PreToolUse hook is owned by ai_clients/claude/settings.json (wired through
+    # rtk_worktree_passthrough.sh, #417); --no-patch keeps rtk from appending a direct
+    # hook that revives that deadlock. stdin is closed so rtk's telemetry prompt cannot
+    # block the run behind the log redirect (#633). Guard on RTK.md, rtk's own artifact.
+    # rtk init -g exits 1 and writes nothing when ~/.claude is absent (measured), which is
+    # the fresh-machine case: install_rtk runs before make ai_clients creates it.
+    if [ ! -f "$HOME/.claude/RTK.md" ]; then
         print_status "info" "Initializing RTK for Claude Code..."
-        if rtk init -g --auto-patch &>> "$LOG_FILE"; then
-            print_status "success" "RTK initialized — PreToolUse hook added to settings.json"
+        mkdir -p "$HOME/.claude"
+        if rtk init -g --no-patch </dev/null &>> "$LOG_FILE"; then
+            print_status "success" "RTK initialized (hook is deployed by make ai_clients)"
         else
-            print_status "warning" "RTK init failed — run manually: rtk init -g --auto-patch"
+            print_status "warning" "RTK init failed — run manually: rtk init -g --no-patch"
         fi
     else
-        print_status "info" "RTK hook already configured"
+        print_status "info" "RTK already initialized"
     fi
 
     print_status "config" "Usage: rtk <command> (e.g. rtk git status, rtk tree)"
