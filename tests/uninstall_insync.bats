@@ -94,6 +94,10 @@ case "$1" in
         if [ "${RCLONE_CHECK_DIFFER:-0}" = "1" ]; then
             echo "differs.txt" >> "$differ_file"
         fi
+        if [ "${RCLONE_CHECK_FAIL:-0}" = "1" ]; then
+            echo "ERROR : a/b.html: error reading destination directory: couldn't list files"
+            echo "NOTICE: 1 errors while checking"
+        fi
         if [ "${RCLONE_CHECK_FAIL:-0}" = "1" ] || [ "${RCLONE_CHECK_MISSING:-0}" = "1" ] \
             || [ "${RCLONE_CHECK_DIFFER:-0}" = "1" ]; then
             exit 1
@@ -199,6 +203,26 @@ teardown() {
     # Package removal must not have been attempted past this precondition.
     [ ! -f "$APT_LOG" ]
     [ -d "$ACCOUNT_DIR" ]
+}
+
+@test "a refusal from rclone errors alone names the cause and keeps the output (#677)" {
+    export RCLONE_CHECK_FAIL=1
+    run uninstall_insync gdrive "$ACCOUNT_DIR"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"exited 1 with no missing/differ entries"* ]]
+    [[ "$output" == *"errors while checking"* ]]
+    grep -q "error reading destination directory" "$TMP/uninstall_insync_check.log"
+    [ -d "$ACCOUNT_DIR" ]
+}
+
+@test "the check output is kept next to the lists even with LOG_FILE unset (#677)" {
+    export RCLONE_CHECK_FAIL=1
+    unset LOG_FILE
+    cd "$TMP"
+    run uninstall_insync gdrive "$ACCOUNT_DIR"
+    [ "$status" -eq 1 ]
+    grep -q "errors while checking" "$TMP/uninstall_insync_check.log"
+    [[ "$output" == *"Full rclone output: ./uninstall_insync_check.log"* ]]
 }
 
 @test "uninstall_insync refuses when the remote name is missing" {

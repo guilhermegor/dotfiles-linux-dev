@@ -874,17 +874,30 @@ uninstall_insync() {
     [ -n "${LOG_FILE:-}" ] && log_dir="$(dirname "$LOG_FILE")"
     local missing_on_dst_file="$log_dir/uninstall_insync_missing_on_dst.txt"
     local differ_file="$log_dir/uninstall_insync_differ.txt"
+    # Always kept next to the two lists: this function runs by hand, usually with
+    # LOG_FILE unset, and a refusal caused only by rclone errors was unexplainable
+    # once the output was gone (#677).
+    local check_log="$log_dir/uninstall_insync_check.log"
     print_status "info" "Step 2/5: comparing local '$account_dir' against remote '$remote:' (read-only)..."
     local check_output check_rc
     check_output=$(rclone check "$account_dir" "$remote:" --one-way --size-only \
         --onedrive-expose-onenote-files \
         --missing-on-dst "$missing_on_dst_file" --differ "$differ_file" 2>&1)
     check_rc=$?
-    echo "$check_output" >> "$LOG_FILE"
+    printf '%s\n' "$check_output" > "$check_log"
+    [ -n "${LOG_FILE:-}" ] && printf '%s\n' "$check_output" >> "$LOG_FILE"
     if [ "$check_rc" -ne 0 ] || [ -s "$missing_on_dst_file" ] || [ -s "$differ_file" ]; then
         print_status "error" "Step 2/5: local copy is not fully backed up to the remote — refusing to delete anything"
-        print_status "info" "Files missing on remote: $missing_on_dst_file"
-        print_status "info" "Files that differ: $differ_file"
+        if [ -s "$missing_on_dst_file" ] || [ -s "$differ_file" ]; then
+            print_status "info" "Files missing on remote: $missing_on_dst_file"
+            print_status "info" "Files that differ: $differ_file"
+        else
+            print_status "info" "rclone check exited $check_rc with no missing/differ entries (read or list errors):"
+            grep -E 'ERROR|errors while checking' "$check_log" | tail -n 8 | while IFS= read -r line; do
+                print_status "info" "  $line"
+            done
+        fi
+        print_status "info" "Full rclone output: $check_log"
         print_status "info" "Resolve the discrepancy, then re-run uninstall_insync"
         return 1
     fi
