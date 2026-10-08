@@ -724,14 +724,14 @@ _run_runtime_review() {
 		}
 		local cr_out
 		cr_out="$(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
-			coderabbit review --agent --base "$cr_base")" || return 1
+			coderabbit review --agent --base "$cr_base" </dev/null)" || return 1
 		# #642: --agent prints NDJSON events; post only the findings, never the stream.
 		_coderabbit_render_findings <<<"$cr_out"
 		;;
 	kimi | copilot | claude)
 		# No review subcommand: hand the verified checkout's diff in the prompt,
 		# so no tool permission (and no --yolo/--allow-all) is ever needed.
-		local rv_base diff prompt
+		local rv_base diff prompt full total notice="" out
 		rv_base="$(cd "$workdir" && _review_base_ref)" || {
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
 			return 1
@@ -739,13 +739,22 @@ _run_runtime_review() {
 		# The prompt is ONE argv string: Linux caps that at MAX_ARG_STRLEN (131072
 		# bytes), so 200000 made every large diff fail with "Argument list too long"
 		# before the CLI started (#634). 120000 leaves room for the prompt prefix.
-		diff="$(git -C "$workdir" diff "${rv_base}...HEAD" | head -c 120000)"
+		full="$(git -C "$workdir" diff "${rv_base}...HEAD")"
+		diff="$(printf '%s' "$full" | head -c 120000)"
 		[ -n "$diff" ] || return 1
+		# #636: a capped diff must not read as a complete review — the notice goes
+		# into the prompt AND onto the posted body (the model may ignore the former).
+		total="$(printf '%s' "$full" | wc -c)"
+		if [ "$total" -gt 120000 ]; then
+			notice="diff truncated at 120000 of $total bytes; this review covers only the first part"
+		fi
 		prompt="Review PR #$pr_number. Report concrete bugs and risks as a markdown list with file:line."
 		[ "$runtime" = "claude" ] && prompt+=" End with a '## Verdict' section giving the overall result."
+		[ -z "$notice" ] || prompt+=" NOTE: $notice; say so in the review."
 		prompt+=" Diff:"$'\n'"$diff"
 		if [ "$runtime" = "kimi" ]; then
-			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" kimi -p "$prompt" </dev/null
+			out="$(timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" kimi -p "$prompt" </dev/null)" || return 1
+			printf '%s\n' "$out"
 		elif [ "$runtime" = "claude" ]; then
 			# NO tools at all, no MCP: the diff is already in the prompt, and it is
 			# untrusted PR content. With Read/Grep/Glob, an injected instruction
@@ -758,8 +767,10 @@ _run_runtime_review() {
 			_claude_require_verdict "$cl_out" || return 1
 			printf '%s\n' "$cl_out"
 		else
-			timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" copilot -s -p "$prompt" </dev/null
+			out="$(timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" copilot -s -p "$prompt" </dev/null)" || return 1
+			printf '%s\n' "$out"
 		fi
+		[ -z "$notice" ] || printf '\n> **Partial review:** %s.\n' "$notice"
 		;;
 	*)
 		return 1
