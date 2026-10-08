@@ -133,6 +133,14 @@ precondition fails.
    Drop `--size-only` on that re-check so content is compared by hash; both output files must
    come back empty. Then re-run `uninstall_insync` (which repeats its own check). Entries in
    `uninstall_insync_differ.txt` need a human decision on which side wins before copying.
+
+   **A refusal with both lists empty** means `rclone check` itself exited non-zero (read or
+   list errors), so nothing was proven missing, and nothing was proven present either.
+   `uninstall_insync` then prints rclone's `ERROR` lines, and the full output is always in
+   `<log-dir>/uninstall_insync_check.log` (#677). That log is written even when `LOG_FILE` is
+   unset, which is the usual case for this hand-run function. Measured on the real run: a
+   9h17m check refused this way, and its output was lost before this fix. Re-check the
+   errored paths on their own, then re-run.
 3. **Uninstall the package.** `sudo apt remove --purge insync`, verified against
    `dpkg -l | grep insync` being empty. Touches only the local machine — OneDrive keeps
    everything regardless of which client is installed.
