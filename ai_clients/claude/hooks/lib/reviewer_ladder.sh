@@ -774,8 +774,8 @@ _run_runtime_review() {
 # anything else fails the rung so the ladder falls through and posts nothing.
 _claude_require_verdict() {
 	local out="$1"
-	if [[ "$out" == *"<invoke "* || "$out" == *"<function_calls>"* ]] ||
-		! grep -qiE '^#{1,3}[[:space:]]*verdict' <<<"$out"; then
+	if [[ "$out" == *"<invoke"[[:space:]\>]* || "$out" == *"<function_calls>"* ]] ||
+		! grep -qiE '^#{1,3}[[:space:]]*verdict([^[:alnum:]_]|$)' <<<"$out"; then
 		print_status "error" "claude output is not a finished review (no verdict section) — refusing to post it"
 		return 1
 	fi

@@ -1425,6 +1425,18 @@ _claude_review_with_output() {
     [[ "$output" == *"no verdict section"* ]]
 }
 
+@test "claude rung refuses an attribute-less <invoke> even with a verdict (#684 review)" {
+    printf '%s\n' '<invoke>' '</invoke>' "## Verdict" "approve" >"$BATS_TEST_TMPDIR/out.txt"
+    _claude_review_with_output "$BATS_TEST_TMPDIR/out.txt"
+    [ "$status" -ne 0 ]
+}
+
+@test "claude rung refuses a near-miss heading like ## Verdictless (#684 review)" {
+    printf '%s\n' "- f:1 nit" "## Verdictless" "approve" >"$BATS_TEST_TMPDIR/out.txt"
+    _claude_review_with_output "$BATS_TEST_TMPDIR/out.txt"
+    [ "$status" -ne 0 ]
+}
+
 @test "claude rung posts a finished review that ends in a verdict (#666)" {
     printf '%s\n' "- f:1 nit" "## Verdict" "approve" >"$BATS_TEST_TMPDIR/out.txt"
     _claude_review_with_output "$BATS_TEST_TMPDIR/out.txt"
