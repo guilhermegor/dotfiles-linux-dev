@@ -126,7 +126,7 @@ redirected to the log (#633). The re-run guard is `~/.claude/RTK.md`, rtk's own 
 `install_ventoy` (also on the already-installed path) calls `install_ventoy_launchers`, which copies
 `ventoy/ventoy-launcher.sh` to `/usr/local/bin/ventoy-web` and `ventoy-plugson` (one script, behaviour
 by invoked name) and writes `ventoy-web.desktop` / `ventoy-plugson.desktop`, listed in the `Infra`
-folder beside `ventoy.desktop` in `ubuntu_workspace.sh`. Ventoy lives in the root-owned `/opt/ventoy` (an old `~/.local/share/ventoy` is copied there, never deleted). The scripts run under sudo, so the wrappers hardcode that dir (override only under `DRY_RUN=1` via `VENTOY_TEST_DIR`) and refuse unless script and dir are root-owned and not group/world-writable. Each wrapper `cd`s into it
+folder beside `ventoy.desktop` in `ubuntu_workspace.sh`. Ventoy lives in the root-owned `/opt/ventoy` (populated only from a freshly downloaded release whose tarball is checked against the release's `sha256.txt` before `sudo tar -x`; a missing checksum asset or a mismatch refuses. An old user-writable `~/.local/share/ventoy` is never copied in and never counts as installed: it is reported as removable and a fresh verified install is done). The scripts run under sudo, so the wrappers hardcode that dir (override only under `DRY_RUN=1` via `VENTOY_TEST_DIR`) and refuse unless script and dir are root-owned and not group/world-writable. Each wrapper `cd`s into it
 (Ventoy's scripts need cwd = their dir), runs `sudo bash ./Ventoy{Web,Plugson}.sh`, and opens the browser
 (`:24680` installer, `:24681` Plugson). `ventoy-plugson` with no arg resolves the disk behind the single
 partition labelled `Ventoy` (`lsblk`) and refuses on zero or several. `ventoy-plugson --install-launcher

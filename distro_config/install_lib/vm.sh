@@ -135,33 +135,64 @@ Categories=System;Utility;
 DESKTOP
 }
 
-# Copy an old user-owned install into the root-owned dir; never deletes the old copy.
-_ventoy_migrate_legacy() {
-    local legacy="$HOME/.local/share/ventoy"
-    [ -d "$VENTOY_DIR_ROOT" ] && return 0
-    [ -n "$(find "$legacy" -maxdepth 1 -name 'VentoyGUI.*' 2>/dev/null)" ] || return 0
-    run_or_echo sudo mkdir -p "$VENTOY_DIR_ROOT"
-    run_or_echo sudo cp -a "$legacy/." "$VENTOY_DIR_ROOT/"
-    _ventoy_publish "$VENTOY_DIR_ROOT" || return 1
-    print_status "info" "Migrated to $VENTOY_DIR_ROOT; the user-writable copy $legacy can be removed"
+# /opt/ventoy counts as installed only when it holds the GUI AND is root-owned and not
+# group/world-writable. A user-writable tree (e.g. ~/.local/share/ventoy) never counts,
+# and is never copied in: /opt/ventoy is populated only from a verified download.
+_ventoy_trusted_install() {
+    local owner mode
+    [ -n "$(find "$VENTOY_DIR_ROOT" -maxdepth 1 -name 'VentoyGUI.*' 2>/dev/null)" ] || return 1
+    read -r owner mode < <(stat -c '%u %a' "$VENTOY_DIR_ROOT") || return 1
+    [ "$owner" = "0" ] && (( (8#$mode & 8#022) == 0 ))
+}
+
+# Download the tarball and its release sha256.txt into <dir> (user-owned temp) and
+# verify. Refuses on a missing checksum asset, a missing entry, or a mismatch.
+# Usage: _ventoy_fetch_verified <tarball_url> <sha256_url> <dir>  -> <dir>/ventoy.tar.gz
+_ventoy_fetch_verified() {
+    local tarball_url=$1 sha_url=$2 dir=$3 name expected
+    name="${tarball_url##*/}"
+    if [ -z "$sha_url" ]; then
+        print_status "error" "No sha256.txt in the Ventoy release; refusing to install unverified"
+        return 1
+    fi
+    curl -fsSL -o "$dir/ventoy.tar.gz" "$tarball_url" 2>>"$LOG_FILE" || {
+        print_status "warning" "Download failed. Visit https://ventoy.net"
+        return 1
+    }
+    curl -fsSL -o "$dir/sha256.txt" "$sha_url" 2>>"$LOG_FILE" || {
+        print_status "error" "Could not fetch sha256.txt; refusing to install unverified"
+        return 1
+    }
+    expected=$(awk -v f="$name" '$2==f || $2=="*"f {print $1; exit}' "$dir/sha256.txt")
+    if [ -z "$expected" ]; then
+        print_status "error" "sha256.txt has no entry for $name; refusing to install"
+        return 1
+    fi
+    if ! echo "$expected  $dir/ventoy.tar.gz" | sha256sum -c --status; then
+        print_status "error" "Checksum mismatch for $name; refusing to extract"
+        return 1
+    fi
 }
 
 install_ventoy() {
     print_status "section" "VENTOY"
 
-    local ventoy_dir="$VENTOY_DIR_ROOT"
+    local ventoy_dir="$VENTOY_DIR_ROOT" legacy="$HOME/.local/share/ventoy"
 
-    if [ -n "$(find "$ventoy_dir" "$HOME/.local/share/ventoy" -maxdepth 1 -name 'VentoyGUI.*' 2>/dev/null)" ]; then
+    if _ventoy_trusted_install; then
         print_status "info" "Ventoy already installed"
-        _ventoy_migrate_legacy || return 1
         install_ventoy_launchers
         return $?
     fi
+    if [ -n "$(find "$legacy" -maxdepth 1 -name 'VentoyGUI.*' 2>/dev/null)" ]; then
+        print_status "info" "$legacy is no longer used (user-writable, never run as root) and can be removed"
+    fi
 
     print_status "info" "Fetching latest Ventoy release..."
-    local tarball_url
-    tarball_url=$(curl -s "https://api.github.com/repos/ventoy/Ventoy/releases/latest" | \
-        grep "browser_download_url" | grep "linux\.tar\.gz" | head -n 1 | cut -d '"' -f 4)
+    local release_json tarball_url sha_url
+    release_json=$(curl -s "https://api.github.com/repos/ventoy/Ventoy/releases/latest")
+    tarball_url=$(echo "$release_json" | grep "browser_download_url" | grep "linux\.tar\.gz" | head -n 1 | cut -d '"' -f 4)
+    sha_url=$(echo "$release_json" | grep "browser_download_url" | grep "sha256\.txt" | head -n 1 | cut -d '"' -f 4)
 
     if [ -z "$tarball_url" ] || [ "$tarball_url" = "null" ]; then
         print_status "warning" "Could not resolve download URL. Visit https://ventoy.net"
@@ -171,8 +202,7 @@ install_ventoy() {
     local tmp_dir ventoy_installed=0
     tmp_dir=$(mktemp -d)
     print_status "info" "Downloading Ventoy..."
-    if wget -q -O "$tmp_dir/ventoy.tar.gz" "$tarball_url" 2>>"$LOG_FILE" || \
-       curl -sL -o "$tmp_dir/ventoy.tar.gz" "$tarball_url" 2>>"$LOG_FILE"; then
+    if _ventoy_fetch_verified "$tarball_url" "$sha_url" "$tmp_dir"; then
         run_or_echo sudo mkdir -p "$ventoy_dir"
         run_or_echo sudo tar -xzf "$tmp_dir/ventoy.tar.gz" -C "$ventoy_dir" --strip-components=2
 
@@ -183,8 +213,6 @@ install_ventoy() {
         install_ventoy_launchers
         print_status "success" "Ventoy installed to $ventoy_dir"
         ventoy_installed=1
-    else
-        print_status "warning" "Download failed. Visit https://ventoy.net"
     fi
     rm -rf "$tmp_dir"
     [ "$ventoy_installed" -eq 1 ] || return 1

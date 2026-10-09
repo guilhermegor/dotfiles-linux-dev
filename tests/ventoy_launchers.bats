@@ -159,6 +159,100 @@ teardown() {
     [[ "$output" == *"[dry-run] cd /tmp/fixture"* ]]
 }
 
+# --- install_ventoy: verified download only, never a copy from $HOME --------
+
+# Source vm.sh, stub curl: the API URL answers $RELEASE_JSON, any other URL is
+# served from $FIX/<basename>. Fixture tarball + sha256.txt are built here.
+_setup_install() {
+    export LOG_FILE="$TMP/log" PACKAGE_MANAGER=apt
+    FIX="$TMP/fix"
+    mkdir -p "$FIX"
+    echo payload > "$FIX/ventoy-1.0-linux.tar.gz"
+    echo "$(sha256sum "$FIX/ventoy-1.0-linux.tar.gz" | cut -d' ' -f1)  ventoy-1.0-linux.tar.gz" > "$FIX/sha256.txt"
+    export FIX
+    cat > "$TMP/bin/curl" <<'STUB'
+#!/bin/bash
+out=; url=
+while [ $# -gt 0 ]; do
+    case "$1" in -o) out=$2; shift ;; http*) url=$1 ;; esac
+    shift
+done
+if [ -z "$out" ]; then printf '%s\n' "$RELEASE_JSON"; exit 0; fi
+cp "$FIX/${url##*/}" "$out"
+STUB
+    chmod +x "$TMP/bin/curl"
+    export RELEASE_JSON='"browser_download_url": "https://x/ventoy-1.0-linux.tar.gz"
+"browser_download_url": "https://x/sha256.txt"'
+    # shellcheck source=../distro_config/install_lib/_common.sh
+    source "$REPO_ROOT/distro_config/install_lib/_common.sh"
+    # shellcheck source=../distro_config/install_lib/vm.sh
+    source "$REPO_ROOT/distro_config/install_lib/vm.sh"
+    VENTOY_DIR_ROOT="$TMP/opt-ventoy"
+}
+
+@test "install_ventoy extracts only after the checksum matches" {
+    _setup_install
+    run install_ventoy
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[dry-run] sudo tar -xzf "*" -C $TMP/opt-ventoy"* ]]
+}
+
+@test "install_ventoy refuses to extract on a checksum mismatch" {
+    _setup_install
+    echo "$(printf 'bad' | sha256sum | cut -d' ' -f1)  ventoy-1.0-linux.tar.gz" > "$FIX/sha256.txt"
+    run install_ventoy
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Checksum mismatch"* ]]
+    [[ "$output" != *"sudo tar"* ]]
+}
+
+@test "install_ventoy refuses when the release has no sha256.txt asset" {
+    _setup_install
+    export RELEASE_JSON='"browser_download_url": "https://x/ventoy-1.0-linux.tar.gz"'
+    run install_ventoy
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"No sha256.txt"* ]]
+    [[ "$output" != *"sudo tar"* ]]
+}
+
+@test "install_ventoy refuses when sha256.txt has no entry for the tarball" {
+    _setup_install
+    echo "abc  other.tar.gz" > "$FIX/sha256.txt"
+    run install_ventoy
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"sudo tar"* ]]
+}
+
+@test "a legacy-only install triggers a fresh download, never a copy into /opt" {
+    _setup_install
+    mkdir -p "$HOME/.local/share/ventoy"
+    touch "$HOME/.local/share/ventoy/VentoyGUI.x86_64"
+    run install_ventoy
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"no longer used"* ]]
+    [[ "$output" == *"Downloading Ventoy"* ]]
+    [[ "$output" == *"sudo tar -xzf"* ]]
+    [[ "$output" != *"already installed"* ]]
+    [[ "$output" != *" cp "* ]]
+    [[ "$output" != *"$HOME/.local/share/ventoy/."* ]]
+}
+
+@test "a root-owned /opt install counts as installed; a user-owned one does not" {
+    _setup_install
+    mkdir -p "$VENTOY_DIR_ROOT"
+    touch "$VENTOY_DIR_ROOT/VentoyGUI.x86_64"
+    run install_ventoy
+    [[ "$output" == *"already installed"* ]]
+    STAT_OUT='1000 755' run install_ventoy
+    [[ "$output" != *"already installed"* ]]
+    [[ "$output" == *"Downloading Ventoy"* ]]
+}
+
+@test "vm.sh has no copy from the user tree into the root dir" {
+    run grep -nE '_ventoy_migrate_legacy|cp -a' "$REPO_ROOT/distro_config/install_lib/vm.sh"
+    [ "$status" -ne 0 ]
+}
+
 @test "the pendrive opener calls ventoy-plugson by absolute path only" {
     local opener="$REPO_ROOT/distro_config/ventoy/ventoy-pendrive-launcher.sh"
     grep -q '^VENTOY_PLUGSON=/usr/local/bin/ventoy-plugson$' "$opener"
