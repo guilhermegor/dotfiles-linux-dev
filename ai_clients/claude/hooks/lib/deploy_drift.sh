@@ -26,6 +26,9 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     exit 1
 fi
 
+# shellcheck source=dotfiles_dir.sh
+source "$(dirname "${BASH_SOURCE[0]}")/dotfiles_dir.sh"
+
 # Names passed to copy_rule_file()/copy_hook_file() calls in a lib script, one per line.
 # Comment lines are stripped first — both lib files document the convention with a literal
 # example call in a header comment, which an unfiltered grep would count as a real call.
@@ -69,6 +72,19 @@ _deploy_drift_manifest() {
     done < <(_deploy_drift_copy_names "$claude_src/lib/hooks.sh" "copy_hook_file")
 }
 
+# True when the live file is what the installer would write from $1: a source carrying the
+# @DOTFILES_DIR@ placeholder is rendered first (dotfiles_dir.sh), or every correct deploy of
+# it would read as drift forever. An unresolvable dir reads as drift, never as a match.
+_deploy_drift_same() {
+    local src="$1" dest="$2" repo_root="$3" dir
+    if ! grep -q '@DOTFILES_DIR@' "$src"; then
+        cmp -s "$src" "$dest"
+        return
+    fi
+    dir="$(resolve_dotfiles_dir "$repo_root")" || return 1
+    cmp -s <(substitute_dotfiles_dir "$dir" < "$src") "$dest"
+}
+
 # Prints "<divergent_count>\t<never_deployed_count>" for $1 (repo root containing
 # ai_clients/claude) against $2 (live ~/.claude dir). A never-deployed file counts as
 # divergent too (a missing file is the maximal case of "differs").
@@ -84,7 +100,7 @@ deploy_drift_counts() {
         if [[ ! -f "$dest_abs" ]]; then
             never=$((never + 1))
             divergent=$((divergent + 1))
-        elif ! cmp -s "$src" "$dest_abs"; then
+        elif ! _deploy_drift_same "$src" "$dest_abs" "$repo_root"; then
             divergent=$((divergent + 1))
         fi
     done < <(_deploy_drift_manifest "$claude_src")

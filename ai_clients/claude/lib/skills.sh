@@ -6,6 +6,9 @@
 # Source stays flat (skills/<name>.md); only the install target is a directory,
 # because that is the only layout Claude Code's skill loader discovers.
 
+# shellcheck source=../hooks/lib/dotfiles_dir.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/dotfiles_dir.sh"
+
 install_skills() {
     print_status "section" "INSTALLING USER SKILLS"
 
@@ -38,7 +41,7 @@ install_skills() {
         local dst="$skills_dst/$slug/SKILL.md"
 
         mkdir -p "$skills_dst/$slug"
-        cp "$skill_file" "$dst"
+        install_with_dotfiles_dir "$skill_file" "$dst" || return 1
         print_status "success" "Installed skill: $slug → $dst"
         (( ++installed ))
     done

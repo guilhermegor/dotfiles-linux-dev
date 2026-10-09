@@ -66,7 +66,7 @@ fix ultimately lands, never by what the lesson is about.**
   `language-common`, `python-common`, `language-specific (<lang>)`, or a scaffolding tier
   (`mvc-*`, `ddd-*`, `react-*`, …). Backport target: `~/github/blueprintx/templates/`.
 
-- Fix edits the **Claude/dotfiles toolchain** under `~/github/dotfiles-dev/ai_clients/claude/`
+- Fix edits the **Claude/dotfiles toolchain** under `@DOTFILES_DIR@/ai_clients/claude/`
   (a slash command, skill, agent, rule, hook, global `CLAUDE.md` rule, `settings*.json`, or
   installer — changes how *Claude itself* behaves across every project)
   → **Claude-toolchain store** `~/.claude/memory/lessons-claude-toolchain/`. Named for the
@@ -76,7 +76,7 @@ fix ultimately lands, never by what the lesson is about.**
   explicitly, since the toolchain repo has already been renamed once and the local
   checkout directory may not match the current remote name.
   Format: `# Title` then `Area / Lesson / Why / Apply to (dotfiles-dev) / PR / Origin`.
-  Backport target: `~/github/dotfiles-dev/ai_clients/claude/`, each landing via its own PR.
+  Backport target: `@DOTFILES_DIR@/ai_clients/claude/`, each landing via its own PR.
 
 - Fix edits neither of the above — the repo is a standalone project (a scaffolded-but-independent
   app, or a future extraction like the `determinism` package, dotfiles-linux-dev#119) with **no**

@@ -40,7 +40,7 @@ business rule)?
 - If YES: capture it now, before moving on. Route by WHERE THE FIX LANDS:
     * fix edits a scaffolding template (~/github/blueprintx/templates/) →
       BlueprintX store ~/.claude/memory/lessons/
-    * fix edits the Claude/dotfiles toolchain (~/github/dotfiles-dev/ai_clients/claude/)
+    * fix edits the Claude/dotfiles toolchain (@DOTFILES_DIR@/ai_clients/claude/)
       → Claude-toolchain store ~/.claude/memory/lessons-claude-toolchain/
   Save one file per lesson + update that store's README index. Then regenerate
   this repo's git-ignored mirror(s) under .specs/_lessons/ — run

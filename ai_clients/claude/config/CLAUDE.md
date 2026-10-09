@@ -90,7 +90,7 @@ spec written where nobody will look.
 
 Durable Claude artifacts (commands, skills, agents, rules, hooks, global
 `CLAUDE.md`, settings) must be authored in the version-controlled source under
-`~/github/dotfiles-dev/ai_clients/claude/`, then deployed with `make ai_clients`
+`@DOTFILES_DIR@/ai_clients/claude/`, then deployed with `make ai_clients`
 (or `cp` into place). Never write them only to `~/.claude/` — it is machine-local
 and non-symlinked, so direct edits are lost on the next OS/distro install.
 
