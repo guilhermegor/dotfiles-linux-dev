@@ -19,6 +19,7 @@ fi
 # $DOTFILES_DIR wins when set (tests, unusual layouts). Otherwise the MAIN working tree
 # of the repo containing the path (default: this file): `--show-toplevel` alone would bake
 # a throwaway agent worktree's path into the live config when deployed from one.
+# shellcheck disable=SC2120 # optional public arg; callers live in other files (deploy_drift.sh, bin/rename_checkout.sh)
 resolve_dotfiles_dir() {
     if [[ -n "${DOTFILES_DIR:-}" ]]; then
         printf '%s\n' "$DOTFILES_DIR"
@@ -37,6 +38,7 @@ resolve_dotfiles_dir() {
 # substitute_dotfiles_dir [<dir>] — stdin to stdout, @DOTFILES_DIR@ -> <dir>
 # (default: resolve_dotfiles_dir). Fails, printing nothing, when no dir can be resolved,
 # so a deploy never writes the raw placeholder into a live file.
+# shellcheck disable=SC2120 # optional public arg; callers live in other files (deploy_drift.sh, bin/rename_checkout.sh)
 substitute_dotfiles_dir() {
     local dir="${1:-}" escaped
     [[ -n "$dir" ]] || dir="$(resolve_dotfiles_dir)" || return 1
