@@ -17,12 +17,33 @@ Everything that includes `common-auth`: `sudo`, GDM login and lock screen,
 TTY `login`, `su`, polkit prompts, and `sshd`. The last three are side
 effects of "all of them", not extra opt-ins.
 
-SSH: a drop-in (`/etc/ssh/sshd_config.d/google-authenticator.conf`) sets
-`KbdInteractiveAuthentication yes` and `UsePAM yes`, and is checked with
-`sshd -t` (removed again if invalid). It is skipped when openssh-server is
-not installed. Key-only logins are unchanged: sshd skips PAM for them, and
-`AuthenticationMethods` is deliberately not set. Requiring key plus code is
-a separate, stricter choice.
+SSH is conditional. The installer reads the effective config with
+`sudo sshd -T` first:
+
+- **Key-only host** (`passwordauthentication no` and
+  `kbdinteractiveauthentication no`, the Ubuntu default): the drop-in is
+  skipped with a warning, and ssh is left unchanged. Enabling
+  keyboard-interactive here would reopen a password login path, and because
+  of `nullok` an unenrolled account would get in with the password alone.
+  The same happens if the `sshd -T` read fails (fail closed), or if
+  openssh-server is not installed.
+- **Password logins already on:** the drop-in
+  `/etc/ssh/sshd_config.d/10-google-authenticator.conf` sets
+  `KbdInteractiveAuthentication yes` and `UsePAM yes`, is checked with
+  `sshd -t`, and is removed again if invalid. The `10-` prefix makes it sort
+  before most vendor drop-ins (sshd keeps the first value it reads, in
+  lexical order); a lower-numbered file such as `00-*.conf` would still win.
+
+Key-only logins skip PAM, so the code is never asked for them.
+`AuthenticationMethods` is deliberately not set by the installer. To require
+key plus code on a key-only host, add this yourself (a manual owner
+decision, and enroll first):
+
+```text
+AuthenticationMethods publickey,keyboard-interactive
+KbdInteractiveAuthentication yes
+UsePAM yes
+```
 
 ## Enroll
 

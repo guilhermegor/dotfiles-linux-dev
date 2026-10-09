@@ -13,13 +13,27 @@ setup() {
     export CALLS="$TMP/calls.log"
     : > "$CALLS"
     mkdir -p "$TMP/bin"
-    for tool in apt-get pam-auth-update sshd; do
+    for tool in apt-get pam-auth-update; do
         printf '#!/bin/bash\necho "%s $*" >> "%s"\n' "$tool" "$CALLS" > "$TMP/bin/$tool"
         chmod +x "$TMP/bin/$tool"
     done
-    # sudo stub: log only, never exec — a real sudo must not be reachable.
-    printf '#!/bin/bash\necho "sudo $*" >> "%s"\n' "$CALLS" > "$TMP/bin/sudo"
-    chmod +x "$TMP/bin/sudo"
+    # sshd stub: -T prints $SSHD_T_OUT (exit $SSHD_T_RC), -t exits $SSHD_CHECK_RC.
+    export SSHD_T_OUT="$TMP/sshd_T.out"
+    printf 'passwordauthentication yes\nkbdinteractiveauthentication no\n' > "$SSHD_T_OUT"
+    cat > "$TMP/bin/sshd" <<'STUB'
+#!/bin/bash
+case "$1" in
+    -T) cat "$SSHD_T_OUT"; exit "${SSHD_T_RC:-0}" ;;
+    -t) exit "${SSHD_CHECK_RC:-0}" ;;
+esac
+STUB
+    # sudo stub: log, forward only to the sshd stub — a real sudo is unreachable.
+    cat > "$TMP/bin/sudo" <<STUB
+#!/bin/bash
+echo "sudo \$*" >> "$CALLS"
+if [ "\$1" = sshd ]; then shift; exec "$TMP/bin/sshd" "\$@"; fi
+STUB
+    chmod +x "$TMP/bin/sshd" "$TMP/bin/sudo"
     export PATH="$TMP/bin:$PATH"
 
     # shellcheck source=../distro_config/install_lib/_common.sh
@@ -58,7 +72,7 @@ refute_call() {
 @test "install writes and validates the ssh drop-in when sshd is present" {
     run install_google_authenticator
     [ "$status" -eq 0 ]
-    grep -q 'sshd_config.d/google-authenticator.conf' "$CALLS"
+    grep -q 'sshd_config.d/10-google-authenticator.conf' "$CALLS"
     grep -q 'sudo sshd -t' "$CALLS"
     run grep -E '^(KbdInteractiveAuthentication|UsePAM) yes' \
         "$REPO_ROOT/distro_config/pam/sshd-google-authenticator.conf"
@@ -76,10 +90,43 @@ refute_call() {
 }
 
 @test "failed sshd -t removes the drop-in and fails" {
-    printf '#!/bin/bash\necho "sudo $*" >> "%s"\nif [ "$1" = sshd ]; then exit 1; fi\n' "$CALLS" > "$TMP/bin/sudo"
+    export SSHD_CHECK_RC=1
     run install_google_authenticator
     [ "$status" -ne 0 ]
-    grep -q 'sudo rm -f /etc/ssh/sshd_config.d/google-authenticator.conf' "$CALLS"
+    grep -q 'sudo rm -f /etc/ssh/sshd_config.d/10-google-authenticator.conf' "$CALLS"
+}
+
+# refute_dropin_installed: the ssh drop-in was never copied into place.
+refute_dropin_installed() {
+    run grep -q 'install .*sshd_config.d' "$CALLS"
+    [ "$status" -ne 0 ]
+}
+
+@test "key-only host (password and kbd-interactive off) skips the drop-in and warns" {
+    printf 'passwordauthentication no\nkbdinteractiveauthentication no\n' > "$SSHD_T_OUT"
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    local install_output="$output"
+    refute_dropin_installed
+    [[ "$install_output" == *"reopen password logins"* ]]
+    [[ "$install_output" == *"docs/totp-2fa.md"* ]]
+    grep -q 'pam-auth-update --enable' "$CALLS"
+}
+
+@test "password auth on installs the drop-in" {
+    printf 'passwordauthentication yes\nkbdinteractiveauthentication no\n' > "$SSHD_T_OUT"
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    grep -q 'install .*10-google-authenticator.conf' "$CALLS"
+}
+
+@test "a failed sshd -T read skips the drop-in (fail closed)" {
+    export SSHD_T_RC=1
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    local install_output="$output"
+    refute_dropin_installed
+    [[ "$install_output" == *"reopen password logins"* ]]
 }
 
 @test "DRY_RUN=1 runs nothing" {
@@ -93,7 +140,7 @@ refute_call() {
     run uninstall_google_authenticator
     [ "$status" -eq 0 ]
     grep -q 'pam-auth-update --disable google-authenticator' "$CALLS"
-    grep -q 'rm -f /etc/ssh/sshd_config.d/google-authenticator.conf' "$CALLS"
+    grep -q 'rm -f /etc/ssh/sshd_config.d/10-google-authenticator.conf' "$CALLS"
     refute_call '/etc/pam.d'
 }
 

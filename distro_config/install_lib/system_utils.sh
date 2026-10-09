@@ -1285,7 +1285,17 @@ install_nvtop() {
 
 _GA_PAM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../pam" && pwd)"
 _GA_PAM_PROFILE="/usr/share/pam-configs/google-authenticator"
-_GA_SSHD_DROPIN="/etc/ssh/sshd_config.d/google-authenticator.conf"
+_GA_SSHD_DROPIN="/etc/ssh/sshd_config.d/10-google-authenticator.conf"
+
+# True only when sshd already accepts password-style logins. On a key-only
+# host, enabling keyboard-interactive would reopen password logins (nullok), so
+# a failed or unparsable `sshd -T` read also answers "no" (fail closed).
+_ga_ssh_password_login_enabled() {
+    [ "${DRY_RUN:-0}" = "1" ] && return 0
+    local cfg
+    cfg="$(sudo sshd -T 2>/dev/null)" || return 1
+    grep -qE '^(passwordauthentication|kbdinteractiveauthentication) yes$' <<< "$cfg"
+}
 
 # Installs the package and enables a pam-auth-update profile (nullok, so a
 # user who has not run `google-authenticator` still logs in with the password
@@ -1304,7 +1314,9 @@ install_google_authenticator() {
         "$_GA_PAM_PROFILE" || return 1
     run_or_echo sudo pam-auth-update --enable google-authenticator || return 1
 
-    if command_exists sshd; then
+    if ! command_exists sshd; then
+        print_status "info" "openssh-server not installed; skipping the ssh drop-in"
+    elif _ga_ssh_password_login_enabled; then
         run_or_echo sudo install -m 0644 \
             "$_GA_PAM_DIR/sshd-google-authenticator.conf" "$_GA_SSHD_DROPIN" || return 1
         if ! run_or_echo sudo sshd -t; then
@@ -1313,7 +1325,7 @@ install_google_authenticator() {
             return 1
         fi
     else
-        print_status "info" "openssh-server not installed; skipping the ssh drop-in"
+        print_status "warning" "Adding TOTP to ssh here would reopen password logins (nullok lets unenrolled accounts in with the password alone), so key-only ssh is left unchanged. See docs/totp-2fa.md for the opt-in."
     fi
 
     print_status "success" "TOTP profile enabled (not enrolled yet)"
