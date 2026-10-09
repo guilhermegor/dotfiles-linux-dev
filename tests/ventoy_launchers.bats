@@ -342,3 +342,19 @@ STUB
     run grep -nE '(^|[^/A-Z_])ventoy-plugson "' "$opener"
     [ "$status" -ne 0 ]
 }
+
+@test "_check_tree refuses a group/world-writable file inside the Ventoy tree" {
+    mkdir -p "$TMP/tree/tool"
+    touch "$TMP/tree/tool/ventoy_lib.sh"
+    chmod 666 "$TMP/tree/tool/ventoy_lib.sh"
+    run _check_tree "$TMP/tree"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Refusing to run as root"* ]]
+}
+
+@test "--install-launcher decodes an lsblk-escaped space in the mountpoint" {
+    export LSBLK_ALL='Ventoy sde\n' LSBLK_DEV='Ventoy /mnt/my\\x20stick\n'
+    run ventoy-plugson --install-launcher
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/mnt/my stick/ventoy-plugson.sh"* ]]
+}

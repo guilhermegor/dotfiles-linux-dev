@@ -83,6 +83,18 @@ _check_trusted() {
     done
 }
 
+# Refuse if anything under $1 is not root-owned or is group/world-writable: the Ventoy
+# scripts source tool/ventoy_lib.sh and run helpers from the same tree as root.
+_check_tree() {
+    local bad
+    bad=$(find "$1" \( ! -user root -o -perm /022 \) -print -quit 2>/dev/null)
+    if [ -n "$bad" ]; then
+        echo "Refusing to run as root: $bad is not root-owned or is group/world-writable." >&2
+        echo "Fix: sudo chown -R root:root $1 && sudo chmod -R go-w $1" >&2
+        return 1
+    fi
+}
+
 _serve() { # <script> <port> [disk]
     local script=$1 port=$2 disk=${3:-}
     if [ "${DRY_RUN:-0}" != "1" ] && [ ! -f "$VENTOY_DIR/$script" ]; then
@@ -90,6 +102,8 @@ _serve() { # <script> <port> [disk]
         return 1
     fi
     _check_trusted "$VENTOY_DIR/$script" || return 1
+    # The test dir is user-owned by design; only the real /opt tree is checked.
+    [ "${DRY_RUN:-0}" = "1" ] || _check_tree "$VENTOY_DIR" || return 1
     # Authenticate first: the browser opens after 2s and must not beat the password prompt.
     _run sudo -v || return 1
     _open_browser "http://127.0.0.1:$port"
@@ -102,6 +116,7 @@ _install_launcher() { # [mountpoint]
     if [ -z "$mp" ]; then
         disk=$(ventoy_find_disk) || return 1
         mp=$(lsblk -rno LABEL,MOUNTPOINT "${disk}"* | awk '$1=="Ventoy" && $2!=""{print $2; exit}')
+        mp=$(printf '%b' "$mp") # lsblk -r escapes spaces as \x20
         [ -n "$mp" ] || { echo "The Ventoy partition on $disk is not mounted." >&2; return 1; }
     fi
     ventoy_disk_of_mount "$mp" >/dev/null || return 1
