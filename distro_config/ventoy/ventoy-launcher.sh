@@ -87,7 +87,11 @@ _check_trusted() {
 # scripts source tool/ventoy_lib.sh and run helpers from the same tree as root.
 _check_tree() {
     local bad
-    bad=$(find "$1" \( ! -user root -o -perm /022 \) -print -quit 2>/dev/null)
+    bad=$(find "$1" \( ! -user root -o -perm /022 \) -print -quit) || {
+        # An unreadable subtree is an uninspected subtree, and this runs as root.
+        echo "Refusing to run as root: cannot fully inspect $1." >&2
+        return 1
+    }
     if [ -n "$bad" ]; then
         echo "Refusing to run as root: $bad is not root-owned or is group/world-writable." >&2
         echo "Fix: sudo chown -R root:root $1 && sudo chmod -R go-w $1" >&2

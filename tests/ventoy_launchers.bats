@@ -358,3 +358,9 @@ STUB
     [ "$status" -eq 0 ]
     [[ "$output" == *"/mnt/my stick/ventoy-plugson.sh"* ]]
 }
+
+@test "_check_tree fails closed when find cannot inspect the tree" {
+    run _check_tree "$TMP/does-not-exist"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot fully inspect"* ]]
+}
