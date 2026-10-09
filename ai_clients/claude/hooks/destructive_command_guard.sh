@@ -73,7 +73,7 @@ is_unscoped_rm() {
 # already applied to protected_branch_guard.sh / branch_requires_issue_guard.sh.
 is_history_rewrite() {
     local cmd="$1"
-    if printf '%s' "$cmd" | grep -Eq "(^|[;&|])[[:space:]]*${WRAPPER_RE}(rtk[[:space:]]+)?git[[:space:]]+push([[:space:]].*)?[[:space:]](-f|--force)([[:space:]]|\$)" \
+    if printf '%s' "$cmd" | grep -Eq "(^|[;&|])[[:space:]]*${WRAPPER_RE}(rtk[[:space:]]+)?git[[:space:]]+push([[:space:]][^;&|]*)?[[:space:]](-f|--force)([[:space:]]|\$)" \
         && ! printf '%s' "$cmd" | grep -q -- '--force-with-lease'; then
         return 0
     fi

@@ -142,6 +142,28 @@ payload() {
     [ "$status" -eq 0 ]
 }
 
+# --- force-push match stays inside ONE command segment (dotfiles-linux-dev#697) ------------------
+
+@test "issue #697: allows git push followed by && gh api -f" {
+    run bash -c "jq -nc '{tool_name: \"Bash\", tool_input: {command: \"git push origin x && gh api repos/o/r/issues/1/comments -f body=y\"}}' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "issue #697: blocks git push -f followed by && echo" {
+    run bash -c "jq -nc '{tool_name: \"Bash\", tool_input: {command: \"git push -f x && echo done\"}}' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "issue #697: blocks git push with trailing -f" {
+    run bash -c "jq -nc '{tool_name: \"Bash\", tool_input: {command: \"git push origin x -f\"}}' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "issue #697: allows --force-with-lease followed by && echo" {
+    run bash -c "jq -nc '{tool_name: \"Bash\", tool_input: {command: \"git push --force-with-lease origin x && echo done\"}}' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
 # --- allowed: the safe forms --------------------------------------------------------------------
 
 @test "allows git push --force-with-lease" {
