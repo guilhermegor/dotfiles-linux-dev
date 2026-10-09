@@ -48,8 +48,13 @@ main() {
     # this-repo ...` is routine in a multi-repo session), and judging it against the wrong repo's
     # template is worse than not judging it at all (it fails in the *permitting* direction too).
     if [[ -n "$GH_REPO" ]]; then
-        root="$HOME/github/${GH_REPO##*/}"
-        [[ -d "$root/.git" ]] || block_unresolved_repo "$GH_REPO" "$root"
+        # The cwd checkout wins when its origin names the target: the local dir name need not
+        # match the GitHub repo name (dotfiles-linux-dev#701).
+        root="$(git rev-parse --show-toplevel 2>/dev/null)"
+        if ! origin_names_repo "$GH_REPO"; then
+            root="$HOME/github/${GH_REPO##*/}"
+            [[ -d "$root/.git" ]] || block_unresolved_repo "$GH_REPO" "$root"
+        fi
         template="$(find_template "$root" 0)"   # no personal-template fallback for a foreign repo
     else
         root="$(git rev-parse --show-toplevel 2>/dev/null)"
@@ -126,6 +131,17 @@ find_template() {
     local fallback="$HOME/.claude/projects/${checkout//[\/.]/-}/memory/feedback_pr_template.md"
     [[ -r "$fallback" ]] && { printf '%s' "$fallback"; return 0; }
     return 0
+}
+
+# $1: owner/name. True when the cwd checkout's `origin` URL (https or ssh, with or without .git
+# or a trailing slash) names that repo, compared case-insensitively.
+origin_names_repo() {
+    local url slug
+    url="$(git remote get-url origin 2>/dev/null)" || return 1
+    url="${url%/}"
+    url="${url%.git}"
+    slug="$(printf '%s' "$url" | sed -E 's#^.*[:/]([^/:]+/[^/:]+)$#\1#')"
+    [[ "${slug,,}" == "${1,,}" ]]
 }
 
 block_unresolved_repo() {
