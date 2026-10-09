@@ -31,9 +31,13 @@ STUB
 echo "${FINDMNT_SRC:-/dev/sde1}"
 STUB
     # stat stub: ownership/mode of every path checked before sudo ("uid mode").
+    # $STAT_OUT answers for the script, $STAT_DIR_OUT (default: same) for its directory.
     cat > "$TMP/bin/stat" <<'STUB'
 #!/bin/bash
-echo "${STAT_OUT:-0 755}"
+case "${*: -1}" in
+    *.sh) echo "${STAT_OUT:-0 755}" ;;
+    *) echo "${STAT_DIR_OUT:-${STAT_OUT:-0 755}}" ;;
+esac
 STUB
     chmod +x "$TMP/bin/lsblk" "$TMP/bin/findmnt" "$TMP/bin/stat"
     ln -s "$LAUNCHER" "$TMP/bin/ventoy-web"
@@ -135,6 +139,20 @@ teardown() {
     [[ "$output" != *"sudo bash"* ]]
 }
 
+@test "ventoy-web refuses a user-owned directory even when the script is root-owned" {
+    export STAT_OUT='0 755' STAT_DIR_OUT='1000 755'
+    run ventoy-web
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Refusing to run /opt/ventoy/VentoyWeb.sh as root: /opt/ventoy must be owned by root"* ]]
+    [[ "$output" != *"sudo bash"* ]]
+}
+
+@test "ventoy-web authenticates sudo before opening the browser" {
+    run ventoy-web
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ sudo\ -v.*xdg-open ]]
+}
+
 @test "ventoy-web refuses a world-writable script with a 4-digit mode" {
     export STAT_OUT='0 1777'
     run ventoy-web
@@ -194,7 +212,12 @@ STUB
     _setup_install
     run install_ventoy
     [ "$status" -eq 0 ]
-    [[ "$output" == *"[dry-run] sudo tar -xzf "*" -C $TMP/opt-ventoy"* ]]
+    [[ "$output" == *"[dry-run] sudo tar -xzf $TMP/opt-ventoy.tar.gz -C $TMP/opt-ventoy"* ]]
+}
+
+@test "the checksum is verified on a root-owned copy, not the user temp file" {
+    run grep -c 'sudo install -m 644 -o root -g root "\$target" "\$stage"' "$REPO_ROOT/distro_config/install_lib/vm.sh"
+    [ "$output" = "1" ]
 }
 
 @test "install_ventoy refuses to extract on a checksum mismatch" {
@@ -220,6 +243,7 @@ STUB
     echo "abc  other.tar.gz" > "$FIX/sha256.txt"
     run install_ventoy
     [ "$status" -ne 0 ]
+    [[ "$output" == *"has no entry for ventoy-1.0-linux.tar.gz"* ]]
     [[ "$output" != *"sudo tar"* ]]
 }
 

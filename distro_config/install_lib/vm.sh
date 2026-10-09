@@ -145,11 +145,15 @@ _ventoy_trusted_install() {
     [ "$owner" = "0" ] && (( (8#$mode & 8#022) == 0 ))
 }
 
-# Download the tarball and its release sha256.txt into <dir> (user-owned temp) and
-# verify. Refuses on a missing checksum asset, a missing entry, or a mismatch.
-# Usage: _ventoy_fetch_verified <tarball_url> <sha256_url> <dir>  -> <dir>/ventoy.tar.gz
+# Download the tarball and its release sha256.txt into <dir> (user-owned temp), then
+# copy the tarball to the root-owned <stage> and verify THAT copy: a process running as
+# the user could swap the temp file between the check and `sudo tar`, but not <stage>.
+# Refuses on a missing checksum asset, a missing entry, or a mismatch. Under DRY_RUN
+# nothing is staged and the temp file is checked instead.
+# Usage: _ventoy_fetch_verified <tarball_url> <sha256_url> <dir> <stage>
 _ventoy_fetch_verified() {
-    local tarball_url=$1 sha_url=$2 dir=$3 name expected
+    local tarball_url=$1 sha_url=$2 dir=$3 stage=$4 name expected target
+    target="$dir/ventoy.tar.gz"
     name="${tarball_url##*/}"
     if [ -z "$sha_url" ]; then
         print_status "error" "No sha256.txt in the Ventoy release; refusing to install unverified"
@@ -168,8 +172,13 @@ _ventoy_fetch_verified() {
         print_status "error" "sha256.txt has no entry for $name; refusing to install"
         return 1
     fi
-    if ! echo "$expected  $dir/ventoy.tar.gz" | sha256sum -c --status; then
+    if [ "${DRY_RUN:-0}" != "1" ]; then
+        sudo install -m 644 -o root -g root "$target" "$stage" || return 1
+        target=$stage
+    fi
+    if ! echo "$expected  $target" | sha256sum -c --status; then
         print_status "error" "Checksum mismatch for $name; refusing to extract"
+        run_or_echo sudo rm -f "$stage"
         return 1
     fi
 }
@@ -202,9 +211,11 @@ install_ventoy() {
     local tmp_dir ventoy_installed=0
     tmp_dir=$(mktemp -d)
     print_status "info" "Downloading Ventoy..."
-    if _ventoy_fetch_verified "$tarball_url" "$sha_url" "$tmp_dir"; then
+    local stage="$ventoy_dir.tar.gz"
+    if _ventoy_fetch_verified "$tarball_url" "$sha_url" "$tmp_dir" "$stage"; then
         run_or_echo sudo mkdir -p "$ventoy_dir"
-        run_or_echo sudo tar -xzf "$tmp_dir/ventoy.tar.gz" -C "$ventoy_dir" --strip-components=2
+        run_or_echo sudo tar -xzf "$stage" -C "$ventoy_dir" --strip-components=2 --no-same-owner
+        run_or_echo sudo rm -f "$stage"
 
         if ! _ventoy_publish "$ventoy_dir"; then
             rm -rf "$tmp_dir"

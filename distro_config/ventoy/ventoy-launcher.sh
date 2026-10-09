@@ -90,6 +90,8 @@ _serve() { # <script> <port> [disk]
         return 1
     fi
     _check_trusted "$VENTOY_DIR/$script" || return 1
+    # Authenticate first: the browser opens after 2s and must not beat the password prompt.
+    _run sudo -v || return 1
     _open_browser "http://127.0.0.1:$port"
     _run cd "$VENTOY_DIR" || return 1
     _run sudo bash "./$script" ${disk:+"$disk"}
