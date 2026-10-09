@@ -42,6 +42,9 @@ if [ "\$1" = sshd ]; then shift; exec "$TMP/bin/sshd" "\$@"; fi
 STUB
     chmod +x "$TMP/bin/sshd" "$TMP/bin/sudo"
     export PATH="$TMP/bin:$PATH"
+    # pam-auth-update is a stub, so a fake common-auth stands in for its output.
+    export _GA_COMMON_AUTH="$TMP/common-auth"
+    echo 'auth required pam_google_authenticator.so nullok' > "$_GA_COMMON_AUTH"
 
     # shellcheck source=../distro_config/install_lib/_common.sh
     source "$REPO_ROOT/distro_config/install_lib/_common.sh"
@@ -168,6 +171,21 @@ refute_dropin_installed() {
     local install_output="$output"
     refute_dropin_installed
     [[ "$install_output" == *"reopen password logins"* ]]
+}
+
+@test "install fails when pam-auth-update leaves common-auth without the module" {
+    : > "$_GA_COMMON_AUTH"
+    run install_google_authenticator
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"left"*"unchanged"* ]]
+    refute_dropin_installed
+}
+
+@test "DRY_RUN=1 uninstall runs nothing" {
+    DRY_RUN=1 run uninstall_google_authenticator
+    [ "$status" -eq 0 ]
+    [ ! -s "$CALLS" ]
+    [[ "$output" == *"[dry-run] sudo pam-auth-update --disable google-authenticator"* ]]
 }
 
 @test "DRY_RUN=1 runs nothing" {

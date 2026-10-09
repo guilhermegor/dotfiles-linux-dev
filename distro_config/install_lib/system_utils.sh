@@ -1285,6 +1285,7 @@ install_nvtop() {
 
 _GA_PAM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../pam" && pwd)"
 _GA_PAM_PROFILE="/usr/share/pam-configs/google-authenticator"
+_GA_COMMON_AUTH="${_GA_COMMON_AUTH:-/etc/pam.d/common-auth}"
 _GA_SSHD_DROPIN="/etc/ssh/sshd_config.d/10-google-authenticator.conf"
 # Pre-40c3264 name; a stale copy must go too, or it keeps keyboard-interactive on.
 _GA_SSHD_DROPIN_OLD="/etc/ssh/sshd_config.d/google-authenticator.conf"
@@ -1323,6 +1324,12 @@ install_google_authenticator() {
     run_or_echo sudo install -m 0644 "$_GA_PAM_DIR/google-authenticator" \
         "$_GA_PAM_PROFILE" || return 1
     run_or_echo sudo pam-auth-update --enable google-authenticator || return 1
+    # pam-auth-update leaves a locally modified common-auth untouched (exit 0),
+    # so confirm the profile actually landed instead of reporting it enabled.
+    if [ "${DRY_RUN:-0}" != "1" ] && ! grep -q pam_google_authenticator "$_GA_COMMON_AUTH"; then
+        print_status "error" "pam-auth-update left $_GA_COMMON_AUTH unchanged (locally modified?); not enabled"
+        return 1
+    fi
 
     # Drop any earlier copy first so the probe sees the host's own config.
     run_or_echo sudo rm -f "$_GA_SSHD_DROPIN" "$_GA_SSHD_DROPIN_OLD"

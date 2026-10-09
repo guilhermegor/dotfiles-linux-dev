@@ -53,6 +53,10 @@ KbdInteractiveAuthentication yes
 UsePAM yes
 ```
 
+After you enroll, anything that calls `sudo` without a terminal (cron, CI,
+`sudo -n`) stops working for that account: the code prompt cannot be answered.
+Run unattended jobs as root or from a user that is not enrolled.
+
 ## Enroll
 
 ```bash
