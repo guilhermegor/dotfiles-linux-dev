@@ -30,7 +30,12 @@ STUB
 #!/bin/bash
 echo "${FINDMNT_SRC:-/dev/sde1}"
 STUB
-    chmod +x "$TMP/bin/lsblk" "$TMP/bin/findmnt"
+    # stat stub: ownership/mode of every path checked before sudo ("uid mode").
+    cat > "$TMP/bin/stat" <<'STUB'
+#!/bin/bash
+echo "${STAT_OUT:-0 755}"
+STUB
+    chmod +x "$TMP/bin/lsblk" "$TMP/bin/findmnt" "$TMP/bin/stat"
     ln -s "$LAUNCHER" "$TMP/bin/ventoy-web"
     ln -s "$LAUNCHER" "$TMP/bin/ventoy-plugson"
 
@@ -82,7 +87,7 @@ teardown() {
     run ventoy-web
     [ "$status" -eq 0 ]
     [[ "$output" == *"[dry-run] xdg-open http://127.0.0.1:24680"* ]]
-    [[ "$output" == *"[dry-run] cd $HOME/.local/share/ventoy"* ]]
+    [[ "$output" == *"[dry-run] cd /opt/ventoy"* ]]
     [[ "$output" == *"[dry-run] sudo bash ./VentoyWeb.sh"* ]]
 }
 
@@ -110,5 +115,54 @@ teardown() {
 @test "ventoy-plugson --install-launcher refuses a non-Ventoy mount" {
     export FINDMNT_SRC=/dev/sda2 LSBLK_DEV='rootfs sda\n'
     run ventoy-plugson --install-launcher "$TMP"
+    [ "$status" -ne 0 ]
+}
+
+@test "ventoy-web refuses a user-owned script before any sudo" {
+    export STAT_OUT='1000 755'
+    run ventoy-web
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Refusing to run /opt/ventoy/VentoyWeb.sh as root"* ]]
+    [[ "$output" == *"sudo chown -R root:root /opt/ventoy"* ]]
+    [[ "$output" != *"sudo bash"* ]]
+}
+
+@test "ventoy-plugson refuses a root-owned but group-writable script" {
+    export LSBLK_ALL='Ventoy sde\n' STAT_OUT='0 775'
+    run ventoy-plugson
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not group/world-writable"* ]]
+    [[ "$output" != *"sudo bash"* ]]
+}
+
+@test "ventoy-web refuses a world-writable script with a 4-digit mode" {
+    export STAT_OUT='0 1777'
+    run ventoy-web
+    [ "$status" -ne 0 ]
+}
+
+@test "VENTOY_DIR from the environment is ignored, even under DRY_RUN" {
+    run env DRY_RUN=1 VENTOY_DIR=/tmp/evil "$TMP/bin/ventoy-web"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"cd /opt/ventoy"* ]]
+    [[ "$output" != *"/tmp/evil"* ]]
+}
+
+@test "VENTOY_TEST_DIR is ignored outside DRY_RUN" {
+    run env DRY_RUN=0 VENTOY_TEST_DIR=/tmp/evil bash -c "source '$LAUNCHER'; echo \$VENTOY_DIR"
+    [ "$output" = "/opt/ventoy" ]
+}
+
+@test "VENTOY_TEST_DIR is honoured under DRY_RUN" {
+    export VENTOY_TEST_DIR=/tmp/fixture
+    run ventoy-web
+    [[ "$output" == *"[dry-run] cd /tmp/fixture"* ]]
+}
+
+@test "the pendrive opener calls ventoy-plugson by absolute path only" {
+    local opener="$REPO_ROOT/distro_config/ventoy/ventoy-pendrive-launcher.sh"
+    grep -q '^VENTOY_PLUGSON=/usr/local/bin/ventoy-plugson$' "$opener"
+    grep -q 'exec "\$VENTOY_PLUGSON"' "$opener"
+    run grep -nE '(^|[^/A-Z_])ventoy-plugson "' "$opener"
     [ "$status" -ne 0 ]
 }

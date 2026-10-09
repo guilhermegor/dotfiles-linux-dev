@@ -13,12 +13,17 @@
 #                                        Ventoy data partition
 #
 # Ventoy's scripts expect cwd = their own directory, so each runs from VENTOY_DIR.
+# They run under sudo, so VENTOY_DIR is fixed to the root-owned /opt/ventoy and the
+# script plus its directory must be root-owned and not group/world-writable. The only
+# override is VENTOY_TEST_DIR, honoured under DRY_RUN=1 (tests); the environment can
+# never choose which script runs as root.
 # DRY_RUN=1 prints the command lines instead of running them (the run_or_echo
 # convention of lib/common.sh, inlined because this file is installed standalone).
 #
 # Sourced (not executed) it only defines the resolvers, which the bats tests use.
 
-VENTOY_DIR="${VENTOY_DIR:-$HOME/.local/share/ventoy}"
+VENTOY_DIR=/opt/ventoy
+[ "${DRY_RUN:-0}" = "1" ] && VENTOY_DIR="${VENTOY_TEST_DIR:-$VENTOY_DIR}"
 VENTOY_OPENER="${VENTOY_OPENER:-$(dirname "${BASH_SOURCE[0]}")/ventoy-pendrive-launcher.sh}"
 
 _run() {
@@ -65,12 +70,26 @@ _open_browser() {
     fi
 }
 
+# Refuse unless $1 and its directory are root-owned and not group/world-writable.
+_check_trusted() {
+    local path owner mode
+    for path in "$1" "$(dirname "$1")"; do
+        read -r owner mode < <(stat -c '%u %a' "$path") || owner=
+        if [ "$owner" != "0" ] || (( 8#${mode:-777} & 8#022 )); then
+            echo "Refusing to run $1 as root: $path must be owned by root and not group/world-writable." >&2
+            echo "Fix: sudo chown -R root:root $VENTOY_DIR && sudo chmod -R go-w $VENTOY_DIR" >&2
+            return 1
+        fi
+    done
+}
+
 _serve() { # <script> <port> [disk]
     local script=$1 port=$2 disk=${3:-}
     if [ "${DRY_RUN:-0}" != "1" ] && [ ! -f "$VENTOY_DIR/$script" ]; then
         echo "$VENTOY_DIR/$script missing. Install Ventoy: make install_programs" >&2
         return 1
     fi
+    _check_trusted "$VENTOY_DIR/$script" || return 1
     _open_browser "http://127.0.0.1:$port"
     _run cd "$VENTOY_DIR" || return 1
     _run sudo bash "./$script" ${disk:+"$disk"}

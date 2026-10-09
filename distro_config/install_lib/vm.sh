@@ -103,13 +103,57 @@ DESKTOP
     done
 }
 
+# Ventoy's scripts run under sudo, so they live in a root-owned dir: a user-writable
+# copy (e.g. ~/.local/share/ventoy) would hand root to any process running as the user.
+VENTOY_DIR_ROOT="/opt/ventoy"
+
+# Root-own the tree, link the GUI and write ventoy.desktop. Returns 1 if no GUI binary.
+_ventoy_publish() {
+    local ventoy_dir=$1 gui_bin
+    run_or_echo sudo chown -R root:root "$ventoy_dir"
+    run_or_echo sudo chmod -R go-w "$ventoy_dir"
+    gui_bin=$(find "$ventoy_dir" -maxdepth 1 -name "VentoyGUI.*" 2>/dev/null | head -n 1)
+    if [ -z "$gui_bin" ]; then
+        [ "${DRY_RUN:-0}" = "1" ] && return 0
+        print_status "warning" "Ventoy extracted but GUI binary not found. Check $ventoy_dir"
+        return 1
+    fi
+    run_or_echo sudo chmod +x "$gui_bin"
+    run_or_echo sudo ln -sf "$gui_bin" /usr/local/bin/ventoy
+
+    run_or_echo mkdir -p "$HOME/.local/share/applications"
+    [ "${DRY_RUN:-0}" = "1" ] && return 0
+    cat > "$HOME/.local/share/applications/ventoy.desktop" <<DESKTOP
+[Desktop Entry]
+Name=Ventoy
+Comment=Create bootable USB drives with multiple ISOs
+Exec=$gui_bin
+Icon=drive-removable-media
+Terminal=false
+Type=Application
+Categories=System;Utility;
+DESKTOP
+}
+
+# Copy an old user-owned install into the root-owned dir; never deletes the old copy.
+_ventoy_migrate_legacy() {
+    local legacy="$HOME/.local/share/ventoy"
+    [ -d "$VENTOY_DIR_ROOT" ] && return 0
+    [ -n "$(find "$legacy" -maxdepth 1 -name 'VentoyGUI.*' 2>/dev/null)" ] || return 0
+    run_or_echo sudo mkdir -p "$VENTOY_DIR_ROOT"
+    run_or_echo sudo cp -a "$legacy/." "$VENTOY_DIR_ROOT/"
+    _ventoy_publish "$VENTOY_DIR_ROOT" || return 1
+    print_status "info" "Migrated to $VENTOY_DIR_ROOT; the user-writable copy $legacy can be removed"
+}
+
 install_ventoy() {
     print_status "section" "VENTOY"
 
-    local ventoy_dir="$HOME/.local/share/ventoy"
+    local ventoy_dir="$VENTOY_DIR_ROOT"
 
-    if command_exists ventoy || [ -n "$(find "$ventoy_dir" -maxdepth 1 -name 'VentoyGUI.*' 2>/dev/null)" ]; then
+    if [ -n "$(find "$ventoy_dir" "$HOME/.local/share/ventoy" -maxdepth 1 -name 'VentoyGUI.*' 2>/dev/null)" ]; then
         print_status "info" "Ventoy already installed"
+        _ventoy_migrate_legacy || return 1
         install_ventoy_launchers
         return $?
     fi
@@ -129,30 +173,13 @@ install_ventoy() {
     print_status "info" "Downloading Ventoy..."
     if wget -q -O "$tmp_dir/ventoy.tar.gz" "$tarball_url" 2>>"$LOG_FILE" || \
        curl -sL -o "$tmp_dir/ventoy.tar.gz" "$tarball_url" 2>>"$LOG_FILE"; then
-        run_or_echo mkdir -p "$ventoy_dir"
-        tar -xzf "$tmp_dir/ventoy.tar.gz" -C "$ventoy_dir" --strip-components=2
+        run_or_echo sudo mkdir -p "$ventoy_dir"
+        run_or_echo sudo tar -xzf "$tmp_dir/ventoy.tar.gz" -C "$ventoy_dir" --strip-components=2
 
-        local gui_bin
-        gui_bin=$(find "$ventoy_dir" -maxdepth 1 -name "VentoyGUI.*" | head -n 1)
-        if [ -z "$gui_bin" ]; then
-            print_status "warning" "Ventoy extracted but GUI binary not found. Check $ventoy_dir"
+        if ! _ventoy_publish "$ventoy_dir"; then
             rm -rf "$tmp_dir"
             return 1
         fi
-        run_or_echo chmod +x "$gui_bin"
-        sudo ln -sf "$gui_bin" /usr/local/bin/ventoy
-
-        run_or_echo mkdir -p "$HOME/.local/share/applications"
-        cat > "$HOME/.local/share/applications/ventoy.desktop" <<DESKTOP
-[Desktop Entry]
-Name=Ventoy
-Comment=Create bootable USB drives with multiple ISOs
-Exec=$gui_bin
-Icon=drive-removable-media
-Terminal=false
-Type=Application
-Categories=System;Utility;
-DESKTOP
         install_ventoy_launchers
         print_status "success" "Ventoy installed to $ventoy_dir"
         ventoy_installed=1
