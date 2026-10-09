@@ -121,6 +121,19 @@ Never declare the task complete if any of these three steps is missing.
 closed because rtk asks a telemetry question on the terminal even when its output is
 redirected to the log (#633). The re-run guard is `~/.claude/RTK.md`, rtk's own artifact.
 
+### Ventoy launchers (`ventoy/`)
+
+`install_ventoy` (also on the already-installed path) calls `install_ventoy_launchers`, which copies
+`ventoy/ventoy-launcher.sh` to `/usr/local/bin/ventoy-web` and `ventoy-plugson` (one script, behaviour
+by invoked name) and writes `ventoy-web.desktop` / `ventoy-plugson.desktop`, listed in the `Infra`
+folder beside `ventoy.desktop` in `ubuntu_workspace.sh`. Ventoy lives in the root-owned `/opt/ventoy` (populated only from a freshly downloaded release whose tarball is checked against the release's `sha256.txt` before `sudo tar -x`; a missing checksum asset or a mismatch refuses. An old user-writable `~/.local/share/ventoy` is never copied in and never counts as installed: it is reported as removable and a fresh verified install is done). The scripts run under sudo, so the wrappers hardcode that dir (override only under `DRY_RUN=1` via `VENTOY_TEST_DIR`) and refuse unless script and dir are root-owned and not group/world-writable. Each wrapper `cd`s into it
+(Ventoy's scripts need cwd = their dir), runs `sudo bash ./Ventoy{Web,Plugson}.sh`, and opens the browser
+(`:24680` installer, `:24681` Plugson). `ventoy-plugson` with no arg resolves the disk behind the single
+partition labelled `Ventoy` (`lsblk`) and refuses on zero or several. `ventoy-plugson --install-launcher
+[mountpoint]` copies `ventoy-pendrive-launcher.sh` onto the stick as `ventoy-plugson.sh`; it finds its own
+disk via `findmnt` and calls the host's `ventoy-plugson`, or prints the install command when missing.
+The stick copy is a convenience for your own sticks: it sits on a FAT partition anyone with the stick can edit, so whoever modifies it can run code as the user; it calls `/usr/local/bin/ventoy-plugson` by absolute path only. `DRY_RUN=1` prints the command lines; `tests/ventoy_launchers.bats`.
+
 ## Where to put a new install function
 
 | New install is… | Goes in |
