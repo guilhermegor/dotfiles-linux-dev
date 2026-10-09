@@ -173,7 +173,10 @@ _ventoy_fetch_verified() {
         return 1
     fi
     if [ "${DRY_RUN:-0}" != "1" ]; then
-        sudo install -m 644 -o root -g root "$target" "$stage" || return 1
+        sudo install -m 644 -o root -g root "$target" "$stage" || {
+            sudo rm -f "$stage"
+            return 1
+        }
         target=$stage
     fi
     if ! echo "$expected  $target" | sha256sum -c --status; then

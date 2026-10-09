@@ -212,12 +212,57 @@ STUB
     _setup_install
     run install_ventoy
     [ "$status" -eq 0 ]
-    [[ "$output" == *"[dry-run] sudo tar -xzf $TMP/opt-ventoy.tar.gz -C $TMP/opt-ventoy"* ]]
+    [[ "$output" == *"[dry-run] sudo tar -xzf $TMP/opt-ventoy.tar.gz -C $TMP/opt-ventoy --strip-components=2 --no-same-owner"* ]]
 }
 
-@test "the checksum is verified on a root-owned copy, not the user temp file" {
-    run grep -c 'sudo install -m 644 -o root -g root "\$target" "\$stage"' "$REPO_ROOT/distro_config/install_lib/vm.sh"
-    [ "$output" = "1" ]
+# Real (non-dry-run) path with a recording sudo stub: `install` is emulated as a
+# copy (after which $SWAP_AFTER_INSTALL=1 overwrites the user-owned source, as an
+# attacker racing the download would); everything else is only logged.
+_stub_sudo() {
+    export DRY_RUN=0 SUDO_LOG="$TMP/sudo.log"
+    cat > "$TMP/bin/sudo" <<'STUB'
+#!/bin/bash
+echo "$*" >> "$SUDO_LOG"
+if [ "$1" = install ]; then
+    [ -z "${FAIL_INSTALL:-}" ] || { : > "$9"; exit 1; }
+    cp "$8" "$9"
+    [ -z "${SWAP_AFTER_INSTALL:-}" ] || echo evil > "$8"
+fi
+exit 0
+STUB
+    chmod +x "$TMP/bin/sudo"
+}
+
+@test "the tarball is staged root-owned, verified there, and extracted from there" {
+    _setup_install
+    _stub_sudo
+    SWAP_AFTER_INSTALL=1 run install_ventoy
+    [[ "$output" != *"Checksum mismatch"* ]]
+    local stage="$TMP/opt-ventoy.tar.gz" log
+    log=$(< "$SUDO_LOG")
+    [[ "$log" == *"install -m 644 -o root -g root "*"/ventoy.tar.gz $stage"* ]]
+    [[ "$log" == *"tar -xzf $stage -C $TMP/opt-ventoy --strip-components=2 --no-same-owner"* ]]
+    # install, then tar, then the stage is removed -- in that order
+    [[ "$log" =~ install.*tar\ -xzf.*rm\ -f\ $stage ]]
+}
+
+@test "a failed stage copy removes the stage file and never extracts" {
+    _setup_install
+    _stub_sudo
+    FAIL_INSTALL=1 run install_ventoy
+    [ "$status" -ne 0 ]
+    [[ "$(< "$SUDO_LOG")" == *"rm -f $TMP/opt-ventoy.tar.gz"* ]]
+    [[ "$(< "$SUDO_LOG")" != *"tar -xzf"* ]]
+}
+
+@test "a checksum mismatch removes the staged copy" {
+    _setup_install
+    _stub_sudo
+    echo "$(printf 'bad' | sha256sum | cut -d' ' -f1)  ventoy-1.0-linux.tar.gz" > "$FIX/sha256.txt"
+    run install_ventoy
+    [ "$status" -ne 0 ]
+    [[ "$(< "$SUDO_LOG")" == *"rm -f $TMP/opt-ventoy.tar.gz"* ]]
+    [[ "$(< "$SUDO_LOG")" != *"tar -xzf"* ]]
 }
 
 @test "install_ventoy refuses to extract on a checksum mismatch" {
