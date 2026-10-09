@@ -721,6 +721,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-checkout-path-is-derived-never-written-dotfiles-linux-dev661" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The checkout path is derived, never written (dotfiles-linux-dev#661)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#deployment" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1414,6 +1425,17 @@
     <span class="md-ellipsis">
       
         AI-state sync (hooks/ai_state_sync.sh, dotfiles-linux-dev#655)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-checkout-path-is-derived-never-written-dotfiles-linux-dev661" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The checkout path is derived, never written (dotfiles-linux-dev#661)
       
     </span>
   </a>
@@ -2605,6 +2627,28 @@ schema belongs to Codex and can change under any update.</p>
 are never synced). Rule for any future client: authored state only, never credentials,
 session history, caches or logs. Keyboard-shortcut wiring
 (<code>distro_config/set_custom_shortcuts.sh</code>) is a separate follow-up.</p>
+<h2 id="the-checkout-path-is-derived-never-written-dotfiles-linux-dev661">The checkout path is derived, never written (dotfiles-linux-dev#661)<a class="headerlink" href="#the-checkout-path-is-derived-never-written-dotfiles-linux-dev661" title="Permanent link">&para;</a></h2>
+<p>No tracked file may name where this repo is checked out. A file that needs the
+path writes the placeholder <code>@DOTFILES_DIR@</code>; the installer that copies it
+(<code>install_hooks</code>, <code>install_skills</code>, <code>install_claude_md</code>, <code>configure_settings</code>)
+renders it via <code>hooks/lib/dotfiles_dir.sh</code>. <code>resolve_dotfiles_dir</code> takes
+<code>$DOTFILES_DIR</code> if set, else the <strong>main</strong> working tree of the repo
+(<code>--git-common-dir</code>, not <code>--show-toplevel</code>: a deploy run from an agent worktree
+must not bake the throwaway worktree path into live config). <code>deploy_drift.sh</code>
+renders the same way before comparing, so a correct deploy never reads as drift.</p>
+<p>Placeholders are legal only in artifacts an installer renders (hooks, skills,
+<code>config/CLAUDE.md</code>, <code>settings.json</code>); <code>rules/</code>, <code>commands/</code>, <code>agents/</code>, <code>shared/</code>
+and the other clients are copied verbatim. <code>tests/dotfiles_dir_substitution.bats</code>
+fails on a hardcoded path anywhere outside <code>docs/</code>, <code>.specs/</code> and the changelog,
+and on a placeholder in a verbatim-copied artifact. Bare NAMES (<code>dotfiles-dev#68</code>,
+<code>Origin: dotfiles-dev</code>) are fine: a rename breaks a path, not a label.</p>
+<p><strong>Known gap, same family:</strong> <code>pr_template_guard.sh</code> and <code>issue_template_guard.sh</code>
+resolve a <code>--repo owner/name</code> target to <code>~/github/&lt;name&gt;</code>, so a checkout whose
+directory differs from its remote name (<code>--repo</code> naming a renamed repo) cannot be
+found and is blocked as unresolvable. Not fixed by #661's de-hardcoding.</p>
+<p><code>bin/rename_checkout.sh &lt;new-dir&gt;</code> is the one-time rename (dry-run by default,
+<code>--apply</code> to do it; preconditions and steps in its header). It is the owner's
+step, run from a terminal outside the checkout.</p>
 <h2 id="deployment">Deployment<a class="headerlink" href="#deployment" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>make<span class="w"> </span>ai_clients<span class="w">        </span><span class="c1"># interactive menu (choose steps individually)</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># or via main.sh directly:</span>
