@@ -83,6 +83,12 @@ command -v python3 >/dev/null 2>&1 || exit 0
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLANNER="${REVIEW_FANOUT_PLANNER:-$HOOK_DIR/lib/review_fanout_plan.py}"
 PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-90}"
+# A big board takes the planner ~5 min (#696), far past PLANNER_TIMEOUT. A validated plan is
+# cached per repo and reused while younger than CACHE_TTL_MIN minutes (0 disables); on a
+# timeout the planner is re-run detached with REFRESH_TIMEOUT so the next Stop finds it.
+CACHE_DIR="${REVIEW_FANOUT_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/review_fanout}"
+CACHE_TTL_MIN="${REVIEW_FANOUT_CACHE_TTL_MIN:-10}"
+REFRESH_TIMEOUT="${REVIEW_FANOUT_REFRESH_TIMEOUT:-900}"
 
 # dev_loop_invoked TRANSCRIPT
 # Pure data: did this session's transcript ever run s:dev-loop? MIRRORS
@@ -387,7 +393,26 @@ main() {
 	# list` resolves its repo from the working directory, and the harness can reset cwd to a
 	# DIFFERENT repository between calls (dotfiles-linux-dev#229) — a plan computed against the
 	# wrong repo is worse than no plan, because it reads as an answer.
-	plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)"
+	cache="$CACHE_DIR/$(printf '%s' "$cwd" | cksum | cut -d' ' -f1).json"
+	plan=""
+	planner_rc=0
+	if [ -n "$(find "$cache" -mmin "-$CACHE_TTL_MIN" 2>/dev/null)" ]; then
+		plan="$(cat "$cache")"
+	else
+		plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)" || planner_rc=$?
+	fi
+
+	if [ "$planner_rc" -eq 124 ]; then
+		# Detached refresh: one at a time (mkdir lock; a lock older than the refresh timeout is stale).
+		mkdir -p "$CACHE_DIR"
+		find "$cache.lock" -maxdepth 0 -mmin "+$((REFRESH_TIMEOUT / 60 + 1))" -exec rmdir {} + 2>/dev/null
+		if mkdir "$cache.lock" 2>/dev/null; then
+			(cd "$cwd" && timeout "$REFRESH_TIMEOUT" python3 "$PLANNER" >"$cache.tmp" 2>/dev/null \
+				&& jq -e '.rung.status' "$cache.tmp" >/dev/null 2>&1 && mv "$cache.tmp" "$cache"
+				rm -f "$cache.tmp"; rmdir "$cache.lock") >/dev/null 2>&1 </dev/null &
+		fi
+		block_unreadable "review fan-out planner timed out after ${PLANNER_TIMEOUT}s — a background refresh is running (up to ${REFRESH_TIMEOUT}s); the next Stop reads its cached plan. Not the same as empty."
+	fi
 
 	# Shape, not just keys: {"dispatchable":null,"excluded":{}} has both keys, formats to
 	# nothing, and would exit 0 below as a false "nothing to review". Every dispatchable
@@ -399,7 +424,12 @@ main() {
 		and all(.dispatchable[]; (.pr | type == "number"))
 		and all(.excluded[]; (.pr | type == "number") and ((.reason // "") | length > 0))
 	' >/dev/null 2>&1; then
+		rm -f "$cache"
 		block_unreadable "review fan-out plan UNREADABLE (planner failed, timed out, or printed something that is not the documented object) — not the same as empty."
+	fi
+
+	if [ -z "$(find "$cache" -mmin "-$CACHE_TTL_MIN" 2>/dev/null)" ] && [ "$CACHE_TTL_MIN" -gt 0 ]; then
+		mkdir -p "$CACHE_DIR" && printf '%s' "$plan" >"$cache"
 	fi
 
 	rung_status="$(printf '%s' "$plan" | jq -r '.rung.status')"

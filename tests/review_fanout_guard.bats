@@ -53,6 +53,11 @@ with open(os.environ["PLAN"], encoding="utf-8") as handle:
     sys.stdout.write(handle.read())
 STUB
     export REVIEW_FANOUT_PLANNER PLAN
+
+    # Cache off by default so tests that swap $PLAN between runs always reach the stub.
+    REVIEW_FANOUT_CACHE_DIR="$TEST_TMP/cache"
+    REVIEW_FANOUT_CACHE_TTL_MIN=0
+    export REVIEW_FANOUT_CACHE_DIR REVIEW_FANOUT_CACHE_TTL_MIN
 }
 
 teardown() {
@@ -328,6 +333,39 @@ EOF
 EOF
     rm -rf "$outside"
     [ "$status" -eq 0 ]
+}
+
+# --- planner timeout and plan cache (#696) -----------------------------------------
+
+@test "a planner timeout says timed out after Ns, not UNREADABLE, and still blocks" {
+    loop_invoked
+    printf 'import time\ntime.sleep(30)\n' >"$REVIEW_FANOUT_PLANNER"
+    REVIEW_FANOUT_PLANNER_TIMEOUT=1 REVIEW_FANOUT_REFRESH_TIMEOUT=1 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"timed out after 1s"* ]]
+    [[ "$output" != *"UNREADABLE"* ]]
+}
+
+@test "a fresh cached plan is read without running the planner" {
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+    printf 'not json at all\n' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a cached plan older than the TTL is ignored and the planner re-runs" {
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+    touch -d '30 minutes ago' "$REVIEW_FANOUT_CACHE_DIR"/*.json
+    printf 'not json at all\n' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNREADABLE"* ]]
 }
 
 # --- but NEVER open about its own blindness ----------------------------------------
