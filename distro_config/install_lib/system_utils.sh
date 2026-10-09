@@ -1286,9 +1286,9 @@ install_nvtop() {
 _GA_PAM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../pam" && pwd)"
 _GA_PAM_PROFILE="/usr/share/pam-configs/google-authenticator"
 _GA_COMMON_AUTH="${_GA_COMMON_AUTH:-/etc/pam.d/common-auth}"
-_GA_SSHD_DROPIN="/etc/ssh/sshd_config.d/10-google-authenticator.conf"
+_GA_SSHD_DROPIN="${_GA_SSHD_DROPIN:-/etc/ssh/sshd_config.d/10-google-authenticator.conf}"
 # Pre-40c3264 name; a stale copy must go too, or it keeps keyboard-interactive on.
-_GA_SSHD_DROPIN_OLD="/etc/ssh/sshd_config.d/google-authenticator.conf"
+_GA_SSHD_DROPIN_OLD="${_GA_SSHD_DROPIN_OLD:-/etc/ssh/sshd_config.d/google-authenticator.conf}"
 
 # True only when the host's own sshd config accepts password-style logins:
 # PasswordAuthentication, or keyboard-interactive on top of UsePAM (the drop-in
@@ -1332,6 +1332,9 @@ install_google_authenticator() {
     fi
 
     # Drop any earlier copy first so the probe sees the host's own config.
+    # A running sshd still serves the removed copy until reloaded.
+    local had_dropin=0
+    { [ -e "$_GA_SSHD_DROPIN" ] || [ -e "$_GA_SSHD_DROPIN_OLD" ]; } && had_dropin=1
     run_or_echo sudo rm -f "$_GA_SSHD_DROPIN" "$_GA_SSHD_DROPIN_OLD"
 
     if ! command_exists sshd; then
@@ -1347,6 +1350,9 @@ install_google_authenticator() {
         print_status "info" "Reload sshd to apply the drop-in: sudo systemctl reload ssh"
     else
         print_status "warning" "Adding TOTP to ssh here would reopen password logins (nullok lets unenrolled accounts in with the password alone), so key-only ssh is left unchanged. See docs/totp-2fa.md for the opt-in."
+        if [ "$had_dropin" = "1" ]; then
+            print_status "warning" "An earlier TOTP ssh drop-in was removed; reload sshd to drop it: sudo systemctl reload ssh"
+        fi
     fi
 
     print_status "success" "TOTP profile enabled (not enrolled yet)"

@@ -158,6 +158,24 @@ refute_dropin_installed() {
     [ "$rm_line" -lt "$probe_line" ]
 }
 
+@test "key-only re-run that removed an earlier drop-in warns to reload sshd" {
+    export _GA_SSHD_DROPIN="$TMP/10-google-authenticator.conf"
+    : > "$_GA_SSHD_DROPIN"
+    printf 'passwordauthentication no\nkbdinteractiveauthentication no\n' > "$SSHD_T_OUT"
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"earlier TOTP ssh drop-in was removed"* ]]
+}
+
+@test "key-only first run with no earlier drop-in does not warn to reload" {
+    export _GA_SSHD_DROPIN="$TMP/10-google-authenticator.conf"
+    export _GA_SSHD_DROPIN_OLD="$TMP/google-authenticator.conf"
+    printf 'passwordauthentication no\nkbdinteractiveauthentication no\n' > "$SSHD_T_OUT"
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"earlier TOTP ssh drop-in"* ]]
+}
+
 @test "install removes the old unprefixed drop-in name too" {
     run install_google_authenticator
     [ "$status" -eq 0 ]
