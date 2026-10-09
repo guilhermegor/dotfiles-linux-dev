@@ -8,6 +8,7 @@ nav:
   - Espanso: espanso.md
   - Shortcuts: shortcuts.md
   - Storage & backups: storage.md
+  - Optional TOTP 2FA: totp-2fa.md
   - Runbooks:
       - rclone mount migration: rclone-mount-migration-360.md
       - Permissions by directory: permissions-by-directory-163.md

@@ -1280,6 +1280,55 @@ install_nvtop() {
 }
 
 # ============================================================================
+# GOOGLE AUTHENTICATOR (optional TOTP second factor, issue #676)
+# ============================================================================
+
+_GA_PAM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../pam" && pwd)"
+_GA_PAM_PROFILE="/usr/share/pam-configs/google-authenticator"
+_GA_SSHD_DROPIN="/etc/ssh/sshd_config.d/google-authenticator.conf"
+
+# Installs the package and enables a pam-auth-update profile (nullok, so a
+# user who has not run `google-authenticator` still logs in with the password
+# alone). Never edits /etc/pam.d/* — pam-auth-update regenerates common-auth.
+# Enrollment stays manual: see docs/totp-2fa.md.
+install_google_authenticator() {
+    print_status "section" "GOOGLE AUTHENTICATOR (TOTP 2FA)"
+
+    if [ "$PACKAGE_MANAGER" != "apt" ]; then
+        print_status "error" "pam-auth-update is Debian/Ubuntu only"
+        return 1
+    fi
+
+    run_or_echo sudo apt-get install -y libpam-google-authenticator || return 1
+    run_or_echo sudo install -m 0644 "$_GA_PAM_DIR/google-authenticator" \
+        "$_GA_PAM_PROFILE" || return 1
+    run_or_echo sudo pam-auth-update --enable google-authenticator || return 1
+
+    if command_exists sshd; then
+        run_or_echo sudo install -m 0644 \
+            "$_GA_PAM_DIR/sshd-google-authenticator.conf" "$_GA_SSHD_DROPIN" || return 1
+        if ! run_or_echo sudo sshd -t; then
+            print_status "error" "sshd -t rejected the drop-in; removing it"
+            run_or_echo sudo rm -f "$_GA_SSHD_DROPIN"
+            return 1
+        fi
+    else
+        print_status "info" "openssh-server not installed; skipping the ssh drop-in"
+    fi
+
+    print_status "success" "TOTP profile enabled (not enrolled yet)"
+    print_status "info" "Keep a root shell open, then run: google-authenticator"
+}
+
+uninstall_google_authenticator() {
+    print_status "section" "UNINSTALL GOOGLE AUTHENTICATOR (TOTP 2FA)"
+
+    run_or_echo sudo pam-auth-update --disable google-authenticator || return 1
+    run_or_echo sudo rm -f "$_GA_SSHD_DROPIN" "$_GA_PAM_PROFILE"
+    print_status "success" "TOTP profile disabled and ssh drop-in removed"
+}
+
+# ============================================================================
 # REGISTRY
 # ============================================================================
 # Entry order = run order. uninstall_dim_calendar_events is NOT registered
@@ -1309,6 +1358,7 @@ INSTALL_REGISTRY+=(
     "install_coolercontrol:CoolerControl:Monitoring:org.coolercontrol.CoolerControl.desktop"
     "install_gsmartcontrol:GSmartControl (disk SMART health):Monitoring:gsmartcontrol.desktop"
     "install_nvtop:nvtop (GPU process monitor):Monitoring:nvtop.desktop"
+    "install_google_authenticator:Google Authenticator (TOTP 2FA)::"
     "install_dim_calendar_events:Calendar Events Enhancement::"
     "configure_gsconnect:GSConnect::"
 )
