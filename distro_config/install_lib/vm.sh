@@ -142,7 +142,9 @@ _ventoy_trusted_install() {
     local owner mode
     [ -n "$(find "$VENTOY_DIR_ROOT" -maxdepth 1 -name 'VentoyGUI.*' 2>/dev/null)" ] || return 1
     read -r owner mode < <(stat -c '%u %a' "$VENTOY_DIR_ROOT") || return 1
-    [ "$owner" = "0" ] && (( (8#${mode:-777} & 8#022) == 0 ))
+    [ "$owner" = "0" ] && (( (8#${mode:-777} & 8#022) == 0 )) || return 1
+    # Same whole-tree test the launcher applies before sudo: a bad entry means reinstall.
+    [ -z "$(find "$VENTOY_DIR_ROOT" \( ! -user root -o -perm /022 \) -print -quit 2>/dev/null)" ]
 }
 
 # Download the tarball and its release sha256.txt into <dir> (user-owned temp), then

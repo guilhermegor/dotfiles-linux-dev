@@ -119,7 +119,7 @@ _install_launcher() { # [mountpoint]
     local mp=${1:-} disk
     if [ -z "$mp" ]; then
         disk=$(ventoy_find_disk) || return 1
-        mp=$(lsblk -rno LABEL,MOUNTPOINT "${disk}"* | awk '$1=="Ventoy" && $2!=""{print $2; exit}')
+        mp=$(lsblk -rno LABEL,MOUNTPOINT "$disk" | awk '$1=="Ventoy" && $2!=""{print $2; exit}')
         mp=$(printf '%b' "$mp") # lsblk -r escapes spaces as \x20
         [ -n "$mp" ] || { echo "The Ventoy partition on $disk is not mounted." >&2; return 1; }
     fi

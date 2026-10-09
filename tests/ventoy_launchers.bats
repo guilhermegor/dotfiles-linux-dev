@@ -324,8 +324,17 @@ STUB
     _setup_install
     mkdir -p "$VENTOY_DIR_ROOT"
     touch "$VENTOY_DIR_ROOT/VentoyGUI.x86_64"
+    # The test tree is user-owned, so the whole-tree find is stubbed: it reports
+    # $FIND_BAD (a deeper entry that is not root-owned) and passes everything else on.
+    cat > "$TMP/bin/find" <<'STUB'
+#!/bin/bash
+case "$*" in *-perm*) [ -z "$FIND_BAD" ] || echo "$FIND_BAD" ;; *) /usr/bin/find "$@" ;; esac
+STUB
+    chmod +x "$TMP/bin/find"
     run install_ventoy
     [[ "$output" == *"already installed"* ]]
+    FIND_BAD="$VENTOY_DIR_ROOT/tool/ventoy_lib.sh" run install_ventoy
+    [[ "$output" != *"already installed"* ]]
     STAT_OUT='1000 755' run install_ventoy
     [[ "$output" != *"already installed"* ]]
     [[ "$output" == *"Downloading Ventoy"* ]]
