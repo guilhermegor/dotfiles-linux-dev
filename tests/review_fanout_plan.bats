@@ -52,14 +52,14 @@ setup() {
     # reason (which is checked on purpose by its own tests below).
     export REVIEW_FANOUT_RUNG="qwen|qwen3-coder-plus|configured-default"
     unset REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
-    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC
+    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED
 }
 
 teardown() {
     cd /
     rm -rf "$TEST_TMP"
     unset REVIEW_FANOUT_RUNG REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
-    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC
+    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED
 }
 
 # ago SECONDS — an ISO-8601 UTC timestamp that many seconds in the past.
@@ -92,6 +92,10 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
             first=*) first="${arg#first=}" ;;
         esac
     done
+    if [ -n "${GH_GRAPHQL_FAIL:-}" ]; then
+        echo "gh: You have exceeded a secondary rate limit" >&2
+        exit 1
+    fi
     if [ "$after" = "${GH_FAIL_AFTER:-none}" ]; then
         echo "gh: HTTP 502" >&2
         exit 1
@@ -107,12 +111,36 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
                 comments: {totalCount: (.commentsTotal // ((.comments // []) | length)),
                            nodes: (.comments // [])},
                 commits: {nodes: [{commit: {statusCheckRollup:
-                    {contexts: {nodes: (.statusCheckRollup // [])}}}}]}}]}}}}' "$FIXTURE"
+                    {contexts: {nodes: (.statusCheckRollup // [])}}}}]}}]}}}}
+        | if env.GH_GRAPHQL_MALFORMED then del(.data.repository.pullRequests.nodes[].commits) else . end' "$FIXTURE"
 elif [ "$1" = "api" ] && [[ "$2" == */rules/branches/* ]]; then
     [[ " ${GH_STRICT_RULESET:-} " == *" ${2##*/rules/branches/} "* ]] && echo true || echo false
 elif [ "$1" = "api" ] && [[ "$2" == */branches/*/protection/required_status_checks ]]; then
     base="${2#*/branches/}"; base="${base%/protection/*}"
     [[ " ${GH_STRICT_CLASSIC:-} " == *" $base "* ]] && echo true || echo false
+elif [ "$1" = "api" ] && [[ "$2" == repos/* ]] && [ -n "${GH_REST_FAIL:-}" ]; then
+    echo "gh: HTTP 403" >&2
+    exit 1
+elif [ "$1" = "api" ] && [[ "$2" == */pulls\?state=open* ]]; then
+    # the REST fallback (#689): same flat fixture, re-shaped into REST's own field names
+    [[ "$2" == *page=1 ]] && filter='[.[] | {number, head: {sha: .headRefOid},
+        base: {ref: (.baseRefName // "master")}, draft: .isDraft}]' || filter='[]'
+    jq "$filter" "$FIXTURE"
+elif [ "$1" = "api" ] && [[ "$2" == */pulls/*/reviews* ]]; then
+    n="${2#*/pulls/}"; n="${n%%/*}"
+    jq --argjson n "$n" '[.[] | select(.number == $n) | (.reviews // [])[] | {commit_id: .commit.oid}]' "$FIXTURE"
+elif [ "$1" = "api" ] && [[ "$2" == */issues/*/comments* ]]; then
+    n="${2#*/issues/}"; n="${n%%/*}"
+    jq --argjson n "$n" '[.[] | select(.number == $n) | (.comments // [])[]
+        | {body, created_at: .createdAt, user: {login: .author.login}}]' "$FIXTURE"
+elif [ "$1" = "api" ] && [[ "$2" == */commits/*/check-runs* ]]; then
+    oid="${2#*/commits/}"; oid="${oid%%/*}"
+    jq --arg oid "$oid" '{check_runs: [.[] | select(.headRefOid == $oid) | (.statusCheckRollup // [])[]
+        | {name, status: (.status | ascii_downcase), conclusion: ((.conclusion // "") | ascii_downcase | if . == "" then null else . end)}]}' "$FIXTURE"
+elif [ "$1" = "api" ] && [[ "$2" == */pulls/[0-9]* ]]; then
+    n="${2##*/}"
+    jq --argjson n "$n" '[.[] | select(.number == $n)][0]
+        | {mergeable_state: (if .mergeStateStatus == "DIRTY" then "dirty" else "blocked" end)}' "$FIXTURE"
 elif [ "$1" = "api" ]; then
     oid="${2##*/}"
     jq -r --arg oid "$oid" \
@@ -517,6 +545,85 @@ EOF
     [[ "$output" == *"review_fanout_plan: could not read the board"* ]]
 }
 
+# --- dotfiles-linux-dev#689: GraphQL refused by the secondary limit, REST still answers ---
+
+# rest_fallback_board — a mixed board: a failing check, a conflict, a draft, a covered head and
+# a bot-skipped PR, so the REST adapter is compared on every field the planner reads.
+rest_fallback_board() {
+    stub_gh_prs <<EOF
+[{"number":801,"headRefOid":"aaaa8010","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"zzzz0000"}}],"comments":[],
+  "commits":[{"oid":"aaaa8010","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE"},
+                       {"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""}]},
+ {"number":802,"headRefOid":"aaaa8020","mergeStateStatus":"DIRTY","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa8020","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]},
+ {"number":803,"headRefOid":"aaaa8030","mergeStateStatus":"BLOCKED","isDraft":true,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa8030","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]},
+ {"number":804,"headRefOid":"aaaa8040","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa8040"}}],"comments":[],
+  "commits":[{"oid":"aaaa8040","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]},
+ {"number":805,"headRefOid":"aaaa8050","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],
+  "comments":[{"body":"Review skipped\n\nBot user detected","createdAt":"$(ago 900)","author":{"login":"coderabbitai[bot]"}}],
+  "commits":[{"oid":"aaaa8050","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+}
+
+@test "GraphQL refused, REST answering: the plan equals the GraphQL path's plan (#689)" {
+    rest_fallback_board
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    graphql_plan="$(jq -S . <<<"$output")"
+    # sanity: the board really exercises every branch, so equality is not vacuous
+    [ "$(jq -r '.dispatchable | map(.pr) | join(",")' <<<"$graphql_plan")" = "801,805" ]
+    [ "$(jq -r '.dispatchable[0].checks.failing[0]' <<<"$graphql_plan")" = "lint" ]
+    [ "$(jq -r '.dispatchable[0].checks.running[0]' <<<"$graphql_plan")" = "test" ]
+    [ "$(jq -r '.dispatchable[1].ladder' <<<"$graphql_plan")" = "bot-skipped" ]
+    [[ "$(jq -r '.excluded[] | select(.pr == 802) | .reason' <<<"$graphql_plan")" == *DIRTY* ]]
+
+    : >"$GH_LOG"
+    export GH_GRAPHQL_FAIL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -S . <<<"$output")" = "$graphql_plan" ]
+    run grep -q 'pulls?state=open' "$GH_LOG"
+    [ "$status" -eq 0 ]
+}
+
+@test "a GraphQL node malformed below the page level still falls back to REST (#689)" {
+    rest_fallback_board
+    export GH_GRAPHQL_MALFORMED=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | map(.pr) | join(",")' <<<"$output")" = "801,805" ]
+    run grep -q 'pulls?state=open' "$GH_LOG"
+    [ "$status" -eq 0 ]
+}
+
+@test "the REST fallback issues no gh mutation either (#689)" {
+    rest_fallback_board
+    export GH_GRAPHQL_FAIL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    run grep -Eq 'pr (comment|review|merge|edit)|api .*-X|--method|mutation' "$GH_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "GraphQL AND REST both refused is UNREADABLE, never an empty plan (#689)" {
+    rest_fallback_board
+    export GH_GRAPHQL_FAIL=1 GH_REST_FAIL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"review_fanout_plan: could not read the board"* ]]
+    [[ "$output" != *"dispatchable"* ]]
+    [[ "$output" != *"Traceback"* ]]
+    run grep -q 'pulls?state=open' "$GH_LOG"
+    [ "$status" -eq 0 ]
+}
+
 @test "an empty open-PR list is a valid, complete, empty plan" {
     stub_gh_prs <<'EOF'
 []
@@ -593,6 +700,9 @@ board_of() {
     stub_gh_prs <<<"$(board_of 45)"
     # Page one (PRs 1-20) answers; the page after cursor 20 returns a gateway 502.
     export GH_FAIL_AFTER=20
+    # REST refused too: since #689 a REST-readable board falls back to a whole REST read, which
+    # is the other half of this contract (whole board or UNREADABLE) and is tested below.
+    export GH_REST_FAIL=1
     run python3 "$PLANNER"
     [ "$status" -eq 1 ]
     [[ "$output" == *"review_fanout_plan: could not read the board"* ]]

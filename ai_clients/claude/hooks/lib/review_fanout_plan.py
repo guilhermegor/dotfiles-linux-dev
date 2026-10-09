@@ -244,6 +244,94 @@ def _flatten(node: dict) -> dict:
 	}
 
 
+# Everything a failed read can raise: gh's own failure, or a response that is not the shape asked for.
+_READ_ERRORS = (
+	subprocess.CalledProcessError,
+	subprocess.TimeoutExpired,
+	RuntimeError,
+	ValueError,
+	KeyError,
+	TypeError,
+)
+
+# REST's page size, and the point at which a REST window is assumed to have dropped entries.
+REST_PAGE = 100
+
+
+def _rest(path: str) -> list | dict:
+	"""Return the parsed JSON of one ``gh api <path>`` read (``{owner}``/``{repo}`` filled by gh)."""
+	return json.loads(_run(["gh", "api", f"repos/{{owner}}/{{repo}}/{path}"]))
+
+
+def _rest_window(nodes: list) -> dict:
+	"""Shape a REST list as a GraphQL connection; a full page reports one more than it holds.
+
+	REST has no ``totalCount``, so a page that came back full cannot be told from a window that
+	dropped older entries -- and ``_flatten`` then marks it truncated, which fails closed into
+	"head coverage undecidable" rather than into a guessed "no review".
+	"""
+	extra = 1 if len(nodes) >= REST_PAGE else 0
+	return {"totalCount": len(nodes) + extra, "nodes": nodes}
+
+
+def _rest_node(pr: dict) -> dict:
+	"""Adapt one REST open PR into the GraphQL node shape ``_flatten`` reads (issue #689)."""
+	number, head = pr["number"], pr["head"]["sha"]
+	detail = _rest(f"pulls/{number}")
+	reviews = _rest(f"pulls/{number}/reviews?per_page={REST_PAGE}")
+	comments = _rest(f"issues/{number}/comments?per_page={REST_PAGE}")
+	runs = _rest(f"commits/{head}/check-runs?per_page={REST_PAGE}")["check_runs"]
+	# ponytail: legacy commit statuses (StatusContext) are not read; checks are informational.
+	contexts = [
+		{
+			"__typename": "CheckRun",
+			"name": run["name"],
+			"status": (run.get("status") or "").upper(),
+			"conclusion": (run.get("conclusion") or "").upper(),
+		}
+		for run in runs
+	]
+	return {
+		"number": number,
+		"headRefOid": head,
+		"baseRefName": pr["base"]["ref"],
+		"mergeStateStatus": (detail.get("mergeable_state") or "").upper(),
+		"isDraft": bool(pr.get("draft")),
+		"reviews": _rest_window([{"commit": {"oid": r.get("commit_id")}} for r in reviews]),
+		"comments": _rest_window(
+			[
+				{
+					"body": c.get("body"),
+					"createdAt": c.get("created_at"),
+					"author": {"login": (c.get("user") or {}).get("login")},
+				}
+				for c in comments
+			]
+		),
+		"commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": contexts}}}}]},
+	}
+
+
+def _open_pr_nodes_rest() -> list[dict]:
+	"""Return every open PR as a GraphQL-shaped node, read over REST (at most the shared cap).
+
+	The fallback when GraphQL is refused by the secondary rate limit while REST still answers
+	(dotfiles-linux-dev#689). One list read plus four small reads per PR, serial like the
+	GraphQL pages; any failure raises and discards the PRs read so far.
+	"""
+	prs: list[dict] = []
+	page = 1
+	while len(prs) < OPEN_PR_LIST_CAP:
+		batch = _rest(f"pulls?state=open&per_page={REST_PAGE}&page={page}")
+		if not isinstance(batch, list):
+			raise RuntimeError("open-PR REST page is not a list")
+		prs.extend(batch)
+		if len(batch) < REST_PAGE:
+			break
+		page += 1
+	return [_rest_node(pr) for pr in prs]
+
+
 def open_prs() -> list[dict]:
 	"""Return every open PR with the fields the predicate and the eligibility rules need.
 
@@ -254,8 +342,19 @@ def open_prs() -> list[dict]:
 	failing page raises and discards the pages before it. ``commits`` is requested only as
 	``last:1`` for the rollup -- see the module docstring's dotfiles-linux-dev#537 section;
 	``head_commit_time()`` fetches the head's own commit date from REST instead.
+
+	When the GraphQL read fails (the secondary rate limit refuses it while ``gh api rate_limit``
+	still reports quota) the same board is read over REST instead (dotfiles-linux-dev#689). If
+	REST fails too, the GraphQL error is the one raised: the board is UNREADABLE, never empty.
 	"""
-	return [_flatten(n) for n in read_open_prs(PR_SELECTION, _run, OPEN_PR_LIST_CAP)]
+	# _flatten runs inside each guard: a malformed nested field must reach the fallback too.
+	try:
+		return [_flatten(n) for n in read_open_prs(PR_SELECTION, _run, OPEN_PR_LIST_CAP)]
+	except _READ_ERRORS as graphql_error:
+		try:
+			return [_flatten(n) for n in _open_pr_nodes_rest()]
+		except _READ_ERRORS:
+			raise graphql_error from None
 
 
 def resolve_rung() -> dict:
