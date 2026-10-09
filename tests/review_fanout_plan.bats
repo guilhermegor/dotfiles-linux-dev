@@ -52,14 +52,14 @@ setup() {
     # reason (which is checked on purpose by its own tests below).
     export REVIEW_FANOUT_RUNG="qwen|qwen3-coder-plus|configured-default"
     unset REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
-    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL
+    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED
 }
 
 teardown() {
     cd /
     rm -rf "$TEST_TMP"
     unset REVIEW_FANOUT_RUNG REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
-    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL
+    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED
 }
 
 # ago SECONDS — an ISO-8601 UTC timestamp that many seconds in the past.
@@ -111,7 +111,8 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
                 comments: {totalCount: (.commentsTotal // ((.comments // []) | length)),
                            nodes: (.comments // [])},
                 commits: {nodes: [{commit: {statusCheckRollup:
-                    {contexts: {nodes: (.statusCheckRollup // [])}}}}]}}]}}}}' "$FIXTURE"
+                    {contexts: {nodes: (.statusCheckRollup // [])}}}}]}}]}}}}
+        | if env.GH_GRAPHQL_MALFORMED then del(.data.repository.pullRequests.nodes[].commits) else . end' "$FIXTURE"
 elif [ "$1" = "api" ] && [[ "$2" == */rules/branches/* ]]; then
     [[ " ${GH_STRICT_RULESET:-} " == *" ${2##*/rules/branches/} "* ]] && echo true || echo false
 elif [ "$1" = "api" ] && [[ "$2" == */branches/*/protection/required_status_checks ]]; then
@@ -588,6 +589,16 @@ EOF
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
     [ "$(jq -S . <<<"$output")" = "$graphql_plan" ]
+    run grep -q 'pulls?state=open' "$GH_LOG"
+    [ "$status" -eq 0 ]
+}
+
+@test "a GraphQL node malformed below the page level still falls back to REST (#689)" {
+    rest_fallback_board
+    export GH_GRAPHQL_MALFORMED=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | map(.pr) | join(",")' <<<"$output")" = "801,805" ]
     run grep -q 'pulls?state=open' "$GH_LOG"
     [ "$status" -eq 0 ]
 }

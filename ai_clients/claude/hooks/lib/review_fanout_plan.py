@@ -347,14 +347,14 @@ def open_prs() -> list[dict]:
 	still reports quota) the same board is read over REST instead (dotfiles-linux-dev#689). If
 	REST fails too, the GraphQL error is the one raised: the board is UNREADABLE, never empty.
 	"""
+	# _flatten runs inside each guard: a malformed nested field must reach the fallback too.
 	try:
-		nodes = read_open_prs(PR_SELECTION, _run, OPEN_PR_LIST_CAP)
+		return [_flatten(n) for n in read_open_prs(PR_SELECTION, _run, OPEN_PR_LIST_CAP)]
 	except _READ_ERRORS as graphql_error:
 		try:
-			nodes = _open_pr_nodes_rest()
+			return [_flatten(n) for n in _open_pr_nodes_rest()]
 		except _READ_ERRORS:
 			raise graphql_error from None
-	return [_flatten(n) for n in nodes]
 
 
 def resolve_rung() -> dict:
