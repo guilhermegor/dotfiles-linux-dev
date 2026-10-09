@@ -458,6 +458,130 @@ EOF
     [ "$status" -eq 2 ]
 }
 
+# idle_envelope NAME BODY — one teammate envelope, as it sits inside a delivered message.
+idle_envelope() {
+    printf '<teammate-message teammate_id="%s" color="blue">\n%s\n</teammate-message>' "$1" "$2"
+}
+
+# send_message_raw ID TO TS RECEIPT — a SendMessage with a caller-supplied receipt text.
+send_message_raw() {
+    jq -cn --arg id "$1" --arg to "$2" --arg ts "$3" \
+        '{timestamp: $ts, message: {content: [{type: "tool_use", name: "SendMessage", id: $id, input: {to: $to, summary: "resume", message: "go"}}]}}' \
+        >>"$TRANSCRIPT"
+    jq -cn --arg id "$1" --arg t "$4" \
+        '{message: {content: [{type: "tool_result", tool_use_id: $id, content: [{type: "text", text: $t}]}]}}' \
+        >>"$TRANSCRIPT"
+}
+
+@test "a batched idle record attributes each verdict to its own teammate" {
+    # Several envelopes share one string. `from` and `idleReason` must come from the SAME
+    # body: a failed 520 sitting behind an available 521 is the RESCUE case for 520.
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    local first second
+    first="$(idle_envelope review-pr-521 '{"type":"idle_notification","from":"review-pr-521","timestamp":"2026-10-09T10:19:00.000Z","idleReason":"available"}')"
+    second="$(idle_envelope review-pr-520 '{"type":"idle_notification","from":"review-pr-520","timestamp":"2026-10-09T10:19:35.963Z","idleReason":"failed","failureReason":"session limit"}')"
+    transcript_text_record "Another Claude session sent a message:
+$first
+$second" "2026-10-09T10:19:36.000Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE case"* ]]
+}
+
+@test "a batched idle record settles only the teammates it names" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    local first second
+    first="$(idle_envelope review-pr-521 '{"type":"idle_notification","from":"review-pr-521","timestamp":"2026-10-09T10:19:00.000Z","idleReason":"failed"}')"
+    second="$(idle_envelope review-pr-522 '{"type":"idle_notification","from":"review-pr-522","timestamp":"2026-10-09T10:19:35.963Z","idleReason":"available"}')"
+    transcript_text_record "Another Claude session sent a message:
+$first
+$second" "2026-10-09T10:19:36.000Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "an idle with no timestamp settles the same under every locale" {
+    # Under en_US/pt_BR collation punctuation is ignored, so a bare byte-order `<` against
+    # the `-` placeholder flipped with the caller's locale. The hook pins LC_ALL=C.
+    local locales=(C) loc
+    for loc in en_US.UTF-8 pt_BR.UTF-8 en_US.utf8 pt_BR.utf8; do
+        if locale -a 2>/dev/null | grep -qix "${loc}"; then
+            locales+=("$loc")
+        fi
+    done
+    loop_invoked
+    send_message m1 "review-pr-520" "2026-10-09T10:30:00.000Z"
+    transcript_text_record "Another Claude session sent a message:
+$(idle_envelope review-pr-520 '{"type":"idle_notification","from":"review-pr-520","idleReason":"available"}')"
+    plan_with_work
+    for loc in "${locales[@]}"; do
+        LC_ALL="$loc" run_guard
+        [ "$status" -eq 2 ]
+    done
+}
+
+@test "an idle quoted inside a tool_result does not settle a review" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    local body
+    body="$(idle_envelope review-pr-520 '{"type":"idle_notification","from":"review-pr-520","timestamp":"2026-10-09T10:19:35.963Z","idleReason":"available"}')"
+    jq -cn --arg t "Another Claude session sent a message:
+$body" \
+        '{type: "user", message: {role: "user", content: [{type: "tool_result", tool_use_id: "r1", content: [{type: "text", text: $t}]}]}}' \
+        >>"$TRANSCRIPT"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "an idle quoted inside a non-envelope user message does not settle a review" {
+    # A compaction summary carries the idle text verbatim; it is a user record too.
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    transcript_text_record "This session is being continued from a previous conversation. It held:
+$(idle_envelope review-pr-520 '{"type":"idle_notification","from":"review-pr-520","timestamp":"2026-10-09T10:19:35.963Z","idleReason":"available"}')" "2026-10-09T10:20:00.000Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a pretty-printed SendMessage receipt still counts as a delivery receipt" {
+    loop_invoked
+    send_message_raw m1 "review-pr-520" "2026-10-09T10:30:00.000Z" '{
+  "success": true,
+  "message": "Message sent to review-pr-520'"'"'s inbox",
+  "msg_id": "8f18dc9f"
+}'
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a failed SendMessage result is not a delivery receipt" {
+    loop_invoked
+    send_message_raw m1 "review-pr-520" "2026-10-09T10:30:00.000Z" '{"success":false,"message":"Message sent to nobody"}'
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+}
+
+@test "a PR number with a collision suffix is still one review name" {
+    # The `-<k>` suffix cannot be told apart from more PR digits; both are review names.
+    loop_invoked
+    agent_dispatched a1 "review-pr-12-3"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
 # --- it fails open on what it cannot resolve ---------------------------------------
 
 @test "fails open when the session never ran the loop" {

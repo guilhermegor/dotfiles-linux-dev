@@ -147,6 +147,8 @@ dev_loop_invoked() {
 # The optional `-<k>` is the suffix the harness appends when a teammate of that name already
 # exists (`review-pr-692` -> `review-pr-692-2`, measured #694). The Agent INPUT name stays
 # unsuffixed; only the spawn result's `name:` line and the teammate's own messages carry it.
+# The suffix is indistinguishable from a PR number's own digits (`review-pr-12-3`); both are
+# review names by construction, so no disambiguation is needed.
 REVIEW_DISPATCH_NAME_RE='^review-pr-[0-9]+(-[0-9]+)?$'
 
 # transcript_agent_facts TRANSCRIPT
@@ -174,10 +176,15 @@ REVIEW_DISPATCH_NAME_RE='^review-pr-[0-9]+(-[0-9]+)?$'
 #     EFFECTIVE name (suffixed on a collision) on its `name:` line -> `R ack` + `E`;
 #   - SendMessage result `{"success":true,"message":"Message sent to review-pr-692's
 #     inbox",...}` — a delivery receipt for a resume -> `R sent`;
-#   - teammate completion: NO task-notification exists for a teammate; it arrives as a user
-#     record `<teammate-message teammate_id="review-pr-692" ...>{"type":"idle_notification",
-#     "from":"review-pr-692","timestamp":"...","idleReason":"available"|"failed",...}`
-#     -> `I`. idleReason `failed` is the RESCUE case, anything else is completed.
+#   - teammate completion: NO task-notification exists for a teammate; it arrives as a USER
+#     record whose string content is a teammate envelope (optionally behind an "Another Claude
+#     session sent a message:" lead-in) wrapping a JSON body of type idle_notification with
+#     `from`, `timestamp` and `idleReason` (`available` | `failed`) -> `I`. A batched record
+#     holds several envelopes, so each is parsed on its own with fromjson: `from` and the
+#     failed/completed verdict come from the SAME body. idleReason `failed` is the RESCUE case,
+#     anything else is completed. Only that record shape counts (never a tool_result, assistant
+#     text or a compaction summary that merely quotes one) — measured: a "continued from a
+#     previous conversation" summary record carries the idle text verbatim.
 # TSV, in transcript order (the idle must be ordered against dispatches): `A`/`S<TAB>id<TAB>
 # name<TAB>label<TAB>ts` (Agent dispatch / SendMessage to a review teammate), `R<TAB>id<TAB>
 # ack|sent|done`, `E<TAB>id<TAB>effective-name`, `N<TAB>id<TAB>completed|failed`,
@@ -207,7 +214,7 @@ transcript_agent_facts() {
 					| .tool_use_id as $id
 					| "R\t\($id)\t\(
 						if ($t | contains($ack)) or ($t | contains("Spawned successfully")) then "ack"
-						elif ($t | contains("\"success\":true")) and ($t | contains("Message sent to")) then "sent"
+						elif (($t | try (fromjson | .success == true) catch false)) and ($t | contains("Message sent to")) then "sent"
 						else "done" end)",
 					  ( $t | select(contains("Spawned successfully")) | capture("(?:^|\n)name: (?<n>[^\\s]+)")? | "E\t\($id)\t\(.n)" )
 				else empty end ),
@@ -217,12 +224,14 @@ transcript_agent_facts() {
 			  | select(test("<status>(completed|failed)</status>"))
 			  | "N\t\(capture("<tool-use-id>(?<i>[^<]+)</tool-use-id>").i)\t\(capture("<status>(?<s>completed|failed)</status>").s)" ),
 			( $rec
-			  | .. | strings
-			  | select(test("<teammate-message[^>]*>\\s*\\{\"type\":\"idle_notification\""))
-			  | capture("\"from\":\"(?<n>[^\"]+)\"") as $f
-			  | (capture("\"timestamp\":\"(?<t>[^\"]+)\"")? // {t: "-"}) as $t
-			  | (if test("\"idleReason\":\"failed\"") then "failed" else "completed" end) as $s
-			  | "I\t\($f.n)\t\($s)\t\($t.t)" )
+			  | select(.type == "user" and (.message.content | type) == "string")
+			  | .message.content
+			  | select(test("^(Another Claude session sent a message:\\s*)?<teammate-message"))
+			  | capture("<teammate-message[^>]*>\\s*(?<b>\\{.*?\\})\\s*</teammate-message>"; "gs")
+			  | .b
+			  | (try fromjson catch empty)
+			  | select(type == "object" and .type == "idle_notification" and (.from | type) == "string")
+			  | "I\t\(.from)\t\(if .idleReason == "failed" then "failed" else "completed" end)\t\(.timestamp | dash)" )
 		  )
 	' "$transcript" 2>/dev/null
 }
@@ -268,6 +277,7 @@ transcript_agent_facts() {
 # settle signal instead (`failed` idleReason = RESCUE, anything else = completed).
 review_dispatch_running() {
 	local transcript="$1"
+	local LC_ALL=C
 	FAILED_BACKGROUND_AGENTS=""
 	OTHER_AGENTS_IN_FLIGHT=""
 	[ -r "$transcript" ] || return 1
@@ -298,14 +308,22 @@ review_dispatch_running() {
 		# A teammate going idle settles every unit of that name dispatched BEFORE it. The
 		# idle blob is re-delivered in several records, so it is ordered by its own embedded
 		# timestamp, never by where the copy sits in the file: a late copy must not settle a
-		# SendMessage resume that was sent after the real idle. `-` (no timestamp) sorts
-		# oldest, i.e. always settles.
+		# SendMessage resume that was sent after the real idle. A dispatch with no timestamp
+		# (`-`) is treated as oldest, and an idle with no timestamp is unorderable and settles
+		# (a real idle always carries one; refusing it would block forever). The `<` is a
+		# byte comparison under LC_ALL=C: under en_US/pt_BR collation punctuation is ignored,
+		# so `"2026…Z" < "-"` is true there.
+		#
+		# ⚠️ Known limit: the idle carries no id tying it to a message, so a SendMessage to a
+		# teammate that is still BUSY is settled by the idle that ends its CURRENT turn, before
+		# the resumed work has run (measured: idle bodies hold type/from/timestamp/idleReason/
+		# result only). That fails open for one resume; there is no signal to do better.
 		I)
 			local unit
 			for unit in "${order[@]}"; do
 				[ "${agent_name[$unit]}" = "$id" ] || continue
 				[ -z "${agent_note[$unit]-}" ] || continue
-				[[ "${agent_ts[$unit]}" == "-" || "${agent_ts[$unit]}" < "$label" ]] || continue
+				[[ "${agent_ts[$unit]}" == "-" || "$label" == "-" || "${agent_ts[$unit]}" < "$label" ]] || continue
 				agent_note["$unit"]="$field"
 			done
 			;;
