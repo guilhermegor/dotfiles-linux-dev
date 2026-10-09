@@ -28,7 +28,7 @@ setup() {
 #!/bin/bash
 case "$1" in
     -T) cat "$SSHD_T_OUT"
-        if [ -e "$DROPIN_MARK" ]; then printf 'kbdinteractiveauthentication yes\nusepam yes\n'; fi
+        if [ -e "$DROPIN_MARK" ]; then printf 'kbdinteractiveauthentication yes\nusepam %s\n' "${SSHD_DROPIN_PAM:-yes}"; fi
         exit "${SSHD_T_RC:-0}" ;;
     -t) exit "${SSHD_CHECK_RC:-0}" ;;
 esac
@@ -38,6 +38,7 @@ STUB
 #!/bin/bash
 echo "sudo \$*" >> "$CALLS"
 if [ "\$1" = rm ]; then case "\$*" in *google-authenticator.conf*) rm -f "\$DROPIN_MARK" ;; esac; fi
+if [ "\$1" = install ]; then case "\$*" in *google-authenticator.conf*) : > "\$DROPIN_MARK" ;; esac; fi
 if [ "\$1" = sshd ]; then shift; exec "$TMP/bin/sshd" "\$@"; fi
 STUB
     chmod +x "$TMP/bin/sshd" "$TMP/bin/sudo"
@@ -238,4 +239,30 @@ refute_dropin_installed() {
 
 @test "registered as a CLI entry with an empty gnome folder" {
     [[ " ${INSTALL_REGISTRY[*]} " == *" install_google_authenticator:Google Authenticator (TOTP 2FA):: "* ]]
+}
+
+@test "sshd outside PATH but at /usr/sbin/sshd still gets the drop-in" {
+    [ -x /usr/sbin/sshd ] || skip "no /usr/sbin/sshd on this host"
+    command_exists() { [ "$1" = sshd ] && return 1; command -v "$1" &>/dev/null; }
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    grep -q 'install .*10-google-authenticator.conf' "$CALLS"
+}
+
+@test "sshd missing everywhere with an earlier drop-in warns to reload" {
+    [ ! -x /usr/sbin/sshd ] || skip "host has /usr/sbin/sshd"
+    command_exists() { [ "$1" = sshd ] && return 1; command -v "$1" &>/dev/null; }
+    export _GA_SSHD_DROPIN="$TMP/10-google-authenticator.conf"
+    : > "$_GA_SSHD_DROPIN"
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"earlier TOTP ssh drop-in was removed"* ]]
+}
+
+@test "an earlier drop-in pinning UsePAM no makes the install remove ours and fail" {
+    export SSHD_DROPIN_PAM=no
+    run install_google_authenticator
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not enable UsePAM"* ]]
+    grep -q 'sudo rm -f /etc/ssh/sshd_config.d/10-google-authenticator.conf' "$CALLS"
 }

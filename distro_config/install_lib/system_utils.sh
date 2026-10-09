@@ -1308,6 +1308,19 @@ _ga_ssh_password_login_enabled() {
     ' <<< "$cfg"
 }
 
+# True when sshd's effective config has both KbdInteractiveAuthentication and
+# UsePAM on, i.e. our drop-in is not overridden by an earlier one.
+_ga_ssh_dropin_effective() {
+    [ "${DRY_RUN:-0}" = "1" ] && return 0
+    local cfg
+    cfg="$(sudo sshd -T 2>/dev/null)" || return 1
+    awk '
+        $1 == "kbdinteractiveauthentication"   { ki = $2 }
+        $1 == "usepam"                         { pam = $2 }
+        END { exit !(ki == "yes" && pam == "yes") }
+    ' <<< "$cfg"
+}
+
 # Installs the package and enables a pam-auth-update profile (nullok, so a
 # user who has not run `google-authenticator` still logs in with the password
 # alone). Never edits /etc/pam.d/* — pam-auth-update regenerates common-auth.
@@ -1337,13 +1350,24 @@ install_google_authenticator() {
     { [ -e "$_GA_SSHD_DROPIN" ] || [ -e "$_GA_SSHD_DROPIN_OLD" ]; } && had_dropin=1
     run_or_echo sudo rm -f "$_GA_SSHD_DROPIN" "$_GA_SSHD_DROPIN_OLD"
 
-    if ! command_exists sshd; then
+    # sshd lives in /usr/sbin, which a non-root user's PATH often lacks.
+    if ! command_exists sshd && [ ! -x /usr/sbin/sshd ]; then
         print_status "info" "openssh-server not installed; skipping the ssh drop-in"
+        if [ "$had_dropin" = "1" ]; then
+            print_status "warning" "An earlier TOTP ssh drop-in was removed; reload sshd to drop it: sudo systemctl reload ssh"
+        fi
     elif _ga_ssh_password_login_enabled; then
         run_or_echo sudo install -m 0644 \
             "$_GA_PAM_DIR/sshd-google-authenticator.conf" "$_GA_SSHD_DROPIN" || return 1
         if ! run_or_echo sudo sshd -t; then
             print_status "error" "sshd -t rejected the drop-in; removing it"
+            run_or_echo sudo rm -f "$_GA_SSHD_DROPIN"
+            return 1
+        fi
+        # An earlier drop-in can pin UsePAM no (sshd keeps the first value),
+        # which would leave ssh password logins outside the PAM module.
+        if ! _ga_ssh_dropin_effective; then
+            print_status "error" "sshd does not enable UsePAM and KbdInteractiveAuthentication with the drop-in; removing it"
             run_or_echo sudo rm -f "$_GA_SSHD_DROPIN"
             return 1
         fi
