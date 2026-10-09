@@ -1286,15 +1286,25 @@ install_nvtop() {
 _GA_PAM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../pam" && pwd)"
 _GA_PAM_PROFILE="/usr/share/pam-configs/google-authenticator"
 _GA_SSHD_DROPIN="/etc/ssh/sshd_config.d/10-google-authenticator.conf"
+# Pre-40c3264 name; a stale copy must go too, or it keeps keyboard-interactive on.
+_GA_SSHD_DROPIN_OLD="/etc/ssh/sshd_config.d/google-authenticator.conf"
 
-# True only when sshd already accepts password-style logins. On a key-only
-# host, enabling keyboard-interactive would reopen password logins (nullok), so
-# a failed or unparsable `sshd -T` read also answers "no" (fail closed).
+# True only when the host's own sshd config accepts password-style logins:
+# PasswordAuthentication, or keyboard-interactive on top of UsePAM (the drop-in
+# forces UsePAM yes, so KI with UsePAM no would be a new password path). Callers
+# must remove our drop-in first, else its own KI yes answers "already on". A
+# failed `sshd -T` read answers "no" (fail closed). `sshd -T` without -C shows
+# only global values, so Match blocks are not considered.
 _ga_ssh_password_login_enabled() {
     [ "${DRY_RUN:-0}" = "1" ] && return 0
     local cfg
     cfg="$(sudo sshd -T 2>/dev/null)" || return 1
-    grep -qE '^(passwordauthentication|kbdinteractiveauthentication) yes$' <<< "$cfg"
+    awk '
+        $1 == "passwordauthentication"         { pw = $2 }
+        $1 == "kbdinteractiveauthentication"   { ki = $2 }
+        $1 == "usepam"                         { pam = $2 }
+        END { exit !(pw == "yes" || (ki == "yes" && pam == "yes")) }
+    ' <<< "$cfg"
 }
 
 # Installs the package and enables a pam-auth-update profile (nullok, so a
@@ -1313,6 +1323,9 @@ install_google_authenticator() {
     run_or_echo sudo install -m 0644 "$_GA_PAM_DIR/google-authenticator" \
         "$_GA_PAM_PROFILE" || return 1
     run_or_echo sudo pam-auth-update --enable google-authenticator || return 1
+
+    # Drop any earlier copy first so the probe sees the host's own config.
+    run_or_echo sudo rm -f "$_GA_SSHD_DROPIN" "$_GA_SSHD_DROPIN_OLD"
 
     if ! command_exists sshd; then
         print_status "info" "openssh-server not installed; skipping the ssh drop-in"
@@ -1336,7 +1349,7 @@ uninstall_google_authenticator() {
     print_status "section" "UNINSTALL GOOGLE AUTHENTICATOR (TOTP 2FA)"
 
     run_or_echo sudo pam-auth-update --disable google-authenticator || return 1
-    run_or_echo sudo rm -f "$_GA_SSHD_DROPIN" "$_GA_PAM_PROFILE"
+    run_or_echo sudo rm -f "$_GA_SSHD_DROPIN" "$_GA_SSHD_DROPIN_OLD" "$_GA_PAM_PROFILE"
     print_status "success" "TOTP profile disabled and ssh drop-in removed"
 }
 

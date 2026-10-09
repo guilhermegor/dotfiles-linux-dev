@@ -18,12 +18,18 @@ setup() {
         chmod +x "$TMP/bin/$tool"
     done
     # sshd stub: -T prints $SSHD_T_OUT (exit $SSHD_T_RC), -t exits $SSHD_CHECK_RC.
+    # While $DROPIN_MARK exists, -T also reports our drop-in's KI yes / UsePAM yes
+    # (sshd keeps the first value, so the drop-in wins); the sudo stub deletes the
+    # marker on `rm` of either drop-in name, like the real removal would.
     export SSHD_T_OUT="$TMP/sshd_T.out"
+    export DROPIN_MARK="$TMP/dropin_present"
     printf 'passwordauthentication yes\nkbdinteractiveauthentication no\n' > "$SSHD_T_OUT"
     cat > "$TMP/bin/sshd" <<'STUB'
 #!/bin/bash
 case "$1" in
-    -T) cat "$SSHD_T_OUT"; exit "${SSHD_T_RC:-0}" ;;
+    -T) cat "$SSHD_T_OUT"
+        if [ -e "$DROPIN_MARK" ]; then printf 'kbdinteractiveauthentication yes\nusepam yes\n'; fi
+        exit "${SSHD_T_RC:-0}" ;;
     -t) exit "${SSHD_CHECK_RC:-0}" ;;
 esac
 STUB
@@ -31,6 +37,7 @@ STUB
     cat > "$TMP/bin/sudo" <<STUB
 #!/bin/bash
 echo "sudo \$*" >> "$CALLS"
+if [ "\$1" = rm ]; then case "\$*" in *google-authenticator.conf*) rm -f "\$DROPIN_MARK" ;; esac; fi
 if [ "\$1" = sshd ]; then shift; exec "$TMP/bin/sshd" "\$@"; fi
 STUB
     chmod +x "$TMP/bin/sshd" "$TMP/bin/sudo"
@@ -85,7 +92,7 @@ refute_call() {
     command_exists() { [ "$1" = sshd ] && return 1; command -v "$1" &>/dev/null; }
     run install_google_authenticator
     [ "$status" -eq 0 ]
-    refute_call 'sshd'
+    refute_call 'sshd -[tT]'
     grep -q 'pam-auth-update --enable' "$CALLS"
 }
 
@@ -120,6 +127,40 @@ refute_dropin_installed() {
     grep -q 'install .*10-google-authenticator.conf' "$CALLS"
 }
 
+@test "KI yes with UsePAM yes (password off) installs the drop-in" {
+    printf 'passwordauthentication no\nkbdinteractiveauthentication yes\nusepam yes\n' > "$SSHD_T_OUT"
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    grep -q 'install .*10-google-authenticator.conf' "$CALLS"
+}
+
+@test "KI yes with UsePAM no (password off) skips the drop-in" {
+    printf 'passwordauthentication no\nkbdinteractiveauthentication yes\nusepam no\n' > "$SSHD_T_OUT"
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    refute_dropin_installed
+}
+
+@test "re-run on a now key-only host removes our drop-in and does not reinstall it" {
+    printf 'passwordauthentication no\nkbdinteractiveauthentication no\nusepam yes\n' > "$SSHD_T_OUT"
+    : > "$DROPIN_MARK"
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    [ ! -e "$DROPIN_MARK" ]
+    refute_dropin_installed
+    # the removal ran before the probe, or the probe would still see our KI yes
+    local rm_line probe_line
+    rm_line="$(grep -n 'sudo rm -f' "$CALLS" | head -1 | cut -d: -f1)"
+    probe_line="$(grep -n 'sudo sshd -T' "$CALLS" | head -1 | cut -d: -f1)"
+    [ "$rm_line" -lt "$probe_line" ]
+}
+
+@test "install removes the old unprefixed drop-in name too" {
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    grep -q 'sudo rm -f .*/etc/ssh/sshd_config.d/google-authenticator.conf' "$CALLS"
+}
+
 @test "a failed sshd -T read skips the drop-in (fail closed)" {
     export SSHD_T_RC=1
     run install_google_authenticator
@@ -140,7 +181,8 @@ refute_dropin_installed() {
     run uninstall_google_authenticator
     [ "$status" -eq 0 ]
     grep -q 'pam-auth-update --disable google-authenticator' "$CALLS"
-    grep -q 'rm -f /etc/ssh/sshd_config.d/10-google-authenticator.conf' "$CALLS"
+    grep -q 'rm -f .*/etc/ssh/sshd_config.d/10-google-authenticator.conf' "$CALLS"
+    grep -q 'rm -f .*/etc/ssh/sshd_config.d/google-authenticator.conf' "$CALLS"
     refute_call '/etc/pam.d'
 }
 

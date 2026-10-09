@@ -17,16 +17,24 @@ Everything that includes `common-auth`: `sudo`, GDM login and lock screen,
 TTY `login`, `su`, polkit prompts, and `sshd`. The last three are side
 effects of "all of them", not extra opt-ins.
 
-SSH is conditional. The installer reads the effective config with
-`sudo sshd -T` first:
+SSH is conditional. The installer first removes any earlier copy of its own
+drop-in (under the current and the pre-`10-` name), so a re-run judges the
+host's own config instead of its own leftover `KbdInteractiveAuthentication
+yes`. It then reads the effective config with `sudo sshd -T` and counts
+password logins as on when `passwordauthentication yes`, or
+`kbdinteractiveauthentication yes` together with `usepam yes` (the drop-in
+forces `UsePAM yes`, so keyboard-interactive under `UsePAM no` would be a
+brand-new PAM password path). `sshd -T` without `-C` shows only global
+values, so `Match` blocks are not considered.
 
-- **Key-only host** (`passwordauthentication no` and
-  `kbdinteractiveauthentication no`, the Ubuntu default): the drop-in is
-  skipped with a warning, and ssh is left unchanged. Enabling
+- **Key-only host** (neither condition holds, the Ubuntu default): the drop-in
+  is skipped with a warning, and ssh is left unchanged. Enabling
   keyboard-interactive here would reopen a password login path, and because
   of `nullok` an unenrolled account would get in with the password alone.
   The same happens if the `sshd -T` read fails (fail closed), or if
-  openssh-server is not installed.
+  openssh-server is not installed. A running sshd keeps its old config until
+  it is reloaded, so after a re-run that removed the drop-in, run
+  `sudo systemctl reload ssh`.
 - **Password logins already on:** the drop-in
   `/etc/ssh/sshd_config.d/10-google-authenticator.conf` sets
   `KbdInteractiveAuthentication yes` and `UsePAM yes`, is checked with
