@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="../permissions-by-directory-163/">
+        <link rel="prev" href="../storage/">
       
       
-        <link rel="next" href="../publishing-docs/">
+        <link rel="next" href="../rclone-mount-migration-360/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Reviewer ledger - dotfiles-linux-dev</title>
+        <title>Optional TOTP 2FA - dotfiles-linux-dev</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#reviewer-ledger-dotfiles-linux-dev488" class="md-skip">
+        <a href="#optional-totp-2fa-libpam-google-authenticator" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Reviewer ledger
+              Optional TOTP 2FA
             
           </span>
         </div>
@@ -423,10 +423,37 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../totp-2fa/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Optional TOTP 2FA
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -442,6 +469,70 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-gets-a-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What gets a code
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enroll" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enroll
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#avoid-lockout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Avoid lockout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#disable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disable
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -450,20 +541,18 @@
       
   
   
-    
   
   
-  
     
     
     
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
         
           
           <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
@@ -484,7 +573,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_8">
             <span class="md-nav__icon md-icon"></span>
             
@@ -555,37 +644,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Reviewer ledger
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../reviewer_ledger/" class="md-nav__link">
         
   
   
@@ -601,92 +663,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#why-two-tables" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Why two tables
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-class-vocabulary-closed-not-free-text" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The class vocabulary (closed, not free text)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#where-the-data-lives" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Where the data lives
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#cli" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        CLI
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-three-reports" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The three reports
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-this-does-not-do-yet" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What this does not do (yet)
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -780,10 +756,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#why-two-tables" class="md-nav__link">
+  <a href="#what-gets-a-code" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why two tables
+        What gets a code
       
     </span>
   </a>
@@ -791,10 +767,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-class-vocabulary-closed-not-free-text" class="md-nav__link">
+  <a href="#enroll" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The class vocabulary (closed, not free text)
+        Enroll
       
     </span>
   </a>
@@ -802,10 +778,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#where-the-data-lives" class="md-nav__link">
+  <a href="#avoid-lockout" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Where the data lives
+        Avoid lockout
       
     </span>
   </a>
@@ -813,32 +789,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cli" class="md-nav__link">
+  <a href="#disable" class="md-nav__link">
     <span class="md-ellipsis">
       
-        CLI
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-three-reports" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The three reports
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-this-does-not-do-yet" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What this does not do (yet)
+        Disable
       
     </span>
   </a>
@@ -865,100 +819,84 @@
   
 
 
-<h1 id="reviewer-ledger-dotfiles-linux-dev488">Reviewer ledger (dotfiles-linux-dev#488)<a class="headerlink" href="#reviewer-ledger-dotfiles-linux-dev488" title="Permanent link">&para;</a></h1>
-<p>A SQLite record of every reviewer ask on the review ladder
-(<code>coderabbitai &gt; codex &gt; qwen &gt; kimi</code>) and every finding it produced, so
-"is the ladder order right / is a rung effective / should another service
-replace one" can be argued from data instead of one session's memory.</p>
-<p>Implementation: <code>ai_clients/claude/hooks/lib/reviewer_ledger.sh</code>.
-Tests: <code>tests/reviewer_ledger.bats</code>.</p>
-<h2 id="why-two-tables">Why two tables<a class="headerlink" href="#why-two-tables" title="Permanent link">&para;</a></h2>
-<p>"Number of reviews" collapses three different things: a review that found
-nothing (clean code), a rung that was never asked (no data), and an ask a
-rate limit refused (not a review). One counter would make an unasked rung
-look identical to an ineffective one. So:</p>
+<h1 id="optional-totp-2fa-libpam-google-authenticator">Optional TOTP 2FA (libpam-google-authenticator)<a class="headerlink" href="#optional-totp-2fa-libpam-google-authenticator" title="Permanent link">&para;</a></h1>
+<p><code>install_google_authenticator</code> (registered in the install menu) installs
+<code>libpam-google-authenticator</code> and enables a <code>pam-auth-update</code> profile
+(<code>distro_config/pam/google-authenticator</code>, installed to
+<code>/usr/share/pam-configs/google-authenticator</code>). It never edits
+<code>/etc/pam.d/*</code>: <code>pam-auth-update</code> regenerates <code>common-auth</code>, and the profile
+lands there as an <code>Additional</code> module that runs after <code>pam_unix</code>.</p>
+<p>The module uses <code>nullok</code>, so a user who has not enrolled still logs in with
+the password alone. Enabling the profile before enrolling cannot lock anyone
+out. Enrollment is never automated.</p>
+<h2 id="what-gets-a-code">What gets a code<a class="headerlink" href="#what-gets-a-code" title="Permanent link">&para;</a></h2>
+<p>Everything that includes <code>common-auth</code>: <code>sudo</code>, GDM login and lock screen,
+TTY <code>login</code>, <code>su</code>, polkit prompts, and <code>sshd</code>. The last three are side
+effects of "all of them", not extra opt-ins.</p>
+<p>SSH is conditional. The installer first removes any earlier copy of its own
+drop-in (under the current and the pre-<code>10-</code> name), so a re-run judges the
+host's own config instead of its own leftover <code>KbdInteractiveAuthentication
+yes</code>. It then reads the effective config with <code>sudo sshd -T</code> and counts
+password logins as on when <code>passwordauthentication yes</code>, or
+<code>kbdinteractiveauthentication yes</code> together with <code>usepam yes</code> (the drop-in
+forces <code>UsePAM yes</code>, so keyboard-interactive under <code>UsePAM no</code> would be a
+brand-new PAM password path). <code>sshd -T</code> without <code>-C</code> shows only global
+values, so <code>Match</code> blocks are not considered.</p>
 <ul>
-<li><strong><code>ask</code></strong> — one row per ask: <code>rung</code>, <code>pr_number</code>, <code>head_sha</code>, <code>asked_at</code>,
-  and an outcome (<code>refused</code> / <code>clean</code> / <code>found</code>).</li>
-<li><strong><code>finding</code></strong> — one row per finding: its <code>ask_id</code>, claimed <code>severity</code>, a
-  ternary <code>verdict</code> (<code>true</code> / <code>false</code> / <code>partial</code> — a finding can be real
-  but overstated, e.g. #454's 200-PR-cap finding), and a closed-vocabulary
-  <code>class</code>.</li>
+<li><strong>Key-only host</strong> (neither condition holds, e.g. cloud images that set
+  <code>PasswordAuthentication no</code>; stock Ubuntu Server does <em>not</em> qualify, since
+  sshd defaults to <code>PasswordAuthentication yes</code>): the drop-in
+  is skipped with a warning, and ssh is left unchanged. Enabling
+  keyboard-interactive here would reopen a password login path, and because
+  of <code>nullok</code> an unenrolled account would get in with the password alone.
+  The same happens if the <code>sshd -T</code> read fails (fail closed), or if
+  openssh-server is not installed. A running sshd keeps its old config until
+  it is reloaded, so after a re-run that removed the drop-in, run
+  <code>sudo systemctl reload ssh</code>.</li>
+<li><strong>Password logins already on:</strong> the drop-in
+  <code>/etc/ssh/sshd_config.d/10-google-authenticator.conf</code> sets
+  <code>KbdInteractiveAuthentication yes</code> and <code>UsePAM yes</code>, is checked with
+  <code>sshd -t</code>, and is removed again if invalid. The <code>10-</code> prefix makes it sort
+  before most vendor drop-ins (sshd keeps the first value it reads, in
+  lexical order); a lower-numbered file such as <code>00-*.conf</code> would still win.
+  sshd only reads the new file on reload: <code>sudo systemctl reload ssh</code>.</li>
 </ul>
-<h2 id="the-class-vocabulary-closed-not-free-text">The class vocabulary (closed, not free text)<a class="headerlink" href="#the-class-vocabulary-closed-not-free-text" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>auth-bypass  fail-open  shell-robustness  api-shape  docs-vs-code  test-gap  other
+<p>Key-only logins skip PAM, so the code is never asked for them.
+<code>AuthenticationMethods</code> is deliberately not set by the installer. To require
+key plus code on a key-only host, add this yourself (a manual owner
+decision, and enroll first):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>AuthenticationMethods publickey,keyboard-interactive
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>KbdInteractiveAuthentication yes
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>UsePAM yes
 </code></pre></div>
-<p>Defined in <code>REVIEWER_LEDGER_CLASSES</code> inside <code>reviewer_ledger.sh</code>, and
-checked against it by the CLI's own validation before every insert.</p>
-<p>⚠️ <strong>Two places, not one, must change together when the vocabulary
-changes.</strong> The <code>finding.class</code> <code>CHECK</code> constraint inside
-<code>reviewer_ledger_init</code>'s schema is a separate, hand-written literal list —
-it is not derived from <code>REVIEWER_LEDGER_CLASSES</code> (SQLite has no way to read
-a shell array into a <code>CHECK</code> clause). Adding a class only to the array lets
-the CLI accept it, then SQLite rejects the insert at the <code>CHECK</code> boundary —
-the two must be edited together. Additionally, <code>CREATE TABLE IF NOT EXISTS</code>
-never alters an existing table's schema: a database created under an older
-vocabulary needs an explicit migration (<code>ALTER TABLE finding</code> to redefine
-the constraint, since SQLite can't <code>ALTER ... CHECK</code> directly — recreate the
-table, copy the rows, and swap it in) before it will accept a newly added
-class. <code>other</code> always requires a <code>--note</code>-worthy reason in practice, even
-though the schema does not force one — re-classifying retroactively means
-re-reading every finding, so pick a real class when one applies.</p>
-<h2 id="where-the-data-lives">Where the data lives<a class="headerlink" href="#where-the-data-lives" title="Permanent link">&para;</a></h2>
-<p><strong>Not in the repo.</strong> The database is <code>${CLAUDE_CONFIG_DIR:-$HOME/.claude}/reviewer_ledger.db</code>
-by default (override with <code>REVIEWER_LEDGER_DB</code>, which every test in
-<code>tests/reviewer_ledger.bats</code> does to a tmp file) — machine-local and not
-backed up; versioning it would churn on every round.</p>
-<h2 id="cli">CLI<a class="headerlink" href="#cli" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">LEDGER</span><span class="o">=</span>ai_clients/claude/hooks/lib/reviewer_ledger.sh
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># idempotent — safe to call before every ladder run</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="s2">"</span><span class="nv">$LEDGER</span><span class="s2">"</span><span class="w"> </span>init
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># the deterministic half: rung, PR, head sha, outcome</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="nv">ask_id</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="s2">"</span><span class="nv">$LEDGER</span><span class="s2">"</span><span class="w"> </span>ask<span class="w"> </span>--rung<span class="w"> </span>codex<span class="w"> </span>--pr<span class="w"> </span><span class="m">453</span><span class="w"> </span>--sha<span class="w"> </span>aaa111<span class="w"> </span>--outcome<span class="w"> </span>found<span class="w"> </span><span class="p">|</span><span class="w"> </span>tail<span class="w"> </span>-1<span class="k">)</span><span class="s2">"</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="c1"># the one explicit model write: verdict + class, judged at resolution time</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="s2">"</span><span class="nv">$LEDGER</span><span class="s2">"</span><span class="w"> </span>finding<span class="w"> </span>--ask-id<span class="w"> </span><span class="s2">"</span><span class="nv">$ask_id</span><span class="s2">"</span><span class="w"> </span>--severity<span class="w"> </span>major<span class="w"> </span>--verdict<span class="w"> </span><span class="nb">true</span><span class="w"> </span>--class<span class="w"> </span>fail-open<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span>--note<span class="w"> </span><span class="s2">"optional free-text context"</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="c1"># the three canned reports (counts only — never a computed ratio, see below)</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="s2">"</span><span class="nv">$LEDGER</span><span class="s2">"</span><span class="w"> </span>report<span class="w"> </span>rung-effectiveness
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="s2">"</span><span class="nv">$LEDGER</span><span class="s2">"</span><span class="w"> </span>report<span class="w"> </span>ladder-order
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="s2">"</span><span class="nv">$LEDGER</span><span class="s2">"</span><span class="w"> </span>report<span class="w"> </span>zero-true<span class="w"> </span>--min-asks<span class="w"> </span><span class="m">5</span>
+<p>After you enroll, anything that calls <code>sudo</code> without a terminal (cron, CI,
+<code>sudo -n</code>) stops working for that account: the code prompt cannot be answered.
+Run unattended jobs as root or from a user that is not enrolled.</p>
+<h2 id="enroll">Enroll<a class="headerlink" href="#enroll" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>google-authenticator
 </code></pre></div>
-<p><code>reviewer_ledger.sh</code> can also be <code>source</code>d — every subcommand is a plain
-function (<code>reviewer_ledger_init</code>, <code>reviewer_ledger_record_ask</code>,
-<code>reviewer_ledger_record_finding</code>, <code>reviewer_ledger_report</code>) so a caller that
-already has the rung/PR/sha in hand (the ladder's own post path) can call
-the writer directly instead of shelling out.</p>
-<h2 id="the-three-reports">The three reports<a class="headerlink" href="#the-three-reports" title="Permanent link">&para;</a></h2>
-<ol>
-<li><strong><code>rung-effectiveness</code></strong> — per rung: ask count by outcome, finding count
-   by verdict. Answers "is each rung effective" directly.</li>
-<li><strong><code>ladder-order</code></strong> — the same table ordered by true-finding count,
-   descending — the argument for whether the ladder's current order still
-   matches the value each rung has produced.</li>
-<li><strong><code>zero-true --min-asks N</code></strong> — rungs with at least N asks and zero true
-   findings. Needs no significance test to be worth acting on.</li>
-</ol>
-<p>All three print raw counts, never a computed percentage: the issue's own
-point is that a raw accept/reject ratio ranks a reviewer wrong (CodeRabbit's
-2/3 on #482 reads worse than a rung that missed a forgeable auth gate). A
-percentage would also be a stored/compared float, which this repo's numeric
-rule (<code>AGENTS.md</code>) disallows — printing <code>true=N</code> beside <code>asks=M</code> says the
-same thing without one.</p>
-<h2 id="what-this-does-not-do-yet">What this does not do (yet)<a class="headerlink" href="#what-this-does-not-do-yet" title="Permanent link">&para;</a></h2>
-<p>The ladder's own post path (<code>ai_clients/claude/hooks/lib/reviewer_ladder.sh</code>)
-and <code>s:dev-loop</code>'s finding-resolution step are not wired to call this
-library in this change — both files were held by other in-flight PRs at
-the time this was written. Wiring <code>reviewer_ledger_record_ask</code> into the
-ladder's post path, and <code>reviewer_ledger_record_finding</code> into the point
-where a thread's verdict is decided, is the natural next step and does not
-require touching this file again.</p>
-<p>At roughly 10 findings a day, statistical significance on "is the order
-right" is months out — the near-term value is a rung with zero true
-findings over N asks becoming visible, not a settled ranking.</p>
+<ul>
+<li>Put the scratch codes in your password manager.</li>
+<li><code>~/.google_authenticator</code> holds the TOTP secret and scratch codes. It must
+  never enter any sync or backup path (it is not on the ai-state whitelist).</li>
+</ul>
+<h2 id="avoid-lockout">Avoid lockout<a class="headerlink" href="#avoid-lockout" title="Permanent link">&para;</a></h2>
+<p>Keep a root shell (<code>sudo -s</code>) open in another terminal while testing the first
+login, sudo and ssh.</p>
+<p>If locked out: boot recovery mode (the root shell there does not use PAM, so
+no code is asked), remount the filesystem writable, then disable the profile:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>mount<span class="w"> </span>-o<span class="w"> </span>remount,rw<span class="w"> </span>/
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>pam-auth-update<span class="w"> </span>--disable<span class="w"> </span>google-authenticator
+</code></pre></div>
+<p>Never <code>apt remove libpam-google-authenticator</code> while the profile is enabled:
+<code>common-auth</code> would then name a missing module and every <code>sudo</code>/login fails.
+Run <code>uninstall_google_authenticator</code> first.</p>
+<h2 id="disable">Disable<a class="headerlink" href="#disable" title="Permanent link">&para;</a></h2>
+<p><code>uninstall_google_authenticator</code> runs the same <code>pam-auth-update --disable</code>
+and removes the ssh drop-in and the profile file:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'source distro_config/install_lib/_common.sh; source distro_config/install_lib/system_utils.sh; uninstall_google_authenticator'</span>
+</code></pre></div>
+<p>Preview either function with <code>DRY_RUN=1</code>.</p>
 
 
 
