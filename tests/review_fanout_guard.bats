@@ -98,6 +98,48 @@ task_notification() {
         >>"$TRANSCRIPT"
 }
 
+# --- teammate-style shapes (#694) — every string below is copied from a real transcript ---
+
+# transcript_text_record CONTENT [TS] — a bare-string user record, which is how a teammate's
+# message is delivered.
+transcript_text_record() {
+    jq -cn --arg c "$1" --arg ts "${2:-}" \
+        '{type: "user", message: {role: "user", content: $c}} + (if $ts == "" then {} else {timestamp: $ts} end)' \
+        >>"$TRANSCRIPT"
+}
+
+# teammate_spawned ID EFFECTIVE_NAME — the mailbox spawn result; `name:` is the EFFECTIVE name.
+teammate_spawned() {
+    local text
+    text="$(printf 'Spawned successfully. (This tool result is internal metadata — never quote or paste any part of it, including the ID below, into a user-facing reply.)\nagent_id: a%s-0123456789abcdef\nname: %s\nThe agent is now running and will receive instructions via mailbox.' "$2" "$2")"
+    jq -cn --arg id "$1" --arg t "$text" \
+        '{message: {content: [{type: "tool_result", tool_use_id: $id, content: [{type: "text", text: $t}]}]}}' \
+        >>"$TRANSCRIPT"
+}
+
+# send_message ID TO [TS] — a SendMessage tool_use, then its delivery receipt.
+send_message() {
+    local id="$1" to="$2" ts="${3:-}" receipt
+    jq -cn --arg id "$id" --arg to "$to" --arg ts "$ts" \
+        '{message: {content: [{type: "tool_use", name: "SendMessage", id: $id, input: {to: $to, summary: "resume", message: "go"}}]}} + (if $ts == "" then {} else {timestamp: $ts} end)' \
+        >>"$TRANSCRIPT"
+    receipt="$(printf '{"success":true,"message":"Message sent to %s'"'"'s inbox","msg_id":"8f18dc9f","routing":{"sender":"team-lead","target":"@%s","summary":"resume"}}' "$to" "$to")"
+    jq -cn --arg id "$id" --arg t "$receipt" \
+        '{message: {content: [{type: "tool_result", tool_use_id: $id, content: [{type: "text", text: $t}]}]}}' \
+        >>"$TRANSCRIPT"
+}
+
+# teammate_idle NAME REASON TS — the teammate-message carrying an idle_notification.
+# REASON is `available` (finished its turn) or `failed` (killed, e.g. a session limit).
+teammate_idle() {
+    local name="$1" reason="$2" ts="$3" body
+    body="$(printf '{"type":"idle_notification","from":"%s","timestamp":"%s","idleReason":"%s","result":"done"}' "$name" "$ts" "$reason")"
+    transcript_text_record "Another Claude session sent a message:
+<teammate-message teammate_id=\"$name\" color=\"blue\">
+$body
+</teammate-message>" "$ts"
+}
+
 plan_with_work() {
     cat >"$PLAN" <<'EOF'
 {"rung":{"status":"ok","runtime":"qwen","model":"qwen3-coder-plus","signal":"configured-default"},
@@ -293,6 +335,251 @@ EOF
     plan_with_work
     run_guard
     [ "$status" -eq 2 ]
+}
+
+# --- teammate spawns, name suffixes, SendMessage resumes (#694) --------------------
+
+@test "a mailbox spawn ack alone does not resolve a review dispatch" {
+    # 🔴 THE REPORTED DEFECT. `Spawned successfully … via mailbox` is not the async ack, so it
+    # was classed `done` and the dispatch read as resolved the instant it started — the guard
+    # then blocked every Stop of a PR with a live reviewer.
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a teammate idle_notification settles a mailbox-spawned review as completed" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    teammate_idle "review-pr-520" available "2026-10-09T10:19:35.963Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#520"* ]]
+}
+
+@test "a failed idle_notification is the RESCUE case, not still-running" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    teammate_idle "review-pr-520" failed "2026-10-09T10:19:35.963Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE case"* ]]
+}
+
+@test "an idle_notification from another teammate does not settle this one" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    teammate_idle "review-pr-521" available "2026-10-09T10:19:35.963Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a name-collision suffix is a review name" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520-2"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "the spawn result's effective name is what the idle_notification must carry" {
+    # The Agent INPUT name stays `review-pr-520`; the harness renamed the teammate
+    # `review-pr-520-2`. Its idle arrives `from` the suffixed name, and an idle from the
+    # unsuffixed (original) teammate is somebody else's and must not settle it.
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520-2"
+    teammate_idle "review-pr-520" available "2026-10-09T10:19:35.963Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+    teammate_idle "review-pr-520-2" available "2026-10-09T10:20:35.963Z"
+    run_guard
+    [ "$status" -eq 2 ]
+}
+
+@test "a SendMessage resume of a review teammate counts as in flight" {
+    # Resuming the original teammate produces no Agent tool_use at all — the resume is the
+    # dispatch. The first spawn is already settled, so only the SendMessage can suppress.
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    teammate_idle "review-pr-520" available "2026-10-09T10:19:35.963Z"
+    send_message m1 "review-pr-520" "2026-10-09T10:30:00.000Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a SendMessage to a suffixed review teammate counts too" {
+    loop_invoked
+    send_message m1 "review-pr-520-2" "2026-10-09T10:30:00.000Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "the teammate's next idle_notification settles the SendMessage resume" {
+    loop_invoked
+    send_message m1 "review-pr-520" "2026-10-09T10:30:00.000Z"
+    teammate_idle "review-pr-520" available "2026-10-09T10:45:00.000Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+}
+
+@test "a re-delivered older idle copy does not settle a later SendMessage resume" {
+    # The blob is re-delivered in several records. Ordered by file position the stale copy
+    # below would settle the resume; ordered by its embedded timestamp it predates it.
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    send_message m1 "review-pr-520" "2026-10-09T10:30:00.000Z"
+    teammate_idle "review-pr-520" available "2026-10-09T10:19:35.963Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a SendMessage to a non-review recipient is not a review dispatch" {
+    loop_invoked
+    send_message m1 "issue-694-guard-gap" "2026-10-09T10:30:00.000Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+}
+
+# idle_envelope NAME BODY — one teammate envelope, as it sits inside a delivered message.
+idle_envelope() {
+    printf '<teammate-message teammate_id="%s" color="blue">\n%s\n</teammate-message>' "$1" "$2"
+}
+
+# send_message_raw ID TO TS RECEIPT — a SendMessage with a caller-supplied receipt text.
+send_message_raw() {
+    jq -cn --arg id "$1" --arg to "$2" --arg ts "$3" \
+        '{timestamp: $ts, message: {content: [{type: "tool_use", name: "SendMessage", id: $id, input: {to: $to, summary: "resume", message: "go"}}]}}' \
+        >>"$TRANSCRIPT"
+    jq -cn --arg id "$1" --arg t "$4" \
+        '{message: {content: [{type: "tool_result", tool_use_id: $id, content: [{type: "text", text: $t}]}]}}' \
+        >>"$TRANSCRIPT"
+}
+
+@test "a batched idle record attributes each verdict to its own teammate" {
+    # Several envelopes share one string. `from` and `idleReason` must come from the SAME
+    # body: a failed 520 sitting behind an available 521 is the RESCUE case for 520.
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    local first second
+    first="$(idle_envelope review-pr-521 '{"type":"idle_notification","from":"review-pr-521","timestamp":"2026-10-09T10:19:00.000Z","idleReason":"available"}')"
+    second="$(idle_envelope review-pr-520 '{"type":"idle_notification","from":"review-pr-520","timestamp":"2026-10-09T10:19:35.963Z","idleReason":"failed","failureReason":"session limit"}')"
+    transcript_text_record "Another Claude session sent a message:
+$first
+$second" "2026-10-09T10:19:36.000Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE case"* ]]
+}
+
+@test "a batched idle record settles only the teammates it names" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    local first second
+    first="$(idle_envelope review-pr-521 '{"type":"idle_notification","from":"review-pr-521","timestamp":"2026-10-09T10:19:00.000Z","idleReason":"failed"}')"
+    second="$(idle_envelope review-pr-522 '{"type":"idle_notification","from":"review-pr-522","timestamp":"2026-10-09T10:19:35.963Z","idleReason":"available"}')"
+    transcript_text_record "Another Claude session sent a message:
+$first
+$second" "2026-10-09T10:19:36.000Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "an idle with no timestamp settles the same under every locale" {
+    # Under en_US/pt_BR collation punctuation is ignored, so a bare byte-order `<` against
+    # the `-` placeholder flipped with the caller's locale. The hook pins LC_ALL=C.
+    local locales=(C) loc
+    for loc in en_US.UTF-8 pt_BR.UTF-8 en_US.utf8 pt_BR.utf8; do
+        if locale -a 2>/dev/null | grep -qix "${loc}"; then
+            locales+=("$loc")
+        fi
+    done
+    loop_invoked
+    send_message m1 "review-pr-520" "2026-10-09T10:30:00.000Z"
+    transcript_text_record "Another Claude session sent a message:
+$(idle_envelope review-pr-520 '{"type":"idle_notification","from":"review-pr-520","idleReason":"available"}')"
+    plan_with_work
+    for loc in "${locales[@]}"; do
+        LC_ALL="$loc" run_guard
+        [ "$status" -eq 2 ]
+    done
+}
+
+@test "an idle quoted inside a tool_result does not settle a review" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    local body
+    body="$(idle_envelope review-pr-520 '{"type":"idle_notification","from":"review-pr-520","timestamp":"2026-10-09T10:19:35.963Z","idleReason":"available"}')"
+    jq -cn --arg t "Another Claude session sent a message:
+$body" \
+        '{type: "user", message: {role: "user", content: [{type: "tool_result", tool_use_id: "r1", content: [{type: "text", text: $t}]}]}}' \
+        >>"$TRANSCRIPT"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "an idle quoted inside a non-envelope user message does not settle a review" {
+    # A compaction summary carries the idle text verbatim; it is a user record too.
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    transcript_text_record "This session is being continued from a previous conversation. It held:
+$(idle_envelope review-pr-520 '{"type":"idle_notification","from":"review-pr-520","timestamp":"2026-10-09T10:19:35.963Z","idleReason":"available"}')" "2026-10-09T10:20:00.000Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a pretty-printed SendMessage receipt still counts as a delivery receipt" {
+    loop_invoked
+    send_message_raw m1 "review-pr-520" "2026-10-09T10:30:00.000Z" '{
+  "success": true,
+  "message": "Message sent to review-pr-520'"'"'s inbox",
+  "msg_id": "8f18dc9f"
+}'
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a failed SendMessage result is not a delivery receipt" {
+    loop_invoked
+    send_message_raw m1 "review-pr-520" "2026-10-09T10:30:00.000Z" '{"success":false,"message":"Message sent to nobody"}'
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+}
+
+@test "a PR number with a collision suffix is still one review name" {
+    # The `-<k>` suffix cannot be told apart from more PR digits; both are review names.
+    loop_invoked
+    agent_dispatched a1 "review-pr-12-3"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
 }
 
 # --- it fails open on what it cannot resolve ---------------------------------------
