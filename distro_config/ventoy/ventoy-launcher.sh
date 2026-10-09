@@ -120,6 +120,16 @@ main() {
             fi
             local disk=${1:-}
             [ -n "$disk" ] || disk=$(ventoy_find_disk) || return 1
+            # The disk reaches a root-run script: only a /dev/ block device
+            # (an option-like or relative argument is refused).
+            case "$disk" in
+                /dev/*) ;;
+                *) echo "Pass the Ventoy disk as /dev/sdX." >&2; return 1 ;;
+            esac
+            if [ ! -b "$disk" ] && [ "${DRY_RUN:-0}" != "1" ]; then
+                echo "$disk is not a block device." >&2
+                return 1
+            fi
             _serve VentoyPlugson.sh 24681 "$disk"
             ;;
         *)

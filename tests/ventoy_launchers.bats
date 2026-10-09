@@ -109,6 +109,19 @@ teardown() {
     [[ "$output" == *"sudo bash ./VentoyPlugson.sh /dev/sdz"* ]]
 }
 
+@test "ventoy-plugson refuses a disk argument outside /dev/" {
+    run ventoy-plugson --help
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Pass the Ventoy disk as /dev/sdX."* ]]
+    [[ "$output" != *"VentoyPlugson.sh"* ]]
+}
+
+@test "ventoy-plugson refuses a /dev/ path that is not a block device outside DRY_RUN" {
+    run env DRY_RUN=0 "$TMP/bin/ventoy-plugson" /dev/null
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"/dev/null is not a block device."* ]]
+}
+
 @test "ventoy-plugson --install-launcher copies the opener onto the stick" {
     export LSBLK_DEV='Ventoy sde\n'
     run ventoy-plugson --install-launcher "$TMP"
