@@ -93,6 +93,7 @@ refute_call() {
 }
 
 @test "install skips the ssh drop-in cleanly without sshd" {
+    export _GA_SSHD_BIN=/nonexistent/sshd
     command_exists() { [ "$1" = sshd ] && return 1; command -v "$1" &>/dev/null; }
     run install_google_authenticator
     [ "$status" -eq 0 ]
@@ -242,7 +243,7 @@ refute_dropin_installed() {
 }
 
 @test "sshd outside PATH but at /usr/sbin/sshd still gets the drop-in" {
-    [ -x /usr/sbin/sshd ] || skip "no /usr/sbin/sshd on this host"
+    export _GA_SSHD_BIN=/bin/true
     command_exists() { [ "$1" = sshd ] && return 1; command -v "$1" &>/dev/null; }
     run install_google_authenticator
     [ "$status" -eq 0 ]
@@ -250,7 +251,7 @@ refute_dropin_installed() {
 }
 
 @test "sshd missing everywhere with an earlier drop-in warns to reload" {
-    [ ! -x /usr/sbin/sshd ] || skip "host has /usr/sbin/sshd"
+    export _GA_SSHD_BIN=/nonexistent/sshd
     command_exists() { [ "$1" = sshd ] && return 1; command -v "$1" &>/dev/null; }
     export _GA_SSHD_DROPIN="$TMP/10-google-authenticator.conf"
     : > "$_GA_SSHD_DROPIN"

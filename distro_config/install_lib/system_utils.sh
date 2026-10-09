@@ -1289,6 +1289,7 @@ _GA_COMMON_AUTH="${_GA_COMMON_AUTH:-/etc/pam.d/common-auth}"
 _GA_SSHD_DROPIN="${_GA_SSHD_DROPIN:-/etc/ssh/sshd_config.d/10-google-authenticator.conf}"
 # Pre-40c3264 name; a stale copy must go too, or it keeps keyboard-interactive on.
 _GA_SSHD_DROPIN_OLD="${_GA_SSHD_DROPIN_OLD:-/etc/ssh/sshd_config.d/google-authenticator.conf}"
+_GA_SSHD_BIN="${_GA_SSHD_BIN:-/usr/sbin/sshd}"
 
 # True only when the host's own sshd config accepts password-style logins:
 # PasswordAuthentication, or keyboard-interactive on top of UsePAM (the drop-in
@@ -1351,7 +1352,7 @@ install_google_authenticator() {
     run_or_echo sudo rm -f "$_GA_SSHD_DROPIN" "$_GA_SSHD_DROPIN_OLD"
 
     # sshd lives in /usr/sbin, which a non-root user's PATH often lacks.
-    if ! command_exists sshd && [ ! -x /usr/sbin/sshd ]; then
+    if ! command_exists sshd && [ ! -x "$_GA_SSHD_BIN" ]; then
         print_status "info" "openssh-server not installed; skipping the ssh drop-in"
         if [ "$had_dropin" = "1" ]; then
             print_status "warning" "An earlier TOTP ssh drop-in was removed; reload sshd to drop it: sudo systemctl reload ssh"
