@@ -126,7 +126,7 @@ teardown() {
     export LSBLK_DEV='Ventoy sde\n'
     run ventoy-plugson --install-launcher "$TMP"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"[dry-run] install -m 755 "*"ventoy-pendrive-launcher.sh $TMP/ventoy-plugson.sh"* ]]
+    [[ "$output" == *"[dry-run] cp "*"ventoy-pendrive-launcher.sh $TMP/ventoy-plugson.sh"* ]]
 }
 
 @test "ventoy-plugson --install-launcher refuses a non-Ventoy mount" {

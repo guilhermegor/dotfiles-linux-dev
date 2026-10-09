@@ -124,7 +124,10 @@ _install_launcher() { # [mountpoint]
         [ -n "$mp" ] || { echo "The Ventoy partition on $disk is not mounted." >&2; return 1; }
     fi
     ventoy_disk_of_mount "$mp" >/dev/null || return 1
-    _run install -m 755 "$VENTOY_OPENER" "$mp/ventoy-plugson.sh"
+    # cp + best-effort chmod: vfat/ntfs mounts refuse the exec bit, and install would
+    # exit 1 after copying. The file runs as `bash ventoy-plugson.sh` either way.
+    _run cp "$VENTOY_OPENER" "$mp/ventoy-plugson.sh" || return 1
+    _run chmod 755 "$mp/ventoy-plugson.sh" 2>/dev/null || true
 }
 
 main() {
