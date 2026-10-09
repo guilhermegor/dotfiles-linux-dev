@@ -67,6 +67,42 @@ install_balena_etcher() {
     fi
 }
 
+# Install the ventoy-web / ventoy-plugson wrappers plus their .desktop entries.
+# Runs on every install_ventoy call so an already-installed Ventoy gets them too.
+install_ventoy_launchers() {
+    local src_dir apps_dir
+    src_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../ventoy" && pwd)" || return 1
+    apps_dir="$HOME/.local/share/applications"
+
+    run_or_echo mkdir -p "$apps_dir"
+    run_or_echo sudo install -m 755 "$src_dir/ventoy-launcher.sh" /usr/local/bin/ventoy-web
+    run_or_echo sudo install -m 755 "$src_dir/ventoy-launcher.sh" /usr/local/bin/ventoy-plugson
+    # The opener sits next to the wrapper so `ventoy-plugson --install-launcher` finds it.
+    run_or_echo sudo install -m 755 "$src_dir/ventoy-pendrive-launcher.sh" \
+        /usr/local/bin/ventoy-pendrive-launcher.sh
+
+    local name exec_cmd comment
+    for name in web plugson; do
+        if [ "$name" = web ]; then
+            comment="Ventoy installer web UI (localhost:24680)"
+        else
+            comment="Ventoy pendrive configuration UI (localhost:24681)"
+        fi
+        exec_cmd="ventoy-$name"
+        [ "${DRY_RUN:-0}" = "1" ] && { echo "[dry-run] write $apps_dir/ventoy-$name.desktop"; continue; }
+        cat > "$apps_dir/ventoy-$name.desktop" <<DESKTOP
+[Desktop Entry]
+Name=Ventoy ${name^}
+Comment=$comment
+Exec=$exec_cmd
+Icon=drive-removable-media
+Terminal=true
+Type=Application
+Categories=System;Utility;
+DESKTOP
+    done
+}
+
 install_ventoy() {
     print_status "section" "VENTOY"
 
@@ -74,7 +110,8 @@ install_ventoy() {
 
     if command_exists ventoy || [ -n "$(find "$ventoy_dir" -maxdepth 1 -name 'VentoyGUI.*' 2>/dev/null)" ]; then
         print_status "info" "Ventoy already installed"
-        return 0
+        install_ventoy_launchers
+        return $?
     fi
 
     print_status "info" "Fetching latest Ventoy release..."
@@ -116,6 +153,7 @@ Terminal=false
 Type=Application
 Categories=System;Utility;
 DESKTOP
+        install_ventoy_launchers
         print_status "success" "Ventoy installed to $ventoy_dir"
         ventoy_installed=1
     else

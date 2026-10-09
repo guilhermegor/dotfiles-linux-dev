@@ -1323,7 +1323,7 @@ EOF
         'qemu.desktop' 'kvirt.desktop'
         'rustdesk.desktop' 'com.rustdesk.RustDesk.desktop' 'org.rustdesk.RustDesk.desktop'
         'balena-etcher-electron.desktop' 'balena-etcher.desktop'
-        'ventoy.desktop'
+        'ventoy.desktop' 'ventoy-web.desktop' 'ventoy-plugson.desktop'
     )
 
     for app in "${infra_app_names[@]}"; do
