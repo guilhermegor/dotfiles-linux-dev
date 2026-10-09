@@ -1,6 +1,9 @@
 #!/bin/bash
 # Writes ~/.claude/settings.json, merging base settings and optional statusLine.
 
+# shellcheck source=../hooks/lib/dotfiles_dir.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/dotfiles_dir.sh"
+
 configure_settings() {
     print_status "section" "CONFIGURING CLAUDE SETTINGS"
 
@@ -27,7 +30,10 @@ configure_settings() {
     fi
 
     local base_settings
-    base_settings=$(cat "$base_settings_file")
+    base_settings=$(substitute_dotfiles_dir < "$base_settings_file") || {
+        print_status "error" "Could not resolve the dotfiles checkout dir"
+        return 1
+    }
 
     # Merge: base_settings take priority over current (preserves any extra user keys).
     # This is additive-only — it can update a key source defines but can never

@@ -18,7 +18,7 @@
       "~/.claude/memory",
       "~/.claude/tasks",
       "~/.claude/projects",
-      "~/github/dotfiles-dev"
+      "@DOTFILES_DIR@"
     ],
     "allow": [
       "WebSearch",

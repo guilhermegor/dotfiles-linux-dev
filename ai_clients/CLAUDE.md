@@ -940,6 +940,33 @@ are never synced). Rule for any future client: authored state only, never creden
 session history, caches or logs. Keyboard-shortcut wiring
 (`distro_config/set_custom_shortcuts.sh`) is a separate follow-up.
 
+## The checkout path is derived, never written (dotfiles-linux-dev#661)
+
+No tracked file may name where this repo is checked out. A file that needs the
+path writes the placeholder `@DOTFILES_DIR@`; the installer that copies it
+(`install_hooks`, `install_skills`, `install_claude_md`, `configure_settings`)
+renders it via `hooks/lib/dotfiles_dir.sh`. `resolve_dotfiles_dir` takes
+`$DOTFILES_DIR` if set, else the **main** working tree of the repo
+(`--git-common-dir`, not `--show-toplevel`: a deploy run from an agent worktree
+must not bake the throwaway worktree path into live config). `deploy_drift.sh`
+renders the same way before comparing, so a correct deploy never reads as drift.
+
+Placeholders are legal only in artifacts an installer renders (hooks, skills,
+`config/CLAUDE.md`, `settings.json`); `rules/`, `commands/`, `agents/`, `shared/`
+and the other clients are copied verbatim. `tests/dotfiles_dir_substitution.bats`
+fails on a hardcoded path anywhere outside `docs/`, `.specs/` and the changelog,
+and on a placeholder in a verbatim-copied artifact. Bare NAMES (`dotfiles-dev#68`,
+`Origin: dotfiles-dev`) are fine: a rename breaks a path, not a label.
+
+**Known gap, same family:** `pr_template_guard.sh` and `issue_template_guard.sh`
+resolve a `--repo owner/name` target to `~/github/<name>`, so a checkout whose
+directory differs from its remote name (`--repo` naming a renamed repo) cannot be
+found and is blocked as unresolvable. Not fixed by #661's de-hardcoding.
+
+`bin/rename_checkout.sh <new-dir>` is the one-time rename (dry-run by default,
+`--apply` to do it; preconditions and steps in its header). It is the owner's
+step, run from a terminal outside the checkout.
+
 ## Deployment
 
 ```bash

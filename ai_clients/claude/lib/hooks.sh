@@ -26,6 +26,9 @@
 
 HOOKS_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" && pwd)"
 
+# shellcheck source=../hooks/lib/dotfiles_dir.sh
+source "$HOOKS_SRC_DIR/lib/dotfiles_dir.sh"
+
 # A verdict cached by a hook is only valid for the logic that computed it. Deploying a new
 # version of that hook without clearing its cache lets the OLD verdict keep being replayed
 # until its TTL expires (dotfiles-linux-dev#504) — measured: PR #498 fixed open_review_threads_nudge.sh
@@ -58,7 +61,7 @@ copy_hook_file() {
     fi
 
     mkdir -p "$(dirname "$dest")"
-    cp "$src" "$dest"
+    install_with_dotfiles_dir "$src" "$dest" || return 1
     chmod +x "$dest"
     print_status "success" "Installed $1 → $dest"
 }

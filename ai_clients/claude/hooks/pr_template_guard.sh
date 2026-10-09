@@ -121,7 +121,9 @@ find_template() {
     fi
     [[ "$allow_personal_fallback" -eq 1 ]] || return 0   # target repo has no template → pass
     # Canonical personal fallback when the repo ships no template.
-    local fallback="$HOME/.claude/projects/-home-guilhermegor-github-dotfiles-dev/memory/feedback_pr_template.md"
+    # Claude keys a project's memory dir by its path with every / and . turned into -.
+    local checkout="@DOTFILES_DIR@"
+    local fallback="$HOME/.claude/projects/${checkout//[\/.]/-}/memory/feedback_pr_template.md"
     [[ -r "$fallback" ]] && { printf '%s' "$fallback"; return 0; }
     return 0
 }
