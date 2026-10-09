@@ -144,11 +144,14 @@ dev_loop_invoked() {
 # it can see, so it is actionable rather than a shrug. Fail-open was the reported defect; the
 # cost of fail-closed here is a nudge during the window between dispatching a review agent and
 # its finishing, which the name closes once the skill text is in place.
-REVIEW_DISPATCH_NAME_RE='^review-pr-[0-9]+$'
+# The optional `-<k>` is the suffix the harness appends when a teammate of that name already
+# exists (`review-pr-692` -> `review-pr-692-2`, measured #694). The Agent INPUT name stays
+# unsuffixed; only the spawn result's `name:` line and the teammate's own messages carry it.
+REVIEW_DISPATCH_NAME_RE='^review-pr-[0-9]+(-[0-9]+)?$'
 
 # transcript_agent_facts TRANSCRIPT
 # Every Agent dispatch and every fact bearing on whether it resolved, as TSV, in ONE streaming
-# pass: `A<TAB>id<TAB>name<TAB>label`, `R<TAB>id<TAB>ack|done`, `N<TAB>id<TAB>completed|failed`.
+# pass (record kinds A/S/R/E/N/I are listed below the shapes note).
 #
 # ⚠️ This is one pass on purpose. The previous shape ran `_agent_result_text` and
 # `_task_notification_status` per dispatched id — two fresh `jq` passes over the whole file
@@ -163,28 +166,63 @@ REVIEW_DISPATCH_NAME_RE='^review-pr-[0-9]+$'
 # ordinary delivered message. Walking every string leaf means a harness change to which shape
 # delivers it cannot silently blind this — the way a `.message.content[]?` walk over a bare
 # string silently blinded shape 3 of dev_loop_invoked above.
+#
+# Beyond the async ack, three teammate-style shapes were invisible (#694), each measured
+# verbatim off real transcripts:
+#   - spawn result `Spawned successfully. ... agent_id: <id>\nname: review-pr-692-2\n ...
+#     will receive instructions via mailbox.` — a launch ack like the async one, with the
+#     EFFECTIVE name (suffixed on a collision) on its `name:` line -> `R ack` + `E`;
+#   - SendMessage result `{"success":true,"message":"Message sent to review-pr-692's
+#     inbox",...}` — a delivery receipt for a resume -> `R sent`;
+#   - teammate completion: NO task-notification exists for a teammate; it arrives as a user
+#     record `<teammate-message teammate_id="review-pr-692" ...>{"type":"idle_notification",
+#     "from":"review-pr-692","timestamp":"...","idleReason":"available"|"failed",...}`
+#     -> `I`. idleReason `failed` is the RESCUE case, anything else is completed.
+# TSV, in transcript order (the idle must be ordered against dispatches): `A`/`S<TAB>id<TAB>
+# name<TAB>label<TAB>ts` (Agent dispatch / SendMessage to a review teammate), `R<TAB>id<TAB>
+# ack|sent|done`, `E<TAB>id<TAB>effective-name`, `N<TAB>id<TAB>completed|failed`,
+# `I<TAB>name<TAB>completed|failed<TAB>ts`. `-` is an empty name/ts: a tab is whitespace to
+# `read`, so an empty field would collapse into its neighbour.
 transcript_agent_facts() {
 	local transcript="$1"
-	jq -n -r --arg ack "Async agent launched successfully" '
+	jq -n -r --arg ack "Async agent launched successfully" --arg re "$REVIEW_DISPATCH_NAME_RE" '
 		def norm:
 			if type == "string" then .
 			else ([.[]? | .text // ""] | join("\n"))
 			end;
+		def dash: if . == null or . == "" then "-" else . end;
 		inputs
 		| . as $rec
+		| ($rec.timestamp | dash) as $ts
 		| (
 			( $rec.message.content[]?
 			  | select(type == "object")
 			  | if (.type == "tool_use" and .name == "Agent") then
-					"A\t\(.id)\t\(.input.name // "")\t\(.input.name // .input.description // .id)"
+					"A\t\(.id)\t\(.input.name | dash)\t\(.input.name // .input.description // .id)\t\($ts)"
+				elif (.type == "tool_use" and .name == "SendMessage"
+					  and ((.input.to // "") | test($re))) then
+					"S\t\(.id)\t\(.input.to)\t\(.input.to)\t\($ts)"
 				elif (.type == "tool_result" and ((.content | norm) | length) > 0) then
-					"R\t\(.tool_use_id)\t\(if ((.content | norm) | contains($ack)) then "ack" else "done" end)"
+					(.content | norm) as $t
+					| .tool_use_id as $id
+					| "R\t\($id)\t\(
+						if ($t | contains($ack)) or ($t | contains("Spawned successfully")) then "ack"
+						elif ($t | contains("\"success\":true")) and ($t | contains("Message sent to")) then "sent"
+						else "done" end)",
+					  ( $t | select(contains("Spawned successfully")) | capture("(?:^|\n)name: (?<n>[^\\s]+)")? | "E\t\($id)\t\(.n)" )
 				else empty end ),
 			( $rec
 			  | .. | strings
 			  | select(test("<tool-use-id>[^<]+</tool-use-id>"))
 			  | select(test("<status>(completed|failed)</status>"))
-			  | "N\t\(capture("<tool-use-id>(?<i>[^<]+)</tool-use-id>").i)\t\(capture("<status>(?<s>completed|failed)</status>").s)" )
+			  | "N\t\(capture("<tool-use-id>(?<i>[^<]+)</tool-use-id>").i)\t\(capture("<status>(?<s>completed|failed)</status>").s)" ),
+			( $rec
+			  | .. | strings
+			  | select(test("<teammate-message[^>]*>\\s*\\{\"type\":\"idle_notification\""))
+			  | capture("\"from\":\"(?<n>[^\"]+)\"") as $f
+			  | (capture("\"timestamp\":\"(?<t>[^\"]+)\"")? // {t: "-"}) as $t
+			  | (if test("\"idleReason\":\"failed\"") then "failed" else "completed" end) as $s
+			  | "I\t\($f.n)\t\($s)\t\($t.t)" )
 		  )
 	' "$transcript" 2>/dev/null
 }
@@ -223,29 +261,54 @@ transcript_agent_facts() {
 # notification yet means still working; failed means NEITHER — a quota kill is not "running",
 # it is the RESCUE case, so it does not count as still-running and the caller is told to
 # resume rather than dispatch a duplicate.
+#
+# A teammate spawn ("Spawned successfully … via mailbox") is the same kind of ack, and a
+# SendMessage to a review teammate is a dispatch of its own whose result is only a delivery
+# receipt (#694). Neither gets a task-notification; the teammate's `idle_notification` is the
+# settle signal instead (`failed` idleReason = RESCUE, anything else = completed).
 review_dispatch_running() {
 	local transcript="$1"
 	FAILED_BACKGROUND_AGENTS=""
 	OTHER_AGENTS_IN_FLIGHT=""
 	[ -r "$transcript" ] || return 1
 
-	local -A agent_name=() agent_label=() agent_result=() agent_note=()
+	local -A agent_name=() agent_label=() agent_result=() agent_note=() agent_ts=()
 	local -a order=()
-	local kind id field label
-	while IFS=$'\t' read -r kind id field label; do
+	local kind id field label ts
+	while IFS=$'\t' read -r kind id field label ts; do
 		[ -n "$id" ] || continue
 		case "$kind" in
-		A)
+		A | S)
 			# A re-dispatched id cannot happen, but last-wins is harmless and keeps the
-			# ordering array free of duplicates.
+			# ordering array free of duplicates. S is a SendMessage resuming a review
+			# teammate: its own unit, in flight from the send until the teammate's next
+			# idle_notification (#694).
 			[ -n "${agent_name[$id]+set}" ] || order+=("$id")
 			agent_name["$id"]="$field"
 			agent_label["$id"]="$label"
+			agent_ts["$id"]="$ts"
 			;;
 		R) agent_result["$id"]="$field" ;;
+		# The name the harness actually gave the teammate: a collision suffixes it
+		# (`review-pr-692` -> `review-pr-692-2`) while the Agent input name stays put.
+		E) agent_name["$id"]="$field" ;;
 		# Last wins, matching the previous `| tail -1`: a later notification supersedes an
 		# earlier one for the same id.
 		N) agent_note["$id"]="$field" ;;
+		# A teammate going idle settles every unit of that name dispatched BEFORE it. The
+		# idle blob is re-delivered in several records, so it is ordered by its own embedded
+		# timestamp, never by where the copy sits in the file: a late copy must not settle a
+		# SendMessage resume that was sent after the real idle. `-` (no timestamp) sorts
+		# oldest, i.e. always settles.
+		I)
+			local unit
+			for unit in "${order[@]}"; do
+				[ "${agent_name[$unit]}" = "$id" ] || continue
+				[ -z "${agent_note[$unit]-}" ] || continue
+				[[ "${agent_ts[$unit]}" == "-" || "${agent_ts[$unit]}" < "$label" ]] || continue
+				agent_note["$unit"]="$field"
+			done
+			;;
 		esac
 	done < <(transcript_agent_facts "$transcript")
 
@@ -263,7 +326,7 @@ review_dispatch_running() {
 		"")
 			# No result yet — in flight.
 			;;
-		ack)
+		ack | sent)
 			case "${agent_note[$id]-}" in
 			completed) continue ;;
 			failed)
