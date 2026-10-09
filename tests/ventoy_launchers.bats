@@ -226,6 +226,7 @@ STUB
     run install_ventoy
     [ "$status" -eq 0 ]
     [[ "$output" == *"[dry-run] sudo tar -xzf $TMP/opt-ventoy.tar.gz -C $TMP/opt-ventoy --strip-components=2 --no-same-owner"* ]]
+    [[ "$output" == *"[dry-run] sudo rm -rf $TMP/opt-ventoy"$'\n'* ]]
 }
 
 # Real (non-dry-run) path with a recording sudo stub: `install` is emulated as a

@@ -18,6 +18,7 @@ if [ ! -x "$VENTOY_PLUGSON" ]; then
     exit 1
 fi
 
-disk=$(lsblk -no PKNAME "$(findmnt -no SOURCE --target "$here")") || exit 1
+src=$(findmnt -no SOURCE --target "$here") || exit 1
+disk=$(lsblk -no PKNAME "$src" | head -n 1) || exit 1
 [ -n "$disk" ] || { echo "Could not resolve the disk behind $here." >&2; exit 1; }
 exec "$VENTOY_PLUGSON" "/dev/$disk"

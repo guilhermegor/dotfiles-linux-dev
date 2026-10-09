@@ -142,7 +142,7 @@ _ventoy_trusted_install() {
     local owner mode
     [ -n "$(find "$VENTOY_DIR_ROOT" -maxdepth 1 -name 'VentoyGUI.*' 2>/dev/null)" ] || return 1
     read -r owner mode < <(stat -c '%u %a' "$VENTOY_DIR_ROOT") || return 1
-    [ "$owner" = "0" ] && (( (8#$mode & 8#022) == 0 ))
+    [ "$owner" = "0" ] && (( (8#${mode:-777} & 8#022) == 0 ))
 }
 
 # Download the tarball and its release sha256.txt into <dir> (user-owned temp), then
@@ -167,7 +167,7 @@ _ventoy_fetch_verified() {
         print_status "error" "Could not fetch sha256.txt; refusing to install unverified"
         return 1
     }
-    expected=$(awk -v f="$name" '$2==f || $2=="*"f {print $1; exit}' "$dir/sha256.txt")
+    expected=$(awk -v f="$name" '{sub(/\r$/,"",$2)} $2==f || $2=="*"f {print $1; exit}' "$dir/sha256.txt")
     if [ -z "$expected" ]; then
         print_status "error" "sha256.txt has no entry for $name; refusing to install"
         return 1
@@ -216,6 +216,8 @@ install_ventoy() {
     print_status "info" "Downloading Ventoy..."
     local stage="$ventoy_dir.tar.gz"
     if _ventoy_fetch_verified "$tarball_url" "$sha_url" "$tmp_dir" "$stage"; then
+        # Start from nothing: leftovers in an untrusted tree would be chowned to root below.
+        run_or_echo sudo rm -rf "$ventoy_dir"
         run_or_echo sudo mkdir -p "$ventoy_dir"
         run_or_echo sudo tar -xzf "$stage" -C "$ventoy_dir" --strip-components=2 --no-same-owner
         run_or_echo sudo rm -f "$stage"
