@@ -1,0 +1,8 @@
+Name: Google Authenticator (TOTP second factor)
+Default: no
+Priority: 128
+Auth-Type: Additional
+Auth:
+	required	pam_google_authenticator.so nullok
+Auth-Initial:
+	required	pam_google_authenticator.so nullok

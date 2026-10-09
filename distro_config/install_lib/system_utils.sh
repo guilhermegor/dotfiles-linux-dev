@@ -1280,6 +1280,125 @@ install_nvtop() {
 }
 
 # ============================================================================
+# GOOGLE AUTHENTICATOR (optional TOTP second factor, issue #676)
+# ============================================================================
+
+_GA_PAM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../pam" && pwd)"
+_GA_PAM_PROFILE="/usr/share/pam-configs/google-authenticator"
+_GA_COMMON_AUTH="${_GA_COMMON_AUTH:-/etc/pam.d/common-auth}"
+_GA_SSHD_DROPIN="${_GA_SSHD_DROPIN:-/etc/ssh/sshd_config.d/10-google-authenticator.conf}"
+# Pre-40c3264 name; a stale copy must go too, or it keeps keyboard-interactive on.
+_GA_SSHD_DROPIN_OLD="${_GA_SSHD_DROPIN_OLD:-/etc/ssh/sshd_config.d/google-authenticator.conf}"
+_GA_SSHD_BIN="${_GA_SSHD_BIN:-/usr/sbin/sshd}"
+
+# True only when the host's own sshd config accepts password-style logins:
+# PasswordAuthentication, or keyboard-interactive on top of UsePAM (the drop-in
+# forces UsePAM yes, so KI with UsePAM no would be a new password path). Callers
+# must remove our drop-in first, else its own KI yes answers "already on". A
+# failed `sshd -T` read answers "no" (fail closed). `sshd -T` without -C shows
+# only global values, so Match blocks are not considered.
+_ga_ssh_password_login_enabled() {
+    [ "${DRY_RUN:-0}" = "1" ] && return 0
+    local cfg
+    cfg="$(sudo sshd -T 2>/dev/null)" || return 1
+    awk '
+        $1 == "passwordauthentication"         { pw = $2 }
+        $1 == "kbdinteractiveauthentication"   { ki = $2 }
+        $1 == "usepam"                         { pam = $2 }
+        END { exit !(pw == "yes" || (ki == "yes" && pam == "yes")) }
+    ' <<< "$cfg"
+}
+
+# True when sshd's effective config has both KbdInteractiveAuthentication and
+# UsePAM on, i.e. our drop-in is not overridden by an earlier one.
+_ga_ssh_dropin_effective() {
+    [ "${DRY_RUN:-0}" = "1" ] && return 0
+    local cfg
+    cfg="$(sudo sshd -T 2>/dev/null)" || return 1
+    awk '
+        $1 == "kbdinteractiveauthentication"   { ki = $2 }
+        $1 == "usepam"                         { pam = $2 }
+        END { exit !(ki == "yes" && pam == "yes") }
+    ' <<< "$cfg"
+}
+
+# Installs the package and enables a pam-auth-update profile (nullok, so a
+# user who has not run `google-authenticator` still logs in with the password
+# alone). Never edits /etc/pam.d/* — pam-auth-update regenerates common-auth.
+# Enrollment stays manual: see docs/totp-2fa.md.
+install_google_authenticator() {
+    print_status "section" "GOOGLE AUTHENTICATOR (TOTP 2FA)"
+
+    if [ "$PACKAGE_MANAGER" != "apt" ]; then
+        print_status "error" "pam-auth-update is Debian/Ubuntu only"
+        return 1
+    fi
+
+    run_or_echo sudo apt-get install -y libpam-google-authenticator || return 1
+    run_or_echo sudo install -m 0644 "$_GA_PAM_DIR/google-authenticator" \
+        "$_GA_PAM_PROFILE" || return 1
+    run_or_echo sudo pam-auth-update --enable google-authenticator || return 1
+    # pam-auth-update leaves a locally modified common-auth untouched (exit 0),
+    # so confirm the profile actually landed instead of reporting it enabled.
+    if [ "${DRY_RUN:-0}" != "1" ] && ! grep -q pam_google_authenticator "$_GA_COMMON_AUTH"; then
+        print_status "error" "pam-auth-update left $_GA_COMMON_AUTH unchanged (locally modified?); not enabled"
+        return 1
+    fi
+
+    # Drop any earlier copy first so the probe sees the host's own config.
+    # A running sshd still serves the removed copy until reloaded.
+    local had_dropin=0
+    { [ -e "$_GA_SSHD_DROPIN" ] || [ -e "$_GA_SSHD_DROPIN_OLD" ]; } && had_dropin=1
+    run_or_echo sudo rm -f "$_GA_SSHD_DROPIN" "$_GA_SSHD_DROPIN_OLD"
+
+    # sshd lives in /usr/sbin, which a non-root user's PATH often lacks.
+    if ! command_exists sshd && [ ! -x "$_GA_SSHD_BIN" ]; then
+        print_status "info" "openssh-server not installed; skipping the ssh drop-in"
+        if [ "$had_dropin" = "1" ]; then
+            print_status "warning" "An earlier TOTP ssh drop-in was removed; reload sshd to drop it: sudo systemctl reload ssh"
+        fi
+    elif _ga_ssh_password_login_enabled; then
+        run_or_echo sudo install -m 0644 \
+            "$_GA_PAM_DIR/sshd-google-authenticator.conf" "$_GA_SSHD_DROPIN" || return 1
+        if ! run_or_echo sudo sshd -t; then
+            print_status "error" "sshd -t rejected the drop-in; removing it"
+            run_or_echo sudo rm -f "$_GA_SSHD_DROPIN"
+            return 1
+        fi
+        # An earlier drop-in can pin UsePAM no (sshd keeps the first value),
+        # which would leave ssh password logins outside the PAM module.
+        if ! _ga_ssh_dropin_effective; then
+            print_status "error" "sshd does not enable UsePAM and KbdInteractiveAuthentication with the drop-in; removing it"
+            run_or_echo sudo rm -f "$_GA_SSHD_DROPIN"
+            return 1
+        fi
+        print_status "info" "Reload sshd to apply the drop-in: sudo systemctl reload ssh"
+    else
+        print_status "warning" "Adding TOTP to ssh here would reopen password logins (nullok lets unenrolled accounts in with the password alone), so key-only ssh is left unchanged. See docs/totp-2fa.md for the opt-in."
+        if [ "$had_dropin" = "1" ]; then
+            print_status "warning" "An earlier TOTP ssh drop-in was removed; reload sshd to drop it: sudo systemctl reload ssh"
+        fi
+    fi
+
+    print_status "success" "TOTP profile enabled (not enrolled yet)"
+    print_status "info" "Keep a root shell open, then run: google-authenticator"
+}
+
+uninstall_google_authenticator() {
+    print_status "section" "UNINSTALL GOOGLE AUTHENTICATOR (TOTP 2FA)"
+
+    run_or_echo sudo pam-auth-update --disable google-authenticator || return 1
+    # Same silent no-op as on install: a locally modified common-auth is left
+    # untouched with exit 0, so removing the profile file would not disable it.
+    if [ "${DRY_RUN:-0}" != "1" ] && grep -q pam_google_authenticator "$_GA_COMMON_AUTH"; then
+        print_status "error" "$_GA_COMMON_AUTH still lists pam_google_authenticator (locally modified?); nothing removed"
+        return 1
+    fi
+    run_or_echo sudo rm -f "$_GA_SSHD_DROPIN" "$_GA_SSHD_DROPIN_OLD" "$_GA_PAM_PROFILE"
+    print_status "success" "TOTP profile disabled and ssh drop-in removed"
+}
+
+# ============================================================================
 # REGISTRY
 # ============================================================================
 # Entry order = run order. uninstall_dim_calendar_events is NOT registered
@@ -1309,6 +1428,7 @@ INSTALL_REGISTRY+=(
     "install_coolercontrol:CoolerControl:Monitoring:org.coolercontrol.CoolerControl.desktop"
     "install_gsmartcontrol:GSmartControl (disk SMART health):Monitoring:gsmartcontrol.desktop"
     "install_nvtop:nvtop (GPU process monitor):Monitoring:nvtop.desktop"
+    "install_google_authenticator:Google Authenticator (TOTP 2FA)::"
     "install_dim_calendar_events:Calendar Events Enhancement::"
     "configure_gsconnect:GSConnect::"
 )
