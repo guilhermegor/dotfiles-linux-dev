@@ -183,6 +183,25 @@ run_guard() {
 EOF
 }
 
+# refresh_lock [HEADS_FILE] — the lock dir a detached refresh holds, keyed on the cwd and on the
+# digest of the open-PR heads the way the guard computes them.
+refresh_lock() {
+    local digest
+    digest="$(printf '%s\n' "$(cat "${1:-$HEADS}")" | sort | cksum | cut -d' ' -f1)"
+    printf '%s/%s.%s.lock' "$REVIEW_FANOUT_CACHE_DIR" "$(printf '%s' "$TEST_TMP" | cksum | cut -d' ' -f1)" "$digest"
+}
+
+# wait_refresh_done LOCK — block until a detached refresh released LOCK, so it cannot outlive
+# the test and race teardown.
+wait_refresh_done() {
+    local _
+    for _ in $(seq 100); do
+        [ -d "$1" ] || return 0
+        sleep 0.1
+    done
+    return 1
+}
+
 # --- it blocks when there is work --------------------------------------------------
 
 @test "blocks a round with dispatchable PRs and no review agent" {
@@ -642,6 +661,7 @@ EOF
     [[ "$output" == *"timed out after 1s"* ]]
     [[ "$output" == *"background refresh is running"* ]]
     [[ "$output" != *"UNREADABLE"* ]]
+    wait_refresh_done "$(refresh_lock)"
 }
 
 @test "a planner timeout with the cache disabled starts no background refresh" {
@@ -660,8 +680,9 @@ EOF
     printf 'import os\nopen(os.environ["RAN"], "w").close()\n' >"$REVIEW_FANOUT_PLANNER"
     RAN="$TEST_TMP/planner_ran"
     export RAN
-    # Hold the lock the way a live refresh does: the key is the cksum of the cwd.
-    mkdir "$REVIEW_FANOUT_CACHE_DIR/$(printf '%s' "$TEST_TMP" | cksum | cut -d' ' -f1).lock"
+    # Hold the lock the way a live refresh does: keyed on the cwd and the current heads.
+    mkdir "$(refresh_lock)"
+    printf '%s\n' "$$" >"$(refresh_lock)/pid"
     REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
     [ "$status" -eq 2 ]
     [[ "$output" == *"already running"* ]]
@@ -672,11 +693,103 @@ EOF
     loop_invoked
     printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
     mkdir -p "$REVIEW_FANOUT_CACHE_DIR"
-    lock="$REVIEW_FANOUT_CACHE_DIR/$(printf '%s' "$TEST_TMP" | cksum | cut -d' ' -f1).lock"
+    lock="$(refresh_lock)"
     mkdir "$lock"
     touch -d '3 hours ago' "$lock"
     REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
     [ "$status" -eq 0 ]
+}
+
+@test "a lock whose refresh was killed does not stop the foreground planner" {
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    mkdir -p "$REVIEW_FANOUT_CACHE_DIR"
+    mkdir "$(refresh_lock)"
+    sh -c 'echo $$' >"$(refresh_lock)/pid"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a refresh running for superseded heads does not hold up the current heads" {
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    mkdir -p "$REVIEW_FANOUT_CACHE_DIR"
+    mkdir "$(refresh_lock)"
+    printf '%s\n' "$$" >"$(refresh_lock)/pid"
+    printf '520:bbbb\n' >"$HEADS"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+}
+
+# A planner that outlasts the foreground timeout and prints a valid plan on the refresh's run.
+slow_valid_planner() {
+    cat >"$REVIEW_FANOUT_PLANNER" <<'STUB'
+import os
+import sys
+import time
+
+time.sleep(2)
+extra = os.environ.get("PUSH_DURING_RUN")
+if extra:
+    with open(os.environ["HEADS"], "w", encoding="utf-8") as handle:
+        handle.write(extra)
+sys.stdout.write('{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}')
+STUB
+}
+
+@test "a finished refresh publishes the plan the next Stop reads" {
+    loop_invoked
+    slow_valid_planner
+    local lock
+    lock="$(refresh_lock)"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 REVIEW_FANOUT_PLANNER_TIMEOUT=1 REVIEW_FANOUT_REFRESH_TIMEOUT=30 run_guard
+    [ "$status" -eq 2 ]
+    wait_refresh_done "$lock"
+    printf 'not json at all\n' >"$REVIEW_FANOUT_PLANNER"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a refresh that outlived a push publishes nothing" {
+    loop_invoked
+    slow_valid_planner
+    local lock
+    lock="$(refresh_lock)"
+    PUSH_DURING_RUN='520:bbbb' REVIEW_FANOUT_CACHE_TTL_MIN=10 REVIEW_FANOUT_PLANNER_TIMEOUT=1 \
+        REVIEW_FANOUT_REFRESH_TIMEOUT=30 run_guard
+    [ "$status" -eq 2 ]
+    wait_refresh_done "$lock"
+    [ "$(ls "$REVIEW_FANOUT_CACHE_DIR"/*.json 2>/dev/null | wc -l)" -eq 0 ]
+    [ "$(ls -A "$REVIEW_FANOUT_CACHE_DIR" | wc -l)" -eq 0 ]
+}
+
+@test "a refresh whose plan has a malformed body is not cached" {
+    loop_invoked
+    cat >"$REVIEW_FANOUT_PLANNER" <<'STUB'
+import time
+
+time.sleep(2)
+print('{"rung":{"status":"ok"},"dispatchable":null,"excluded":{}}')
+STUB
+    local lock
+    lock="$(refresh_lock)"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 REVIEW_FANOUT_PLANNER_TIMEOUT=1 REVIEW_FANOUT_REFRESH_TIMEOUT=30 run_guard
+    [ "$status" -eq 2 ]
+    wait_refresh_done "$lock"
+    [ "$(ls "$REVIEW_FANOUT_CACHE_DIR"/*.json 2>/dev/null | wc -l)" -eq 0 ]
+}
+
+@test "temp files a killed refresh left behind are swept on the next timeout" {
+    loop_invoked
+    printf 'import time\ntime.sleep(30)\n' >"$REVIEW_FANOUT_PLANNER"
+    mkdir -p "$REVIEW_FANOUT_CACHE_DIR"
+    orphan="$REVIEW_FANOUT_CACHE_DIR/$(printf '%s' "$TEST_TMP" | cksum | cut -d' ' -f1).1.json.AbCdEf"
+    : >"$orphan"
+    touch -d '3 hours ago' "$orphan"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 REVIEW_FANOUT_PLANNER_TIMEOUT=1 REVIEW_FANOUT_REFRESH_TIMEOUT=1 run_guard
+    [ "$status" -eq 2 ]
+    [ ! -e "$orphan" ]
+    wait_refresh_done "$(refresh_lock)"
 }
 
 @test "a fresh cached plan is read without running the planner" {

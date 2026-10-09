@@ -88,6 +88,11 @@ PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-90}"
 # timeout the planner is re-run detached with REFRESH_TIMEOUT so the next Stop finds it.
 # The cache key includes a digest of every open PR's head SHA (one REST call), so a push
 # invalidates it at once — a TTL alone would let a Stop through for a head pushed after caching.
+# What the key does NOT see: a review landing on an unchanged head, a check finishing, the rung
+# probe. A plan stale that way lives at most CACHE_TTL_MIN minutes (a refresh's run time counts
+# from when it finished); it errs toward blocking on done work, or toward a late nudge.
+# The key costs one REST call (20s cap) on every Stop, cache hit or not — an offline hook
+# disables the cache rather than trusting it.
 CACHE_DIR="${REVIEW_FANOUT_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/review_fanout}"
 CACHE_TTL_MIN="${REVIEW_FANOUT_CACHE_TTL_MIN:-10}"
 REFRESH_TIMEOUT="${REVIEW_FANOUT_REFRESH_TIMEOUT:-900}"
@@ -391,14 +396,38 @@ open_pr_heads() {
 	printf '%s\n' "$out" | sort | cksum | cut -d' ' -f1
 }
 
-# refresh_running LOCK — a detached refresh holds LOCK; one older than the refresh timeout is stale.
+# refresh_running LOCK — a detached refresh holds LOCK (a dir; its pid file is written once the
+# refresh starts). Running = the dir is younger than the refresh timeout and its pid, if any,
+# is alive — a killed refresh leaves its lock behind, and it must not block Stops for 16 minutes.
 refresh_running() {
-	[ -d "$1" ] && [ -z "$(find "$1" -maxdepth 0 -mmin "+$((REFRESH_TIMEOUT / 60 + 1))" 2>/dev/null)" ]
+	local pid
+	[ -d "$1" ] || return 1
+	[ -z "$(find "$1" -maxdepth 0 -mmin "+$((REFRESH_TIMEOUT / 60 + 1))" 2>/dev/null)" ] || return 1
+	pid="$(cat "$1/pid" 2>/dev/null)"
+	[ -z "$pid" ] || kill -0 "$pid" 2>/dev/null
+}
+
+# plan_valid — stdin is a plan. Shape, not just keys: {"dispatchable":null,"excluded":{}} has
+# both keys, formats to nothing, and would exit 0 as a false "nothing to review". Every
+# dispatchable record needs a PR number; every excluded record needs a non-empty reason — an
+# exclusion with no reason is exactly the silent skip this hook exists to refuse.
+plan_valid() {
+	jq -e '
+		(.rung.status | type == "string")
+		and (.dispatchable | type == "array") and (.excluded | type == "array")
+		and all(.dispatchable[]; (.pr | type == "number"))
+		and all(.excluded[]; (.pr | type == "number") and ((.reason // "") | length > 0))
+	' >/dev/null 2>&1
 }
 
 # publish_cache TMP CACHE — rename TMP over CACHE (readers never see a half-written file) and
-# drop entries cached under older PR heads.
+# drop entries cached under older PR heads. Only if the open PRs still carry the heads CACHE
+# was keyed on: a refresh that outlived a push must not publish (or prune) over the newer key.
 publish_cache() {
+	if [ "$(open_pr_heads "$cwd")" != "$heads" ]; then
+		rm -f "$1"
+		return 0
+	fi
 	mv "$1" "$2" && find "$CACHE_DIR" -maxdepth 1 -name "$cwdsum.*.json" ! -name "${2##*/}" -delete 2>/dev/null
 }
 
@@ -498,11 +527,14 @@ main() {
 	# DIFFERENT repository between calls (dotfiles-linux-dev#229) — a plan computed against the
 	# wrong repo is worse than no plan, because it reads as an answer.
 	cwdsum="$(printf '%s' "$cwd" | cksum | cut -d' ' -f1)"
-	lock="$CACHE_DIR/$cwdsum.lock"
+	lock=""
 	cache=""
 	# No cache when disabled, or when the open-PR heads cannot be read (cannot prove it current).
 	if [ "$CACHE_TTL_MIN" -gt 0 ] && heads="$(open_pr_heads "$cwd")"; then
 		cache="$CACHE_DIR/$cwdsum.$heads.json"
+		# Per heads, like the cache: a refresh for superseded heads publishes nowhere a Stop will
+		# look, so it must not make the current heads wait on it.
+		lock="$CACHE_DIR/$cwdsum.$heads.lock"
 	fi
 	plan=""
 	planner_rc=0
@@ -519,28 +551,22 @@ main() {
 		if [ -z "$cache" ]; then
 			block_unreadable "review fan-out planner timed out after ${PLANNER_TIMEOUT}s — plan caching is off (REVIEW_FANOUT_CACHE_TTL_MIN=0 or the open-PR heads were unreadable), so there is no background refresh; raise REVIEW_FANOUT_PLANNER_TIMEOUT. Not the same as empty."
 		fi
-		# Detached refresh: one at a time (mkdir lock; refresh_running treats an old lock as stale).
+		# Detached refresh: one at a time per heads (mkdir lock). A dead or stale lock, and the
+		# temp files a killed refresh left, are swept first.
 		mkdir -p "$CACHE_DIR"
-		find "$lock" -maxdepth 0 -mmin "+$((REFRESH_TIMEOUT / 60 + 1))" -exec rmdir {} + 2>/dev/null
+		find "$CACHE_DIR" -maxdepth 1 -name "$cwdsum.*.json.*" -mmin "+$((REFRESH_TIMEOUT / 60 + 1))" -delete 2>/dev/null
+		refresh_running "$lock" || rm -rf "$lock"
 		if mkdir "$lock" 2>/dev/null; then
-			(cd "$cwd" && tmp="$(mktemp "$cache.XXXXXX")" \
+			(echo "$BASHPID" >"$lock/pid"
+				cd "$cwd" && tmp="$(mktemp "$cache.XXXXXX")" \
 				&& timeout "$REFRESH_TIMEOUT" python3 "$PLANNER" >"$tmp" 2>/dev/null \
-				&& jq -e '.rung.status' "$tmp" >/dev/null 2>&1 && publish_cache "$tmp" "$cache"
-				rm -f "$tmp"; rmdir "$lock") >/dev/null 2>&1 </dev/null &
+				&& plan_valid <"$tmp" && publish_cache "$tmp" "$cache"
+				rm -f "${tmp:-}"; rm -rf "$lock") >/dev/null 2>&1 </dev/null &
 		fi
 		block_unreadable "review fan-out planner timed out after ${PLANNER_TIMEOUT}s — a background refresh is running (up to ${REFRESH_TIMEOUT}s); the next Stop reads its cached plan. Not the same as empty."
 	fi
 
-	# Shape, not just keys: {"dispatchable":null,"excluded":{}} has both keys, formats to
-	# nothing, and would exit 0 below as a false "nothing to review". Every dispatchable
-	# record needs a PR number; every excluded record needs a non-empty reason — an exclusion
-	# with no reason is exactly the silent skip this hook exists to refuse.
-	if ! printf '%s' "$plan" | jq -e '
-		(.rung.status | type == "string")
-		and (.dispatchable | type == "array") and (.excluded | type == "array")
-		and all(.dispatchable[]; (.pr | type == "number"))
-		and all(.excluded[]; (.pr | type == "number") and ((.reason // "") | length > 0))
-	' >/dev/null 2>&1; then
+	if ! printf '%s' "$plan" | plan_valid; then
 		rm -f "$cache"
 		block_unreadable "review fan-out plan UNREADABLE (planner failed, timed out, or printed something that is not the documented object) — not the same as empty."
 	fi
