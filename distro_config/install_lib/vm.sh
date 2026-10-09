@@ -224,7 +224,11 @@ install_ventoy() {
             rm -rf "$tmp_dir"
             return 1
         fi
-        install_ventoy_launchers
+        if ! install_ventoy_launchers; then
+            print_status "error" "Ventoy installed, but the ventoy-web/ventoy-plugson launchers failed"
+            rm -rf "$tmp_dir"
+            return 1
+        fi
         print_status "success" "Ventoy installed to $ventoy_dir"
         ventoy_installed=1
     fi

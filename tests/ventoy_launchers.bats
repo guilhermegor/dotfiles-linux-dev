@@ -364,3 +364,11 @@ STUB
     [ "$status" -ne 0 ]
     [[ "$output" == *"cannot fully inspect"* ]]
 }
+
+@test "install_ventoy fails when the launchers fail on a fresh install" {
+    _setup_install
+    install_ventoy_launchers() { return 1; }
+    run install_ventoy
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"Ventoy installed to"* ]]
+}
