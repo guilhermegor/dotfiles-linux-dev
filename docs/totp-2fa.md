@@ -27,7 +27,9 @@ forces `UsePAM yes`, so keyboard-interactive under `UsePAM no` would be a
 brand-new PAM password path). `sshd -T` without `-C` shows only global
 values, so `Match` blocks are not considered.
 
-- **Key-only host** (neither condition holds, the Ubuntu default): the drop-in
+- **Key-only host** (neither condition holds, e.g. cloud images that set
+  `PasswordAuthentication no`; stock Ubuntu Server does *not* qualify, since
+  sshd defaults to `PasswordAuthentication yes`): the drop-in
   is skipped with a warning, and ssh is left unchanged. Enabling
   keyboard-interactive here would reopen a password login path, and because
   of `nullok` an unenrolled account would get in with the password alone.
@@ -41,6 +43,7 @@ values, so `Match` blocks are not considered.
   `sshd -t`, and is removed again if invalid. The `10-` prefix makes it sort
   before most vendor drop-ins (sshd keeps the first value it reads, in
   lexical order); a lower-numbered file such as `00-*.conf` would still win.
+  sshd only reads the new file on reload: `sudo systemctl reload ssh`.
 
 Key-only logins skip PAM, so the code is never asked for them.
 `AuthenticationMethods` is deliberately not set by the installer. To require
@@ -72,11 +75,17 @@ google-authenticator
 Keep a root shell (`sudo -s`) open in another terminal while testing the first
 login, sudo and ssh.
 
-If locked out: boot recovery mode, then run
+If locked out: boot recovery mode (the root shell there does not use PAM, so
+no code is asked), remount the filesystem writable, then disable the profile:
 
 ```bash
+mount -o remount,rw /
 pam-auth-update --disable google-authenticator
 ```
+
+Never `apt remove libpam-google-authenticator` while the profile is enabled:
+`common-auth` would then name a missing module and every `sudo`/login fails.
+Run `uninstall_google_authenticator` first.
 
 ## Disable
 

@@ -196,12 +196,26 @@ refute_dropin_installed() {
 }
 
 @test "uninstall disables the profile and removes the drop-in" {
+    : > "$_GA_COMMON_AUTH"
     run uninstall_google_authenticator
     [ "$status" -eq 0 ]
     grep -q 'pam-auth-update --disable google-authenticator' "$CALLS"
     grep -q 'rm -f .*/etc/ssh/sshd_config.d/10-google-authenticator.conf' "$CALLS"
     grep -q 'rm -f .*/etc/ssh/sshd_config.d/google-authenticator.conf' "$CALLS"
     refute_call '/etc/pam.d'
+}
+
+@test "uninstall fails and removes nothing while common-auth still lists the module" {
+    run uninstall_google_authenticator
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"still lists"* ]]
+    refute_call 'rm -f'
+}
+
+@test "install tells the owner to reload sshd after adding the drop-in" {
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"systemctl reload ssh"* ]]
 }
 
 @test "registered as a CLI entry with an empty gnome folder" {

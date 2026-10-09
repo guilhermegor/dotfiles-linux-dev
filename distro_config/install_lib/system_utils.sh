@@ -1344,6 +1344,7 @@ install_google_authenticator() {
             run_or_echo sudo rm -f "$_GA_SSHD_DROPIN"
             return 1
         fi
+        print_status "info" "Reload sshd to apply the drop-in: sudo systemctl reload ssh"
     else
         print_status "warning" "Adding TOTP to ssh here would reopen password logins (nullok lets unenrolled accounts in with the password alone), so key-only ssh is left unchanged. See docs/totp-2fa.md for the opt-in."
     fi
@@ -1356,6 +1357,12 @@ uninstall_google_authenticator() {
     print_status "section" "UNINSTALL GOOGLE AUTHENTICATOR (TOTP 2FA)"
 
     run_or_echo sudo pam-auth-update --disable google-authenticator || return 1
+    # Same silent no-op as on install: a locally modified common-auth is left
+    # untouched with exit 0, so removing the profile file would not disable it.
+    if [ "${DRY_RUN:-0}" != "1" ] && grep -q pam_google_authenticator "$_GA_COMMON_AUTH"; then
+        print_status "error" "$_GA_COMMON_AUTH still lists pam_google_authenticator (locally modified?); nothing removed"
+        return 1
+    fi
     run_or_echo sudo rm -f "$_GA_SSHD_DROPIN" "$_GA_SSHD_DROPIN_OLD" "$_GA_PAM_PROFILE"
     print_status "success" "TOTP profile disabled and ssh drop-in removed"
 }
