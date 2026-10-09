@@ -70,3 +70,28 @@ setup() {
     [ "$status" -eq 0 ]
     [ "$output" -eq 1 ]
 }
+
+# dotfiles-linux-dev#364: the spec file half.
+
+@test "writes projects/<name>.yaml in the greenfield repo" {
+    run grep -c 'repos/guilhermegor/greenfield/contents/projects/' "$CMD"
+    [ "$status" -eq 0 ]
+    [ "$output" -ge 1 ]
+}
+
+@test "spec follows blueprintx's KEY=value format and refuses unmapped skeletons" {
+    grep -q 'blueprintx new --spec' "$CMD"
+    grep -q 'flat `KEY=value` list' "$CMD"
+    grep -q 'Emit \*\*only\*\* keys that format defines' "$CMD"
+    grep -q 'ts-lib' "$CMD"
+}
+
+@test "names three independent visibility fields; services carry no registry" {
+    grep -q 'Three visibility fields, never one' "$CMD"
+    grep -q 'forces `registry: git-only`' "$CMD"
+    grep -q 'Services carry no publish keys' "$CMD"
+}
+
+@test "issue body links the YAML as the source of truth" {
+    grep -q 'Source of truth: <html_url' "$CMD"
+}
