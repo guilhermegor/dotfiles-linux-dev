@@ -77,7 +77,7 @@ _deploy_drift_manifest() {
 # it would read as drift forever. An unresolvable dir reads as drift, never as a match.
 _deploy_drift_same() {
     local src="$1" dest="$2" repo_root="$3" dir
-    if ! grep -q '@DOTFILES_DIR@' "$src"; then
+    if ! grep -qF "$DOTFILES_DIR_PLACEHOLDER" "$src"; then
         cmp -s "$src" "$dest"
         return
     fi

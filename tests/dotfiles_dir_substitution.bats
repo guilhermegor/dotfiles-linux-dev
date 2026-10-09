@@ -148,3 +148,12 @@ deploy_all() {
     run env DOTFILES_DIR="$FAKE_DIR" bash -c "source '$REPO_ROOT/ai_clients/claude/hooks/lib/deploy_drift.sh'; deploy_drift_counts '$root' '$live'"
     [ "$output" = "$(printf '1\t0')" ]
 }
+
+@test "the deployed helper still substitutes (deploy renders hooks/lib/ too)" {
+    deploy_all
+    [ "$status" -eq 0 ]
+    run bash -c 'source "$1"; printf "x @DOTFILES_DIR""@ y\n" | substitute_dotfiles_dir /new/path' _ \
+        "$CLAUDE_HOME/hooks/lib/dotfiles_dir.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "x /new/path y" ]
+}

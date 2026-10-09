@@ -221,6 +221,9 @@ step_move_project_key() {
 step_move_checkout() {
     print_status "section" "2/7 CHECKOUT + WORKTREES"
     act "mv $OLD -> $NEW" mv_checkout
+    # Right after the move, not after redeploy: the still-live config names $OLD, and a
+    # failed redeploy under set -e must not leave it pointing at nothing.
+    act "ln -s $NEW $OLD  (temporary: remove once the other repos are updated)" ln -s "$NEW" "$OLD"
 }
 
 # Moves the directory, then repairs and verifies every linked worktree. A failed move puts
@@ -337,8 +340,7 @@ step_redeploy() {
 }
 
 step_symlink() {
-    print_status "section" "6/7 COMPATIBILITY SYMLINK + OTHER REPOS"
-    act "ln -s $NEW $OLD  (temporary: remove once the other repos are updated)" ln -s "$NEW" "$OLD"
+    print_status "section" "6/7 OTHER REPOS (compatibility symlink made in step 2)"
 
     local repo hits real seen=""
     local -a candidates=("$PARENT"/*/)

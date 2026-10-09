@@ -15,6 +15,10 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     exit 1
 fi
 
+# Built in two halves: this file ships through install_with_dotfiles_dir too, so a literal
+# placeholder in its code would be rendered into the checkout path on deploy.
+DOTFILES_DIR_PLACEHOLDER='@DOTFILES_DIR''@'
+
 # resolve_dotfiles_dir [<any-path-inside-the-checkout>]
 # $DOTFILES_DIR wins when set (tests, unusual layouts). Otherwise the MAIN working tree
 # of the repo containing the path (default: this file): `--show-toplevel` alone would bake
@@ -43,7 +47,7 @@ substitute_dotfiles_dir() {
     local dir="${1:-}" escaped
     [[ -n "$dir" ]] || dir="$(resolve_dotfiles_dir)" || return 1
     escaped="$(printf '%s' "$dir" | sed 's/[|&\\]/\\&/g')"
-    sed "s|@DOTFILES_DIR@|$escaped|g"
+    sed "s|$DOTFILES_DIR_PLACEHOLDER|$escaped|g"
 }
 
 # install_with_dotfiles_dir <src> <dest> — cp, substituting the placeholder when present.
@@ -51,7 +55,7 @@ substitute_dotfiles_dir() {
 # not a truncated one.
 install_with_dotfiles_dir() {
     local src="$1" dest="$2" tmp
-    if ! grep -q '@DOTFILES_DIR@' "$src"; then
+    if ! grep -qF "$DOTFILES_DIR_PLACEHOLDER" "$src"; then
         cp "$src" "$dest"
         return
     fi
