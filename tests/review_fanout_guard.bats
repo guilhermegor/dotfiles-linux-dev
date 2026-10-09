@@ -58,6 +58,16 @@ STUB
     REVIEW_FANOUT_CACHE_DIR="$TEST_TMP/cache"
     REVIEW_FANOUT_CACHE_TTL_MIN=0
     export REVIEW_FANOUT_CACHE_DIR REVIEW_FANOUT_CACHE_TTL_MIN
+
+    # `gh api .../pulls` stub: prints $HEADS (the open-PR head list the cache is keyed on), or
+    # fails when GH_STUB_FAIL is set. Real file on PATH — the guard shells out.
+    HEADS="$TEST_TMP/heads.txt"
+    printf '520:aaaa\n' >"$HEADS"
+    mkdir -p "$TEST_TMP/bin"
+    printf '#!/bin/sh\n[ -z "$GH_STUB_FAIL" ] || exit 1\ncat "$HEADS"\n' >"$TEST_TMP/bin/gh"
+    chmod +x "$TEST_TMP/bin/gh"
+    PATH="$TEST_TMP/bin:$PATH"
+    export HEADS PATH
 }
 
 teardown() {
@@ -340,10 +350,46 @@ EOF
 @test "a planner timeout says timed out after Ns, not UNREADABLE, and still blocks" {
     loop_invoked
     printf 'import time\ntime.sleep(30)\n' >"$REVIEW_FANOUT_PLANNER"
-    REVIEW_FANOUT_PLANNER_TIMEOUT=1 REVIEW_FANOUT_REFRESH_TIMEOUT=1 run_guard
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 REVIEW_FANOUT_PLANNER_TIMEOUT=1 REVIEW_FANOUT_REFRESH_TIMEOUT=1 run_guard
     [ "$status" -eq 2 ]
     [[ "$output" == *"timed out after 1s"* ]]
+    [[ "$output" == *"background refresh is running"* ]]
     [[ "$output" != *"UNREADABLE"* ]]
+}
+
+@test "a planner timeout with the cache disabled starts no background refresh" {
+    loop_invoked
+    printf 'import time\ntime.sleep(30)\n' >"$REVIEW_FANOUT_PLANNER"
+    REVIEW_FANOUT_PLANNER_TIMEOUT=1 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"timed out after 1s"* ]]
+    [[ "$output" == *"caching is off"* ]]
+    [ ! -e "$REVIEW_FANOUT_CACHE_DIR" ]
+}
+
+@test "a cache miss while a refresh runs reports it instead of starting another planner" {
+    loop_invoked
+    mkdir -p "$REVIEW_FANOUT_CACHE_DIR"
+    printf 'import os\nopen(os.environ["RAN"], "w").close()\n' >"$REVIEW_FANOUT_PLANNER"
+    RAN="$TEST_TMP/planner_ran"
+    export RAN
+    # Hold the lock the way a live refresh does: the key is the cksum of the cwd.
+    mkdir "$REVIEW_FANOUT_CACHE_DIR/$(printf '%s' "$TEST_TMP" | cksum | cut -d' ' -f1).lock"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"already running"* ]]
+    [ ! -e "$RAN" ]
+}
+
+@test "a stale refresh lock does not stop the foreground planner" {
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    mkdir -p "$REVIEW_FANOUT_CACHE_DIR"
+    lock="$REVIEW_FANOUT_CACHE_DIR/$(printf '%s' "$TEST_TMP" | cksum | cut -d' ' -f1).lock"
+    mkdir "$lock"
+    touch -d '3 hours ago' "$lock"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
 }
 
 @test "a fresh cached plan is read without running the planner" {
@@ -366,6 +412,53 @@ EOF
     REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
     [ "$status" -eq 2 ]
     [[ "$output" == *"UNREADABLE"* ]]
+}
+
+@test "a head pushed after caching invalidates the cached plan" {
+    # The staleness hole a TTL alone leaves: cached "nothing to review", then a push.
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+    printf '520:bbbb\n' >"$HEADS"
+    plan_with_work
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#520"* ]]
+    # The superseded entry is dropped, not left to accumulate.
+    [ "$(ls "$REVIEW_FANOUT_CACHE_DIR"/*.json | wc -l)" -eq 1 ]
+}
+
+@test "a new open PR invalidates the cached plan" {
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+    printf '520:aaaa\n521:cccc\n' >"$HEADS"
+    printf 'not json at all\n' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNREADABLE"* ]]
+}
+
+@test "unreadable open-PR heads disable the cache rather than trusting it" {
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+    printf 'not json at all\n' >"$PLAN"
+    GH_STUB_FAIL=1 REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNREADABLE"* ]]
+}
+
+@test "a published cache entry is whole JSON and leaves no temp file behind" {
+    loop_invoked
+    plan_with_work
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    jq -e '.dispatchable | length == 1' "$REVIEW_FANOUT_CACHE_DIR"/*.json
+    [ "$(ls -A "$REVIEW_FANOUT_CACHE_DIR" | wc -l)" -eq 1 ]
 }
 
 # --- but NEVER open about its own blindness ----------------------------------------

@@ -86,6 +86,8 @@ PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-90}"
 # A big board takes the planner ~5 min (#696), far past PLANNER_TIMEOUT. A validated plan is
 # cached per repo and reused while younger than CACHE_TTL_MIN minutes (0 disables); on a
 # timeout the planner is re-run detached with REFRESH_TIMEOUT so the next Stop finds it.
+# The cache key includes a digest of every open PR's head SHA (one REST call), so a push
+# invalidates it at once — a TTL alone would let a Stop through for a head pushed after caching.
 CACHE_DIR="${REVIEW_FANOUT_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/review_fanout}"
 CACHE_TTL_MIN="${REVIEW_FANOUT_CACHE_TTL_MIN:-10}"
 REFRESH_TIMEOUT="${REVIEW_FANOUT_REFRESH_TIMEOUT:-900}"
@@ -298,6 +300,27 @@ review_dispatch_running() {
 	return 1
 }
 
+# open_pr_heads CWD
+# Prints a digest of "<number>:<head sha>" for every open PR, or fails. A failure means the
+# cache cannot be proven current, so the caller runs with no cache at all.
+open_pr_heads() {
+	local out
+	out="$(cd "$1" && timeout 20 gh api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' \
+		--jq '.[] | "\(.number):\(.head.sha)"' 2>/dev/null)" || return 1
+	printf '%s\n' "$out" | sort | cksum | cut -d' ' -f1
+}
+
+# refresh_running LOCK — a detached refresh holds LOCK; one older than the refresh timeout is stale.
+refresh_running() {
+	[ -d "$1" ] && [ -z "$(find "$1" -maxdepth 0 -mmin "+$((REFRESH_TIMEOUT / 60 + 1))" 2>/dev/null)" ]
+}
+
+# publish_cache TMP CACHE — rename TMP over CACHE (readers never see a half-written file) and
+# drop entries cached under older PR heads.
+publish_cache() {
+	mv "$1" "$2" && find "$CACHE_DIR" -maxdepth 1 -name "$cwdsum.*.json" ! -name "${2##*/}" -delete 2>/dev/null
+}
+
 # block_unreadable REASON
 # One exit path for every case where the plan could not be trusted. Distinct wording from the
 # "there is work to do" message on purpose: an operator must be able to tell "the planner
@@ -393,23 +416,36 @@ main() {
 	# list` resolves its repo from the working directory, and the harness can reset cwd to a
 	# DIFFERENT repository between calls (dotfiles-linux-dev#229) — a plan computed against the
 	# wrong repo is worse than no plan, because it reads as an answer.
-	cache="$CACHE_DIR/$(printf '%s' "$cwd" | cksum | cut -d' ' -f1).json"
+	cwdsum="$(printf '%s' "$cwd" | cksum | cut -d' ' -f1)"
+	lock="$CACHE_DIR/$cwdsum.lock"
+	cache=""
+	# No cache when disabled, or when the open-PR heads cannot be read (cannot prove it current).
+	if [ "$CACHE_TTL_MIN" -gt 0 ] && heads="$(open_pr_heads "$cwd")"; then
+		cache="$CACHE_DIR/$cwdsum.$heads.json"
+	fi
 	plan=""
 	planner_rc=0
-	if [ -n "$(find "$cache" -mmin "-$CACHE_TTL_MIN" 2>/dev/null)" ]; then
+	if [ -n "$cache" ] && [ -n "$(find "$cache" -mmin "-$CACHE_TTL_MIN" 2>/dev/null)" ]; then
 		plan="$(cat "$cache")"
+	elif [ -n "$cache" ] && refresh_running "$lock"; then
+		# A planner started now would just time out too, 90s per Stop, while the refresh runs.
+		block_unreadable "review fan-out plan not cached yet — a background refresh is already running (up to ${REFRESH_TIMEOUT}s); the next Stop reads its cached plan. Not the same as empty."
 	else
 		plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)" || planner_rc=$?
 	fi
 
 	if [ "$planner_rc" -eq 124 ]; then
-		# Detached refresh: one at a time (mkdir lock; a lock older than the refresh timeout is stale).
+		if [ -z "$cache" ]; then
+			block_unreadable "review fan-out planner timed out after ${PLANNER_TIMEOUT}s — plan caching is off (REVIEW_FANOUT_CACHE_TTL_MIN=0 or the open-PR heads were unreadable), so there is no background refresh; raise REVIEW_FANOUT_PLANNER_TIMEOUT. Not the same as empty."
+		fi
+		# Detached refresh: one at a time (mkdir lock; refresh_running treats an old lock as stale).
 		mkdir -p "$CACHE_DIR"
-		find "$cache.lock" -maxdepth 0 -mmin "+$((REFRESH_TIMEOUT / 60 + 1))" -exec rmdir {} + 2>/dev/null
-		if mkdir "$cache.lock" 2>/dev/null; then
-			(cd "$cwd" && timeout "$REFRESH_TIMEOUT" python3 "$PLANNER" >"$cache.tmp" 2>/dev/null \
-				&& jq -e '.rung.status' "$cache.tmp" >/dev/null 2>&1 && mv "$cache.tmp" "$cache"
-				rm -f "$cache.tmp"; rmdir "$cache.lock") >/dev/null 2>&1 </dev/null &
+		find "$lock" -maxdepth 0 -mmin "+$((REFRESH_TIMEOUT / 60 + 1))" -exec rmdir {} + 2>/dev/null
+		if mkdir "$lock" 2>/dev/null; then
+			(cd "$cwd" && tmp="$(mktemp "$cache.XXXXXX")" \
+				&& timeout "$REFRESH_TIMEOUT" python3 "$PLANNER" >"$tmp" 2>/dev/null \
+				&& jq -e '.rung.status' "$tmp" >/dev/null 2>&1 && publish_cache "$tmp" "$cache"
+				rm -f "$tmp"; rmdir "$lock") >/dev/null 2>&1 </dev/null &
 		fi
 		block_unreadable "review fan-out planner timed out after ${PLANNER_TIMEOUT}s — a background refresh is running (up to ${REFRESH_TIMEOUT}s); the next Stop reads its cached plan. Not the same as empty."
 	fi
@@ -428,8 +464,10 @@ main() {
 		block_unreadable "review fan-out plan UNREADABLE (planner failed, timed out, or printed something that is not the documented object) — not the same as empty."
 	fi
 
-	if [ -z "$(find "$cache" -mmin "-$CACHE_TTL_MIN" 2>/dev/null)" ] && [ "$CACHE_TTL_MIN" -gt 0 ]; then
-		mkdir -p "$CACHE_DIR" && printf '%s' "$plan" >"$cache"
+	if [ -n "$cache" ] && [ -z "$(find "$cache" -mmin "-$CACHE_TTL_MIN" 2>/dev/null)" ]; then
+		mkdir -p "$CACHE_DIR" && tmp="$(mktemp "$cache.XXXXXX")" \
+			&& printf '%s' "$plan" >"$tmp" && publish_cache "$tmp" "$cache"
+		rm -f "${tmp:-}"
 	fi
 
 	rung_status="$(printf '%s' "$plan" | jq -r '.rung.status')"
