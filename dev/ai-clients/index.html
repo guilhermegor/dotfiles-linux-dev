@@ -2669,10 +2669,14 @@ and the other clients are copied verbatim. <code>tests/dotfiles_dir_substitution
 fails on a hardcoded path anywhere outside <code>docs/</code>, <code>.specs/</code> and the changelog,
 and on a placeholder in a verbatim-copied artifact. Bare NAMES (<code>dotfiles-dev#68</code>,
 <code>Origin: dotfiles-dev</code>) are fine: a rename breaks a path, not a label.</p>
-<p><strong>Known gap, same family:</strong> <code>pr_template_guard.sh</code> and <code>issue_template_guard.sh</code>
-resolve a <code>--repo owner/name</code> target to <code>~/github/&lt;name&gt;</code>, so a checkout whose
-directory differs from its remote name (<code>--repo</code> naming a renamed repo) cannot be
-found and is blocked as unresolvable. Not fixed by #661's de-hardcoding.</p>
+<p><strong>Same family, fixed (#701):</strong> <code>pr_template_guard.sh</code> and <code>issue_template_guard.sh</code>
+used to resolve a <code>--repo owner/name</code> target only to <code>~/github/&lt;name&gt;</code>, so a checkout
+whose directory differs from its remote name was blocked as unresolvable. Both now
+first accept the cwd checkout when its <code>origin</code> names the target
+(<code>origin_names_repo()</code> in <code>hooks/lib/gh_body_guard_common.sh</code>; github.com only, https or
+ssh, with or without <code>.git</code>). Still unresolvable, and blocked: a <code>--repo</code> target that is
+neither the cwd checkout's <code>origin</code> nor at <code>~/github/&lt;name&gt;</code> (a fork checkout whose
+<code>upstream</code> is the target included).</p>
 <p><code>bin/rename_checkout.sh &lt;new-dir&gt;</code> is the one-time rename (dry-run by default,
 <code>--apply</code> to do it; preconditions and steps in its header). It is the owner's
 step, run from a terminal outside the checkout.</p>
