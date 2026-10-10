@@ -134,6 +134,15 @@ partition labelled `Ventoy` (`lsblk`) and refuses on zero or several. `ventoy-pl
 disk via `findmnt` and calls the host's `ventoy-plugson`, or prints the install command when missing.
 The stick copy is a convenience for your own sticks: it sits on a FAT partition anyone with the stick can edit, so whoever modifies it can run code as the user; it calls `/usr/local/bin/ventoy-plugson` by absolute path only. `DRY_RUN=1` prints the command lines; `tests/ventoy_launchers.bats`.
 
+### KillDisk Freeware is a manual install (#703)
+
+Not automated on purpose. The vendor serves a Linux build at a stable URL
+(`https://download.lsoft.net/KillDiskLinuxFree.run.tar.gz`, a self-extracting `.run` installer that
+runs as root), but publishes no checksum or signature for it (no `.sha256`/`.md5`/`.asc`/`.sig`
+sibling, none on the vendor pages), so it cannot be verified before running as root. Install by
+hand from https://www.killdisk.com/killdisk-freeware.htm if needed; revisit if the vendor
+publishes a hash. Its folder would be `Infra`.
+
 ## Where to put a new install function
 
 | New install is… | Goes in |
@@ -184,7 +193,7 @@ Folders are grouped by **artifact produced**, not by tool category. Existing fol
 | `IRPF` | IRPF | Brazilian tax program |
 | `Code` | Code | IDEs, editors, terminals (Cursor, vim, nvim, Notepadqq, Warp, Devtoolbox) |
 | `Data` | Data | DB clients (pgAdmin4, DBeaver) |
-| `Infra` | Infra | VMs, containers, USB imaging (Docker Desktop, VM Manager, Ventoy, Balena Etcher) |
+| `Infra` | Infra | VMs, containers, USB imaging, disk tools (Docker Desktop, VM Manager, Ventoy, Balena Etcher, GNOME Disks, Baobab) |
 | `Design` | Design | Image/graphic design tools (Figma, GIMP, Pinta) |
 | `Planning` | Planning | Project/task planning (Linear, Google Calendar, Google Tasks, Notion Calendar, Miro, Google Keep) |
 | `Reading` | Reading | Things to read later (Instapaper, NewsFlash, Valor Digital) |

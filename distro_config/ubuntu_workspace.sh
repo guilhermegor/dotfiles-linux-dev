@@ -699,8 +699,7 @@ organize_app_folders() {
     
     local utility_app_names=(
         'nm-connection-editor.desktop' 'network-admin.desktop' 'gnome-nettool.desktop'
-        'org.gnome.baobab.desktop' 'baobab.desktop'
-        'org.gnome.DiskUtility.desktop' 'gnome-disks.desktop' 'gnome-disk-utility.desktop'
+        # baobab / DiskUtility deliberately absent: Infra claims them (#703).
         'org.gnome.FileShredder.desktop' 'file-shredder.desktop' 'shredder.desktop'
         'com.github.ADBeveridge.Raider.desktop' 'raider.desktop'
         'org.gnome.Evince.desktop' 'evince.desktop'
@@ -754,8 +753,8 @@ organize_app_folders() {
     # actually wants (Nautilus, Calculator, eog, Evince, Extensions, Shotwell,
     # clocks, Logs, Characters, font-viewer, gedit/TextEditor, FileRoller,
     # Screenshot, Weather, Maps, Evolution, Geary, MultiWriter, SimpleScan,
-    # baobab, DiskUtility, FileShredder, seahorse.Application) is already in
-    # utility_app_names above. A blanket org.gnome.* glob catches every OTHER
+    # FileShredder, seahorse.Application) is already in
+    # utility_app_names above (baobab/DiskUtility moved to Infra, #703). A blanket org.gnome.* glob catches every OTHER
     # org.gnome app too — Settings/Software (System), SystemMonitor/PowerStats
     # (Monitoring),
     # Boxes/Vinagre (Infra), Cheese/Music/Rhythmbox3/SoundRecorder/Totem
@@ -1324,6 +1323,8 @@ EOF
         'rustdesk.desktop' 'com.rustdesk.RustDesk.desktop' 'org.rustdesk.RustDesk.desktop'
         'balena-etcher-electron.desktop' 'balena-etcher.desktop'
         'ventoy.desktop' 'ventoy-web.desktop' 'ventoy-plugson.desktop'
+        'org.gnome.DiskUtility.desktop' 'gnome-disks.desktop' 'gnome-disk-utility.desktop'
+        'org.gnome.baobab.desktop' 'baobab.desktop'
     )
 
     for app in "${infra_app_names[@]}"; do
