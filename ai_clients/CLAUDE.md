@@ -402,6 +402,14 @@ PR still carries a reason, no bare override, and an unreadable policy falls back
 parallel plan, never to a guessed serial one. The guard needs no new branch — "the queue
 head has a `review-pr-<N>` agent in flight" is already its pass condition.
 
+**Merge-ready (#705).** On a strict base the plan also carries a separate `merge_ready` list:
+PRs `BEHIND` with every check clean and the review holding at the head, either named by a
+review (both channels) or carried forward — the gate named by `REVIEW_FANOUT_GATE_CHECK`
+(default `Review threads answered`) green on a head no review names, for a PR reviewed at some
+point (blueprintx#698/#699). Checked before the rung, so they need no reviewer; a red or
+ambiguous gate is a red check and never merge-ready. The guard lists them but never blocks
+on them; `dev-loop` step 4c-fast is the procedure.
+
 ## Worktree rescue fan-out: two callers, one implementation
 
 `hooks/lib/worktree_fanout.sh` (`fanout_worktrees()` + `classify_worktree_diff()`,
