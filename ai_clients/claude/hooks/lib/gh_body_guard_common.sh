@@ -25,6 +25,21 @@ fi
 
 _GH_BODY_GUARD_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# $1: owner/name. True when the cwd checkout's `origin` URL (github.com only, https or ssh, with
+# or without .git or a trailing slash) names that repo, compared case-insensitively. Lets both
+# guards accept the cwd checkout for a `--repo` target even when its directory name differs from
+# the repo name (dotfiles-linux-dev#701).
+origin_names_repo() {
+    local url slug
+    url="$(git remote get-url origin 2>/dev/null)" || return 1
+    url="${url%/}"
+    url="${url%.git}"
+    # Anchored to github.com: a gitlab/GHE remote or a nested path must not match a github.com
+    # target.
+    slug="$(printf '%s' "$url" | sed -nE 's#^([a-z+]+://)?([^@/]+@)?github\.com[:/]([^/:]+/[^/:]+)$#\3#p')"
+    [[ -n "$slug" && "${slug,,}" == "${1,,}" ]]
+}
+
 # Run gh_cmd_match.py against $1 (the raw command string) for $2 (noun: "pr" or "issue") and
 # populate these globals:
 #   GH_MATCHED       "true"/"false" — was a `[rtk] gh <noun> create|edit` segment found at all

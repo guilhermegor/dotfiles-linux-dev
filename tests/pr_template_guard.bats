@@ -163,6 +163,57 @@ payload() {
     rm -rf "$fake_home"
 }
 
+@test "uses the cwd checkout when its origin names --repo, even if the dir name differs (#701)" {
+    local fake_home
+    fake_home="$(mktemp -d)"   # empty: the $HOME/github/<name> fallback cannot resolve
+    git remote add origin https://github.com/someowner/other-repo.git
+    # $REPO is a randomly named dir; the body satisfies its own Description/Testing template.
+    run env HOME="$fake_home" bash -c "payload 'gh pr create --repo someowner/other-repo --title x --body \"## Description\\n## Testing\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    rm -rf "$fake_home"
+}
+
+@test "matches an ssh origin without .git for the --repo target (#701)" {
+    local fake_home
+    fake_home="$(mktemp -d)"
+    git remote add origin git@github.com:someowner/other-repo
+    run env HOME="$fake_home" bash -c "payload 'gh pr create --repo someowner/other-repo --title x --body \"## Description\\n## Testing\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    rm -rf "$fake_home"
+}
+
+@test "matches origin case-insensitively with a trailing slash (#701)" {
+    local fake_home
+    fake_home="$(mktemp -d)"
+    git remote add origin https://github.com/SomeOwner/Other-Repo/
+    run env HOME="$fake_home" bash -c "payload 'gh pr create --repo someowner/other-repo --title x --body \"## Description\\n## Testing\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    rm -rf "$fake_home"
+}
+
+@test "does not match an origin on a foreign host or nested path (#701)" {
+    local fake_home origin
+    fake_home="$(mktemp -d)"
+    for origin in https://gitlab.com/someowner/other-repo.git https://github.com/group/someowner/other-repo.git; do
+        git remote remove origin 2>/dev/null || true
+        git remote add origin "$origin"
+        run env HOME="$fake_home" bash -c "payload 'gh pr create --repo someowner/other-repo --title x --body \"## Description\\n## Testing\"' | '$GUARD'"
+        [ "$status" -eq 2 ]
+        [[ "$output" == *"could not resolve"* ]]
+    done
+    rm -rf "$fake_home"
+}
+
+@test "still blocks as unresolved when the cwd origin names a different repo (#701)" {
+    local fake_home
+    fake_home="$(mktemp -d)"
+    git remote add origin https://github.com/someowner/not-the-target.git
+    run env HOME="$fake_home" bash -c "payload 'gh pr create --repo someowner/other-repo --title x --body \"## Description\\n## Testing\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"could not resolve"* ]]
+    rm -rf "$fake_home"
+}
+
 @test "reports unresolvable (not non-compliant) when --repo has no local checkout" {
     local fake_home
     fake_home="$(mktemp -d)"

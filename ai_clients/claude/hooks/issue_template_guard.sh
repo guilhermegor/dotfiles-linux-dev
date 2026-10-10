@@ -69,8 +69,11 @@ main() {
     # Resolve the TARGET repo, not the session cwd's, mirroring pr_template_guard.sh exactly —
     # a `--repo`/`-R owner/name` on the command always wins over cwd.
     if [[ -n "$GH_REPO" ]]; then
-        root="$HOME/github/${GH_REPO##*/}"
-        [[ -d "$root/.git" ]] || block_unresolved_repo "$GH_REPO" "$root"
+        root="$(git rev-parse --show-toplevel 2>/dev/null)"
+        if ! origin_names_repo "$GH_REPO"; then
+            root="$HOME/github/${GH_REPO##*/}"
+            [[ -d "$root/.git" ]] || block_unresolved_repo "$GH_REPO" "$root"
+        fi
     else
         root="$(git rev-parse --show-toplevel 2>/dev/null)"
     fi

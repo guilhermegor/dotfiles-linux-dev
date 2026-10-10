@@ -958,10 +958,14 @@ fails on a hardcoded path anywhere outside `docs/`, `.specs/` and the changelog,
 and on a placeholder in a verbatim-copied artifact. Bare NAMES (`dotfiles-dev#68`,
 `Origin: dotfiles-dev`) are fine: a rename breaks a path, not a label.
 
-**Known gap, same family:** `pr_template_guard.sh` and `issue_template_guard.sh`
-resolve a `--repo owner/name` target to `~/github/<name>`, so a checkout whose
-directory differs from its remote name (`--repo` naming a renamed repo) cannot be
-found and is blocked as unresolvable. Not fixed by #661's de-hardcoding.
+**Same family, fixed (#701):** `pr_template_guard.sh` and `issue_template_guard.sh`
+used to resolve a `--repo owner/name` target only to `~/github/<name>`, so a checkout
+whose directory differs from its remote name was blocked as unresolvable. Both now
+first accept the cwd checkout when its `origin` names the target
+(`origin_names_repo()` in `hooks/lib/gh_body_guard_common.sh`; github.com only, https or
+ssh, with or without `.git`). Still unresolvable, and blocked: a `--repo` target that is
+neither the cwd checkout's `origin` nor at `~/github/<name>` (a fork checkout whose
+`upstream` is the target included).
 
 `bin/rename_checkout.sh <new-dir>` is the one-time rename (dry-run by default,
 `--apply` to do it; preconditions and steps in its header). It is the owner's
