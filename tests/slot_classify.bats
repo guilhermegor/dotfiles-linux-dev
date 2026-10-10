@@ -82,6 +82,21 @@ JSON"
     [[ "$output" != *"no-stated-wait"* ]]
 }
 
+@test "a wait stated by an older limit event is not borrowed by the newest wrapper (#707)" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY'
+[
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 600)\",
+   \"body\": \"Rate limit exceeded. Please wait 40 minutes before requesting another review. Reviews will be available in 40 minutes.\"},
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 590)\",
+   \"body\": \"> [!IMPORTANT]\\n> ## Review skipped\\n> This repository has fewer than 10 stars.\"},
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"$(ts 20)\",
+   \"body\": \"\\u26a0\\ufe0f Action not completed — Review rate limited.\"}
+]
+JSON"
+    [ "$status" -eq 0 ]
+    [ "$output" = "BUSY|rate-limited-no-stated-wait-on-this-page" ]
+}
+
 @test "a stated wait that has already elapsed reports FREE, naming the expiry" {
     run bash -c "cat <<JSON | python3 '$CLASSIFY'
 [
