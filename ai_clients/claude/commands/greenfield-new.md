@@ -8,7 +8,7 @@ argument-hint: "[--skeleton <name>]"
 You are filing a backlog item in `guilhermegor/greenfield` for a future, unattended
 `bin/blueprintx.sh` scaffold run — captured now as a GitHub issue with a named `key: value`
 answer map, so the run can happen later without a person re-answering an ordered list of
-prompts. It also writes `projects/<name>.yaml` in that repo, a spec file that
+prompts. It also writes `projects/<name>.spec` in that repo, a spec file that
 `blueprintx new --spec <file>` consumes (dotfiles-linux-dev#364). Follow these steps exactly. `$ARGUMENTS` may carry `--skeleton <name>` to preseed
 step 1's skeleton pick.
 
@@ -116,12 +116,12 @@ Load `s:story-score` via the Skill tool, passing the `name`/`description` keys a
 get the `Points` value filed in step 7. Follow the skill's own escalation rule if it returns a
 split signal instead of a 1–3 score.
 
-## 6. Write `projects/<name>.yaml`
+## 6. Write `projects/<name>.spec`
 
-The YAML is the source of truth for the scaffold; the issue body (step 7) only links it, because
+The spec file is the source of truth for the scaffold; the issue body (step 7) only links it, because
 bodies are edited by people and bots and are not typed. Its format is **blueprintx's**
 (`bin/lib/spec.sh`, `docs/spec-answers.md` in guilhermegor/blueprintx): a flat `KEY=value` list,
-`#` comments ignored — not nested YAML — so `blueprintx new --spec projects/<name>.yaml` reads it
+`#` comments ignored — not YAML, hence the `.spec` extension — so `blueprintx new --spec projects/<name>.spec` reads it
 unchanged. Emit **only** keys that format defines; never invent one.
 
 If `skeleton` is not one of `ddd-service-native-db`, `ddd-service-orm-db`, `api-service-native-db`,
@@ -163,7 +163,7 @@ Write it to the scratchpad, then commit it to greenfield's default branch (creat
 it exists — pass `-f sha=<current blob sha>` then):
 
 ```
-rtk gh api -X PUT repos/guilhermegor/greenfield/contents/projects/<name>.yaml \
+rtk gh api -X PUT repos/guilhermegor/greenfield/contents/projects/<name>.spec \
   -f message="feat: add scaffold spec for <name>" -f content="$(base64 -w0 <scratchpad-file>)"
 ```
 
@@ -188,7 +188,7 @@ Scaffold `<name>` from the `<skeleton>` template.
 
 ## Spec
 <only when step 6 wrote the file:>
-Source of truth: <html_url of projects/<name>.yaml> — run `blueprintx new --spec <file>`.
+Source of truth: <html_url of projects/<name>.spec> — run `blueprintx new --spec <file>`.
 This table is a view of it; edit the file, not this body.
 <otherwise, instead of the two lines above:>
 No spec file: `--spec` has no named-key map for `<skeleton>` yet, so this table is the only record.
@@ -228,7 +228,7 @@ Add the card (`rtk gh project item-add <project-number> --owner guilhermegor --u
 ```
 Issue:  #<N> <url>
 Kind:   <kind> / Lang: <lang> / Registry: <registry> / Repo: <repo>
-Spec:   <html_url of projects/<name>.yaml, or `none (skeleton unsupported by --spec)`>
+Spec:   <html_url of projects/<name>.spec, or `none (skeleton unsupported by --spec)`>
 Score:  <n> (<justification>)
 Board:  greenfield kanban → Backlog
 ```

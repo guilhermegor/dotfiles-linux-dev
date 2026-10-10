@@ -73,7 +73,7 @@ setup() {
 
 # dotfiles-linux-dev#364: the spec file half.
 
-@test "writes projects/<name>.yaml in the greenfield repo" {
+@test "writes projects/<name>.spec in the greenfield repo" {
     run grep -c 'repos/guilhermegor/greenfield/contents/projects/' "$CMD"
     [ "$status" -eq 0 ]
     [ "$output" -ge 1 ]
@@ -92,6 +92,6 @@ setup() {
     grep -q 'Services carry no publish keys' "$CMD"
 }
 
-@test "issue body links the YAML as the source of truth" {
+@test "issue body links the spec file as the source of truth" {
     grep -q 'Source of truth: <html_url' "$CMD"
 }
