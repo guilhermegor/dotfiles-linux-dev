@@ -182,6 +182,28 @@ payload() {
     rm -rf "$fake_home"
 }
 
+@test "matches origin case-insensitively with a trailing slash (#701)" {
+    local fake_home
+    fake_home="$(mktemp -d)"
+    git remote add origin https://github.com/SomeOwner/Other-Repo/
+    run env HOME="$fake_home" bash -c "payload 'gh pr create --repo someowner/other-repo --title x --body \"## Description\\n## Testing\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    rm -rf "$fake_home"
+}
+
+@test "does not match an origin on a foreign host or nested path (#701)" {
+    local fake_home origin
+    fake_home="$(mktemp -d)"
+    for origin in https://gitlab.com/someowner/other-repo.git https://github.com/group/someowner/other-repo.git; do
+        git remote remove origin 2>/dev/null || true
+        git remote add origin "$origin"
+        run env HOME="$fake_home" bash -c "payload 'gh pr create --repo someowner/other-repo --title x --body \"## Description\\n## Testing\"' | '$GUARD'"
+        [ "$status" -eq 2 ]
+        [[ "$output" == *"could not resolve"* ]]
+    done
+    rm -rf "$fake_home"
+}
+
 @test "still blocks as unresolved when the cwd origin names a different repo (#701)" {
     local fake_home
     fake_home="$(mktemp -d)"
