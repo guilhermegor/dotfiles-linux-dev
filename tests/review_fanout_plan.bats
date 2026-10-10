@@ -52,14 +52,14 @@ setup() {
     # reason (which is checked on purpose by its own tests below).
     export REVIEW_FANOUT_RUNG="qwen|qwen3-coder-plus|configured-default"
     unset REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
-    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED
+    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED GH_PAGING_FAIL
 }
 
 teardown() {
     cd /
     rm -rf "$TEST_TMP"
     unset REVIEW_FANOUT_RUNG REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
-    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED
+    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED GH_PAGING_FAIL
 }
 
 # ago SECONDS — an ISO-8601 UTC timestamp that many seconds in the past.
@@ -107,9 +107,9 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
                        endCursor: (($after + $first) | tostring)},
             nodes: [$page[] | {number, headRefOid, baseRefName: (.baseRefName // "master"), mergeStateStatus, isDraft,
                 reviews: {totalCount: (.reviewsTotal // ((.reviews // []) | length)),
-                          nodes: (.reviews // [])},
+                          nodes: ((.reviews // [])[-100:])},
                 comments: {totalCount: (.commentsTotal // ((.comments // []) | length)),
-                           nodes: (.comments // [])},
+                           nodes: ((.comments // [])[-100:])},
                 commits: {nodes: [{commit: {statusCheckRollup:
                     {contexts: {nodes: (.statusCheckRollup // [])}}}}]}}]}}}}
         | if env.GH_GRAPHQL_MALFORMED then del(.data.repository.pullRequests.nodes[].commits) else . end' "$FIXTURE"
@@ -128,11 +128,17 @@ elif [ "$1" = "api" ] && [[ "$2" == */pulls\?state=open* ]]; then
     jq "$filter" "$FIXTURE"
 elif [ "$1" = "api" ] && [[ "$2" == */pulls/*/reviews* ]]; then
     n="${2#*/pulls/}"; n="${n%%/*}"
-    jq --argjson n "$n" '[.[] | select(.number == $n) | (.reviews // [])[] | {commit_id: .commit.oid}]' "$FIXTURE"
+    [ -n "${GH_PAGING_FAIL:-}" ] && { echo "gh: HTTP 502" >&2; exit 1; }
+    p=1; [[ "$2" == *\&page=* ]] && p="${2##*\&page=}"
+    jq --argjson n "$n" --argjson p "$p" '[.[] | select(.number == $n) | (.reviews // [])[] | {commit_id: .commit.oid}]
+        | .[($p - 1) * 100:$p * 100]' "$FIXTURE"
 elif [ "$1" = "api" ] && [[ "$2" == */issues/*/comments* ]]; then
     n="${2#*/issues/}"; n="${n%%/*}"
-    jq --argjson n "$n" '[.[] | select(.number == $n) | (.comments // [])[]
-        | {body, created_at: .createdAt, user: {login: .author.login}}]' "$FIXTURE"
+    [ -n "${GH_PAGING_FAIL:-}" ] && { echo "gh: HTTP 502" >&2; exit 1; }
+    p=1; [[ "$2" == *\&page=* ]] && p="${2##*\&page=}"
+    jq --argjson n "$n" --argjson p "$p" '[.[] | select(.number == $n) | (.comments // [])[]
+        | {body, created_at: .createdAt, user: {login: .author.login}}]
+        | .[($p - 1) * 100:$p * 100]' "$FIXTURE"
 elif [ "$1" = "api" ] && [[ "$2" == */commits/*/check-runs* ]]; then
     oid="${2#*/commits/}"; oid="${oid%%/*}"
     jq --arg oid "$oid" '{check_runs: [.[] | select(.headRefOid == $oid) | (.statusCheckRollup // [])[]
@@ -761,6 +767,7 @@ EOF
     # comments(last:100) of 150: the attribution comment covering this head could be among
     # the 50 the window dropped. "Not covered" is unprovable, so the PR must not be offered
     # a reviewer on a guess (the duplicate assignment the codex review of #605 predicted).
+    export GH_PAGING_FAIL=1  # paging unreadable: the window stays truncated (#709)
     stub_gh_prs <<EOF
 [{"number":610,"headRefOid":"dddd4444","mergeStateStatus":"BLOCKED","isDraft":false,
   "reviews":[],
@@ -776,6 +783,7 @@ EOF
 }
 
 @test "a truncated review window with no coverage in view is excluded by name" {
+    export GH_PAGING_FAIL=1  # paging unreadable: the window stays truncated (#709)
     stub_gh_prs <<EOF
 [{"number":611,"headRefOid":"eeee5555","mergeStateStatus":"BLOCKED","isDraft":false,
   "reviews":[{"commit":{"oid":"ffff6666"}}],
@@ -788,6 +796,20 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
     [[ "$(reason_for 611)" == *"reviews truncated"* ]]
+}
+
+@test "a 140-comment PR is paged in full and read as decidable (#709, blueprintx#319)" {
+    stub_gh_prs <<EOF
+[{"number":319,"headRefOid":"cccc9999","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],
+  "comments":$(jq -nc --arg t "$(ago 900)" '[range(140) | {body: "c\(.)", createdAt: $t}]'),
+  "commits":[{"oid":"cccc9999","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [[ "$(reason_for 319)" != *"truncated"* ]]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
 }
 
 @test "coverage found inside a truncated window still counts as covered" {
