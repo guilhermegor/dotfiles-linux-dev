@@ -1090,3 +1090,49 @@ behind_pr() {
     run python3 "$PLANNER"
     [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]
 }
+
+# not_ready JQ_EDIT -- a gate-green BEHIND PR with one field broken is never merge-ready.
+not_ready() {
+    stub_gh_prs <<<"[$(behind_pr 1 head1 SUCCESS | jq "$1")]"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]
+}
+
+@test "regression: a draft stays excluded, never merge-ready (#705)" {
+    not_ready '.isDraft = true'
+    [[ "$(reason_for 1)" == *"draft"* ]]
+}
+
+@test "regression: a missing isDraft is not read as 'not a draft' (#705)" {
+    not_ready '.isDraft = null'
+}
+
+@test "regression: a DIRTY PR stays excluded, never merge-ready (#705)" {
+    not_ready '.mergeStateStatus = "DIRTY"'
+    [[ "$(reason_for 1)" == *"merge conflict"* ]]
+}
+
+@test "regression: a just-pushed head stays excluded, never merge-ready (#705)" {
+    stub_gh_prs <<<"[$(behind_pr 1 head1 SUCCESS | jq --arg w "$(ago 5)" '.commits[0].committedDate = $w')]"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 1)" == *"pushed less than"* ]]
+}
+
+@test "regression: an unknown head commit is never merge-ready (#705)" {
+    not_ready '.commits = []'
+    [[ "$(reason_for 1)" == *"UNKNOWN"* ]]
+}
+
+@test "must-fail: review gate check absent from an otherwise green rollup (#705)" {
+    not_ready '.statusCheckRollup |= map(select(.name != "Review threads answered"))'
+}
+
+@test "must-fail: a null or empty checks list is never merge-ready (#705)" {
+    not_ready '.statusCheckRollup = null'
+    not_ready '.statusCheckRollup = []'
+}

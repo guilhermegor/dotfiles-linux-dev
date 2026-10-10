@@ -744,7 +744,7 @@ def _clean_checks(pr: dict) -> list:
 	return [] if states["failing"] or states["running"] or states["ambiguous"] else rollup
 
 
-def merge_ready(pr: dict) -> bool:
+def merge_ready(pr: dict, now: datetime.datetime) -> bool:
 	"""True when a serial-drain PR is gate-green on its current head and only BEHIND (#705).
 
 	One source of truth: the repo's own review gate (``REVIEW_GATE_CHECK``), read from the
@@ -756,11 +756,17 @@ def merge_ready(pr: dict) -> bool:
 	written only by the repo's own CI. Fail closed -- a missing gate, empty rollup, draft or
 	any other merge state is "not ready": a wrong "ready" merges unreviewed code.
 	"""
-	if pr.get("isDraft") or (pr.get("mergeStateStatus") or "") != "BEHIND":
+	# Allowlist: each condition must be positively confirmed; absence is never a pass.
+	if pr.get("isDraft") is not False or pr.get("mergeStateStatus") != "BEHIND":
 		return False
-	rollup = _clean_checks(pr)
+	head_time = head_commit_time(pr)
+	# The pre-existing just-pushed exclusion still applies: a push triggers its own re-review.
+	if head_time is None or (now - head_time).total_seconds() < RECENT_PUSH_SECONDS:
+		return False
 	return any(
-		(entry.get("name") or entry.get("context") or "") == REVIEW_GATE_CHECK for entry in rollup
+		(entry.get("name") or entry.get("context") or "") == REVIEW_GATE_CHECK
+		and _entry_verdict(entry) == "pass"
+		for entry in _clean_checks(pr)
 	)
 
 
@@ -784,7 +790,7 @@ def build_plan() -> dict:
 		number = pr["number"]
 		# Before the rung check on purpose: an update-branch needs no reviewer (#705).
 		base = pr.get("baseRefName") or ""
-		if merge_is_serial(base) and merge_ready(pr):
+		if merge_is_serial(base) and merge_ready(pr, now):
 			ready.append({"pr": number, "head": pr.get("headRefOid") or "", "base": base})
 			continue
 		reason = exclusion_reason(pr, now, rung)
