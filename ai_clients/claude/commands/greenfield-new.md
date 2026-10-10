@@ -1,14 +1,15 @@
 ---
 name: c:greenfield-new
-allowed-tools: Bash(rtk gh issue*), Bash(rtk gh project*), Bash(rtk gh label*), Bash(rtk gh api*), AskUserQuestion, Read, Write, Skill
-description: File a BlueprintX scaffold backlog item in guilhermegor/greenfield from named keys, never a prompt list
+allowed-tools: Bash(rtk gh issue*), Bash(rtk gh project*), Bash(rtk gh label*), Bash(rtk gh api*), Bash(base64*), AskUserQuestion, Read, Write, Skill
+description: File a BlueprintX scaffold backlog item in guilhermegor/greenfield from named keys, with a blueprintx --spec file
 argument-hint: "[--skeleton <name>]"
 ---
 
 You are filing a backlog item in `guilhermegor/greenfield` for a future, unattended
 `bin/blueprintx.sh` scaffold run — captured now as a GitHub issue with a named `key: value`
 answer map, so the run can happen later without a person re-answering an ordered list of
-prompts. Follow these steps exactly. `$ARGUMENTS` may carry `--skeleton <name>` to preseed
+prompts. It also writes `projects/<name>.spec` in that repo, a spec file that
+`blueprintx new --spec <file>` consumes (dotfiles-linux-dev#364). Follow these steps exactly. `$ARGUMENTS` may carry `--skeleton <name>` to preseed
 step 1's skeleton pick.
 
 ## 0. Why named keys, not a prompt list
@@ -57,7 +58,7 @@ if BlueprintX's own prompts have moved on since.
 | skeleton | keys to ask |
 |---|---|
 | `lib-minimal` | `logging_helper` · `publish_to_pypi` · `testpypi_staging` · `private_index_or_git` · `docker_compose` · `db_backend` |
-| `ddd-service-*` | `docker_compose` · `db_backend` · `schemaless_storage` · `custom_output_dir` · `output_base` · `dated_subdirs` · `webhook` · `webhook_platform` (teams/slack/custom) · `email_handler` · `email_backend` |
+| `ddd-service-*`, `api-service-*` | `docker_compose` · `db_backend` · `schemaless_storage` · `custom_output_dir` · `output_base` · `dated_subdirs` · `webhook` · `webhook_platform` (teams/slack/custom) · `email_handler` · `email_backend` |
 | `mvc-service-*` | `docker_compose` · `db_backend` · `custom_output_dir` · `output_base` · `dated_subdirs` · `webhook` · `webhook_platform` (teams/slack only — no `custom`) · `email_handler` · `email_backend` · `multiple_run_intents` |
 | `react-spa-webpack` | `state_management` · `deploy_target` · `module_federation` · `docker` · `js_copy` · `wait_for_deploy` · `enable_pages` |
 | `ts-lib` | *(shared set only — no extra keys)* |
@@ -84,7 +85,7 @@ between this step and step 4 — the map is looked up by key, never replayed by 
 
 Compute these from the map above and add them to it. None of these is its own question:
 
-- `kind`: `lib-minimal` / `ts-lib` → `lib`; `ddd-service-*` / `mvc-service-*` → `service`;
+- `kind`: `lib-minimal` / `ts-lib` → `lib`; `ddd-service-*` / `api-service-*` / `mvc-service-*` → `service`;
   `react-spa-webpack` → `app`.
 - `lang`: the `language` key's value, taxonomy-cased (`python`, `typescript`).
 - `registry`: `kind:service` ⇒ `none` (services are never published to a package registry).
@@ -93,6 +94,14 @@ Compute these from the map above and add them to it. None of these is its own qu
   when it didn't.
 - `repo`: the `repo_visibility` value verbatim (`public` / `private`).
 - `state`: always `backlog` — this command only files a backlog item, it never starts work.
+- `tracking`: always `provider: github-projects`, `visibility: private` (the greenfield board —
+  the same for every item, never asked).
+
+⚠️ Three visibility fields, never one: `tracking.visibility` (the board), `repo.visibility`
+(the scaffolded thing's own repo) and `registry` (production/staging targets, implied by
+`repo.visibility` but never equal to it). `repo.visibility: private` forces `registry: git-only`,
+so a private repo never declares a public registry. A `kind:service` (or `app`) has **no
+registry** at all — it is deployed, not published.
 
 ## 4. Confirm the full map
 
@@ -107,7 +116,62 @@ Load `s:story-score` via the Skill tool, passing the `name`/`description` keys a
 get the `Points` value filed in step 7. Follow the skill's own escalation rule if it returns a
 split signal instead of a 1–3 score.
 
-## 6. Ensure labels exist, then file the issue
+## 6. Write `projects/<name>.spec`
+
+The spec file is the source of truth for the scaffold; the issue body (step 7) only links it, because
+bodies are edited by people and bots and are not typed. Its format is **blueprintx's**
+(`bin/lib/spec.sh`, `docs/spec-answers.md` in guilhermegor/blueprintx): a flat `KEY=value` list,
+`#` comments ignored — not YAML, hence the `.spec` extension — so `blueprintx new --spec projects/<name>.spec` reads it
+unchanged. Emit **only** keys that format defines; never invent one.
+
+If `skeleton` is not one of `ddd-service-native-db`, `ddd-service-orm-db`, `api-service-native-db`,
+`mvc-service-native-db`, `mvc-service-orm-db`, `lib-minimal`, write **no** file and say why:
+`--spec` refuses a skeleton with no named-key map (`ts-lib`, `react-spa-webpack` today), so a
+file here would fail at scaffold time. Skip to step 7 and omit the link.
+
+Map the step-2 keys to spec keys (omit any key the chosen skeleton did not ask — absence means
+the documented default):
+
+| asked key | spec key |
+|---|---|
+| `name` / `description` / `root` | `project_name` / `project_description` / `project_root` |
+| `language`, `skeleton`, `license`, `github_username` | same name |
+| `logging_helper` / `docker_compose` / `db_backend` | `logs` / `docker_compose` / `docker_db_backend` |
+| `schemaless_storage` | `storage` |
+| `custom_output_dir` / `output_base` / `dated_subdirs` | `data_dir` / `data_dir_base` / `data_dir_dated` |
+| `webhook` / `webhook_platform` | `webhook` / `webhook_platform` |
+| `email_handler` / `email_backend` | `email` / `email_backend` |
+| `multiple_run_intents` | `pipeline_intent` |
+| `publish_to_pypi` / `testpypi_staging` / `private_index_or_git` | `publish_pypi` / `publish_test_pypi` / `consume_private` |
+
+`git_remote` is always written `n`: `y` needs a live `gh` session and blueprintx marks it out of
+scope for an unattended run. For a `lib-minimal` with `repo_visibility: private`, write
+`publish_pypi=n` and `publish_test_pypi=n` (git-only). Services carry no publish keys.
+
+blueprintx has no keys for `tracking`, `repo.visibility` or `registry`, so they are recorded as
+`#` comment lines at the top of the file (a record, not input) and in the issue labels:
+
+```
+# tracking: github-projects / private
+# repo.visibility: <public|private>
+# registry: <production>/<staging>, git-only, or (none - service)
+project_name=<name>
+...
+```
+
+Write it to the scratchpad, then commit it to greenfield's default branch (create, or update if
+it exists — pass `-f sha=<current blob sha>` then):
+
+```
+rtk gh api -X PUT repos/guilhermegor/greenfield/contents/projects/<name>.spec \
+  -f message="feat: add scaffold spec for <name>" -f content="$(base64 -w0 <scratchpad-file>)"
+```
+
+If the default branch is protected and rejects it, put the file on a `backlog/<name>` branch
+instead (`-f branch=backlog/<name>`, created via `git/refs` first) and say so in step 9. Capture
+the file's `html_url` for the issue body.
+
+## 7. Ensure labels exist, then file the issue
 
 For each of `kind:<value>`, `lang:<value>`, `registry:<value>`, `repo:<value>`,
 `state:backlog`, ensure the label exists before attaching it (idempotent — safe to always run):
@@ -121,6 +185,13 @@ Write the issue body with the Write tool to a scratchpad file, then create it:
 ```
 ## Goal
 Scaffold `<name>` from the `<skeleton>` template.
+
+## Spec
+<only when step 6 wrote the file:>
+Source of truth: <html_url of projects/<name>.spec> — run `blueprintx new --spec <file>`.
+This table is a view of it; edit the file, not this body.
+<otherwise, instead of the two lines above:>
+No spec file: `--spec` has no named-key map for `<skeleton>` yet, so this table is the only record.
 
 ## Answer surface
 | key | value | source |
@@ -141,7 +212,7 @@ rtk gh issue create --repo guilhermegor/greenfield --title "feat: scaffold <name
 
 Capture the issue number and URL.
 
-## 7. Board card and Points
+## 8. Board card and Points
 
 List `guilhermegor`'s projects (`rtk gh project list --owner guilhermegor --format json`) and
 match the one titled exactly `greenfield kanban`. More than one match → stop and ask which to
@@ -152,11 +223,12 @@ Add the card (`rtk gh project item-add <project-number> --owner guilhermegor --u
 `Points` to step 5's score — same field-resolution mechanics as `c:issue` step 7
 (`field-list` → field id + option id → `item-edit`).
 
-## 8. Report
+## 9. Report
 
 ```
 Issue:  #<N> <url>
 Kind:   <kind> / Lang: <lang> / Registry: <registry> / Repo: <repo>
+Spec:   <html_url of projects/<name>.spec, or `none (skeleton unsupported by --spec)`>
 Score:  <n> (<justification>)
 Board:  greenfield kanban → Backlog
 ```
