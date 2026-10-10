@@ -42,6 +42,8 @@ CHAT_QUOTA_PHRASE = "chat message"
 REVIEW_DONE_PHRASE = "review finished"
 ELIGIBILITY_PHRASE = "fewer than 10 stars"
 RE_STATED_WAIT = re.compile(r"available in (\d+) minutes?")
+# Measured sibling gap is 13 s (17:19:58Z/17:20:11Z); 120 s is ~9x that, far below any real wait.
+SAME_EVENT_WINDOW_SECONDS = 120
 
 
 def is_rest_shaped(list_comments: list) -> bool:
@@ -165,13 +167,27 @@ def rate_limit_verdict(list_comments: list) -> str:
 	# every limit to "no stated wait". Measured 2026-09-20: 17:20:11Z had none while
 	# 17:19:58Z said 27 minutes. Take the LATEST reset any notice implies, so a fresh
 	# limit posted while an older one is still running cannot shorten the window.
+	# ⚠️ "Any notice" stops at the event boundary (dotfiles-linux-dev#707): only notices
+	# within SAME_EVENT_WINDOW_SECONDS at or before the newest limit notice count.
+	# An unreadable timestamp is not a verdict: fail closed with the bare token.
+	try:
+		dt_newest = datetime.datetime.fromisoformat(
+			(dict_limit.get("created_at") or "").replace("Z", "+00:00")
+		)
+	except ValueError:
+		return "UNKNOWN"
 	dt_reset = None
 	for dict_c in list_bot:
 		cls_match = RE_STATED_WAIT.search(dict_c.get("body") or "")
 		if not cls_match:
 			continue
 		str_posted = (dict_c.get("created_at") or "").replace("Z", "+00:00")
-		dt_posted = datetime.datetime.fromisoformat(str_posted)
+		try:
+			dt_posted = datetime.datetime.fromisoformat(str_posted)
+		except ValueError:
+			continue  # unplaceable in the event window, so it cannot set the reset
+		if not 0 <= (dt_newest - dt_posted).total_seconds() <= SAME_EVENT_WINDOW_SECONDS:
+			continue
 		dt_candidate = dt_posted + datetime.timedelta(minutes=int(cls_match.group(1)))
 		if dt_reset is None or dt_candidate > dt_reset:
 			dt_reset = dt_candidate
