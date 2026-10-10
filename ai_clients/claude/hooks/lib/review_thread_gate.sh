@@ -158,6 +158,11 @@ _gate_page_channels() {
 			[ -n "$cursor" ] || break
 			page="$(gh api graphql -f query="$(_gate_page_query "$channel")" \
 				-F owner="$owner" -F repo="$repo" -F number="$number" -f cursor="$cursor" 2>/dev/null)" || break
+			# A 200 with a GraphQL `errors` array is partial data, and a cursor that did not
+			# advance is a repeated page: merging either could fake a complete read.
+			printf '%s' "$page" | jq -e --arg c "$channel" --arg old "$cursor" "(.errors | not)
+				and ((.data.repository.pullRequest[\$c] | $cursor_path // \"\") != \$old)" \
+				>/dev/null 2>&1 || break
 			json="$(jq -c --arg c "$channel" --argjson new "$(printf '%s' "$page" \
 				| jq -c --arg c "$channel" '.data.repository.pullRequest[$c]')" \
 				".data.repository.pullRequest[\$c] |= ($merge | .pageInfo = \$new.pageInfo)" \
