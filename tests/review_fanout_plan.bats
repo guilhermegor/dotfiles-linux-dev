@@ -980,3 +980,78 @@ mixed_board() {
     [ "$(grep -c 'rules/branches/master' "$GH_LOG")" -eq 1 ]
     [ "$(grep -c 'rules/branches/release/1.0' "$GH_LOG")" -eq 1 ]
 }
+
+# --- dotfiles-linux-dev#705: merge-ready class in serial drain -------------------------------
+
+# behind_pr NUMBER REVIEW_OID GATE_CONCLUSION -- one PR behind its base, an hour-old head.
+# REVIEW_OID is the commit the (only) submitted review names ("-" for none); GATE_CONCLUSION is
+# the conclusion of the "Review threads answered" check ("-" for no such check).
+behind_pr() {
+    jq -n --argjson n "$1" --arg review "$2" --arg gate "$3" --arg when "$(ago 3600)" '{
+        number: $n, headRefOid: "head\($n)", mergeStateStatus: "BEHIND", isDraft: false,
+        reviews: (if $review == "-" then [] else [{commit: {oid: $review}}] end), comments: [],
+        commits: [{oid: "head\($n)", committedDate: $when}],
+        statusCheckRollup: ([{__typename: "CheckRun", name: "lint", status: "COMPLETED",
+                              conclusion: "SUCCESS"}]
+            + (if $gate == "-" then [] else [{__typename: "CheckRun", name: "Review threads answered",
+                                              status: "COMPLETED", conclusion: $gate}] end))}'
+}
+
+@test "merge-ready: reviewed at its head, green, only behind (#705)" {
+    stub_gh_prs <<<"[$(behind_pr 1 head1 -)]"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.merge_ready[].pr]' <<<"$output")" = "[1]" ]
+    [ "$(jq -r '.merge_ready[0].head' <<<"$output")" = "head1" ]
+    # merge work, not review work and not an exclusion
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [ "$(jq -r '.excluded | length' <<<"$output")" -eq 0 ]
+}
+
+@test "merge-ready: a review carried forward (gate green on a head no review names) (#705)" {
+    stub_gh_prs <<<"[$(behind_pr 1 oldhead SUCCESS)]"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.merge_ready[].pr]' <<<"$output")" = "[1]" ]
+}
+
+@test "needs-reviewer: the update changed the PR's own patch (gate not green, no review at head) (#705)" {
+    stub_gh_prs <<<"[$(behind_pr 1 oldhead FAILURE)]"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1]" ]
+}
+
+@test "needs-reviewer: a never-reviewed PR with a green gate is not carried forward (#705)" {
+    stub_gh_prs <<<"[$(behind_pr 1 - SUCCESS)]"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1]" ]
+}
+
+@test "must-fail: a reviewed-at-head PR whose review gate is red is never merge-ready (#705)" {
+    stub_gh_prs <<<"[$(behind_pr 1 head1 FAILURE)]"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 1)" == *"already reviewed"* ]]
+}
+
+@test "merge-ready needs BEHIND, and only exists in serial-drain mode (#705)" {
+    stub_gh_prs <<<"[$(behind_pr 1 head1 -), $(behind_pr 2 head2 - | jq '.mergeStateStatus = "BLOCKED"')]"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.merge_ready[].pr]' <<<"$output")" = "[1]" ]
+    [[ "$(reason_for 2)" == *"already reviewed"* ]]
+    export REVIEW_FANOUT_SERIAL=0
+    run python3 "$PLANNER"
+    [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]
+}

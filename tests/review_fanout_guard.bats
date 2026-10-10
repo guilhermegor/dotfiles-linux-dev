@@ -1007,6 +1007,33 @@ PLAN_EOF
     [[ "$output" == *"#521  serial drain"* ]]
 }
 
+@test "a plan's merge-ready PRs are listed as update-and-merge work, never as review work (#705)" {
+    loop_invoked
+    cat >"$PLAN" <<'PLAN_EOF'
+{"rung":{"status":"ok","runtime":"qwen","model":"qwen3-coder-plus","signal":"configured-default"},
+ "serial":true,
+ "merge_ready":[{"pr":675,"head":"0bd6d5cc1234","base":"main"}],
+ "dispatchable":[{"pr":520,"head":"e1319925c49d","checks":{}}],
+ "excluded":[]}
+PLAN_EOF
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Merge-ready"*"#675  head 0bd6d5cc"* ]]
+}
+
+@test "a plan with only merge-ready PRs does not block: they need no reviewer (#705)" {
+    loop_invoked
+    cat >"$PLAN" <<'PLAN_EOF'
+{"rung":{"status":"ok","runtime":"qwen","model":"qwen3-coder-plus","signal":"configured-default"},
+ "serial":true,
+ "merge_ready":[{"pr":675,"head":"0bd6d5cc1234","base":"main"}],
+ "dispatchable":[],
+ "excluded":[]}
+PLAN_EOF
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
 @test "a serial plan with the queue head's review agent in flight passes" {
     loop_invoked
     plan_serial

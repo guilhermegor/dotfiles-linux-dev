@@ -808,6 +808,23 @@ Neither dependency is this step's file to fix — `slot_classify.py` and the API
 outside `dev-loop.md`/`reviewer_ladder.sh`/`tests/reviewer_ladder.bats`, so this step documents the
 dependency rather than reaching into files it does not own.
 
+### 4c-fast. Merge-ready fast path (dotfiles-linux-dev#705)
+
+Runs **before** any reviewer rung is spent. The planner's `merge_ready` list (serial-drain mode,
+#646) names PRs that are reviewed at their head or carried forward, have every check green, and
+are blocked only on being `BEHIND`. Take them in this order:
+
+1. **Update every `merge_ready` PR in parallel** (`update-branch`). No reviewer, no rung.
+2. **Wait for CI, then read the repo's own review gate on the new head.** Never re-derive coverage.
+3. **Re-review only the PRs whose gate now reports the review superseded** (a conflict resolution
+   or new code changed the PR's own patch) — they re-enter the planner as ordinary `dispatchable`.
+4. **Merge one at a time, pinned to the head SHA, as each turns green.** Every merge puts the rest
+   behind again, so repeat step 1 for the remainder.
+
+⚠️ **Depends on the gate carrying reviews forward** (blueprintx#698/#699: a review survives while the
+PR's own patch fingerprint is unchanged). Without it every update costs a full review of unchanged
+code; on a repo whose gate does not, skip this path and use the serial drain above.
+
 ## 5. RELEASE — evaluate and cut
 
 ```bash

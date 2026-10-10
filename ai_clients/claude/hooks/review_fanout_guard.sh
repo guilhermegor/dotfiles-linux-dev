@@ -604,6 +604,9 @@ main() {
 	[ -n "$dispatchable" ] || exit 0
 
 	excluded="$(printf '%s' "$plan" | jq -r '.excluded[]? | "  #\(.pr)  \(.reason)"')"
+	# Reviewed, green, only behind (#705): merge work, never review work, so it is listed
+	# and never counted as a reason to block.
+	merge_ready="$(printf '%s' "$plan" | jq -r '.merge_ready[]? | "  #\(.pr)  head \((.head // "")[0:8])"')"
 	{
 		echo "Open PRs need a reviewer on their CURRENT head and no review agent was started —"
 		echo "do not stop here without dispatching the fan-out."
@@ -629,6 +632,12 @@ main() {
 		if [ "$(printf '%s' "$plan" | jq -r '.serial // false')" = "true" ]; then
 			echo "Serial drain (strict merges, #646): only the head of the merge queue is listed —"
 			echo "one reviewer at a time; the rest are excluded below until it merges."
+			echo
+		fi
+		if [ -n "$merge_ready" ]; then
+			echo "Merge-ready (reviewed, green, only behind; update-branch spends no reviewer — step 4c"
+			echo "fast path, update them first, then merge one at a time pinned to the head SHA):"
+			printf '%s\n' "$merge_ready"
 			echo
 		fi
 		echo "Needs a reviewer now (one agent per PR — N single-PR ladder calls, which is what"

@@ -170,6 +170,14 @@ REVIEWER_LOGINS = frozenset({"coderabbitai", "coderabbitai[bot]"})
 BOT_SKIP_PHRASE = "review skipped"
 BOT_SKIP_DETAIL = "bot user detected"
 
+# The repo's own review gate, read by name from the rollup (#705) and never re-derived. Green on
+# a head no review names means the review was carried forward (blueprintx#698/#699).
+REVIEW_GATE_CHECK = os.environ.get("REVIEW_FANOUT_GATE_CHECK", "Review threads answered")
+
+# The repo's own review gate, read by name from the rollup (#705), never re-derived. Green on a
+# head no review names means the review was carried forward (blueprintx#698/#699).
+REVIEW_GATE_CHECK = os.environ.get("REVIEW_FANOUT_GATE_CHECK", "Review threads answered")
+
 # `conclusion` values that are not a failure. NEUTRAL/SKIPPED are how a conditional job
 # reports "did not need to run" — counting either as failing would make almost every PR look
 # red.
@@ -369,8 +377,8 @@ def resolve_rung() -> dict:
 	blindness, and the guard blocks on it: a gate that reports its own blindness as routine
 	silence is this toolchain's own recorded failure mode (#396, #433).
 
-    ``REVIEW_FANOUT_RUNG`` overrides the probe for tests and dry runs — ``unknown``,
-    ``none``, or ``runtime|model|signal``. Real tests must never shell out to a live model.
+	``REVIEW_FANOUT_RUNG`` overrides the probe for tests and dry runs — ``unknown``,
+	``none``, or ``runtime|model|signal``. Real tests must never shell out to a live model.
 	"""
 	override = os.environ.get("REVIEW_FANOUT_RUNG")
 	if override is not None:
@@ -725,6 +733,52 @@ def drain_serially(dispatchable: list[dict], excluded: list[dict]) -> None:
 	dispatchable[:] = kept
 
 
+def _clean_checks(pr: dict) -> list:
+	"""Return the PR's rollup when no check is failing, running or ambiguous, else ``[]``.
+
+	Reuses ``check_states`` (grouped by name, never first-match). An empty rollup is "no
+	evidence of green", so it comes back as ``[]`` too.
+	"""
+	rollup = pr.get("statusCheckRollup") or []
+	states = check_states(rollup)
+	return [] if states["failing"] or states["running"] or states["ambiguous"] else rollup
+
+
+def has_review_history(pr: dict) -> bool:
+	"""True when ANY review (either channel, any head) exists on the PR -- never reviewed is not."""
+	return bool(pr.get("reviews")) or any(
+		LADDER_ATTRIBUTION_RE.search(comment.get("body") or "") for comment in pr.get("comments") or []
+	)
+
+
+def merge_ready(pr: dict) -> bool:
+	"""True when a serial-drain PR is reviewed, green and blocked only on being behind (#705).
+
+	``BEHIND`` is the only mergeStateStatus that qualifies: an update-branch needs no reviewer,
+	so this PR is merge work, not review work. Every check must be clean (``_clean_checks``),
+	and the review must hold at the current head, either directly (a review names it, either
+	channel) or carried forward -- the repo's own review gate (``REVIEW_GATE_CHECK``) passes on
+	a head no review names, which only a gate that carries reviews forward (blueprintx#698/#699)
+	does, and only for a PR that was reviewed at some point. A red or ambiguous gate is a red
+	check, so it can never be merge-ready. Anything unreadable is not ready: a wrong "ready"
+	merges unreviewed code.
+	"""
+	if pr.get("isDraft") or (pr.get("mergeStateStatus") or "") != "BEHIND":
+		return False
+	rollup = _clean_checks(pr)
+	if not rollup:
+		return False
+	if reviewed_at_head(pr):
+		return True
+	head_time = head_commit_time(pr)
+	if head_time is not None and ladder_covered_at_head(pr, head_time):
+		return True
+	gate_passes = any(
+		(entry.get("name") or entry.get("context") or "") == REVIEW_GATE_CHECK for entry in rollup
+	)
+	return gate_passes and has_review_history(pr)
+
+
 def build_plan() -> dict:
 	"""Assemble the rung, the dispatchable set and the named exclusions for every open PR."""
 	prs = open_prs()
@@ -740,8 +794,14 @@ def build_plan() -> dict:
 	now = datetime.datetime.now(datetime.timezone.utc)
 	dispatchable: list[dict] = []
 	excluded: list[dict] = []
+	ready: list[dict] = []
 	for pr in prs:
 		number = pr["number"]
+		# Before the rung check on purpose: an update-branch needs no reviewer (#705).
+		base = pr.get("baseRefName") or ""
+		if merge_is_serial(base) and merge_ready(pr):
+			ready.append({"pr": number, "head": pr.get("headRefOid") or "", "base": base})
+			continue
 		reason = exclusion_reason(pr, now, rung)
 		if reason is not None:
 			excluded.append({"pr": number, "reason": reason})
@@ -760,7 +820,14 @@ def build_plan() -> dict:
 	serial = any(merge_is_serial(c["base"]) for c in dispatchable)
 	dispatchable.sort(key=lambda c: c["pr"])
 	excluded.sort(key=lambda c: c["pr"])
-	return {"rung": rung, "serial": serial, "dispatchable": dispatchable, "excluded": excluded}
+	ready.sort(key=lambda c: c["pr"])
+	return {
+		"rung": rung,
+		"serial": serial,
+		"merge_ready": ready,
+		"dispatchable": dispatchable,
+		"excluded": excluded,
+	}
 
 
 def main() -> int:
