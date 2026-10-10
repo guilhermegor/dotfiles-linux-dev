@@ -58,7 +58,7 @@ if BlueprintX's own prompts have moved on since.
 | skeleton | keys to ask |
 |---|---|
 | `lib-minimal` | `logging_helper` · `publish_to_pypi` · `testpypi_staging` · `private_index_or_git` · `docker_compose` · `db_backend` |
-| `ddd-service-*` | `docker_compose` · `db_backend` · `schemaless_storage` · `custom_output_dir` · `output_base` · `dated_subdirs` · `webhook` · `webhook_platform` (teams/slack/custom) · `email_handler` · `email_backend` |
+| `ddd-service-*`, `api-service-*` | `docker_compose` · `db_backend` · `schemaless_storage` · `custom_output_dir` · `output_base` · `dated_subdirs` · `webhook` · `webhook_platform` (teams/slack/custom) · `email_handler` · `email_backend` |
 | `mvc-service-*` | `docker_compose` · `db_backend` · `custom_output_dir` · `output_base` · `dated_subdirs` · `webhook` · `webhook_platform` (teams/slack only — no `custom`) · `email_handler` · `email_backend` · `multiple_run_intents` |
 | `react-spa-webpack` | `state_management` · `deploy_target` · `module_federation` · `docker` · `js_copy` · `wait_for_deploy` · `enable_pages` |
 | `ts-lib` | *(shared set only — no extra keys)* |
@@ -85,7 +85,7 @@ between this step and step 4 — the map is looked up by key, never replayed by 
 
 Compute these from the map above and add them to it. None of these is its own question:
 
-- `kind`: `lib-minimal` / `ts-lib` → `lib`; `ddd-service-*` / `mvc-service-*` → `service`;
+- `kind`: `lib-minimal` / `ts-lib` → `lib`; `ddd-service-*` / `api-service-*` / `mvc-service-*` → `service`;
   `react-spa-webpack` → `app`.
 - `lang`: the `language` key's value, taxonomy-cased (`python`, `typescript`).
 - `registry`: `kind:service` ⇒ `none` (services are never published to a package registry).
@@ -187,8 +187,11 @@ Write the issue body with the Write tool to a scratchpad file, then create it:
 Scaffold `<name>` from the `<skeleton>` template.
 
 ## Spec
+<only when step 6 wrote the file:>
 Source of truth: <html_url of projects/<name>.yaml> — run `blueprintx new --spec <file>`.
 This table is a view of it; edit the file, not this body.
+<otherwise, instead of the two lines above:>
+No spec file: `--spec` has no named-key map for `<skeleton>` yet, so this table is the only record.
 
 ## Answer surface
 | key | value | source |
