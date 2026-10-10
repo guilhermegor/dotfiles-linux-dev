@@ -1976,6 +1976,15 @@ any dispatchable PR sits on a strict base. The invariants hold: every
 PR still carries a reason, no bare override, and an unreadable policy falls back to the
 parallel plan, never to a guessed serial one. The guard needs no new branch — "the queue
 head has a <code>review-pr-&lt;N&gt;</code> agent in flight" is already its pass condition.</p>
+<p><strong>Merge-ready (#705).</strong> On a strict base the plan also carries a separate <code>merge_ready</code> list:
+PRs <code>BEHIND</code> with every check clean and the repo's own review gate (<code>REVIEW_FANOUT_GATE_CHECK</code>,
+default <code>Review threads answered</code>) present and green on the current head — a gate that carries
+reviews forward (blueprintx#698/#699) is green on an updated head. That check is the single
+source of truth: comment bodies and review objects are never read for this class (neither is
+author-checked, so a quoted attribution line could spoof them). Fail closed: no gate, a
+red/running/ambiguous check, an empty rollup or any other merge state is not merge-ready.
+Checked before the rung, so they need no reviewer. The guard lists them but never blocks
+on them; <code>dev-loop</code> step 4c-fast is the procedure.</p>
 <h2 id="worktree-rescue-fan-out-two-callers-one-implementation">Worktree rescue fan-out: two callers, one implementation<a class="headerlink" href="#worktree-rescue-fan-out-two-callers-one-implementation" title="Permanent link">&para;</a></h2>
 <p><code>hooks/lib/worktree_fanout.sh</code> (<code>fanout_worktrees()</code> + <code>classify_worktree_diff()</code>,
 dotfiles-linux-dev#383) is the shared implementation of "walk every worktree of this
