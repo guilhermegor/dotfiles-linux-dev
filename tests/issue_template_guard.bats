@@ -185,6 +185,25 @@ TEMPLATE
     rm -rf "$fake_home"
 }
 
+@test "uses the cwd checkout when its origin names --repo, even if the dir name differs (#701)" {
+    local fake_home
+    fake_home="$(mktemp -d)"   # empty: the $HOME/github/<name> fallback cannot resolve
+    git remote add origin https://github.com/someowner/other-repo.git
+    run env HOME="$fake_home" bash -c "payload 'gh issue create --repo someowner/other-repo --title x --body \"$COMPLIANT_BODY\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    rm -rf "$fake_home"
+}
+
+@test "still blocks as unresolved when the cwd origin names a different repo (#701)" {
+    local fake_home
+    fake_home="$(mktemp -d)"
+    git remote add origin git@github.com:someowner/not-the-target.git
+    run env HOME="$fake_home" bash -c "payload 'gh issue create --repo someowner/other-repo --title x --body \"$COMPLIANT_BODY\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"could not resolve"* ]]
+    rm -rf "$fake_home"
+}
+
 @test "reports unresolvable (not non-compliant) when --repo has no local checkout" {
     local fake_home
     fake_home="$(mktemp -d)"

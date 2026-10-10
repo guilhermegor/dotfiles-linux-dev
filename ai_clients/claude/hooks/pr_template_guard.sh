@@ -133,17 +133,6 @@ find_template() {
     return 0
 }
 
-# $1: owner/name. True when the cwd checkout's `origin` URL (https or ssh, with or without .git
-# or a trailing slash) names that repo, compared case-insensitively.
-origin_names_repo() {
-    local url slug
-    url="$(git remote get-url origin 2>/dev/null)" || return 1
-    url="${url%/}"
-    url="${url%.git}"
-    slug="$(printf '%s' "$url" | sed -E 's#^.*[:/]([^/:]+/[^/:]+)$#\1#')"
-    [[ "${slug,,}" == "${1,,}" ]]
-}
-
 block_unresolved_repo() {
     # A verdict from a template we could not locate is "unknown", not "approved" — same principle
     # as block_unresolved_body_file below. This must never share text with the "Missing required
