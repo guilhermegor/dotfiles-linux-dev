@@ -241,3 +241,16 @@ JSON"
     [ "$status" -eq 0 ]
     [ "$output" = "FREE|no-notice-on-this-page" ]
 }
+
+@test "a limit notice with no readable created_at is UNKNOWN, never a traceback" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY'
+[
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": null,
+   \"body\": \"Action not completed. Review rate limited.\"},
+  {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"created_at\": \"not-a-date\",
+   \"body\": \"Rate limit exceeded. Please wait 40 minutes and 3 seconds before requesting another review.\"}
+]
+JSON"
+    [ "$status" -eq 0 ]
+    [ "$output" = "UNKNOWN" ]
+}
