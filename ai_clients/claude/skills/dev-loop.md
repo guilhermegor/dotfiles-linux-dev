@@ -811,8 +811,8 @@ dependency rather than reaching into files it does not own.
 ### 4c-fast. Merge-ready fast path (dotfiles-linux-dev#705)
 
 Runs **before** any reviewer rung is spent. The planner's `merge_ready` list (serial-drain mode,
-#646) names PRs that are reviewed at their head or carried forward, have every check green, and
-are blocked only on being `BEHIND`. Take them in this order:
+#646) names PRs whose review gate is green on the current head (reviewed or carried forward), with
+every check green, blocked only on being `BEHIND`. Take them in this order:
 
 1. **Update every `merge_ready` PR in parallel** (`update-branch`). No reviewer, no rung.
 2. **Wait for CI, then read the repo's own review gate on the new head.** Never re-derive coverage.

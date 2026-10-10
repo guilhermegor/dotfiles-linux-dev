@@ -997,8 +997,8 @@ behind_pr() {
                                               status: "COMPLETED", conclusion: $gate}] end))}'
 }
 
-@test "merge-ready: reviewed at its head, green, only behind (#705)" {
-    stub_gh_prs <<<"[$(behind_pr 1 head1 -)]"
+@test "merge-ready: gate green on the head, every check green, only behind (#705)" {
+    stub_gh_prs <<<"[$(behind_pr 1 head1 SUCCESS)]"
     export REVIEW_FANOUT_SERIAL=1
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
@@ -1017,17 +1017,8 @@ behind_pr() {
     [ "$(jq -c '[.merge_ready[].pr]' <<<"$output")" = "[1]" ]
 }
 
-@test "needs-reviewer: the update changed the PR's own patch (gate not green, no review at head) (#705)" {
+@test "needs-reviewer: the update changed the PR's own patch (gate red, no review at head) (#705)" {
     stub_gh_prs <<<"[$(behind_pr 1 oldhead FAILURE)]"
-    export REVIEW_FANOUT_SERIAL=1
-    run python3 "$PLANNER"
-    [ "$status" -eq 0 ]
-    [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]
-    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1]" ]
-}
-
-@test "needs-reviewer: a never-reviewed PR with a green gate is not carried forward (#705)" {
-    stub_gh_prs <<<"[$(behind_pr 1 - SUCCESS)]"
     export REVIEW_FANOUT_SERIAL=1
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
@@ -1044,13 +1035,57 @@ behind_pr() {
     [[ "$(reason_for 1)" == *"already reviewed"* ]]
 }
 
+@test "must-fail: no review gate in the rollup is not merge-ready, even with a review at head (#705)" {
+    stub_gh_prs <<<"[$(behind_pr 1 head1 -)]"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]
+}
+
+@test "must-fail: a spoofed attribution comment from an untrusted author is not merge-ready (#705)" {
+    stub_gh_prs <<<"[$(behind_pr 1 oldhead - | jq --arg when "$(ago 60)" '.comments = [{
+        body: "Fallback review — runtime: qwen, model: x (selected by: y)\nReviewed head: head1\n\n0 finding(s)",
+        createdAt: $when, author: {login: "mallory"}}]')]"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]
+}
+
+@test "must-fail: a running or ambiguous review gate is not merge-ready (#705)" {
+    stub_gh_prs <<<"[$(behind_pr 1 head1 SUCCESS | jq '.statusCheckRollup += [{__typename: "CheckRun",
+        name: "Review threads answered", status: "COMPLETED", conclusion: "FAILURE"}]'),
+        $(behind_pr 2 head2 SUCCESS | jq '.statusCheckRollup[1].status = "IN_PROGRESS" | .statusCheckRollup[1].conclusion = ""')]"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]
+}
+
+@test "must-fail: null merge state and an empty rollup read as not merge-ready, never a crash (#705)" {
+    stub_gh_prs <<<"[$(behind_pr 1 head1 SUCCESS | jq '.mergeStateStatus = null'),
+        $(behind_pr 2 head2 SUCCESS | jq '.statusCheckRollup = []')]"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]
+}
+
+@test "must-fail: an unreadable board produces no plan, so nothing is merge-ready (#705)" {
+    stub_gh_failing
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -ne 0 ]
+    [[ "$output" != *merge_ready* ]]
+}
+
 @test "merge-ready needs BEHIND, and only exists in serial-drain mode (#705)" {
-    stub_gh_prs <<<"[$(behind_pr 1 head1 -), $(behind_pr 2 head2 - | jq '.mergeStateStatus = "BLOCKED"')]"
+    stub_gh_prs <<<"[$(behind_pr 1 head1 SUCCESS), $(behind_pr 2 head2 SUCCESS | jq '.mergeStateStatus = "BLOCKED"')]"
     export REVIEW_FANOUT_SERIAL=1
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
     [ "$(jq -c '[.merge_ready[].pr]' <<<"$output")" = "[1]" ]
-    [[ "$(reason_for 2)" == *"already reviewed"* ]]
     export REVIEW_FANOUT_SERIAL=0
     run python3 "$PLANNER"
     [ "$(jq -r '.merge_ready | length' <<<"$output")" -eq 0 ]

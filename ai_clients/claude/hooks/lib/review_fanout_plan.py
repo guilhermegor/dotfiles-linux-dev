@@ -744,39 +744,24 @@ def _clean_checks(pr: dict) -> list:
 	return [] if states["failing"] or states["running"] or states["ambiguous"] else rollup
 
 
-def has_review_history(pr: dict) -> bool:
-	"""True when ANY review (either channel, any head) exists on the PR -- never reviewed is not."""
-	return bool(pr.get("reviews")) or any(
-		LADDER_ATTRIBUTION_RE.search(comment.get("body") or "") for comment in pr.get("comments") or []
-	)
-
-
 def merge_ready(pr: dict) -> bool:
-	"""True when a serial-drain PR is reviewed, green and blocked only on being behind (#705).
+	"""True when a serial-drain PR is gate-green on its current head and only BEHIND (#705).
 
-	``BEHIND`` is the only mergeStateStatus that qualifies: an update-branch needs no reviewer,
-	so this PR is merge work, not review work. Every check must be clean (``_clean_checks``),
-	and the review must hold at the current head, either directly (a review names it, either
-	channel) or carried forward -- the repo's own review gate (``REVIEW_GATE_CHECK``) passes on
-	a head no review names, which only a gate that carries reviews forward (blueprintx#698/#699)
-	does, and only for a PR that was reviewed at some point. A red or ambiguous gate is a red
-	check, so it can never be merge-ready. Anything unreadable is not ready: a wrong "ready"
-	merges unreviewed code.
+	One source of truth: the repo's own review gate (``REVIEW_GATE_CHECK``), read from the
+	head-scoped rollup, must be present and passing, every other check clean (``_clean_checks``),
+	and ``mergeStateStatus`` exactly ``BEHIND``. A gate that carries reviews forward
+	(blueprintx#698/#699) is green on an updated head; one that does not is red and the PR
+	stays review work. Comment bodies and review objects are deliberately NOT read here: neither
+	is author-checked (anyone can quote an attribution line), while a check on the head is
+	written only by the repo's own CI. Fail closed -- a missing gate, empty rollup, draft or
+	any other merge state is "not ready": a wrong "ready" merges unreviewed code.
 	"""
 	if pr.get("isDraft") or (pr.get("mergeStateStatus") or "") != "BEHIND":
 		return False
 	rollup = _clean_checks(pr)
-	if not rollup:
-		return False
-	if reviewed_at_head(pr):
-		return True
-	head_time = head_commit_time(pr)
-	if head_time is not None and ladder_covered_at_head(pr, head_time):
-		return True
-	gate_passes = any(
+	return any(
 		(entry.get("name") or entry.get("context") or "") == REVIEW_GATE_CHECK for entry in rollup
 	)
-	return gate_passes and has_review_history(pr)
 
 
 def build_plan() -> dict:
