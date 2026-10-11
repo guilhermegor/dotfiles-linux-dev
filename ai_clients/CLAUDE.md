@@ -296,6 +296,21 @@ check-and-append under `flock` to `$(git rev-parse --git-common-dir)/dispatch-cl
    killed agent never calls it, and a registry that reads "everything is in
    flight" forever is dotfiles-linux-dev#404 — a guard that never fires — with a
    different cause.
+4. **Cross-machine "held elsewhere" (#715).** The same once-per-round rule:
+   `refresh_elsewhere_held_paths <owner> <repo>` writes `elsewhere-held-paths.tsv`
+   from the forge (cards In progress, plus pushed `*-<issue>` branches that have no
+   local worktree, via each issue's `surface` block); `claim_files` then answers
+   `HELD:elsewhere#<issue>:<path>`. The forge read tries `gh`, then REST with
+   `GH_TOKEN`/`GITHUB_TOKEN`, following every page; a surface token is a literal
+   or a glob (same fnmatch rule as `dispatch_plan.py`), so `docs/*` holds
+   `docs/readme.md`. A read that fails, comes back empty or malformed, or cannot
+   be paged to the end counts as failed. If both transports fail it **degrades
+   to local-only, never blocks**: the previous file stays, `forge-pending` records the attempt, and
+   retries back off 1/2/5/10 min (a call inside the window prints `BACKOFF`). On
+   reconcile, a local claim the forge shows another issue holding is printed as
+   `CONFLICT:#<local>:#<remote>:<path>` (one line per remote holder, live local
+   claims only) and never resolved silently. Nothing
+   written names a host or machine.
 
 An issue with no declared file surface is `UNDECLARED`: reported, never assumed
 free, never dispatched on a guess. The convention itself is named in exactly one
