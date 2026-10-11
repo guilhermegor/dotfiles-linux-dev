@@ -142,14 +142,16 @@ _dispatch_forge_call() {
 	if [ "$kind" = graphql ]; then
 		gh api graphql -f query="$arg" 2>/dev/null && return 0
 		[ -n "$token" ] || return 1
-		curl -fsS -H "Authorization: Bearer $token" -X POST \
-			-d "$(jq -n --arg q "$arg" '{query:$q}')" https://api.github.com/graphql 2>/dev/null
+		# The header goes in on stdin (`-H @-`), never argv: argv is readable by every local user.
+		curl -fsS -H @- -X POST \
+			-d "$(jq -n --arg q "$arg" '{query:$q}')" https://api.github.com/graphql \
+			<<<"Authorization: Bearer $token" 2>/dev/null
 	elif [ "$kind" = list ]; then
 		gh api "$arg" --paginate 2>/dev/null && return 0
 		[ -n "$token" ] || return 1
 		while ((page <= 100)); do
-			out="$(curl -fsS -H "Authorization: Bearer $token" \
-				"https://api.github.com/$arg?per_page=100&page=$page" 2>/dev/null)" || return 1
+			out="$(curl -fsS -H @- "https://api.github.com/$arg?per_page=100&page=$page" \
+				<<<"Authorization: Bearer $token" 2>/dev/null)" || return 1
 			printf '%s\n' "$out"
 			jq -e 'length >= 100' <<<"$out" >/dev/null || return 0
 			page=$((page + 1))
@@ -158,7 +160,7 @@ _dispatch_forge_call() {
 	else
 		gh api "$arg" 2>/dev/null && return 0
 		[ -n "$token" ] || return 1
-		curl -fsS -H "Authorization: Bearer $token" "https://api.github.com/$arg" 2>/dev/null
+		curl -fsS -H @- "https://api.github.com/$arg" <<<"Authorization: Bearer $token" 2>/dev/null
 	fi
 }
 
@@ -226,8 +228,11 @@ refresh_elsewhere_held_paths() {
 			_dispatch_forge_mark_pending "$pending" "$attempts" "$now"
 			return 1
 		}
-		printf '%s\n' "$body" | awk '/^```surface/{f=1;next} /^```/{f=0} f{gsub(/^[ \t\r]+|[ \t\r]+$/, "")} f && NF' |
-			sed "s/^/$n\t/" >>"$tmp"
+		# A token of only `*`/`?`/`/` has no literal path component and would hold every path
+		# (#725): drop it here, once per token, and report it (same predicate as dispatch_plan.py).
+		printf '%s\n' "$body" | awk -v n="$n" '/^```surface/{f=1;next} /^```/{f=0} f{gsub(/^[ \t\r]+|[ \t\r]+$/, "")}
+			f && NF { if ($0 ~ /^[*?\/]*$/) { print "dispatch_claims: rejected surface token \047" $0 "\047 of #" n " (no literal path component)" > "/dev/stderr"; next } print n "\t" $0 }' \
+			>>"$tmp"
 	done <<<"$issues"
 	mv -f "$tmp" "$file" || {
 		rm -f "$tmp"
@@ -245,6 +250,8 @@ refresh_elsewhere_held_paths() {
 _dispatch_elsewhere_holders() {
 	local n tok
 	while IFS=$'\t' read -r n tok; do
+		# Normally dropped (and reported) at write time; this covers a file written before that (#725).
+		[[ "$tok" =~ ^[*?/]*$ ]] && continue
 		# shellcheck disable=SC2053  # tok is a glob on purpose
 		[[ "$2" == "$tok" || "$2" == $tok ]] && echo "$n"
 	done <"$1" | sort -un

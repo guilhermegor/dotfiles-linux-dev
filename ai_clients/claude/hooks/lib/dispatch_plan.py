@@ -558,6 +558,19 @@ def _walk_repo_files(root: Path) -> list[str]:
 	return sorted({p for p in listing.split("\0") if p and (root / p).is_file()})
 
 
+def _is_bare_glob(token: str) -> bool:
+	"""True (and reported on stderr) for a token with no literal path component.
+
+	`*`, `**`, `*/?` match every file, so one such token in an issue body would hold the whole
+	repo and stall all dispatch (#725). The one predicate for both callers, so the report is
+	never skipped by a pre-filter. Mirrors the regex in dispatch_claims.sh.
+	"""
+	if token.strip("*?/"):
+		return False
+	print(f"dispatch_plan: rejected surface token {token!r}", file=sys.stderr)
+	return True
+
+
 def expand_tokens(tokens: list[str], root: Path, held: list[str]) -> list[str]:
 	"""Expand each glob token against the repo tree AND the live-agent held-paths set.
 
@@ -580,6 +593,8 @@ def expand_tokens(tokens: list[str], root: Path, held: list[str]) -> list[str]:
 	files: list[str] = []
 	local_files: list[str] | None = None
 	for token in tokens:
+		if _is_bare_glob(token):
+			continue
 		if any(ch in token for ch in GLOB_CHARS):
 			if local_files is None:
 				local_files = _walk_repo_files(root)
@@ -712,7 +727,9 @@ def build_plan() -> dict:
 	surfaces: dict[int, list[str]] = {}
 	expanded: dict[int, list[str]] = {}
 	for issue in issues:
-		tokens = declared_surface(issue.get("body") or "")
+		# A surface of only bare globs is UNDECLARED, not an empty surface that collides with
+		# nothing (#725): expand_tokens drops those tokens, so filter before deciding "declared".
+		tokens = [t for t in declared_surface(issue.get("body") or "") if not _is_bare_glob(t)]
 		if tokens:
 			number = issue["number"]
 			surfaces[number] = tokens

@@ -319,6 +319,20 @@ field() {
     [[ "$(field '.excluded[0].reason')" == *"no declared file surface"* ]]
 }
 
+@test "a surface of only bare globs is UNDECLARED, never an empty surface that collides with nothing" {
+    # #725 review: rejecting `*` left surfaces={4: ["*"]} expanded to [], so the issue was
+    # dispatchable with zero files — fail-open where the old `*` collided with everything.
+    stub_gh "[$(issue_json 4 '*' '**')]"
+    run_planner
+    [ "$status" -eq 0 ]
+    # the filter reports each dropped token (stderr is merged into $output by `run`)
+    [ "$(grep -c '^dispatch_plan: rejected surface token' <<<"$output")" -eq 2 ]
+    output="$(grep -v '^dispatch_plan: rejected' <<<"$output")"
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [ "$(field '.excluded[0].issue')" = "4" ]
+    [[ "$(field '.excluded[0].reason')" == *"no declared file surface"* ]]
+}
+
 @test "an issue already claimed by a PR is excluded and never blocks its neighbour" {
     stub_gh "[$(issue_json 5 free/a.sh), $(issue_json 6 free/b.sh)]" "" 5
     run_planner
@@ -894,4 +908,21 @@ dispatch_plan.expand_tokens(["*.py"], Path(sys.argv[2]), [])
 ' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib" "$plain"
 	rm -rf "$plain"
 	[ "$status" -ne 0 ]
+}
+
+@test "a surface token with no literal path component is rejected, not expanded (#725)" {
+	mkdir -p "$TEST_TMP/src"
+	: >"$TEST_TMP/src/a.py"
+	/usr/bin/git add src/a.py
+	/usr/bin/git commit -q -m "tracked"
+	run python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+from pathlib import Path
+print(dispatch_plan.expand_tokens(["*", "**", "*/?", "src/*"], Path(".").resolve(), ["x/y.sh"]))
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"['src/a.py']" ]]
+	[[ "$output" == *"rejected surface token"* ]]
 }

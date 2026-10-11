@@ -531,3 +531,60 @@ old/gone.sh"
     [[ "$output" == *"CONFLICT:#5:#83:o/p.sh"* ]]
     [[ "$output" != *"old/gone.sh"* ]]
 }
+
+# --- hardening (dotfiles-linux-dev#725) ----------------------------------------------------
+
+@test "the REST fallback never puts the token on curl's argv but still delivers the header" {
+    forge_stub
+    touch "$STUB/fail-gh"
+    cat >"$STUB/bin/curl" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >>"$STUB/curl-argv"
+cat >>"$STUB/curl-stdin"
+case "$*" in
+*graphql*) cat "$STUB/graphql.json" ;;
+*branches*) cat "$STUB/branches.json" ;;
+esac
+SH
+    chmod +x "$STUB/bin/curl"
+    export GH_TOKEN=s3cr3t-token-725
+    run _dispatch_forge_call get repos/o/r/issues/1
+    [ "$status" -eq 0 ]
+    run _dispatch_forge_call list repos/o/r/branches
+    [ "$status" -eq 0 ]
+    run _dispatch_forge_call graphql '{x}'
+    [ "$status" -eq 0 ]
+    [ -s "$STUB/curl-argv" ]
+    # every call must ask curl to read its headers from stdin, or auth is silently lost
+    [ "$(grep -c -e '-H @-' "$STUB/curl-argv")" -eq 3 ]
+    run grep -c "s3cr3t-token-725" "$STUB/curl-argv"
+    [ "$output" = "0" ]
+    [ "$(grep -c '^Authorization: Bearer s3cr3t-token-725$' "$STUB/curl-stdin")" -eq 3 ]
+}
+
+@test "a surface token with no literal path component holds nothing" {
+    forge_stub
+    card_in_progress 90
+    issue_surface 90 "**"
+    run refresh_elsewhere_held_paths o r
+    [[ "$output" == *"rejected surface token"* ]]
+    run claim_files 5 "any/path.sh" "other/two.sh"
+    [ "$output" = "CLAIMED" ]
+    card_in_progress 91
+    issue_surface 91 "*/?"
+    refresh_elsewhere_held_paths o r
+    run claim_files 5 "other/path.sh"
+    [ "${lines[-1]}" = "CLAIMED" ]
+}
+
+@test "a mixed surface keeps the literal token, drops the bare glob and reports it once" {
+    forge_stub
+    card_in_progress 92
+    issue_surface 92 "$(printf "*\nsrc/held.sh")"
+    run refresh_elsewhere_held_paths o r
+    [ "$(grep -c "rejected surface token" <<<"$output")" -eq 1 ]
+    run claim_files 5 "src/held.sh"
+    [[ "$output" == "HELD:elsewhere#92:src/held.sh" ]]
+    run claim_files 5 "src/free.sh"
+    [ "$output" = "CLAIMED" ]
+}
