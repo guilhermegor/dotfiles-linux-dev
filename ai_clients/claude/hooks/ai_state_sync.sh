@@ -189,10 +189,12 @@ scan_blobs() {
             continue
         fi
         LC_ALL=C sed -e "s/$AWS_EXAMPLE_ID//g" -e "s#$AWS_EXAMPLE_SECRET##g" "$scan" |
-            grep -aEq -e "$TOKEN_RE" -e "${PK_BEGIN}[A-Z ]*${PK_END}${PK_TAIL}"
+            grep -aE -e "$TOKEN_RE" -e "${PK_BEGIN}[A-Z ]*${PK_END}${PK_TAIL}" >/dev/null
         rcs=("${PIPESTATUS[@]}")
         rc=${rcs[1]}
-        [ "$rc" -ne 1 ] || [ "${rcs[0]}" -eq 0 ] || rc=2
+        # No -q: grep drains sed, so a healthy sed never dies of SIGPIPE. A sed failure
+        # makes the scan incomplete whatever grep concluded, even when grep matched.
+        [ "${rcs[0]}" -eq 0 ] || rc=2
         [ "$rc" -eq 1 ] || FLAGGED+=("$path") # 0 = match; >=2 = grep error
         [ "$rc" -le 1 ] || SCAN_ERR=1
     done <"$listing"

@@ -538,7 +538,7 @@ aws_example_secret() { printf 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE%s' "KEY"; }
     plant_ok_file
     run bash "$SYNC" push
     run git --git-dir="$AI_STATE_REMOTE" log -1 --format=%s main
-    [[ "$output" =~ ^chore\(state\):\ sync\ [0-9]{4}- ]]
+    [[ "$output" =~ ^chore\(state\):\ sync\ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
 }
 
 @test "secret guard catches a PEM key stored with escaped newlines" {
@@ -550,6 +550,18 @@ aws_example_secret() { printf 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE%s' "KEY"; }
 @test "fail closed: a failing sed filter is not read as 'no match'" {
     plant_ok_file
     stub_cmd sed 1
+    push_with_stubs
+}
+
+# sed prints the token, then fails: grep still matches, so the verdict alone would be
+# "flagged, scan fine". The failed filter must make the whole scan incomplete instead.
+@test "fail closed: a sed that fails after emitting a match refuses the whole commit" {
+    plant_ok_file
+    printf 'k=%s\n' "$(fake_token)" >"$CLAUDE_CONFIG_DIR/memory/leaky.md"
+    mkdir -p "$T/stubs"
+    printf '#!/bin/bash\nout="$(%s "$@")"\nprintf "%%s\\n" "$out"\n[[ "$out" == *ghp_* ]] && exit 1\nexit 0\n' \
+        "$(command -v sed)" >"$T/stubs/sed"
+    chmod +x "$T/stubs/sed"
     push_with_stubs
 }
 
