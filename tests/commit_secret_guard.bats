@@ -99,3 +99,19 @@ run_guard() {
     run run_guard "git -C $other commit -m wip"
     [ "$status" -eq 0 ]
 }
+
+@test "AWS documented example key is not blocked" {
+    git reset -q
+    printf 'aws_key = "AKIA%s"\n' "IOSFODNN7EXAMPLE" > secret.txt
+    git add secret.txt
+    run run_guard 'git commit -m wip'
+    [ "$status" -eq 0 ]
+}
+
+@test "an example key does not shield a real key on the same line" {
+    git reset -q
+    printf 'a=AKIA%s b=AKIA%s\n' "IOSFODNN7EXAMPLE" "ABCDEFGHIJKLMNOP" > secret.txt
+    git add secret.txt
+    run run_guard 'git commit -m wip'
+    [ "$status" -eq 2 ]
+}

@@ -40,6 +40,8 @@ TOKEN_RE='(AKIA[0-9A-Z]{16}|gh[oprsu]_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{22
 DASHES='-----'
 PK_BEGIN="${DASHES}BEGIN "
 PK_END="PRIVATE KEY${DASHES}"
+AWS_EXAMPLE_ID="AKIAIOSFODNN7EXAMPLE"
+AWS_EXAMPLE_SECRET="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 SECRET_NAME='(password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key)'
 # A secret-named var assigned a quoted literal of >= 8 chars.
 ASSIGN_RE="${SECRET_NAME}${QUOTE}?[[:space:]]*[:=][[:space:]]*${QUOTE}${NOTQUOTE}{8,}${QUOTE}"
@@ -113,7 +115,9 @@ scan_added_lines() {
             '+++ '*) file="${line#+++ b/}" ;;
             '+'*)
                 content="${line#+}"
-                if [[ "$content" == *"$PK_BEGIN"*"$PK_END"* ]]; then
+                content="${content//"$AWS_EXAMPLE_ID"/}"
+                content="${content//"$AWS_EXAMPLE_SECRET"/}"
+                if [[ "$content" == *"$PK_BEGIN"*"$PK_END" || "$content" == *"$PK_BEGIN"*"$PK_END"$'\r' ]]; then
                     printf '%s\t%s\n' "$file" "a private key"; return
                 fi
                 if [[ "$content" =~ $TOKEN_RE ]]; then

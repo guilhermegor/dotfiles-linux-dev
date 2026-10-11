@@ -165,7 +165,7 @@ fake_token() { printf 'ghp_%s' "$(printf 'A%.0s' $(seq 1 36))"; }
     printf 'fine\n' >"$CLAUDE_CONFIG_DIR/memory/ok.md"
     printf 'token=%s\n' "$(fake_token)" >"$CLAUDE_CONFIG_DIR/memory/leaky.md"
     run bash "$SYNC" push
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 0 ]
     [[ "$output" == *"leaky.md"* ]]
     [[ "$output" != *"$(fake_token)"* ]]
     run remote_files
@@ -180,7 +180,8 @@ fake_token() { printf 'ghp_%s' "$(printf 'A%.0s' $(seq 1 36))"; }
 assert_planted_not_committed() {
     local planted="$1"
     run bash "$SYNC" push
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"held back"* ]]
     run remote_files
     [[ "$output" == *"memory/ok.md"* ]]
     [[ "$output" != *"$planted"* ]]
@@ -368,7 +369,7 @@ push_with_stubs() {
     [ "$status" -eq 0 ]
     printf 'k=%s\n' "$(fake_token)" >>"$CLAUDE_CONFIG_DIR/memory/ok.md"
     run bash "$SYNC" push
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 0 ]
     run git --git-dir="$AI_STATE_GIT_DIR" log --all -p
     [[ "$output" != *"$(fake_token)"* ]]
 }
@@ -481,4 +482,59 @@ resolved_remote() { # <gh stub body>
     run bash "$SYNC" pull
     [ "$status" -ne 0 ]
     [[ "$output" == *"state_sync"* ]]
+}
+
+# Built at runtime so no scannable literal sits in this file.
+aws_example_id() { printf 'AKIA%s' "IOSFODNN7EXAMPLE"; }
+aws_example_secret() { printf 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE%s' "KEY"; }
+
+@test "AWS documented example credentials are not held back" {
+    plant_ok_file
+    printf 'id=%s\nsecret=%s\n' "$(aws_example_id)" "$(aws_example_secret)" \
+        >"$CLAUDE_CONFIG_DIR/memory/example.md"
+    run bash "$SYNC" push
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"held back"* ]]
+    run remote_files
+    [[ "$output" == *"memory/example.md"* ]]
+}
+
+@test "a real-shaped AKIA key is still held back" {
+    plant_ok_file
+    printf 'id=AKIA%s\n' "ABCDEFGHIJKLMNOP" >"$CLAUDE_CONFIG_DIR/memory/real.md"
+    assert_planted_not_committed "real.md"
+}
+
+@test "an example key does not shield a real key in the same file" {
+    plant_ok_file
+    printf '%s\nAKIA%s\n' "$(aws_example_id)" "ABCDEFGHIJKLMNOP" >"$CLAUDE_CONFIG_DIR/memory/mixed.md"
+    assert_planted_not_committed "mixed.md"
+}
+
+@test "prose quoting a PEM header mid-line is not a private key" {
+    plant_ok_file
+    printf 'fixture: -----BEGIN RSA %s----- with a short fake body\n' "PRIVATE KEY" \
+        >"$CLAUDE_CONFIG_DIR/memory/prose.md"
+    run bash "$SYNC" push
+    [ "$status" -eq 0 ]
+    run remote_files
+    [[ "$output" == *"memory/prose.md"* ]]
+}
+
+@test "held files alone exit 0 and are reported as a warning" {
+    plant_ok_file
+    printf 'k=%s\n' "$(fake_token)" >"$CLAUDE_CONFIG_DIR/memory/leaky.md"
+    run bash "$SYNC" push
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WARNING"*"leaky.md"* ]]
+    run bash "$SYNC" push
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"leaky.md"* ]]
+}
+
+@test "the sync commit message carries no hostname" {
+    plant_ok_file
+    run bash "$SYNC" push
+    run git --git-dir="$AI_STATE_REMOTE" log -1 --format=%s main
+    [[ "$output" =~ ^chore\(state\):\ sync\ [0-9]{4}- ]]
 }

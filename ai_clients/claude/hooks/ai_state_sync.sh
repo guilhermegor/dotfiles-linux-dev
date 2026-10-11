@@ -126,6 +126,8 @@ select_client() {
 TOKEN_RE='(AKIA[0-9A-Z]{16}|gh[oprsu]_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{22,}|xox[baprs]-[0-9A-Za-z-]{10,}|AIza[0-9A-Za-z_-]{35}|(sk|rk)_live_[0-9A-Za-z]{20,})'
 PK_BEGIN="-----BEGIN "
 PK_END="PRIVATE KEY-----"
+AWS_EXAMPLE_ID="AKIAIOSFODNN7EXAMPLE"
+AWS_EXAMPLE_SECRET="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
 g() { git --git-dir="$AI_STATE_GIT_DIR" --work-tree="$AI_STATE_WORK_TREE" "$@"; }
 net() { GIT_TERMINAL_PROMPT=0 timeout "$AI_STATE_TIMEOUT" "$@"; }
@@ -167,6 +169,7 @@ unmerged_files() { g diff --name-only --diff-filter=U 2>/dev/null; }
 # "do not commit / do not push". No status is ever swallowed, and no list is built
 # through a process substitution whose own failure would read as "empty = clean".
 FLAGGED=()
+SCAN_ERR=0 # 1 once any blob could not be scanned (unknown, as opposed to a content match)
 
 # scan_blobs <NUL-delimited path listing file> <blob prefix>
 scan_blobs() {
@@ -176,11 +179,14 @@ scan_blobs() {
     while IFS= read -r -d '' path; do
         if ! g cat-file blob "$prefix$path" >"$scan" 2>/dev/null; then
             FLAGGED+=("$path") # unreadable blob: unknown, so refuse
+            SCAN_ERR=1
             continue
         fi
-        grep -aEq -e "$TOKEN_RE" -e "${PK_BEGIN}[A-Z ]*${PK_END}" "$scan"
-        rc=$?
+        LC_ALL=C sed -e "s/$AWS_EXAMPLE_ID//g" -e "s#$AWS_EXAMPLE_SECRET##g" "$scan" |
+            grep -aEq -e "$TOKEN_RE" -e "${PK_BEGIN}[A-Z ]*${PK_END}[[:space:]]*$"
+        rc=${PIPESTATUS[1]}
         [ "$rc" -eq 1 ] || FLAGGED+=("$path") # 0 = match; >=2 = grep error
+        [ "$rc" -le 1 ] || SCAN_ERR=1
     done <"$listing"
     rm -f "$scan"
     [ "${#FLAGGED[@]}" -eq 0 ]
@@ -296,8 +302,15 @@ $conflicts"
 commit_changes() {
     g add -A >/dev/null 2>&1 || { REFUSAL="git add failed"; return 1; }
     local f rc blocked
+    SCAN_ERR=0
     guard_staged
     rc=$?
+    if [ "$rc" -eq 1 ] && [ "$SCAN_ERR" -eq 1 ]; then
+        g reset -q >/dev/null 2>&1
+        REFUSAL="secret scan could not read every staged file; nothing committed"
+        report_forward "$REFUSAL"
+        return 1
+    fi
     if [ "$rc" -eq 1 ]; then
         blocked=("${FLAGGED[@]}")
         for f in "${blocked[@]}"; do
@@ -321,7 +334,7 @@ $(printf '%s\n' "${blocked[@]}")"
         1) ;;                                 # changes: fall through to commit
         *) REFUSAL="could not tell what is staged"; return 1 ;;
     esac
-    g commit -q -m "chore(state): sync $(hostname -s 2>/dev/null || echo host) $(date -u +%FT%TZ)" >/dev/null 2>&1 ||
+    g commit -q -m "chore(state): sync $(date -u +%FT%TZ)" >/dev/null 2>&1 ||
         { REFUSAL="git commit failed"; return 1; }
 }
 
@@ -429,7 +442,7 @@ $unmerged"
     rm -f "$HANDOFF" 2>/dev/null || true # re-evaluated from scratch every run
     export_sqlite_dumps
     commit_changes || finish 1 "commit refused: $REFUSAL"
-    [ -n "$SECRET_HELD" ] && { held=" Secret guard held back: $SECRET_HELD"; rc=1; }
+    [ -n "$SECRET_HELD" ] && held=" WARNING: secret guard held back: $SECRET_HELD"
 
     if [ "$(commits_ahead)" -eq 0 ]; then
         finish "$rc" "nothing to push.$held"
