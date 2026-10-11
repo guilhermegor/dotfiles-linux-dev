@@ -27,7 +27,7 @@ _resolve_dir() {
 }
 
 main() {
-	local payload cwd cmd branch gitdir prefix dir
+	local payload cwd cmd branch gitdir prefix dir pre
 
 	payload="$(cat)"
 	cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
@@ -41,9 +41,13 @@ main() {
 
 	# The commit lands where the command points it, not where the shell sits:
 	# apply every `cd <dir>` before it in order (each relative to the last),
-	# then `git -C <dir>` on top. ponytail: unquoted cd targets only.
+	# then `git -C <dir>` on top. A cd right after `||` only runs if the left
+	# side failed, so it is not guaranteed and is skipped.
+	# ponytail: unquoted cd targets only.
 	while [[ "$prefix" =~ (^|[[:space:];\&\|])cd[[:space:]]+([^[:space:];\&\|]+)(.*)$ ]]; do
-		cwd="$(_resolve_dir "$cwd" "${BASH_REMATCH[2]}")"
+		pre="${prefix%"${BASH_REMATCH[0]}"}"
+		pre="${pre%"${pre##*[![:space:]]}"}"
+		[[ "$pre" == *'|' || "${BASH_REMATCH[1]}" == '|' ]] || cwd="$(_resolve_dir "$cwd" "${BASH_REMATCH[2]}")"
 		prefix="${BASH_REMATCH[3]}"
 	done
 	[ -z "$dir" ] || cwd="$(_resolve_dir "$cwd" "$dir")"

@@ -133,6 +133,13 @@ refute_remote() {
     remote_has feat/some-thing-715
 }
 
+@test "a cd after || is not applied (it may never run)" {
+    add_worktree feat/some-thing-715
+    run run_hook "$TEST_TMP/wt" "cd $TEST_TMP/wt || cd $TEST_TMP/main && git commit -m x"
+    [ "$status" -eq 0 ]
+    remote_has feat/some-thing-715
+}
+
 @test "git -C with a quoted path containing spaces is resolved" {
     git -C "$TEST_TMP/main" worktree add -q -b feat/some-thing-715 "$TEST_TMP/wt dir" main
     git -C "$TEST_TMP/wt dir" commit -q --allow-empty -m work
