@@ -440,3 +440,94 @@ issue_surface() {
     run grep -rlF "$(hostname)" "$TEST_TMP/.git/dispatch-claims.tsv" "$TEST_TMP/.git/elsewhere-held-paths.tsv"
     [ "$status" -ne 0 ]
 }
+
+# --- review findings on #718 ---------------------------------------------------------------
+
+@test "a surface pattern held elsewhere blocks a concrete path it covers" {
+    forge_stub
+    card_in_progress 85
+    issue_surface 85 "  docs/*  "
+    refresh_elsewhere_held_paths o r
+    run claim_files 5 "docs/readme.md"
+    [ "$status" -ne 0 ]
+    [ "$output" = "HELD:elsewhere#85:docs/readme.md" ]
+    run claim_files 5 "src/readme.md"
+    [ "$output" = "CLAIMED" ]
+}
+
+@test "a malformed forge read keeps the previous file and leaves the pending marker" {
+    forge_stub
+    card_in_progress 86
+    issue_surface 86 "u/v.sh"
+    refresh_elsewhere_held_paths o r
+    : >"$STUB/issue-86.json"
+    rm -f "$TEST_TMP/.git/forge-pending"
+    run refresh_elsewhere_held_paths o r
+    [ "$status" -ne 0 ]
+    [ -s "$TEST_TMP/.git/forge-pending" ]
+    run claim_files 5 "u/v.sh"
+    [ "$output" = "HELD:elsewhere#86:u/v.sh" ]
+}
+
+@test "an empty branch read is a failure, not an empty hold list" {
+    forge_stub
+    : >"$STUB/branches.json"
+    run refresh_elsewhere_held_paths o r
+    [ "$status" -ne 0 ]
+    [ -s "$TEST_TMP/.git/forge-pending" ]
+}
+
+@test "later GraphQL pages are followed, and a card with more project items fails closed" {
+    forge_stub
+    cat >"$STUB/bin/gh" <<'SH'
+#!/bin/bash
+case "$*" in
+*graphql*after*) cat "$STUB/graphql-2.json" ;;
+*graphql*) cat "$STUB/graphql-1.json" ;;
+*branches*) echo '[]' ;;
+*issues/*) cat "$STUB/issue-$(sed -E 's#.*issues/([0-9]+).*#\1#' <<<"$*").json" ;;
+esac
+SH
+    page() {
+        printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":%s,"endCursor":"c1"},"nodes":[{"number":%s,"projectItems":{"pageInfo":{"hasNextPage":%s},"nodes":[{"fieldValueByName":{"name":"In progress"}}]}}]}}}}' "$1" "$2" "$3"
+    }
+    page true 87 false >"$STUB/graphql-1.json"
+    page false 88 false >"$STUB/graphql-2.json"
+    issue_surface 87 "w/x.sh"
+    issue_surface 88 "y/z.sh"
+    run refresh_elsewhere_held_paths o r
+    [ "$status" -eq 0 ]
+    run claim_files 5 "y/z.sh"
+    [ "$output" = "HELD:elsewhere#88:y/z.sh" ]
+    page false 89 true >"$STUB/graphql-1.json"
+    rm -f "$TEST_TMP/.git/elsewhere-held-paths.tsv"
+    run refresh_elsewhere_held_paths o r
+    [ "$status" -ne 0 ]
+}
+
+@test "concurrent refreshes each publish a complete file" {
+    forge_stub
+    card_in_progress 90
+    issue_surface 90 "p/q.sh"
+    for _ in 1 2 3 4; do refresh_elsewhere_held_paths o r & done
+    wait
+    [ "$(wc -l <"$TEST_TMP/.git/elsewhere-held-paths.tsv")" -eq 1 ]
+    run ls "$TEST_TMP/.git"
+    [[ "$output" != *tsv.* ]]
+}
+
+@test "every remote holder of a path is reported, and an expired local claim is not" {
+    forge_stub
+    claim_files 5 "o/p.sh"
+    printf '1\t6\told/gone.sh\n' >>"$TEST_TMP/.git/dispatch-claims.tsv"
+    printf '{"data":{"repository":{"issues":{"nodes":[%s,%s]}}}}' \
+        '{"number":77,"projectItems":{"nodes":[{"fieldValueByName":{"name":"In progress"}}]}}' \
+        '{"number":83,"projectItems":{"nodes":[{"fieldValueByName":{"name":"In progress"}}]}}' >"$STUB/graphql.json"
+    issue_surface 77 "o/p.sh
+old/gone.sh"
+    issue_surface 83 "o/*"
+    run refresh_elsewhere_held_paths o r
+    [[ "$output" == *"CONFLICT:#5:#77:o/p.sh"* ]]
+    [[ "$output" == *"CONFLICT:#5:#83:o/p.sh"* ]]
+    [[ "$output" != *"old/gone.sh"* ]]
+}

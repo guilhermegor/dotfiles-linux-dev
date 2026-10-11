@@ -135,39 +135,73 @@ _dispatch_forge_backoff() {
 
 # _dispatch_forge_call KIND ARG
 # gh first, then the REST API with the token; non-zero only when both fail.
-# KIND is `get` (ARG = REST path) or `graphql` (ARG = query).
+# KIND is `get` (ARG = REST path of one object), `list` (ARG = REST path of an array, every page
+# followed — a stream of arrays on stdout) or `graphql` (ARG = query).
 _dispatch_forge_call() {
-	local kind="$1" arg="$2" token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+	local kind="$1" arg="$2" token="${GH_TOKEN:-${GITHUB_TOKEN:-}}" page=1 out
 	if [ "$kind" = graphql ]; then
 		gh api graphql -f query="$arg" 2>/dev/null && return 0
 		[ -n "$token" ] || return 1
 		curl -fsS -H "Authorization: Bearer $token" -X POST \
 			-d "$(jq -n --arg q "$arg" '{query:$q}')" https://api.github.com/graphql 2>/dev/null
-	else
+	elif [ "$kind" = list ]; then
 		gh api "$arg" --paginate 2>/dev/null && return 0
+		[ -n "$token" ] || return 1
+		while ((page <= 100)); do
+			out="$(curl -fsS -H "Authorization: Bearer $token" \
+				"https://api.github.com/$arg?per_page=100&page=$page" 2>/dev/null)" || return 1
+			printf '%s\n' "$out"
+			jq -e 'length >= 100' <<<"$out" >/dev/null || return 0
+			page=$((page + 1))
+		done
+		return 1
+	else
+		gh api "$arg" 2>/dev/null && return 0
 		[ -n "$token" ] || return 1
 		curl -fsS -H "Authorization: Bearer $token" "https://api.github.com/$arg" 2>/dev/null
 	fi
 }
 
 # _dispatch_elsewhere_issues SLUG: In-progress cards and pushed -<issue> branches, minus local worktrees.
+# Every read is validated before it is parsed: a failed fetch piped into jq is an empty success, and
+# an empty list published as "nothing is held elsewhere" is the exact failure this file guards against.
+# Pages are followed to the end; a card with more project items than one page fails the read closed.
 _dispatch_elsewhere_issues() {
-	local slug="$1" owner="${1%%/*}" repo="${1##*/}" cards branches local_issues
-	cards="$(_dispatch_forge_call graphql "{repository(owner:\"$owner\",name:\"$repo\"){issues(states:OPEN,first:100){nodes{number projectItems(first:5){nodes{fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}}")" || return 1
-	branches="$(_dispatch_forge_call get "repos/$slug/branches")" || return 1
+	local slug="$1" owner="${1%%/*}" repo="${1##*/}" cards="" page branches local_issues after="" cursor pages=0
+	while :; do
+		page="$(_dispatch_forge_call graphql "{repository(owner:\"$owner\",name:\"$repo\"){issues(states:OPEN,first:100$after){pageInfo{hasNextPage endCursor}nodes{number projectItems(first:20){pageInfo{hasNextPage}nodes{fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}}")" || return 1
+		jq -e '.data.repository.issues.nodes | type == "array"' <<<"$page" >/dev/null || return 1
+		jq -e 'any(.data.repository.issues.nodes[]; .projectItems.pageInfo.hasNextPage == true) | not' <<<"$page" >/dev/null || return 1
+		cards+="$(jq -r '.data.repository.issues.nodes[]
+			| select(any(.projectItems.nodes[]?; .fieldValueByName.name == "In progress")) | .number' <<<"$page")"$'\n'
+		jq -e '.data.repository.issues.pageInfo.hasNextPage == true' <<<"$page" >/dev/null || break
+		cursor="$(jq -r '.data.repository.issues.pageInfo.endCursor // empty' <<<"$page")"
+		pages=$((pages + 1))
+		{ [ -n "$cursor" ] && ((pages < 100)); } || return 1
+		after=",after:\"$cursor\""
+	done
+	branches="$(_dispatch_forge_call list "repos/$slug/branches")" || return 1
+	jq -es 'length > 0 and all(.[]; type == "array")' <<<"$branches" >/dev/null || return 1
 	local_issues="$($DISPATCH_CLAIMS_GIT worktree list --porcelain 2>/dev/null |
 		sed -n 's#^branch refs/heads/.*-\([0-9][0-9]*\)$#\1#p')"
 	{
-		printf '%s' "$cards" | jq -r '.data.repository.issues.nodes[]
-			| select(any(.projectItems.nodes[]?; .fieldValueByName.name == "In progress")) | .number'
-		printf '%s' "$branches" | jq -r '.[].name' | sed -n 's#.*-\([0-9][0-9]*\)$#\1#p'
-	} | sort -un | grep -vxF -f <(printf '%s\n' "$local_issues" | sed '/^$/d') || true
+		printf '%s' "$cards"
+		jq -r '.[].name' <<<"$branches" | sed -n 's#.*-\([0-9][0-9]*\)$#\1#p'
+	} | sed '/^$/d' | sort -un | awk 'NR == FNR { skip[$1]; next } !($1 in skip)' \
+		<(printf '%s\n' "$local_issues") -
+}
+
+# _dispatch_forge_mark_pending PENDING ATTEMPTS NOW
+_dispatch_forge_mark_pending() {
+	printf '%s\t%s\n' "$(($2 + 1))" "$3" >"$1"
 }
 
 # refresh_elsewhere_held_paths OWNER REPO
 # One forge read per round; claim_files stays API-free. Fallback and conflict rules: docs/.
+# The new file is built under a name of its own (two worktrees can refresh at once) and is
+# published, and forge-pending cleared, only after every read and the final move succeeded.
 refresh_elsewhere_held_paths() {
-	local slug="$1/$2" dir file pending attempts last issues n body now
+	local slug="$1/$2" dir file pending attempts=0 last issues n raw body now tmp
 	dir="$(dispatch_state_dir)" || return 1
 	file="$dir/elsewhere-held-paths.tsv"
 	pending="$dir/forge-pending"
@@ -180,31 +214,55 @@ refresh_elsewhere_held_paths() {
 		fi
 	fi
 	issues="$(_dispatch_elsewhere_issues "$slug")" || {
-		printf '%s\t%s\n' "$((${attempts:-0} + 1))" "$now" >"$pending"
+		_dispatch_forge_mark_pending "$pending" "$attempts" "$now"
 		return 1
 	}
-	: >"$file.tmp"
+	tmp="$(mktemp "$file.XXXXXX")" || return 1
 	while read -r n; do
 		[ -n "$n" ] || continue
-		body="$(_dispatch_forge_call get "repos/$slug/issues/$n" | jq -r '.body // empty')" || {
-			printf '%s\t%s\n' "$((${attempts:-0} + 1))" "$now" >"$pending"
+		{ raw="$(_dispatch_forge_call get "repos/$slug/issues/$n")" &&
+			body="$(jq -er '.body // ""' <<<"$raw")"; } || {
+			rm -f "$tmp"
+			_dispatch_forge_mark_pending "$pending" "$attempts" "$now"
 			return 1
 		}
-		printf '%s\n' "$body" | awk '/^```surface/{f=1;next} /^```/{f=0} f && NF' |
-			sed "s/^/$n\t/" >>"$file.tmp"
+		printf '%s\n' "$body" | awk '/^```surface/{f=1;next} /^```/{f=0} f{gsub(/^[ \t\r]+|[ \t\r]+$/, "")} f && NF' |
+			sed "s/^/$n\t/" >>"$tmp"
 	done <<<"$issues"
-	mv -f "$file.tmp" "$file"
+	mv -f "$tmp" "$file" || {
+		rm -f "$tmp"
+		_dispatch_forge_mark_pending "$pending" "$attempts" "$now"
+		return 1
+	}
 	rm -f "$pending"
 	_dispatch_report_conflicts "$file"
+	return 0
 }
 
+# _dispatch_elsewhere_holders FILE PATH
+# Distinct issues whose declared surface covers PATH: literally, or as a glob under the same
+# fnmatch rule dispatch_plan.py applies to a surface token (`*` crosses `/`).
+_dispatch_elsewhere_holders() {
+	local n tok
+	while IFS=$'\t' read -r n tok; do
+		# shellcheck disable=SC2053  # tok is a glob on purpose
+		[[ "$2" == "$tok" || "$2" == $tok ]] && echo "$n"
+	done <"$1" | sort -un
+}
+
+# _dispatch_report_conflicts FILE
+# One CONFLICT line per (live local claim, other issue holding that path elsewhere).
 _dispatch_report_conflicts() {
-	local claims
+	local claims live issue path h
 	claims="$(dispatch_claims_file)" || return 0
-	[ -s "$claims" ] || return 0
-	awk -F'\t' 'NR == FNR { if (NF == 2) held[$2] = $1; next }
-		NF == 3 && ($3 in held) && held[$3] != $2 { printf "CONFLICT:#%s:#%s:%s\n", $2, held[$3], $3 }' \
-		"$1" "$claims"
+	live="$(_dispatch_live_claims "$claims")"
+	[ -n "$live" ] || return 0
+	while IFS=$'\t' read -r _ issue path; do
+		for h in $(_dispatch_elsewhere_holders "$1" "$path"); do
+			[ "$h" = "$issue" ] || printf 'CONFLICT:#%s:#%s:%s\n' "$issue" "$h" "$path"
+		done
+	done <<<"$live"
+	return 0
 }
 
 # _dispatch_live_claims FILE
@@ -227,11 +285,14 @@ _dispatch_holder() {
 		printf 'open-pr\n'
 		return 0
 	fi
-	local elsewhere
+	local elsewhere h
 	elsewhere="$(dispatch_elsewhere_file)" || elsewhere=""
 	if [ -s "$elsewhere" ]; then
-		awk -F'\t' -v p="$path" -v me="$issue" \
-			'$2 == p && $1 != me { print "elsewhere#" $1; exit }' "$elsewhere" | grep . && return 0
+		h="$(_dispatch_elsewhere_holders "$elsewhere" "$path" | grep -vxF -- "$issue" | head -n 1)"
+		[ -z "$h" ] || {
+			printf 'elsewhere#%s\n' "$h"
+			return 0
+		}
 	fi
 	printf '%s\n' "$live" | awk -F'\t' -v p="$path" -v me="$issue" \
 		'$3 == p && $2 != me { print "#" $2; exit }'
