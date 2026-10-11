@@ -102,7 +102,7 @@ remote_files() {
     make_db "$CODEX_HOME/memories_1.sqlite" "ghp_$(printf 'A%.0s' $(seq 1 36))"
     bash "$SYNC" setup
     run bash "$SYNC" push
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"Secret guard"* ]]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"secret guard held back"* ]]
     [ -z "$(remote_files)" ]
 }

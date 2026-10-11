@@ -99,3 +99,67 @@ run_guard() {
     run run_guard "git -C $other commit -m wip"
     [ "$status" -eq 0 ]
 }
+
+@test "AWS documented example key is not blocked" {
+    git reset -q
+    printf 'aws_key = "AKIA%s"\n' "IOSFODNN7EXAMPLE" > secret.txt
+    git add secret.txt
+    run run_guard 'git commit -m wip'
+    [ "$status" -eq 0 ]
+}
+
+@test "an example key does not shield a real key on the same line" {
+    git reset -q
+    printf 'a=AKIA%s b=AKIA%s\n' "IOSFODNN7EXAMPLE" "ABCDEFGHIJKLMNOP" > secret.txt
+    git add secret.txt
+    run run_guard 'git commit -m wip'
+    [ "$status" -eq 2 ]
+}
+
+@test "blocks a PEM key stored with escaped newlines" {
+    git reset -q
+    printf '{"pem":"-----BEGIN RSA %s-----\\nabc\\n"}\n' "PRIVATE KEY" > secret.txt
+    git add secret.txt
+    run run_guard 'git commit -m wip'
+    [ "$status" -eq 2 ]
+}
+
+@test "blocks a PEM key with base64 glued to the header" {
+    git reset -q
+    printf 'k=-----BEGIN %s-----MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n' "PRIVATE KEY" > secret.txt
+    git add secret.txt
+    run run_guard 'git commit -m wip'
+    [ "$status" -eq 2 ]
+}
+
+@test "blocks a space-joined PEM key" {
+    git reset -q
+    printf 'KEY="-----BEGIN %s----- MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"\n' "PRIVATE KEY" > secret.txt
+    git add secret.txt
+    run run_guard 'git commit -m wip'
+    [ "$status" -eq 2 ]
+}
+
+@test "blocks a PEM key with double-escaped newlines" {
+    git reset -q
+    printf '{"pem":"-----BEGIN RSA %s-----\\\\nabc"}\n' "PRIVATE KEY" > secret.txt
+    git add secret.txt
+    run run_guard 'git commit -m wip'
+    [ "$status" -eq 2 ]
+}
+
+@test "blocks a PEM header with trailing whitespace" {
+    git reset -q
+    printf -- '-----BEGIN RSA %s----- \n' "PRIVATE KEY" > secret.txt
+    git add secret.txt
+    run run_guard 'git commit -m wip'
+    [ "$status" -eq 2 ]
+}
+
+@test "prose quoting a PEM header mid-sentence is not blocked" {
+    git reset -q
+    printf 'fixture: -----BEGIN RSA %s----- with a short fake body\n' "PRIVATE KEY" > secret.txt
+    git add secret.txt
+    run run_guard 'git commit -m wip'
+    [ "$status" -eq 0 ]
+}

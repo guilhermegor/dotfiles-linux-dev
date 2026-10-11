@@ -165,7 +165,7 @@ fake_token() { printf 'ghp_%s' "$(printf 'A%.0s' $(seq 1 36))"; }
     printf 'fine\n' >"$CLAUDE_CONFIG_DIR/memory/ok.md"
     printf 'token=%s\n' "$(fake_token)" >"$CLAUDE_CONFIG_DIR/memory/leaky.md"
     run bash "$SYNC" push
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 0 ]
     [[ "$output" == *"leaky.md"* ]]
     [[ "$output" != *"$(fake_token)"* ]]
     run remote_files
@@ -180,12 +180,15 @@ fake_token() { printf 'ghp_%s' "$(printf 'A%.0s' $(seq 1 36))"; }
 assert_planted_not_committed() {
     local planted="$1"
     run bash "$SYNC" push
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"held back"* ]]
     run remote_files
     [[ "$output" == *"memory/ok.md"* ]]
     [[ "$output" != *"$planted"* ]]
     run git --git-dir="$AI_STATE_GIT_DIR" log --all --name-only
     [[ "$output" != *"$planted"* ]]
+    # exit 0 must not make the leak invisible: the handoff is what the next session shows
+    grep -q "$planted" "$CLAUDE_CONFIG_DIR/session-audit/ai-state-sync.md"
 }
 
 plant_ok_file() {
@@ -368,7 +371,7 @@ push_with_stubs() {
     [ "$status" -eq 0 ]
     printf 'k=%s\n' "$(fake_token)" >>"$CLAUDE_CONFIG_DIR/memory/ok.md"
     run bash "$SYNC" push
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 0 ]
     run git --git-dir="$AI_STATE_GIT_DIR" log --all -p
     [[ "$output" != *"$(fake_token)"* ]]
 }
@@ -481,4 +484,102 @@ resolved_remote() { # <gh stub body>
     run bash "$SYNC" pull
     [ "$status" -ne 0 ]
     [[ "$output" == *"state_sync"* ]]
+}
+
+# Built at runtime so no scannable literal sits in this file.
+aws_example_id() { printf 'AKIA%s' "IOSFODNN7EXAMPLE"; }
+aws_example_secret() { printf 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE%s' "KEY"; }
+
+@test "AWS documented example credentials are not held back" {
+    plant_ok_file
+    printf 'id=%s\nsecret=%s\n' "$(aws_example_id)" "$(aws_example_secret)" \
+        >"$CLAUDE_CONFIG_DIR/memory/example.md"
+    run bash "$SYNC" push
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"held back"* ]]
+    run remote_files
+    [[ "$output" == *"memory/example.md"* ]]
+}
+
+@test "a real-shaped AKIA key is still held back" {
+    plant_ok_file
+    printf 'id=AKIA%s\n' "ABCDEFGHIJKLMNOP" >"$CLAUDE_CONFIG_DIR/memory/real.md"
+    assert_planted_not_committed "real.md"
+}
+
+@test "an example key does not shield a real key in the same file" {
+    plant_ok_file
+    printf '%s\nAKIA%s\n' "$(aws_example_id)" "ABCDEFGHIJKLMNOP" >"$CLAUDE_CONFIG_DIR/memory/mixed.md"
+    assert_planted_not_committed "mixed.md"
+}
+
+@test "prose quoting a PEM header mid-line is not a private key" {
+    plant_ok_file
+    printf 'fixture: -----BEGIN RSA %s----- with a short fake body\n' "PRIVATE KEY" \
+        >"$CLAUDE_CONFIG_DIR/memory/prose.md"
+    run bash "$SYNC" push
+    [ "$status" -eq 0 ]
+    run remote_files
+    [[ "$output" == *"memory/prose.md"* ]]
+}
+
+@test "held files alone exit 0 and are reported as a warning" {
+    plant_ok_file
+    printf 'k=%s\n' "$(fake_token)" >"$CLAUDE_CONFIG_DIR/memory/leaky.md"
+    run bash "$SYNC" push
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"WARNING"*"leaky.md"* ]]
+    run bash "$SYNC" push
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"leaky.md"* ]]
+}
+
+@test "the sync commit message carries no hostname" {
+    plant_ok_file
+    run bash "$SYNC" push
+    run git --git-dir="$AI_STATE_REMOTE" log -1 --format=%s main
+    [[ "$output" =~ ^chore\(state\):\ sync\ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+}
+
+@test "secret guard catches a PEM key stored with escaped newlines" {
+    plant_ok_file
+    printf '{"pem":"-----BEGIN RSA %s-----\\nabc\\n"}\n' "PRIVATE KEY" >"$CLAUDE_CONFIG_DIR/memory/esc.json"
+    assert_planted_not_committed "esc.json"
+}
+
+@test "fail closed: a failing sed filter is not read as 'no match'" {
+    plant_ok_file
+    stub_cmd sed 1
+    push_with_stubs
+}
+
+# sed prints the token, then fails: grep still matches, so the verdict alone would be
+# "flagged, scan fine". The failed filter must make the whole scan incomplete instead.
+@test "fail closed: a sed that fails after emitting a match refuses the whole commit" {
+    plant_ok_file
+    printf 'k=%s\n' "$(fake_token)" >"$CLAUDE_CONFIG_DIR/memory/leaky.md"
+    mkdir -p "$T/stubs"
+    printf '#!/bin/bash\nout="$(%s "$@")"\nprintf "%%s\\n" "$out"\n[[ "$out" == *ghp_* ]] && exit 1\nexit 0\n' \
+        "$(command -v sed)" >"$T/stubs/sed"
+    chmod +x "$T/stubs/sed"
+    push_with_stubs
+}
+
+# Each layout below once passed as "prose"; every one is a real key shape.
+@test "secret guard catches a PEM key with base64 glued to the header" {
+    plant_ok_file
+    printf 'k=-----BEGIN %s-----MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n' "PRIVATE KEY" >"$CLAUDE_CONFIG_DIR/memory/glued.md"
+    assert_planted_not_committed "glued.md"
+}
+
+@test "secret guard catches a space-joined PEM key" {
+    plant_ok_file
+    printf 'KEY="-----BEGIN %s----- MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"\n' "PRIVATE KEY" >"$CLAUDE_CONFIG_DIR/memory/spaced.md"
+    assert_planted_not_committed "spaced.md"
+}
+
+@test "secret guard catches a PEM key with double-escaped newlines" {
+    plant_ok_file
+    printf '{"pem":"-----BEGIN RSA %s-----\\\\nabc"}\n' "PRIVATE KEY" >"$CLAUDE_CONFIG_DIR/memory/dbl.json"
+    assert_planted_not_committed "dbl.json"
 }
