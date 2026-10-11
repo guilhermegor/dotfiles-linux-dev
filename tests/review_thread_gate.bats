@@ -151,6 +151,23 @@ reviewed_fixture() {
     [[ "$output" == *"needs a REPLY"* ]]
 }
 
+@test "the repo's own roster lists greptile: its lone finding needs a REPLY (#721)" {
+    # Reads the real .review-bots.yaml, not a hand-written roster string: the defect was the file
+    # missing the login, so a fixture roster could never have caught it.
+    roster="$(_gate_roster_logins "$BATS_TEST_DIRNAME/../.review-bots.yaml")"
+    fixture="$(jq -nc --arg bot "$LONG_BODY" '{
+      data: { repository: { pullRequest: { reviewThreads: {
+        totalCount: 1,
+        nodes: [ { isResolved: false, path: "a.sh", comments: {
+          totalCount: 1,
+          nodes: [ { author: { login: "greptile-apps", __typename: "Bot" }, body: $bot } ]
+        } } ] } } } }
+    }')"
+    run_filter "$fixture" "$roster"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"needs a REPLY"* ]]
+}
+
 # --- the no-roster fallback, which takes the other branch entirely -------------------------------
 
 @test "__NO_ROSTER__ falls back to __typename and still exits 0" {
