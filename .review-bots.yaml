@@ -8,3 +8,5 @@ reviewers:
   - login: coderabbitai[bot]
   # The fallback reviewer ladder's own identity (dotfiles-linux-dev#624).
   - login: guilhermegor-review-ladder[bot]
+  # Greptile's REST login; GraphQL returns it without the suffix (dotfiles-linux-dev#721).
+  - login: greptile-apps[bot]
