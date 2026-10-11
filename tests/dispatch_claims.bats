@@ -549,9 +549,14 @@ SH
     chmod +x "$STUB/bin/curl"
     export GH_TOKEN=s3cr3t-token-725
     run _dispatch_forge_call get repos/o/r/issues/1
+    [ "$status" -eq 0 ]
     run _dispatch_forge_call list repos/o/r/branches
+    [ "$status" -eq 0 ]
     run _dispatch_forge_call graphql '{x}'
+    [ "$status" -eq 0 ]
     [ -s "$STUB/curl-argv" ]
+    # every call must ask curl to read its headers from stdin, or auth is silently lost
+    [ "$(grep -c -e '-H @-' "$STUB/curl-argv")" -eq 3 ]
     run grep -c "s3cr3t-token-725" "$STUB/curl-argv"
     [ "$output" = "0" ]
     [ "$(grep -c '^Authorization: Bearer s3cr3t-token-725$' "$STUB/curl-stdin")" -eq 3 ]
