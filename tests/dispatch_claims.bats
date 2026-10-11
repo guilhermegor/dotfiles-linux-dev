@@ -291,3 +291,243 @@ refute() {
         "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib/dispatch_plan.py"
     [ "$output" = "1" ]
 }
+
+# --- forge-aware HELD (dotfiles-linux-dev#715) ---------------------------------------------
+# `gh` and `curl` are stubs on PATH driven by files in $STUB: graphql.json (cards), branches.json,
+# issue-<N>.json (REST issue body), and fail-gh / fail-curl switches. Calls are counted.
+
+forge_stub() {
+    STUB="$TEST_TMP/stub"
+    mkdir -p "$STUB/bin"
+    cat >"$STUB/bin/gh" <<'SH'
+#!/bin/bash
+echo x >>"$STUB/gh-calls"
+[ -e "$STUB/fail-gh" ] && exit 1
+case "$*" in
+*graphql*) cat "$STUB/graphql.json" ;;
+*branches*) cat "$STUB/branches.json" ;;
+*issues/*) cat "$STUB/issue-$(sed -E 's#.*issues/([0-9]+).*#\1#' <<<"$*").json" ;;
+esac
+SH
+    cat >"$STUB/bin/curl" <<'SH'
+#!/bin/bash
+echo x >>"$STUB/curl-calls"
+[ -e "$STUB/fail-curl" ] && exit 1
+args="$*"
+case "$args" in
+*graphql*) cat "$STUB/graphql.json" ;;
+*branches*) cat "$STUB/branches.json" ;;
+*issues/*) cat "$STUB/issue-$(sed -E 's#.*issues/([0-9]+).*#\1#' <<<"$args").json" ;;
+esac
+SH
+    chmod +x "$STUB/bin/gh" "$STUB/bin/curl"
+    export STUB PATH="$STUB/bin:$PATH" GH_TOKEN=t
+    echo '{"data":{"repository":{"issues":{"nodes":[]}}}}' >"$STUB/graphql.json"
+    echo '[]' >"$STUB/branches.json"
+}
+
+card_in_progress() {
+    printf '{"data":{"repository":{"issues":{"nodes":[{"number":%s,"projectItems":{"nodes":[{"fieldValueByName":{"name":"In progress"}}]}}]}}}}' \
+        "$1" >"$STUB/graphql.json"
+}
+
+issue_surface() {
+    # shellcheck disable=SC2016
+    jq -n --arg b "$(printf '## s\n\n```surface\n%s\n```\n' "$2")" '{body:$b}' >"$STUB/issue-$1.json"
+}
+
+@test "a path in the surface of an In-progress card with no local worktree is HELD" {
+    forge_stub
+    card_in_progress 77
+    issue_surface 77 "a/b.sh"
+    run refresh_elsewhere_held_paths o r
+    [ "$status" -eq 0 ]
+    run claim_files 5 "a/b.sh"
+    [ "$status" -ne 0 ]
+    [ "$output" = "HELD:elsewhere#77:a/b.sh" ]
+}
+
+@test "a pushed branch named for an issue, with no local worktree, holds that issue's surface" {
+    forge_stub
+    echo '[{"name":"main"},{"name":"feat/x-78"}]' >"$STUB/branches.json"
+    issue_surface 78 "c/d.sh"
+    refresh_elsewhere_held_paths o r
+    run claim_files 5 "c/d.sh"
+    [ "$output" = "HELD:elsewhere#78:c/d.sh" ]
+}
+
+@test "an issue with a LOCAL worktree is not held as elsewhere" {
+    forge_stub
+    card_in_progress 79
+    issue_surface 79 "e/f.sh"
+    git worktree add -q -b feat/y-79 "$TEST_TMP/wt79"
+    refresh_elsewhere_held_paths o r
+    run claim_files 5 "e/f.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "CLAIMED" ]
+}
+
+@test "the issue's own claim is never HELD by its own forge marker" {
+    forge_stub
+    card_in_progress 80
+    issue_surface 80 "g/h.sh"
+    refresh_elsewhere_held_paths o r
+    run claim_files 80 "g/h.sh"
+    [ "$output" = "CLAIMED" ]
+}
+
+@test "gh failing falls back to the REST API" {
+    forge_stub
+    card_in_progress 81
+    issue_surface 81 "i/j.sh"
+    touch "$STUB/fail-gh"
+    run refresh_elsewhere_held_paths o r
+    [ "$status" -eq 0 ]
+    [ -s "$STUB/curl-calls" ]
+    run claim_files 5 "i/j.sh"
+    [ "$output" = "HELD:elsewhere#81:i/j.sh" ]
+}
+
+@test "both transports failing never blocks: local claim works and a pending marker is left" {
+    forge_stub
+    touch "$STUB/fail-gh" "$STUB/fail-curl"
+    run refresh_elsewhere_held_paths o r
+    [ "$status" -ne 0 ]
+    [ -s "$TEST_TMP/.git/forge-pending" ]
+    run claim_files 5 "k/l.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "CLAIMED" ]
+}
+
+@test "a retry inside the backoff window makes no forge call; once due it reconciles" {
+    forge_stub
+    touch "$STUB/fail-gh" "$STUB/fail-curl"
+    refresh_elsewhere_held_paths o r || true
+    rm -f "$STUB/gh-calls" "$STUB/curl-calls"
+    run refresh_elsewhere_held_paths o r
+    [ "$output" = "BACKOFF" ]
+    [ ! -e "$STUB/gh-calls" ]
+    rm "$STUB/fail-gh" "$STUB/fail-curl"
+    printf '1\t%s\n' "$(($(date +%s) - 3600))" >"$TEST_TMP/.git/forge-pending"
+    card_in_progress 82
+    issue_surface 82 "m/n.sh"
+    run refresh_elsewhere_held_paths o r
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_TMP/.git/forge-pending" ]
+}
+
+@test "backoff grows 1, 2, 5, 10 minutes and then holds at 10" {
+    run bash -c '. "$1"; for n in 1 2 3 4 9; do _dispatch_forge_backoff "$n"; done | paste -sd" "' _ "$LIB"
+    [ "$output" = "60 120 300 600 600" ]
+}
+
+@test "a cross-machine conflict is reported and the local claim is left alone" {
+    forge_stub
+    claim_files 5 "o/p.sh"
+    card_in_progress 83
+    issue_surface 83 "o/p.sh"
+    run refresh_elsewhere_held_paths o r
+    [[ "$output" == *"CONFLICT:#5:#83:o/p.sh"* ]]
+    grep -q "$(printf '\t5\to/p.sh')" "$TEST_TMP/.git/dispatch-claims.tsv"
+}
+
+@test "no hostname is written into any registry file" {
+    forge_stub
+    card_in_progress 84
+    issue_surface 84 "q/r.sh"
+    refresh_elsewhere_held_paths o r
+    claim_files 5 "s/t.sh"
+    run grep -rlF "$(hostname)" "$TEST_TMP/.git/dispatch-claims.tsv" "$TEST_TMP/.git/elsewhere-held-paths.tsv"
+    [ "$status" -ne 0 ]
+}
+
+# --- review findings on #718 ---------------------------------------------------------------
+
+@test "a surface pattern held elsewhere blocks a concrete path it covers" {
+    forge_stub
+    card_in_progress 85
+    issue_surface 85 "  docs/*  "
+    refresh_elsewhere_held_paths o r
+    run claim_files 5 "docs/readme.md"
+    [ "$status" -ne 0 ]
+    [ "$output" = "HELD:elsewhere#85:docs/readme.md" ]
+    run claim_files 5 "src/readme.md"
+    [ "$output" = "CLAIMED" ]
+}
+
+@test "a malformed forge read keeps the previous file and leaves the pending marker" {
+    forge_stub
+    card_in_progress 86
+    issue_surface 86 "u/v.sh"
+    refresh_elsewhere_held_paths o r
+    : >"$STUB/issue-86.json"
+    rm -f "$TEST_TMP/.git/forge-pending"
+    run refresh_elsewhere_held_paths o r
+    [ "$status" -ne 0 ]
+    [ -s "$TEST_TMP/.git/forge-pending" ]
+    run claim_files 5 "u/v.sh"
+    [ "$output" = "HELD:elsewhere#86:u/v.sh" ]
+}
+
+@test "an empty branch read is a failure, not an empty hold list" {
+    forge_stub
+    : >"$STUB/branches.json"
+    run refresh_elsewhere_held_paths o r
+    [ "$status" -ne 0 ]
+    [ -s "$TEST_TMP/.git/forge-pending" ]
+}
+
+@test "later GraphQL pages are followed, and a card with more project items fails closed" {
+    forge_stub
+    cat >"$STUB/bin/gh" <<'SH'
+#!/bin/bash
+case "$*" in
+*graphql*after*) cat "$STUB/graphql-2.json" ;;
+*graphql*) cat "$STUB/graphql-1.json" ;;
+*branches*) echo '[]' ;;
+*issues/*) cat "$STUB/issue-$(sed -E 's#.*issues/([0-9]+).*#\1#' <<<"$*").json" ;;
+esac
+SH
+    page() {
+        printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":%s,"endCursor":"c1"},"nodes":[{"number":%s,"projectItems":{"pageInfo":{"hasNextPage":%s},"nodes":[{"fieldValueByName":{"name":"In progress"}}]}}]}}}}' "$1" "$2" "$3"
+    }
+    page true 87 false >"$STUB/graphql-1.json"
+    page false 88 false >"$STUB/graphql-2.json"
+    issue_surface 87 "w/x.sh"
+    issue_surface 88 "y/z.sh"
+    run refresh_elsewhere_held_paths o r
+    [ "$status" -eq 0 ]
+    run claim_files 5 "y/z.sh"
+    [ "$output" = "HELD:elsewhere#88:y/z.sh" ]
+    page false 89 true >"$STUB/graphql-1.json"
+    rm -f "$TEST_TMP/.git/elsewhere-held-paths.tsv"
+    run refresh_elsewhere_held_paths o r
+    [ "$status" -ne 0 ]
+}
+
+@test "concurrent refreshes each publish a complete file" {
+    forge_stub
+    card_in_progress 90
+    issue_surface 90 "p/q.sh"
+    for _ in 1 2 3 4; do refresh_elsewhere_held_paths o r & done
+    wait
+    [ "$(wc -l <"$TEST_TMP/.git/elsewhere-held-paths.tsv")" -eq 1 ]
+    run ls "$TEST_TMP/.git"
+    [[ "$output" != *tsv.* ]]
+}
+
+@test "every remote holder of a path is reported, and an expired local claim is not" {
+    forge_stub
+    claim_files 5 "o/p.sh"
+    printf '1\t6\told/gone.sh\n' >>"$TEST_TMP/.git/dispatch-claims.tsv"
+    printf '{"data":{"repository":{"issues":{"nodes":[%s,%s]}}}}' \
+        '{"number":77,"projectItems":{"nodes":[{"fieldValueByName":{"name":"In progress"}}]}}' \
+        '{"number":83,"projectItems":{"nodes":[{"fieldValueByName":{"name":"In progress"}}]}}' >"$STUB/graphql.json"
+    issue_surface 77 "o/p.sh
+old/gone.sh"
+    issue_surface 83 "o/*"
+    run refresh_elsewhere_held_paths o r
+    [[ "$output" == *"CONFLICT:#5:#77:o/p.sh"* ]]
+    [[ "$output" == *"CONFLICT:#5:#83:o/p.sh"* ]]
+    [[ "$output" != *"old/gone.sh"* ]]
+}
