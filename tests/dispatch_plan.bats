@@ -319,6 +319,17 @@ field() {
     [[ "$(field '.excluded[0].reason')" == *"no declared file surface"* ]]
 }
 
+@test "a surface of only bare globs is UNDECLARED, never an empty surface that collides with nothing" {
+    # #725 review: rejecting `*` left surfaces={4: ["*"]} expanded to [], so the issue was
+    # dispatchable with zero files — fail-open where the old `*` collided with everything.
+    stub_gh "[$(issue_json 4 '*' '**')]"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [ "$(field '.excluded[0].issue')" = "4" ]
+    [[ "$(field '.excluded[0].reason')" == *"no declared file surface"* ]]
+}
+
 @test "an issue already claimed by a PR is excluded and never blocks its neighbour" {
     stub_gh "[$(issue_json 5 free/a.sh), $(issue_json 6 free/b.sh)]" "" 5
     run_planner

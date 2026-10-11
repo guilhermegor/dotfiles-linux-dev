@@ -716,7 +716,9 @@ def build_plan() -> dict:
 	surfaces: dict[int, list[str]] = {}
 	expanded: dict[int, list[str]] = {}
 	for issue in issues:
-		tokens = declared_surface(issue.get("body") or "")
+		# A surface of only bare globs is UNDECLARED, not an empty surface that collides with
+		# nothing (#725): expand_tokens drops those tokens, so filter before deciding "declared".
+		tokens = [t for t in declared_surface(issue.get("body") or "") if t.strip("*?/")]
 		if tokens:
 			number = issue["number"]
 			surfaces[number] = tokens
