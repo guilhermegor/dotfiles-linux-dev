@@ -373,6 +373,15 @@ field() {
     [[ "$(field '.excluded[0].reason')" == *"state:blocked"* ]]
 }
 
+@test "a hitl label excludes an otherwise-free issue, never dispatched (#711)" {
+    stub_gh "[$(issue_json_labeled 9 hitl free/a.sh)]"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [ "$(field '.excluded[0].issue')" = "9" ]
+    [[ "$(field '.excluded[0].reason')" == HITL:* ]]
+}
+
 @test "a failed native-blocker read excludes the issue as UNKNOWN, never dispatched" {
     stub_gh "[$(issue_json 13 free/a.sh)]" "" "" 0 "" "[]" "" "[]" 13
     run_planner

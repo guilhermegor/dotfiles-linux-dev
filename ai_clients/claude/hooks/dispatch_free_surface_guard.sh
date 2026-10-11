@@ -398,7 +398,7 @@ rescue_note() {
 
 main() {
 	local payload active cwd transcript plan dispatchable undeclared
-	local in_flight claimed remaining missing queued slots
+	local in_flight claimed remaining missing queued slots hitl
 
 	payload="$(cat)"
 
@@ -438,6 +438,10 @@ main() {
 	undeclared="$(printf '%s' "$plan" |
 		jq -r --arg t "$DISPATCH_UNDECLARED_TOKEN" \
 			'.excluded[]? | select(.reason | startswith($t)) | .issue')"
+
+	# hitl issues are excluded by the planner (#711); named here so the exclusion stays visible.
+	hitl="$(printf '%s' "$plan" |
+		jq -r '.excluded[]? | select(.reason | startswith("HITL")) | "excluded: #\(.issue) (hitl)"')"
 
 	# Two independent in-flight sources, unioned: this session's own unresolved dispatches, and
 	# the cross-worktree claims registry (an agent of ANOTHER session holds those).
@@ -482,6 +486,10 @@ main() {
 				echo "UNDECLARED file surface — reported, never assumed free. Declare a"
 				echo "\`\`\`surface block on each, then they become dispatchable:"
 				printf '%s\n' "$undeclared" | sed 's/^/  #/'
+			fi
+			if [ -n "$hitl" ]; then
+				echo
+				printf '%s\n' "$hitl"
 			fi
 			echo
 			echo "Each agent's brief starts with the claim step (hooks/lib/dispatch_claims.sh):"
