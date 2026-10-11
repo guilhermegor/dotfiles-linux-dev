@@ -164,6 +164,11 @@ payload() {
     [ "$status" -eq 0 ]
 }
 
+@test "issue #697: blocks a bare -f push chained after a --force-with-lease push" {
+    run bash -c "jq -nc '{tool_name: \"Bash\", tool_input: {command: \"git push --force-with-lease origin a && git push -f origin b\"}}' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
 # --- allowed: the safe forms --------------------------------------------------------------------
 
 @test "allows git push --force-with-lease" {

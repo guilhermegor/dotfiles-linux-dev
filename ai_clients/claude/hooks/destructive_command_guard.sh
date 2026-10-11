@@ -72,11 +72,15 @@ is_unscoped_rm() {
 # at its actual position, not a substring of the whole line, is the same fix shape #97/#140/#141
 # already applied to protected_branch_guard.sh / branch_requires_issue_guard.sh.
 is_history_rewrite() {
-    local cmd="$1"
-    if printf '%s' "$cmd" | grep -Eq "(^|[;&|])[[:space:]]*${WRAPPER_RE}(rtk[[:space:]]+)?git[[:space:]]+push([[:space:]][^;&|]*)?[[:space:]](-f|--force)([[:space:]]|\$)" \
-        && ! printf '%s' "$cmd" | grep -q -- '--force-with-lease'; then
-        return 0
-    fi
+    local cmd="$1" segment
+    # The lease exemption is per segment (dotfiles-linux-dev#697): a lease on one push must not
+    # excuse a bare force-push chained after it.
+    while IFS= read -r segment; do
+        if printf '%s' "$segment" | grep -Eq "(^|[;&|])[[:space:]]*${WRAPPER_RE}(rtk[[:space:]]+)?git[[:space:]]+push([[:space:]][^;&|]*)?[[:space:]](-f|--force)([[:space:]]|\$)" \
+            && ! printf '%s' "$segment" | grep -q -- '--force-with-lease'; then
+            return 0
+        fi
+    done < <(printf '%s\n' "$cmd" | tr ';&|' '\n\n\n')
     printf '%s' "$cmd" | grep -Eq "(^|[;&|])[[:space:]]*${WRAPPER_RE}(rtk[[:space:]]+)?git[[:space:]]+filter-branch([[:space:]]|\$)"
 }
 
