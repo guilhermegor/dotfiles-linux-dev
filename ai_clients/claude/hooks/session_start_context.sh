@@ -131,22 +131,44 @@ emit_fanout_status() {
 	fanout_worktrees "$cwd" "$github_ok" "$json"
 }
 
+# shipped_into_default DEFAULT_REF BRANCH_REF: true when the branch adds nothing the default
+# lacks — an ancestor (merge/rebase) or, for a squash merge whose originals are not
+# ancestors, a three-way merge whose result tree IS the default's tree. Local objects only.
+shipped_into_default() {
+	local cwd="$1" default="$2" ref="$3" tree
+	git -C "$cwd" merge-base --is-ancestor "$ref" "$default" 2>/dev/null && return 0
+	tree="$(git -C "$cwd" merge-tree --write-tree "$default" "$ref" 2>/dev/null)" || return 1
+	[ "$tree" = "$(git -C "$cwd" rev-parse "$default^{tree}" 2>/dev/null)" ]
+}
+
 emit_elsewhere_status() {
-	local cwd="${CLAUDE_PROJECT_DIR:-$PWD}" default local_branches common branch n
+	local cwd="${CLAUDE_PROJECT_DIR:-$PWD}" default="" ref local_branches common branch n checkout
 	git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
-	default="$(git -C "$cwd" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)"
-	local_branches="$(git -C "$cwd" worktree list --porcelain | sed -n 's#^branch refs/heads/##p')"
+	# origin/HEAD is unset after `git init` + fetch; fall back to the usual names.
+	for ref in refs/remotes/origin/HEAD refs/remotes/origin/main refs/remotes/origin/master; do
+		git -C "$cwd" rev-parse --verify --quiet "$ref" >/dev/null && { default="$ref"; break; }
+	done
+	[ -n "$default" ] ||
+		printf 'in progress elsewhere — default branch unknown, merged branches cannot be filtered out\n'
+	local_branches=$'\n'"$(git -C "$cwd" worktree list --porcelain | sed -n 's#^branch refs/heads/##p')"$'\n'
 	while IFS= read -r branch; do
 		branch="${branch#origin/}"
 		is_loop_branch "$branch" || continue
-		printf '%s\n' "$local_branches" | grep -qxF -- "$branch" && continue
-		[ -z "$default" ] || ! git -C "$cwd" merge-base --is-ancestor "origin/$branch" "$default" 2>/dev/null || continue
-		printf 'in progress elsewhere — %s — check out with: git worktree add <path> origin/%s\n' "$branch" "$branch"
+		[[ "$local_branches" == *$'\n'"$branch"$'\n'* ]] && continue
+		[ -z "$default" ] || ! shipped_into_default "$cwd" "$default" "refs/remotes/origin/$branch" || continue
+		# Named local branch, tracking the remote one: a detached checkout would stay listed
+		# here and its new commits would miss the closeout push.
+		if git -C "$cwd" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
+			checkout="rtk git worktree add <path> $branch"
+		else
+			checkout="rtk git worktree add --track -b $branch <path> origin/$branch"
+		fi
+		printf 'in progress elsewhere — %s — check out with: %s\n' "$branch" "$checkout"
 	done < <(git -C "$cwd" for-each-ref --format='%(refname:short)' refs/remotes/origin)
 	common="$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
 	[ -s "$common/elsewhere-held-paths.tsv" ] || return 0
 	while read -r n; do
-		printf '%s\n' "$local_branches" | grep -q -- "-$n$" && continue
+		[[ "$local_branches" == *"-$n"$'\n'* ]] && continue
 		printf 'in progress elsewhere — #%s has a card In progress (last forge refresh), no local worktree\n' "$n"
 	done < <(cut -f1 "$common/elsewhere-held-paths.tsv" | sort -un)
 }

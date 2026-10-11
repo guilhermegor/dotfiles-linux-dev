@@ -96,38 +96,51 @@ check_git() {
 	fi
 }
 
-push_loop_branches() {
-	local cwd="$1" line path="" branch
-	git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+# loop_worktrees CWD: "path<TAB>branch" for every worktree on a loop-owned branch, the
+# current checkout included — a closeout run from inside the loop worktree must share it too.
+loop_worktrees() {
+	local line path="" branch
 	while IFS= read -r line; do
 		case "$line" in
 		"worktree "*) path="${line#worktree }" ;;
 		"branch refs/heads/"*)
 			branch="${line#branch refs/heads/}"
-			[ "$path" = "$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" ] && continue
-			is_loop_branch "$branch" || continue
-			[ "$(git -C "$path" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 1)" -gt 0 ] || continue
-			if git -C "$path" push -q -u origin "$branch" >/dev/null 2>&1; then
-				PUSHED+=("[git] pushed loop branch '$branch' (was not on the forge)")
-			else
-				add_gap "[git] could not push loop branch '$branch' — retry once the forge is reachable"
-			fi
+			is_loop_branch "$branch" && printf '%s\t%s\n' "$path" "$branch"
 			;;
 		esac
-	done < <(git -C "$cwd" worktree list --porcelain 2>/dev/null)
+	done < <(git -C "$1" worktree list --porcelain 2>/dev/null)
 }
 
-check_tasks_md() {
-	local cwd="$1" line
+push_loop_branches() {
+	local cwd="$1" path branch
 	git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
-	while IFS= read -r line; do
-		add_gap "[specs] ${line:3} is not committed — commit and push it so the other machine sees it"
-	done < <(git -C "$cwd" status --porcelain -uall -- '.specs/features/*/tasks.md' 2>/dev/null)
+	while IFS=$'\t' read -r path branch; do
+		# Explicit refs, not HEAD: the worktree may sit detached mid-rebase.
+		[ "$(git -C "$path" rev-list --count "refs/heads/$branch@{upstream}..refs/heads/$branch" 2>/dev/null || echo 1)" -gt 0 ] || continue
+		if git -C "$path" push -q -u origin "$branch" >/dev/null 2>&1; then
+			PUSHED+=("[git] pushed loop branch '$branch' (was not on the forge)")
+		else
+			add_gap "[git] could not push loop branch '$branch' — retry once the forge is reachable"
+		fi
+	done < <(loop_worktrees "$cwd")
+}
+
+# The current checkout plus every loop worktree: a tracker that is uncommitted in a sibling
+# worktree is shared stale the moment its branch is pushed above.
+check_tasks_md() {
+	local cwd="$1" path branch line
+	git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+	while IFS= read -r path; do
+		while IFS= read -r line; do
+			add_gap "[specs] $path/${line:3} is not committed — commit and push it so the other machine sees it"
+		done < <(git -C "$path" status --porcelain -uall -- '.specs/features/*/tasks.md' 2>/dev/null)
+	done < <({ git -C "$cwd" rev-parse --show-toplevel; loop_worktrees "$cwd" | cut -f1; } 2>/dev/null | sort -u)
 }
 
 check_ai_state() {
-	[ -f "$CLAUDE_DIR/session-audit/ai-state-sync.md" ] &&
-		add_gap "[ai-state] the last state sync did not complete — run ai_state_sync.sh push"
+	local handoff="$CLAUDE_DIR/session-audit/ai-state-sync.md"
+	[ -f "$handoff" ] &&
+		add_gap "[ai-state] the last state sync did not complete — follow the repair steps in $handoff, then run ai_state_sync.sh push"
 }
 
 check_lessons() {

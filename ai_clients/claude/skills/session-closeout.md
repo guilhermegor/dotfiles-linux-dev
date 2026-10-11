@@ -34,8 +34,11 @@ must). Work every line of all three.
   every loop-owned worktree branch (`<type>/<slug>-<issue>`) so the other machine can see it
   (dotfiles-linux-dev#715); that is the one push the "never push" rule above does not cover. A
   `could not push` line means the forge was unreachable: retry later, nothing is lost.
-- **`[specs] … tasks.md is not committed`** — commit and push the tracker so it is shared.
-- **`[ai-state] the last state sync did not complete`** — rerun `ai_state_sync.sh push`.
+- **`[specs] <worktree>/… tasks.md is not committed`** — commit and push the tracker (in the worktree the
+  line names) so it is shared.
+- **`[ai-state] the last state sync did not complete`** — read the handoff file the line names and follow
+  its repair steps (unresolved rebase, conflicting files, files held by the secret guard); only then rerun
+  `ai_state_sync.sh push`, which cannot clear those states on its own.
 - **`[git] on branch '…' (not default)`** — remind the user the branch is unmerged; offer to open
   a PR (`s:gh-create-pr`) if the work is done.
 - **`[lessons] '<file>' is not in the <store> README index`** — a lesson file exists but is

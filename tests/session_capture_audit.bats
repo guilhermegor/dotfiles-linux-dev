@@ -472,7 +472,7 @@ pushed() {
 	mkdir -p "$REPO/.specs/features/f"
 	printf -- '- [ ] one\n' >"$REPO/.specs/features/f/tasks.md"
 	run_report ""
-	[[ "$output" == *"[specs] .specs/features/f/tasks.md is not committed"* ]]
+	[[ "$output" == *"[specs] $REPO/.specs/features/f/tasks.md is not committed"* ]]
 }
 
 @test "a committed tasks.md is not a gap" {
@@ -491,4 +491,29 @@ pushed() {
 	printf 'push failed\n' >"$CLAUDE_CONFIG_DIR/session-audit/ai-state-sync.md"
 	run_report ""
 	[[ "$output" == *"[ai-state] the last state sync did not complete"* ]]
+}
+
+@test "closeout run from inside a loop worktree pushes that worktree's own branch" {
+	forge_repo
+	branch_wt feat/some-thing-715 a
+	run bash -c "cd '$TEST_TMP/wt-a' && PATH='$TEST_TMP/bin:$PATH' GH_ISSUES='' \
+		GH_ARGV_LOG='$TEST_TMP/gh_argv' bash '$HOOK' </dev/null"
+	pushed feat/some-thing-715
+}
+
+@test "an uncommitted tasks.md in a sibling loop worktree is a gap naming that worktree" {
+	forge_repo
+	branch_wt feat/some-thing-715 a
+	mkdir -p "$TEST_TMP/wt-a/.specs/features/f"
+	printf -- '- [ ] one\n' >"$TEST_TMP/wt-a/.specs/features/f/tasks.md"
+	run_report ""
+	[[ "$output" == *"[specs] $TEST_TMP/wt-a/.specs/features/f/tasks.md is not committed"* ]]
+}
+
+@test "the ai-state gap points at the handoff file's repair steps" {
+	forge_repo
+	mkdir -p "$CLAUDE_CONFIG_DIR/session-audit"
+	printf 'push failed\n' >"$CLAUDE_CONFIG_DIR/session-audit/ai-state-sync.md"
+	run_report ""
+	[[ "$output" == *"repair steps in $CLAUDE_CONFIG_DIR/session-audit/ai-state-sync.md"* ]]
 }
