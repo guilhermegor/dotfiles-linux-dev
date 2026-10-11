@@ -228,8 +228,11 @@ refresh_elsewhere_held_paths() {
 			_dispatch_forge_mark_pending "$pending" "$attempts" "$now"
 			return 1
 		}
-		printf '%s\n' "$body" | awk '/^```surface/{f=1;next} /^```/{f=0} f{gsub(/^[ \t\r]+|[ \t\r]+$/, "")} f && NF' |
-			sed "s/^/$n\t/" >>"$tmp"
+		# A token of only `*`/`?`/`/` has no literal path component and would hold every path
+		# (#725): drop it here, once per token, and report it (same predicate as dispatch_plan.py).
+		printf '%s\n' "$body" | awk -v n="$n" '/^```surface/{f=1;next} /^```/{f=0} f{gsub(/^[ \t\r]+|[ \t\r]+$/, "")}
+			f && NF { if ($0 ~ /^[*?\/]*$/) { print "dispatch_claims: rejected surface token \047" $0 "\047 of #" n " (no literal path component)" > "/dev/stderr"; next } print n "\t" $0 }' \
+			>>"$tmp"
 	done <<<"$issues"
 	mv -f "$tmp" "$file" || {
 		rm -f "$tmp"
@@ -247,12 +250,8 @@ refresh_elsewhere_held_paths() {
 _dispatch_elsewhere_holders() {
 	local n tok
 	while IFS=$'\t' read -r n tok; do
-		# A token of only `*`/`?`/`/` has no literal path component and would hold every path
-		# (#725); skip and report it rather than let one issue body stall all dispatch.
-		if [[ "$tok" =~ ^[*?/]*$ ]]; then
-			echo "dispatch_claims: rejected surface token '$tok' of #$n (no literal path component)" >&2
-			continue
-		fi
+		# Normally dropped (and reported) at write time; this covers a file written before that (#725).
+		[[ "$tok" =~ ^[*?/]*$ ]] && continue
 		# shellcheck disable=SC2053  # tok is a glob on purpose
 		[[ "$2" == "$tok" || "$2" == $tok ]] && echo "$n"
 	done <"$1" | sort -un

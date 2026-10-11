@@ -325,6 +325,9 @@ field() {
     stub_gh "[$(issue_json 4 '*' '**')]"
     run_planner
     [ "$status" -eq 0 ]
+    # the filter reports each dropped token (stderr is merged into $output by `run`)
+    [ "$(grep -c '^dispatch_plan: rejected surface token' <<<"$output")" -eq 2 ]
+    output="$(grep -v '^dispatch_plan: rejected' <<<"$output")"
     [ "$(field '.dispatchable | length')" -eq 0 ]
     [ "$(field '.excluded[0].issue')" = "4" ]
     [[ "$(field '.excluded[0].reason')" == *"no declared file surface"* ]]

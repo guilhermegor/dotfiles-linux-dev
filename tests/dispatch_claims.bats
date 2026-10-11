@@ -561,13 +561,25 @@ SH
     forge_stub
     card_in_progress 90
     issue_surface 90 "**"
-    refresh_elsewhere_held_paths o r
-    run claim_files 5 "any/path.sh"
+    run refresh_elsewhere_held_paths o r
     [[ "$output" == *"rejected surface token"* ]]
-    [ "${lines[-1]}" = "CLAIMED" ]
+    run claim_files 5 "any/path.sh" "other/two.sh"
+    [ "$output" = "CLAIMED" ]
     card_in_progress 91
     issue_surface 91 "*/?"
     refresh_elsewhere_held_paths o r
     run claim_files 5 "other/path.sh"
     [ "${lines[-1]}" = "CLAIMED" ]
+}
+
+@test "a mixed surface keeps the literal token, drops the bare glob and reports it once" {
+    forge_stub
+    card_in_progress 92
+    issue_surface 92 "$(printf "*\nsrc/held.sh")"
+    run refresh_elsewhere_held_paths o r
+    [ "$(grep -c "rejected surface token" <<<"$output")" -eq 1 ]
+    run claim_files 5 "src/held.sh"
+    [[ "$output" == "HELD:elsewhere#92:src/held.sh" ]]
+    run claim_files 5 "src/free.sh"
+    [ "$output" = "CLAIMED" ]
 }
