@@ -117,6 +117,96 @@ dispatch_claims_lock() {
 	printf '%s/dispatch-claims.lock\n' "$dir"
 }
 
+dispatch_elsewhere_file() {
+	local dir
+	dir="$(dispatch_state_dir)" || return 1
+	printf '%s/elsewhere-held-paths.tsv\n' "$dir"
+}
+
+# _dispatch_forge_backoff ATTEMPT
+_dispatch_forge_backoff() {
+	case "$1" in
+	1) echo 60 ;;
+	2) echo 120 ;;
+	3) echo 300 ;;
+	*) echo 600 ;;
+	esac
+}
+
+# _dispatch_forge_call KIND ARG
+# gh first, then the REST API with the token; non-zero only when both fail.
+# KIND is `get` (ARG = REST path) or `graphql` (ARG = query).
+_dispatch_forge_call() {
+	local kind="$1" arg="$2" token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+	if [ "$kind" = graphql ]; then
+		gh api graphql -f query="$arg" 2>/dev/null && return 0
+		[ -n "$token" ] || return 1
+		curl -fsS -H "Authorization: Bearer $token" -X POST \
+			-d "$(jq -n --arg q "$arg" '{query:$q}')" https://api.github.com/graphql 2>/dev/null
+	else
+		gh api "$arg" --paginate 2>/dev/null && return 0
+		[ -n "$token" ] || return 1
+		curl -fsS -H "Authorization: Bearer $token" "https://api.github.com/$arg" 2>/dev/null
+	fi
+}
+
+# _dispatch_elsewhere_issues SLUG: In-progress cards and pushed -<issue> branches, minus local worktrees.
+_dispatch_elsewhere_issues() {
+	local slug="$1" owner="${1%%/*}" repo="${1##*/}" cards branches local_issues
+	cards="$(_dispatch_forge_call graphql "{repository(owner:\"$owner\",name:\"$repo\"){issues(states:OPEN,first:100){nodes{number projectItems(first:5){nodes{fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}}")" || return 1
+	branches="$(_dispatch_forge_call get "repos/$slug/branches")" || return 1
+	local_issues="$($DISPATCH_CLAIMS_GIT worktree list --porcelain 2>/dev/null |
+		sed -n 's#^branch refs/heads/.*-\([0-9][0-9]*\)$#\1#p')"
+	{
+		printf '%s' "$cards" | jq -r '.data.repository.issues.nodes[]
+			| select(any(.projectItems.nodes[]?; .fieldValueByName.name == "In progress")) | .number'
+		printf '%s' "$branches" | jq -r '.[].name' | sed -n 's#.*-\([0-9][0-9]*\)$#\1#p'
+	} | sort -un | grep -vxF -f <(printf '%s\n' "$local_issues" | sed '/^$/d') || true
+}
+
+# refresh_elsewhere_held_paths OWNER REPO
+# One forge read per round; claim_files stays API-free. Fallback and conflict rules: docs/.
+refresh_elsewhere_held_paths() {
+	local slug="$1/$2" dir file pending attempts last issues n body now
+	dir="$(dispatch_state_dir)" || return 1
+	file="$dir/elsewhere-held-paths.tsv"
+	pending="$dir/forge-pending"
+	now="$(date +%s)"
+	if [ -s "$pending" ]; then
+		IFS=$'\t' read -r attempts last <"$pending"
+		if ((now - last < $(_dispatch_forge_backoff "$attempts"))); then
+			echo BACKOFF
+			return 1
+		fi
+	fi
+	issues="$(_dispatch_elsewhere_issues "$slug")" || {
+		printf '%s\t%s\n' "$((${attempts:-0} + 1))" "$now" >"$pending"
+		return 1
+	}
+	: >"$file.tmp"
+	while read -r n; do
+		[ -n "$n" ] || continue
+		body="$(_dispatch_forge_call get "repos/$slug/issues/$n" | jq -r '.body // empty')" || {
+			printf '%s\t%s\n' "$((${attempts:-0} + 1))" "$now" >"$pending"
+			return 1
+		}
+		printf '%s\n' "$body" | awk '/^```surface/{f=1;next} /^```/{f=0} f && NF' |
+			sed "s/^/$n\t/" >>"$file.tmp"
+	done <<<"$issues"
+	mv -f "$file.tmp" "$file"
+	rm -f "$pending"
+	_dispatch_report_conflicts "$file"
+}
+
+_dispatch_report_conflicts() {
+	local claims
+	claims="$(dispatch_claims_file)" || return 0
+	[ -s "$claims" ] || return 0
+	awk -F'\t' 'NR == FNR { if (NF == 2) held[$2] = $1; next }
+		NF == 3 && ($3 in held) && held[$3] != $2 { printf "CONFLICT:#%s:#%s:%s\n", $2, held[$3], $3 }' \
+		"$1" "$claims"
+}
+
 # _dispatch_live_claims FILE
 # FILE's lines with the expired ones dropped. Pruning on every read AND rewriting on every
 # write keeps the TTL from needing a sweeper of its own.
@@ -136,6 +226,12 @@ _dispatch_holder() {
 	if [ -s "$pr_held" ] && cut -f2 "$pr_held" | grep -qxF -- "$path"; then
 		printf 'open-pr\n'
 		return 0
+	fi
+	local elsewhere
+	elsewhere="$(dispatch_elsewhere_file)" || elsewhere=""
+	if [ -s "$elsewhere" ]; then
+		awk -F'\t' -v p="$path" -v me="$issue" \
+			'$2 == p && $1 != me { print "elsewhere#" $1; exit }' "$elsewhere" | grep . && return 0
 	fi
 	printf '%s\n' "$live" | awk -F'\t' -v p="$path" -v me="$issue" \
 		'$3 == p && $2 != me { print "#" $2; exit }'
