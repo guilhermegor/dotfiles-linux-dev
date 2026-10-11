@@ -173,7 +173,7 @@ SCAN_ERR=0 # 1 once any blob could not be scanned (unknown, as opposed to a cont
 
 # scan_blobs <NUL-delimited path listing file> <blob prefix>
 scan_blobs() {
-    local listing="$1" prefix="$2" path scan rc
+    local listing="$1" prefix="$2" path scan rc rcs
     FLAGGED=()
     scan="$(mktemp)" || return 2
     while IFS= read -r -d '' path; do
@@ -183,8 +183,10 @@ scan_blobs() {
             continue
         fi
         LC_ALL=C sed -e "s/$AWS_EXAMPLE_ID//g" -e "s#$AWS_EXAMPLE_SECRET##g" "$scan" |
-            grep -aEq -e "$TOKEN_RE" -e "${PK_BEGIN}[A-Z ]*${PK_END}[[:space:]]*$"
-        rc=${PIPESTATUS[1]}
+            grep -aEq -e "$TOKEN_RE" -e "${PK_BEGIN}[A-Z ]*${PK_END}([[:space:]]*$|\\\\[nr])"
+        rcs=("${PIPESTATUS[@]}")
+        rc=${rcs[1]}
+        [ "$rc" -ne 1 ] || [ "${rcs[0]}" -eq 0 ] || rc=2
         [ "$rc" -eq 1 ] || FLAGGED+=("$path") # 0 = match; >=2 = grep error
         [ "$rc" -le 1 ] || SCAN_ERR=1
     done <"$listing"

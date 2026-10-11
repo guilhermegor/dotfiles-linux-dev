@@ -538,3 +538,15 @@ aws_example_secret() { printf 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE%s' "KEY"; }
     run git --git-dir="$AI_STATE_REMOTE" log -1 --format=%s main
     [[ "$output" =~ ^chore\(state\):\ sync\ [0-9]{4}- ]]
 }
+
+@test "secret guard catches a PEM key stored with escaped newlines" {
+    plant_ok_file
+    printf '{"pem":"-----BEGIN RSA %s-----\\nabc\\n"}\n' "PRIVATE KEY" >"$CLAUDE_CONFIG_DIR/memory/esc.json"
+    assert_planted_not_committed "esc.json"
+}
+
+@test "fail closed: a failing sed filter is not read as 'no match'" {
+    plant_ok_file
+    stub_cmd sed 1
+    push_with_stubs
+}

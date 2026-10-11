@@ -117,7 +117,7 @@ scan_added_lines() {
                 content="${line#+}"
                 content="${content//"$AWS_EXAMPLE_ID"/}"
                 content="${content//"$AWS_EXAMPLE_SECRET"/}"
-                if [[ "$content" == *"$PK_BEGIN"*"$PK_END" || "$content" == *"$PK_BEGIN"*"$PK_END"$'\r' ]]; then
+                if [[ "$content" == *"$PK_BEGIN"*"$PK_END" || "$content" == *"$PK_BEGIN"*"$PK_END"$'\r' || "$content" == *"$PK_BEGIN"*"$PK_END"'\'[nr]* ]]; then
                     printf '%s\t%s\n' "$file" "a private key"; return
                 fi
                 if [[ "$content" =~ $TOKEN_RE ]]; then

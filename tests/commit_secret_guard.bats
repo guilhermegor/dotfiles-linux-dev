@@ -115,3 +115,11 @@ run_guard() {
     run run_guard 'git commit -m wip'
     [ "$status" -eq 2 ]
 }
+
+@test "blocks a PEM key stored with escaped newlines" {
+    git reset -q
+    printf '{"pem":"-----BEGIN RSA %s-----\\nabc\\n"}\n' "PRIVATE KEY" > secret.txt
+    git add secret.txt
+    run run_guard 'git commit -m wip'
+    [ "$status" -eq 2 ]
+}
