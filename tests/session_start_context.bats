@@ -132,3 +132,49 @@ run_hook() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == "stale"* ]]
 }
+
+# --- in progress elsewhere (dotfiles-linux-dev#715) --------------------------------------------
+
+elsewhere_out() {
+	run bash -c "source '$HOOK'; CLAUDE_PROJECT_DIR='$REPO' emit_elsewhere_status"
+}
+
+push_branch() {
+	git -C "$SEED" push -q origin "HEAD:refs/heads/$1"
+	git -C "$REPO" fetch -q origin
+}
+
+@test "a pushed loop branch with no local worktree is reported as in progress elsewhere" {
+	git -C "$SEED" commit -q --allow-empty -m w
+	push_branch feat/some-thing-715
+	elsewhere_out
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"in progress elsewhere"*"feat/some-thing-715"*"git worktree add"*"origin/feat/some-thing-715"* ]]
+}
+
+@test "a pushed loop branch that has a local worktree is not reported" {
+	git -C "$SEED" commit -q --allow-empty -m w
+	push_branch feat/some-thing-715
+	git -C "$REPO" worktree add -q -b feat/some-thing-715 "$TEST_TMP/wt-715" origin/feat/some-thing-715
+	elsewhere_out
+	[ -z "$output" ]
+}
+
+@test "a non-loop pushed branch is not reported" {
+	git -C "$SEED" commit -q --allow-empty -m w
+	push_branch feat/adhoc
+	elsewhere_out
+	[ -z "$output" ]
+}
+
+@test "a loop branch already merged into the default branch is not reported" {
+	push_branch fix/done-3
+	elsewhere_out
+	[ -z "$output" ]
+}
+
+@test "an In-progress card with no branch is reported from the last forge refresh" {
+	printf '91\ta/b.sh\n' >"$REPO/.git/elsewhere-held-paths.tsv"
+	elsewhere_out
+	[[ "$output" == *"in progress elsewhere"*"#91"* ]]
+}

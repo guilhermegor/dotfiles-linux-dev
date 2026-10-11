@@ -30,6 +30,12 @@ must). Work every line of all three.
 - **`[git] uncommitted changes` / `unpushed commits`** — surface them and ask the user whether to
   commit/push. **Never commit or push without an explicit request** (global rule) — report and let
   them decide.
+- **`[git] pushed loop branch '…'` / `could not push loop branch '…'`** — the audit itself pushes
+  every loop-owned worktree branch (`<type>/<slug>-<issue>`) so the other machine can see it
+  (dotfiles-linux-dev#715); that is the one push the "never push" rule above does not cover. A
+  `could not push` line means the forge was unreachable: retry later, nothing is lost.
+- **`[specs] … tasks.md is not committed`** — commit and push the tracker so it is shared.
+- **`[ai-state] the last state sync did not complete`** — rerun `ai_state_sync.sh push`.
 - **`[git] on branch '…' (not default)`** — remind the user the branch is unmerged; offer to open
   a PR (`s:gh-create-pr`) if the work is done.
 - **`[lessons] '<file>' is not in the <store> README index`** — a lesson file exists but is

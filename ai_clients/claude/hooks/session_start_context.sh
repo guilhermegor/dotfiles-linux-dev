@@ -22,6 +22,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/lesson_mirrors.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/worktree_fanout.sh"
 # shellcheck source=lib/reviewer_probe.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/reviewer_probe.sh"
+# shellcheck source=lib/loop_branch.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/loop_branch.sh"
 
 emit_cross_project_context() {
 	local claude_dir lessons_store proving_mem cwd
@@ -129,10 +131,31 @@ emit_fanout_status() {
 	fanout_worktrees "$cwd" "$github_ok" "$json"
 }
 
+emit_elsewhere_status() {
+	local cwd="${CLAUDE_PROJECT_DIR:-$PWD}" default local_branches common branch n
+	git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+	default="$(git -C "$cwd" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)"
+	local_branches="$(git -C "$cwd" worktree list --porcelain | sed -n 's#^branch refs/heads/##p')"
+	while IFS= read -r branch; do
+		branch="${branch#origin/}"
+		is_loop_branch "$branch" || continue
+		printf '%s\n' "$local_branches" | grep -qxF -- "$branch" && continue
+		[ -z "$default" ] || ! git -C "$cwd" merge-base --is-ancestor "origin/$branch" "$default" 2>/dev/null || continue
+		printf 'in progress elsewhere — %s — check out with: git worktree add <path> origin/%s\n' "$branch" "$branch"
+	done < <(git -C "$cwd" for-each-ref --format='%(refname:short)' refs/remotes/origin)
+	common="$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+	[ -s "$common/elsewhere-held-paths.tsv" ] || return 0
+	while read -r n; do
+		printf '%s\n' "$local_branches" | grep -q -- "-$n$" && continue
+		printf 'in progress elsewhere — #%s has a card In progress (last forge refresh), no local worktree\n' "$n"
+	done < <(cut -f1 "$common/elsewhere-held-paths.tsv" | sort -un)
+}
+
 main() {
 	emit_cross_project_context
 	emit_deploy_drift_status
 	emit_fanout_status
+	emit_elsewhere_status
 	emit_reviewer_probe_status
 	exit 0
 }
