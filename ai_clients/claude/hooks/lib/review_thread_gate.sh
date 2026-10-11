@@ -58,6 +58,7 @@ query($owner:String!, $repo:String!, $number:Int!) {
     pullRequest(number:$number) {
       reviewThreads(first:100) {
         totalCount
+        pageInfo { hasNextPage endCursor }
         nodes {
           isResolved
           path
@@ -66,10 +67,12 @@ query($owner:String!, $repo:String!, $number:Int!) {
       }
       comments(last:100) {
         totalCount
+        pageInfo { hasPreviousPage startCursor }
         nodes { id author { login __typename } authorAssociation body createdAt }
       }
       reviews(first:100) {
         totalCount
+        pageInfo { hasNextPage endCursor }
         nodes { author { login __typename } state commit { oid } }
       }
       commits(last:1) {
@@ -102,6 +105,71 @@ query($owner:String!, $repo:String!, $number:Int!) {
   }
 }
 GRAPHQL
+}
+
+# Paging (dotfiles-linux-dev#709): the first query reads one page per channel, and a PR with more than
+# 100 comments was permanently UNREADABLE. _gate_page_channels reads the remaining pages by cursor,
+# only for a channel whose totalCount exceeds the nodes in hand, at most _gate_max_pages pages in
+# all. A failed page read or an exceeded bound leaves the channel short, and the truncation filter
+# below still reports it UNREADABLE -- the gate keeps failing closed.
+_gate_max_pages=10
+
+# _gate_page_query CHANNEL -- the one-channel query. `comments` pages backwards (`last`/`before`,
+# it keeps the NEWEST page), the others forwards.
+# shellcheck disable=SC2016 # `$cursor`/`$new` are GraphQL/jq variables, not shell ones
+_gate_page_query() {
+	local sel
+	case "$1" in
+	reviewThreads)
+		sel='reviewThreads(first:100, after:$cursor) { totalCount pageInfo { hasNextPage endCursor }
+			nodes { isResolved path comments(first:50) { totalCount nodes { author { login __typename } body } } } }'
+		;;
+	comments)
+		sel='comments(last:100, before:$cursor) { totalCount pageInfo { hasPreviousPage startCursor }
+			nodes { id author { login __typename } authorAssociation body createdAt } }'
+		;;
+	reviews)
+		sel='reviews(first:100, after:$cursor) { totalCount pageInfo { hasNextPage endCursor }
+			nodes { author { login __typename } state commit { oid } } }'
+		;;
+	esac
+	printf 'query($owner:String!, $repo:String!, $number:Int!, $cursor:String!) { repository(owner:$owner, name:$repo) { pullRequest(number:$number) { %s } } }' "$sel"
+}
+
+# _gate_page_channels OWNER REPO NUMBER JSON -- echo JSON with every short channel paged in.
+# shellcheck disable=SC2016 # `$new` is a jq variable
+_gate_page_channels() {
+	local owner="$1" repo="$2" number="$3" json="$4"
+	local channel cursor_path merge page cursor
+	for channel in reviewThreads comments reviews; do
+		if [ "$channel" = comments ]; then
+			cursor_path='.pageInfo.startCursor'
+			merge='.nodes = ($new.nodes + .nodes)'
+		else
+			cursor_path='.pageInfo.endCursor'
+			merge='.nodes = (.nodes + $new.nodes)'
+		fi
+		for _ in $(seq 2 "$_gate_max_pages"); do
+			printf '%s' "$json" | jq -e --arg c "$channel" \
+				'.data.repository.pullRequest[$c] | (.totalCount // 0) > (.nodes | length)' \
+				>/dev/null 2>&1 || break
+			cursor="$(printf '%s' "$json" | jq -r --arg c "$channel" \
+				".data.repository.pullRequest[\$c] | ($cursor_path) // empty" 2>/dev/null)"
+			[ -n "$cursor" ] || break
+			page="$(gh api graphql -f query="$(_gate_page_query "$channel")" \
+				-F owner="$owner" -F repo="$repo" -F number="$number" -f cursor="$cursor" 2>/dev/null)" || break
+			# A 200 with a GraphQL `errors` array is partial data, and a cursor that did not
+			# advance is a repeated page: merging either could fake a complete read.
+			printf '%s' "$page" | jq -e --arg c "$channel" --arg old "$cursor" "(.errors | not)
+				and ((.data.repository.pullRequest[\$c] | $cursor_path // \"\") != \$old)" \
+				>/dev/null 2>&1 || break
+			json="$(jq -c --arg c "$channel" --argjson new "$(printf '%s' "$page" \
+				| jq -c --arg c "$channel" '.data.repository.pullRequest[$c]')" \
+				".data.repository.pullRequest[\$c] |= ($merge | .pageInfo = \$new.pageInfo)" \
+				<<<"$json" 2>/dev/null)" || break
+		done
+	done
+	printf '%s' "$json"
 }
 
 # ⚠️ Normalised WITHOUT the `[bot]` suffix: REST reports `coderabbitai[bot]`, GraphQL returns
@@ -415,6 +483,10 @@ gate_pr_thread_state() {
 		GATE_DETAIL="review threads unreadable after $attempts attempts — state unknown, not clean"
 		return 0
 	fi
+
+	# A paging failure keeps the unpaged JSON, never an empty one: the short channel is then
+	# reported UNREADABLE by _gate_truncated_filter.
+	threads="$(_gate_page_channels "$owner" "$repo" "$number" "$threads")" || true
 
 	roster="$(_gate_roster_logins "$roster_file")"
 

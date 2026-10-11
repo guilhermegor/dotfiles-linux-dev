@@ -754,3 +754,117 @@ JSON
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
+
+# dotfiles-linux-dev#709: 140 comments is two pages, not an unreadable PR (measured on blueprintx#319).
+# page_stub_json <comments-total> <node-count> <start-cursor> -- one comments page of a PR with
+# zero review threads, the shape both the first query and the cursor query answer with.
+page_stub_json() {
+    jq -nc --argjson total "$1" --argjson n "$2" --arg cur "$3" --arg pfx "${4:-c}" '{data:{repository:{pullRequest:{
+      reviewThreads:{totalCount:0,nodes:[]},
+      comments:{totalCount:$total,pageInfo:{hasPreviousPage:($total>$n),startCursor:$cur},
+        nodes:[range($n) | {id:"\($pfx)\(.)",author:{login:"someone",__typename:"User"},
+                            authorAssociation:"NONE",body:"hi",createdAt:"2026-01-01T00:00:00Z"}]},
+      reviews:{totalCount:1,nodes:[{author:{login:"coderabbitai",__typename:"Bot"},state:"COMMENTED",commit:{oid:"x"}}]},
+      commits:{nodes:[{commit:{oid:"x",committedDate:"2026-01-01T00:00:00Z",statusCheckRollup:{contexts:{totalCount:0,nodes:[]}}}}]}}}}}'
+}
+
+@test "paging: 140 comments over two pages with 0 unresolved threads is clean, not UNREADABLE (#709)" {
+    local first second
+    first="$(page_stub_json 140 100 cur1)"
+    second="$(page_stub_json 140 40 "" old)"
+    run env FIRST="$first" SECOND="$second" GATE_LIB="$GATE" bash -c '
+        gh() {
+            case "$*" in
+                *"cursor=cur1"*) printf "%s" "$SECOND" ;;
+                *"-F number=319") printf "%s" "$FIRST" ;;
+                *) return 1 ;;
+            esac
+        }
+        source "$GATE_LIB"
+        gate_pr_thread_state o r 319 ".review-bots.yaml"
+        echo "status=$GATE_STATUS"
+        echo "detail=$GATE_DETAIL"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"UNREADABLE"* ]]
+    [[ "$output" == *"status=clean"* ]] || [[ "$output" == *"status=unreviewed"* ]]
+}
+
+@test "paging: a failed page read keeps the channel UNREADABLE (fail closed, #709)" {
+    local first
+    first="$(page_stub_json 140 100 cur1)"
+    run env FIRST="$first" GATE_LIB="$GATE" bash -c '
+        gh() {
+            case "$*" in
+                *"cursor=cur1"*) return 1 ;;
+                *"-F number=319") printf "%s" "$FIRST" ;;
+                *) return 1 ;;
+            esac
+        }
+        source "$GATE_LIB"
+        gate_pr_thread_state o r 319 ".review-bots.yaml"
+        echo "status=$GATE_STATUS"
+        echo "detail=$GATE_DETAIL"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"status=problems"* ]]
+    [[ "$output" == *"140 PR comments exist"* ]]
+}
+
+@test "paging: more pages than the bound stays UNREADABLE (#709)" {
+    local first
+    first="$(page_stub_json 5000 100 cur1)"
+    run env FIRST="$first" GATE_LIB="$GATE" bash -c '
+        gh() {
+            case "$*" in
+                *"cursor="*) jq -nc "{data:{repository:{pullRequest:{comments:{totalCount:5000,
+                    pageInfo:{startCursor:\"cur1\"},nodes:[range(100)|{id:\"d\(.)\",body:\"x\"}]}}}}}" ;;
+                *"-F number=319") printf "%s" "$FIRST" ;;
+                *) return 1 ;;
+            esac
+        }
+        source "$GATE_LIB"
+        gate_pr_thread_state o r 319 ".review-bots.yaml"
+        echo "status=$GATE_STATUS"
+        echo "detail=$GATE_DETAIL"
+    '
+    [[ "$output" == *"5000 PR comments exist"* ]]
+}
+
+@test "paging: a GraphQL errors array on a cursor page keeps the channel UNREADABLE (#709)" {
+    local first second
+    first="$(page_stub_json 140 100 cur1)"
+    second="$(page_stub_json 140 40 "" old | jq -c '. + {errors:[{message:"partial"}]}')"
+    run env FIRST="$first" SECOND="$second" GATE_LIB="$GATE" bash -c '
+        gh() {
+            case "$*" in
+                *"cursor=cur1"*) printf "%s" "$SECOND" ;;
+                *"-F number=319") printf "%s" "$FIRST" ;;
+                *) return 1 ;;
+            esac
+        }
+        source "$GATE_LIB"
+        gate_pr_thread_state o r 319 ".review-bots.yaml"
+        echo "detail=$GATE_DETAIL"
+    '
+    [[ "$output" == *"140 PR comments exist"* ]]
+}
+
+@test "paging: a repeated page (cursor does not advance) never completes the read (#709)" {
+    local first repeat
+    first="$(page_stub_json 140 100 cur1)"
+    repeat="$(page_stub_json 140 40 cur1 dup)"
+    run env FIRST="$first" REPEAT="$repeat" GATE_LIB="$GATE" bash -c '
+        gh() {
+            case "$*" in
+                *"cursor=cur1"*) printf "%s" "$REPEAT" ;;
+                *"-F number=319") printf "%s" "$FIRST" ;;
+                *) return 1 ;;
+            esac
+        }
+        source "$GATE_LIB"
+        gate_pr_thread_state o r 319 ".review-bots.yaml"
+        echo "detail=$GATE_DETAIL"
+    '
+    [[ "$output" == *"140 PR comments exist"* ]]
+}

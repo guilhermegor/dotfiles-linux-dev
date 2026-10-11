@@ -320,6 +320,54 @@ def _rest_node(pr: dict) -> dict:
 	}
 
 
+# Pages read per truncated channel (dotfiles-linux-dev#709): 10 x REST_PAGE = 1000 entries.
+MAX_WINDOW_PAGES = 10
+
+
+def _rest_all(path: str) -> list | None:
+	"""Return every entry of a REST list, or None when MAX_WINDOW_PAGES full pages did not end it."""
+	entries: list = []
+	for page in range(1, MAX_WINDOW_PAGES + 1):
+		batch = _rest(f"{path}?per_page={REST_PAGE}&page={page}")
+		if not isinstance(batch, list):
+			raise RuntimeError("REST page is not a list")
+		entries.extend(batch)
+		if len(batch) < REST_PAGE:
+			return entries
+	return None
+
+
+def _complete_window(pr: dict) -> dict:
+	"""Page a truncated reviews/comments window in full over REST (dotfiles-linux-dev#709).
+
+	A PR with more than 100 comments was permanently "head coverage undecidable". Only a
+	truncated PR costs extra reads. A failed read or an exceeded page bound leaves the PR
+	truncated, so it still fails closed into the same named exclusion.
+	"""
+	if not pr["truncated"]:
+		return pr
+	number = pr["number"]
+	try:
+		reviews = _rest_all(f"pulls/{number}/reviews") if "reviews" in pr["truncated"] else None
+		comments = _rest_all(f"issues/{number}/comments") if "comments" in pr["truncated"] else None
+	except _READ_ERRORS:
+		return pr
+	if reviews is not None:
+		pr["reviews"] = [{"commit": {"oid": r.get("commit_id")}} for r in reviews]
+		pr["truncated"].remove("reviews")
+	if comments is not None:
+		pr["comments"] = [
+			{
+				"body": c.get("body"),
+				"createdAt": c.get("created_at"),
+				"author": {"login": (c.get("user") or {}).get("login")},
+			}
+			for c in comments
+		]
+		pr["truncated"].remove("comments")
+	return pr
+
+
 def _open_pr_nodes_rest() -> list[dict]:
 	"""Return every open PR as a GraphQL-shaped node, read over REST (at most the shared cap).
 
@@ -357,10 +405,10 @@ def open_prs() -> list[dict]:
 	"""
 	# _flatten runs inside each guard: a malformed nested field must reach the fallback too.
 	try:
-		return [_flatten(n) for n in read_open_prs(PR_SELECTION, _run, OPEN_PR_LIST_CAP)]
+		return [_complete_window(_flatten(n)) for n in read_open_prs(PR_SELECTION, _run, OPEN_PR_LIST_CAP)]
 	except _READ_ERRORS as graphql_error:
 		try:
-			return [_flatten(n) for n in _open_pr_nodes_rest()]
+			return [_complete_window(_flatten(n)) for n in _open_pr_nodes_rest()]
 		except _READ_ERRORS:
 			raise graphql_error from None
 
