@@ -66,3 +66,10 @@ teardown() {
     [ "$status" -eq 0 ]
     [ -f "$HOME/.claude/RTK.md" ]
 }
+
+# Moved from install_codexbar.bats (#723): the only PR-time validate_registry run over
+# the ai_clients.sh registry, so a missing install_* function fails CI, not the menu.
+@test "validate_registry passes for the ai_clients.sh registry" {
+    run validate_registry
+    [ "$status" -eq 0 ]
+}
