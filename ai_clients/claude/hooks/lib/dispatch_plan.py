@@ -580,6 +580,10 @@ def expand_tokens(tokens: list[str], root: Path, held: list[str]) -> list[str]:
 	files: list[str] = []
 	local_files: list[str] | None = None
 	for token in tokens:
+		if not token.strip("*?/"):
+			# No literal path component (`*`, `**`, `*/?`): it would match every file (#725).
+			print(f"dispatch_plan: rejected surface token {token!r}", file=sys.stderr)
+			continue
 		if any(ch in token for ch in GLOB_CHARS):
 			if local_files is None:
 				local_files = _walk_repo_files(root)

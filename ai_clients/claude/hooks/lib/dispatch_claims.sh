@@ -142,14 +142,16 @@ _dispatch_forge_call() {
 	if [ "$kind" = graphql ]; then
 		gh api graphql -f query="$arg" 2>/dev/null && return 0
 		[ -n "$token" ] || return 1
-		curl -fsS -H "Authorization: Bearer $token" -X POST \
-			-d "$(jq -n --arg q "$arg" '{query:$q}')" https://api.github.com/graphql 2>/dev/null
+		# The header goes in on stdin (`-H @-`), never argv: argv is readable by every local user.
+		curl -fsS -H @- -X POST \
+			-d "$(jq -n --arg q "$arg" '{query:$q}')" https://api.github.com/graphql \
+			<<<"Authorization: Bearer $token" 2>/dev/null
 	elif [ "$kind" = list ]; then
 		gh api "$arg" --paginate 2>/dev/null && return 0
 		[ -n "$token" ] || return 1
 		while ((page <= 100)); do
-			out="$(curl -fsS -H "Authorization: Bearer $token" \
-				"https://api.github.com/$arg?per_page=100&page=$page" 2>/dev/null)" || return 1
+			out="$(curl -fsS -H @- "https://api.github.com/$arg?per_page=100&page=$page" \
+				<<<"Authorization: Bearer $token" 2>/dev/null)" || return 1
 			printf '%s\n' "$out"
 			jq -e 'length >= 100' <<<"$out" >/dev/null || return 0
 			page=$((page + 1))
@@ -158,7 +160,7 @@ _dispatch_forge_call() {
 	else
 		gh api "$arg" 2>/dev/null && return 0
 		[ -n "$token" ] || return 1
-		curl -fsS -H "Authorization: Bearer $token" "https://api.github.com/$arg" 2>/dev/null
+		curl -fsS -H @- "https://api.github.com/$arg" <<<"Authorization: Bearer $token" 2>/dev/null
 	fi
 }
 
@@ -245,6 +247,12 @@ refresh_elsewhere_held_paths() {
 _dispatch_elsewhere_holders() {
 	local n tok
 	while IFS=$'\t' read -r n tok; do
+		# A token of only `*`/`?`/`/` has no literal path component and would hold every path
+		# (#725); skip and report it rather than let one issue body stall all dispatch.
+		if [[ "$tok" =~ ^[*?/]*$ ]]; then
+			echo "dispatch_claims: rejected surface token '$tok' of #$n (no literal path component)" >&2
+			continue
+		fi
 		# shellcheck disable=SC2053  # tok is a glob on purpose
 		[[ "$2" == "$tok" || "$2" == $tok ]] && echo "$n"
 	done <"$1" | sort -un

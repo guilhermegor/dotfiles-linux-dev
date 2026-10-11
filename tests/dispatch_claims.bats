@@ -531,3 +531,43 @@ old/gone.sh"
     [[ "$output" == *"CONFLICT:#5:#83:o/p.sh"* ]]
     [[ "$output" != *"old/gone.sh"* ]]
 }
+
+# --- hardening (dotfiles-linux-dev#725) ----------------------------------------------------
+
+@test "the REST fallback never puts the token on curl's argv but still delivers the header" {
+    forge_stub
+    touch "$STUB/fail-gh"
+    cat >"$STUB/bin/curl" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >>"$STUB/curl-argv"
+cat >>"$STUB/curl-stdin"
+case "$*" in
+*graphql*) cat "$STUB/graphql.json" ;;
+*branches*) cat "$STUB/branches.json" ;;
+esac
+SH
+    chmod +x "$STUB/bin/curl"
+    export GH_TOKEN=s3cr3t-token-725
+    run _dispatch_forge_call get repos/o/r/issues/1
+    run _dispatch_forge_call list repos/o/r/branches
+    run _dispatch_forge_call graphql '{x}'
+    [ -s "$STUB/curl-argv" ]
+    run grep -c "s3cr3t-token-725" "$STUB/curl-argv"
+    [ "$output" = "0" ]
+    [ "$(grep -c '^Authorization: Bearer s3cr3t-token-725$' "$STUB/curl-stdin")" -eq 3 ]
+}
+
+@test "a surface token with no literal path component holds nothing" {
+    forge_stub
+    card_in_progress 90
+    issue_surface 90 "**"
+    refresh_elsewhere_held_paths o r
+    run claim_files 5 "any/path.sh"
+    [[ "$output" == *"rejected surface token"* ]]
+    [ "${lines[-1]}" = "CLAIMED" ]
+    card_in_progress 91
+    issue_surface 91 "*/?"
+    refresh_elsewhere_held_paths o r
+    run claim_files 5 "other/path.sh"
+    [ "${lines[-1]}" = "CLAIMED" ]
+}

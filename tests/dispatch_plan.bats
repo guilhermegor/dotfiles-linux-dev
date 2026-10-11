@@ -895,3 +895,20 @@ dispatch_plan.expand_tokens(["*.py"], Path(sys.argv[2]), [])
 	rm -rf "$plain"
 	[ "$status" -ne 0 ]
 }
+
+@test "a surface token with no literal path component is rejected, not expanded (#725)" {
+	mkdir -p "$TEST_TMP/src"
+	: >"$TEST_TMP/src/a.py"
+	/usr/bin/git add src/a.py
+	/usr/bin/git commit -q -m "tracked"
+	run python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+from pathlib import Path
+print(dispatch_plan.expand_tokens(["*", "**", "*/?", "src/*"], Path(".").resolve(), ["x/y.sh"]))
+' "$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"['src/a.py']" ]]
+	[[ "$output" == *"rejected surface token"* ]]
+}
