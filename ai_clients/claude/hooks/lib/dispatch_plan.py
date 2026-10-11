@@ -102,6 +102,13 @@ BLOCKED_TIMEOUT = 120
 # `_ru_unblock` in roadmap_unblock.sh adds/removes the very same string.
 BLOCKED_LABEL = "state:blocked"
 
+# A human-in-the-loop issue is never dispatchable (dotfiles-linux-dev#711). It is excluded here,
+# where the labels are already fetched, so every plan consumer agrees; the token leads the reason
+# for the same prefix contract as UNDECLARED_TOKEN (dispatch_free_surface_guard.sh greps it).
+HITL_LABEL = "hitl"
+HITL_TOKEN = "HITL"
+HITL_REASON = f"{HITL_TOKEN}: '{HITL_LABEL}' label set — needs a human, never dispatched"
+
 # gate_free_surface's own `gh issue list --state open --limit 500` cap (free_surface.sh) — not
 # editable from here (dotfiles-linux-dev#433 finding 2, see module docstring).
 FREE_SURFACE_ISSUE_CAP = 500
@@ -744,6 +751,8 @@ def build_plan() -> dict:
 					"verify non-collision by hand",
 				}
 			)
+		elif HITL_LABEL in (issue.get("labels") or []):
+			excluded.append({"issue": number, "reason": HITL_REASON})
 		elif reason is not None:
 			excluded.append({"issue": number, "reason": reason})
 		elif number not in unclaimed:

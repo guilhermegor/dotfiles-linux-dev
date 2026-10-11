@@ -325,6 +325,22 @@ transcript_dev_loop_many_failed_agents() {
     [[ "$output" == *"Declaring the surface"* ]]
 }
 
+@test "a hitl-excluded issue is never Missing, and is reported once as excluded (#711)" {
+    stub_plan '{"dispatchable":[{"issue":4,"surface":["f4.sh"]}],"excluded":[{"issue":304,"reason":"HITL: human-in-the-loop label set"}]}'
+    run run_guard "$(transcript_dev_loop)"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"excluded: #304 (hitl)"* ]]
+    [ "$(printf '%s\n' "$output" | grep -c '#304')" -eq 1 ]
+    [[ "$output" == *"#4"* ]]
+}
+
+@test "a plan holding only a hitl issue does not block the stop (#711)" {
+    stub_plan '{"dispatchable":[],"excluded":[{"issue":304,"reason":"HITL: human-in-the-loop label set"}]}'
+    run run_guard "$(transcript_dev_loop)"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"excluded: #304 (hitl)"* ]]
+}
+
 @test "an undeclared surface is listed alongside the issues that are dispatchable" {
     stub_plan '{"dispatchable":[{"issue":4,"surface":["f4.sh"]}],"excluded":[{"issue":9,"reason":"UNDECLARED: no declared file surface"}]}'
     run run_guard "$(transcript_dev_loop)"
