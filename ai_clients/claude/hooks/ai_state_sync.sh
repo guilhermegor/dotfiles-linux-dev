@@ -126,6 +126,12 @@ select_client() {
 TOKEN_RE='(AKIA[0-9A-Z]{16}|gh[oprsu]_[0-9A-Za-z]{36}|github_pat_[0-9A-Za-z_]{22,}|xox[baprs]-[0-9A-Za-z-]{10,}|AIza[0-9A-Za-z_-]{35}|(sk|rk)_live_[0-9A-Za-z]{20,})'
 PK_BEGIN="-----BEGIN "
 PK_END="PRIVATE KEY-----"
+# A header is a key when it ends the line, is followed by base64 (glued or space-joined),
+# or by an escaped newline (JSON-stored, any number of backslashes). Prose that merely
+# quotes the header mid-sentence matches none of these.
+PK_TAIL='([[:space:]]*$|[[:space:]]*[A-Za-z0-9+/=]{16}|\\+[nr])'
+# Documented AWS example credentials, exact strings only. The secret has no TOKEN_RE
+# shape here; it is stripped for parity with commit_secret_guard.sh, where ASSIGN_RE sees it.
 AWS_EXAMPLE_ID="AKIAIOSFODNN7EXAMPLE"
 AWS_EXAMPLE_SECRET="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
@@ -183,7 +189,7 @@ scan_blobs() {
             continue
         fi
         LC_ALL=C sed -e "s/$AWS_EXAMPLE_ID//g" -e "s#$AWS_EXAMPLE_SECRET##g" "$scan" |
-            grep -aEq -e "$TOKEN_RE" -e "${PK_BEGIN}[A-Z ]*${PK_END}([[:space:]]*$|\\\\[nr])"
+            grep -aEq -e "$TOKEN_RE" -e "${PK_BEGIN}[A-Z ]*${PK_END}${PK_TAIL}"
         rcs=("${PIPESTATUS[@]}")
         rc=${rcs[1]}
         [ "$rc" -ne 1 ] || [ "${rcs[0]}" -eq 0 ] || rc=2

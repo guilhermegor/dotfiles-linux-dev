@@ -187,6 +187,8 @@ assert_planted_not_committed() {
     [[ "$output" != *"$planted"* ]]
     run git --git-dir="$AI_STATE_GIT_DIR" log --all --name-only
     [[ "$output" != *"$planted"* ]]
+    # exit 0 must not make the leak invisible: the handoff is what the next session shows
+    grep -q "$planted" "$CLAUDE_CONFIG_DIR/session-audit/ai-state-sync.md"
 }
 
 plant_ok_file() {
@@ -549,4 +551,23 @@ aws_example_secret() { printf 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE%s' "KEY"; }
     plant_ok_file
     stub_cmd sed 1
     push_with_stubs
+}
+
+# Each layout below once passed as "prose"; every one is a real key shape.
+@test "secret guard catches a PEM key with base64 glued to the header" {
+    plant_ok_file
+    printf 'k=-----BEGIN %s-----MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n' "PRIVATE KEY" >"$CLAUDE_CONFIG_DIR/memory/glued.md"
+    assert_planted_not_committed "glued.md"
+}
+
+@test "secret guard catches a space-joined PEM key" {
+    plant_ok_file
+    printf 'KEY="-----BEGIN %s----- MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"\n' "PRIVATE KEY" >"$CLAUDE_CONFIG_DIR/memory/spaced.md"
+    assert_planted_not_committed "spaced.md"
+}
+
+@test "secret guard catches a PEM key with double-escaped newlines" {
+    plant_ok_file
+    printf '{"pem":"-----BEGIN RSA %s-----\\\\nabc"}\n' "PRIVATE KEY" >"$CLAUDE_CONFIG_DIR/memory/dbl.json"
+    assert_planted_not_committed "dbl.json"
 }
