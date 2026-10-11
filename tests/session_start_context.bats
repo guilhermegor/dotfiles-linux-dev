@@ -132,3 +132,86 @@ run_hook() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == "stale"* ]]
 }
+
+# --- in progress elsewhere (dotfiles-linux-dev#715) --------------------------------------------
+
+elsewhere_out() {
+	run bash -c "source '$HOOK'; CLAUDE_PROJECT_DIR='$REPO' emit_elsewhere_status"
+}
+
+# A real change: an empty commit keeps the default's tree and would read as shipped.
+work_commit() {
+	printf 'w\n' >"$SEED/work.txt"
+	git -C "$SEED" add work.txt
+	git -C "$SEED" commit -q -m w
+}
+
+push_branch() {
+	git -C "$SEED" push -q origin "HEAD:refs/heads/$1"
+	git -C "$REPO" fetch -q origin
+}
+
+@test "a pushed loop branch with no local worktree is reported as in progress elsewhere" {
+	work_commit
+	push_branch feat/some-thing-715
+	elsewhere_out
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"in progress elsewhere"*"feat/some-thing-715"*"git worktree add --track -b feat/some-thing-715 <path> origin/feat/some-thing-715"* ]]
+}
+
+@test "a pushed loop branch that has a local worktree is not reported" {
+	work_commit
+	push_branch feat/some-thing-715
+	git -C "$REPO" worktree add -q -b feat/some-thing-715 "$TEST_TMP/wt-715" origin/feat/some-thing-715
+	elsewhere_out
+	[ -z "$output" ]
+}
+
+@test "a non-loop pushed branch is not reported" {
+	work_commit
+	push_branch feat/adhoc
+	elsewhere_out
+	[ -z "$output" ]
+}
+
+@test "a loop branch already merged into the default branch is not reported" {
+	push_branch fix/done-3
+	elsewhere_out
+	[ -z "$output" ]
+}
+
+@test "an In-progress card with no branch is reported from the last forge refresh" {
+	printf '91\ta/b.sh\n' >"$REPO/.git/elsewhere-held-paths.tsv"
+	elsewhere_out
+	[[ "$output" == *"in progress elsewhere"*"#91"* ]]
+}
+
+@test "a loop branch that exists locally without a worktree is checked out by name, not detached" {
+	work_commit
+	push_branch feat/some-thing-715
+	git -C "$REPO" branch -q feat/some-thing-715 origin/feat/some-thing-715
+	elsewhere_out
+	[[ "$output" == *"git worktree add <path> feat/some-thing-715"* ]]
+}
+
+@test "a squash-merged loop branch whose remote ref lingers is not reported" {
+	git -C "$SEED" checkout -q -b feat/sq-5
+	printf 'sq\n' >"$SEED/sq.txt"
+	git -C "$SEED" add sq.txt
+	git -C "$SEED" commit -q -m "sq work"
+	git -C "$SEED" push -q origin HEAD:refs/heads/feat/sq-5
+	git -C "$SEED" checkout -q master
+	git -C "$SEED" merge -q --squash feat/sq-5
+	git -C "$SEED" commit -q -m "squash sq (#5)"
+	git -C "$SEED" push -q origin master
+	git -C "$REPO" fetch -q origin
+	elsewhere_out
+	[ -z "$output" ]
+}
+
+@test "an unset origin/HEAD falls back to origin/master for the merged filter" {
+	push_branch fix/done-3
+	git -C "$REPO" remote set-head origin -d >/dev/null 2>&1
+	elsewhere_out
+	[ -z "$output" ]
+}

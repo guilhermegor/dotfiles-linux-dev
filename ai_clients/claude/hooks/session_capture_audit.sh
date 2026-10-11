@@ -36,6 +36,8 @@ set -uo pipefail
 
 # shellcheck source=lib/lesson_mirrors.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/lesson_mirrors.sh"
+# shellcheck source=lib/loop_branch.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/loop_branch.sh"
 
 # LESSON_STORES, mirror_path()/mirror_rel_path(), mirror_expected_for_repo(), and
 # lesson_originates_in_repo() all come from lib/lesson_mirrors.sh — shared with
@@ -67,6 +69,7 @@ default_branch() {
 
 # Appends a gap line to the global GAPS array (mechanical, blocks a "clean" audit).
 GAPS=()
+PUSHED=()
 add_gap() { GAPS+=("$1"); }
 
 check_git() {
@@ -91,6 +94,53 @@ check_git() {
 		ahead="$(git -C "$cwd" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)"
 		[ "${ahead:-0}" -gt 0 ] && add_gap "[git] $ahead commit(s) not pushed to upstream"
 	fi
+}
+
+# loop_worktrees CWD: "path<TAB>branch" for every worktree on a loop-owned branch, the
+# current checkout included — a closeout run from inside the loop worktree must share it too.
+loop_worktrees() {
+	local line path="" branch
+	while IFS= read -r line; do
+		case "$line" in
+		"worktree "*) path="${line#worktree }" ;;
+		"branch refs/heads/"*)
+			branch="${line#branch refs/heads/}"
+			is_loop_branch "$branch" && printf '%s\t%s\n' "$path" "$branch"
+			;;
+		esac
+	done < <(git -C "$1" worktree list --porcelain 2>/dev/null)
+}
+
+push_loop_branches() {
+	local cwd="$1" path branch
+	git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+	while IFS=$'\t' read -r path branch; do
+		# Explicit refs, not HEAD: the worktree may sit detached mid-rebase.
+		[ "$(git -C "$path" rev-list --count "refs/heads/$branch@{upstream}..refs/heads/$branch" 2>/dev/null || echo 1)" -gt 0 ] || continue
+		if git -C "$path" push -q -u origin "$branch" >/dev/null 2>&1; then
+			PUSHED+=("[git] pushed loop branch '$branch' (was not on the forge)")
+		else
+			add_gap "[git] could not push loop branch '$branch' — retry once the forge is reachable"
+		fi
+	done < <(loop_worktrees "$cwd")
+}
+
+# The current checkout plus every loop worktree: a tracker that is uncommitted in a sibling
+# worktree is shared stale the moment its branch is pushed above.
+check_tasks_md() {
+	local cwd="$1" path branch line
+	git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+	while IFS= read -r path; do
+		while IFS= read -r line; do
+			add_gap "[specs] $path/${line:3} is not committed — commit and push it so the other machine sees it"
+		done < <(git -C "$path" status --porcelain -uall -- '.specs/features/*/tasks.md' 2>/dev/null)
+	done < <({ git -C "$cwd" rev-parse --show-toplevel; loop_worktrees "$cwd" | cut -f1; } 2>/dev/null | sort -u)
+}
+
+check_ai_state() {
+	local handoff="$CLAUDE_DIR/session-audit/ai-state-sync.md"
+	[ -f "$handoff" ] &&
+		add_gap "[ai-state] the last state sync did not complete — follow the repair steps in $handoff, then run ai_state_sync.sh push"
 }
 
 check_lessons() {
@@ -357,6 +407,10 @@ emit_report() {
 	fi
 
 	printf '%s\n' "=== Session capture audit — $repo via $identity_source ($date_str) ==="
+	local pushed_line
+	for pushed_line in "${PUSHED[@]}"; do
+		printf '%s\n' "$pushed_line"
+	done
 	if [ "${#GAPS[@]}" -eq 0 ]; then
 		printf '%s\n' "Mechanical checks: clean (git, lesson index, mirrors)."
 	else
@@ -411,6 +465,9 @@ main() {
 	cwd="$(resolve_cwd "$payload")"
 
 	check_git "$cwd"
+	[ "$mode" = "handoff" ] || push_loop_branches "$cwd"
+	check_tasks_md "$cwd"
+	check_ai_state
 	check_lessons
 	check_mirrors "$cwd"
 

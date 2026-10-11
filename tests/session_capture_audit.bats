@@ -412,3 +412,108 @@ STUB
 
 	[ "$old_line" = "$new_line" ]
 }
+
+# --- multi-machine visibility (dotfiles-linux-dev#715) -----------------------------------------
+
+forge_repo() {
+	git init -q --bare "$TEST_TMP/o.git"
+	REPO="$TEST_TMP/proj"
+	git clone -q "$TEST_TMP/o.git" "$REPO" 2>/dev/null
+	git -C "$REPO" config user.email t@t
+	git -C "$REPO" config user.name t
+	git -C "$REPO" commit -q --allow-empty -m init
+	git -C "$REPO" push -q origin HEAD:refs/heads/main
+	git -C "$REPO" branch -q --set-upstream-to=origin/main
+}
+
+branch_wt() {
+	git -C "$REPO" worktree add -q -b "$1" "$TEST_TMP/wt-$2"
+	git -C "$TEST_TMP/wt-$2" commit -q --allow-empty -m work
+}
+
+pushed() {
+	git -C "$TEST_TMP/o.git" rev-parse --verify -q "refs/heads/$1" >/dev/null
+}
+
+@test "closeout pushes an unpushed loop-owned worktree branch instead of only reporting it" {
+	forge_repo
+	branch_wt feat/some-thing-715 a
+	run_report ""
+	pushed feat/some-thing-715
+	[[ "$output" == *"pushed loop branch 'feat/some-thing-715'"* ]]
+}
+
+@test "closeout leaves a non-loop worktree branch unpushed" {
+	forge_repo
+	branch_wt feat/adhoc a
+	run_report ""
+	run pushed feat/adhoc
+	[ "$status" -ne 0 ]
+}
+
+@test "closeout reports a loop branch whose push fails" {
+	forge_repo
+	branch_wt fix/thing-9 a
+	git -C "$REPO" remote set-url origin "$TEST_TMP/missing.git"
+	run_report ""
+	[[ "$output" == *"[git] could not push loop branch 'fix/thing-9'"* ]]
+}
+
+@test "the SessionEnd handoff mode never pushes" {
+	forge_repo
+	branch_wt feat/some-thing-715 a
+	run bash -c "cd '$REPO' && bash '$HOOK' --handoff </dev/null"
+	run pushed feat/some-thing-715
+	[ "$status" -ne 0 ]
+}
+
+@test "an uncommitted tasks.md under .specs/features is a gap" {
+	forge_repo
+	mkdir -p "$REPO/.specs/features/f"
+	printf -- '- [ ] one\n' >"$REPO/.specs/features/f/tasks.md"
+	run_report ""
+	[[ "$output" == *"[specs] $REPO/.specs/features/f/tasks.md is not committed"* ]]
+}
+
+@test "a committed tasks.md is not a gap" {
+	forge_repo
+	mkdir -p "$REPO/.specs/features/f"
+	printf -- '- [ ] one\n' >"$REPO/.specs/features/f/tasks.md"
+	git -C "$REPO" add .specs
+	git -C "$REPO" commit -q -m tasks
+	run_report ""
+	[[ "$output" != *"[specs]"* ]]
+}
+
+@test "an unresolved ai-state sync handoff is a gap" {
+	forge_repo
+	mkdir -p "$CLAUDE_CONFIG_DIR/session-audit"
+	printf 'push failed\n' >"$CLAUDE_CONFIG_DIR/session-audit/ai-state-sync.md"
+	run_report ""
+	[[ "$output" == *"[ai-state] the last state sync did not complete"* ]]
+}
+
+@test "closeout run from inside a loop worktree pushes that worktree's own branch" {
+	forge_repo
+	branch_wt feat/some-thing-715 a
+	run bash -c "cd '$TEST_TMP/wt-a' && PATH='$TEST_TMP/bin:$PATH' GH_ISSUES='' \
+		GH_ARGV_LOG='$TEST_TMP/gh_argv' bash '$HOOK' </dev/null"
+	pushed feat/some-thing-715
+}
+
+@test "an uncommitted tasks.md in a sibling loop worktree is a gap naming that worktree" {
+	forge_repo
+	branch_wt feat/some-thing-715 a
+	mkdir -p "$TEST_TMP/wt-a/.specs/features/f"
+	printf -- '- [ ] one\n' >"$TEST_TMP/wt-a/.specs/features/f/tasks.md"
+	run_report ""
+	[[ "$output" == *"[specs] $TEST_TMP/wt-a/.specs/features/f/tasks.md is not committed"* ]]
+}
+
+@test "the ai-state gap points at the handoff file's repair steps" {
+	forge_repo
+	mkdir -p "$CLAUDE_CONFIG_DIR/session-audit"
+	printf 'push failed\n' >"$CLAUDE_CONFIG_DIR/session-audit/ai-state-sync.md"
+	run_report ""
+	[[ "$output" == *"repair steps in $CLAUDE_CONFIG_DIR/session-audit/ai-state-sync.md"* ]]
+}
