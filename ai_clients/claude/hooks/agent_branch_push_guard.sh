@@ -44,6 +44,11 @@ main() {
 	# then `git -C <dir>` on top. A cd right after `||` only runs if the left
 	# side failed, so it is not guaranteed and is skipped.
 	# ponytail: unquoted cd targets only.
+	# A `( … )` or `$( … )` group runs in a subshell, so its cd never reaches the
+	# parent: drop groups innermost-first before applying anything.
+	while [[ "$prefix" =~ \([^\(\)]*\) ]]; do
+		prefix="${prefix/"${BASH_REMATCH[0]}"/ }"
+	done
 	while [[ "$prefix" =~ (^|[[:space:];\&\|])cd[[:space:]]+([^[:space:];\&\|]+)(.*)$ ]]; do
 		pre="${prefix%"${BASH_REMATCH[0]}"}"
 		pre="${pre%"${pre##*[![:space:]]}"}"

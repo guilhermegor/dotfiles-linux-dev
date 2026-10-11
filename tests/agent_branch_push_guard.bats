@@ -140,6 +140,13 @@ refute_remote() {
     remote_has feat/some-thing-715
 }
 
+@test "a cd inside a ( subshell ) does not move the parent shell" {
+    add_worktree feat/some-thing-715
+    run run_hook "$TEST_TMP" "( cd main && true ) && cd wt && git commit -m x"
+    [ "$status" -eq 0 ]
+    remote_has feat/some-thing-715
+}
+
 @test "git -C with a quoted path containing spaces is resolved" {
     git -C "$TEST_TMP/main" worktree add -q -b feat/some-thing-715 "$TEST_TMP/wt dir" main
     git -C "$TEST_TMP/wt dir" commit -q --allow-empty -m work
@@ -157,6 +164,8 @@ refute_remote() {
 
 @test "settings.json registers the guard on both PostToolUse and PostToolUseFailure" {
     S="$BATS_TEST_DIRNAME/../ai_clients/claude/settings.json"
-    run jq -e '[.hooks.PostToolUse[].hooks[].command, .hooks.PostToolUseFailure[].hooks[].command] | map(select(test("agent_branch_push_guard"))) | length == 2' "$S"
+    # Each event on its own, under its Bash matcher: a total of 2 could hide a missing event.
+    run jq -e '[.hooks.PostToolUse, .hooks.PostToolUseFailure]
+        | all(any(.[]; .matcher == "Bash" and any(.hooks[]; .command | test("agent_branch_push_guard"))))' "$S"
     [ "$status" -eq 0 ]
 }
