@@ -95,6 +95,7 @@ install_hooks() {
     copy_hook_file "release_dispatch_guard.sh" "$hooks_dir"
     copy_hook_file "destructive_command_guard.sh" "$hooks_dir"
     copy_hook_file "push_pr_head_guard.sh" "$hooks_dir"
+    copy_hook_file "agent_branch_push_guard.sh" "$hooks_dir"
     copy_hook_file "kanban_lifecycle.sh" "$hooks_dir"
     copy_hook_file "claude_artifact_source_guard.sh" "$hooks_dir"
     copy_hook_file "lesson_capture_checkpoint.sh" "$hooks_dir"

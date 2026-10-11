@@ -10,6 +10,7 @@ setup() {
     git init -q -b main "$TEST_TMP/main"
     cd "$TEST_TMP/main" || return 1
     git config user.email t@t && git config user.name t
+    git config commit.gpgsign false
     git commit -q --allow-empty -m init
     git remote add origin "$TEST_TMP/origin.git"
     git push -q origin main
@@ -28,6 +29,7 @@ add_worktree() {
     git -C "$TEST_TMP/main" worktree add -q -b "$1" "$TEST_TMP/wt" main
     git -C "$TEST_TMP/wt" config user.email t@t
     git -C "$TEST_TMP/wt" config user.name t
+    git -C "$TEST_TMP/wt" config commit.gpgsign false
     git -C "$TEST_TMP/wt" commit -q --allow-empty -m work
 }
 
@@ -93,4 +95,33 @@ refute_remote() {
     [ "$status" -eq 0 ]
     remote_has fix/thing-8
     [ ! -f "$(git -C "$TEST_TMP/wt" rev-parse --absolute-git-dir)/pending-push" ]
+}
+
+@test "an absolute git path still triggers the push" {
+    add_worktree feat/some-thing-715
+    run run_hook "$TEST_TMP/wt" "/usr/bin/git commit -m x"
+    [ "$status" -eq 0 ]
+    remote_has feat/some-thing-715
+}
+
+@test "git -C pushes the worktree it names, not the shell's cwd" {
+    add_worktree feat/some-thing-715
+    run run_hook "$TEST_TMP/main" "git -C $TEST_TMP/wt commit -m x"
+    [ "$status" -eq 0 ]
+    remote_has feat/some-thing-715
+}
+
+@test "a leading cd decides which worktree is pushed" {
+    add_worktree feat/some-thing-715
+    run run_hook "$TEST_TMP/main" "cd $TEST_TMP/wt && git commit -m x"
+    [ "$status" -eq 0 ]
+    remote_has feat/some-thing-715
+}
+
+@test "git -C from another loop worktree does not push that worktree's branch" {
+    add_worktree feat/some-thing-715
+    git -C "$TEST_TMP/main" worktree add -q -b fix/other-9 "$TEST_TMP/wt2" main
+    run run_hook "$TEST_TMP/wt" "git -C $TEST_TMP/main commit -m x"
+    [ "$status" -eq 0 ]
+    refute_remote feat/some-thing-715
 }
