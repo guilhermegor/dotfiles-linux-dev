@@ -125,3 +125,47 @@ refute_remote() {
     [ "$status" -eq 0 ]
     refute_remote feat/some-thing-715
 }
+
+@test "chained cds resolve each relative to the last" {
+    add_worktree feat/some-thing-715
+    run run_hook "$TEST_TMP" "cd $TEST_TMP && cd wt && git commit -m x"
+    [ "$status" -eq 0 ]
+    remote_has feat/some-thing-715
+}
+
+@test "a cd after || is not applied (it may never run)" {
+    add_worktree feat/some-thing-715
+    run run_hook "$TEST_TMP/wt" "cd $TEST_TMP/wt || cd $TEST_TMP/main && git commit -m x"
+    [ "$status" -eq 0 ]
+    remote_has feat/some-thing-715
+}
+
+@test "a cd inside a ( subshell ) does not move the parent shell" {
+    add_worktree feat/some-thing-715
+    run run_hook "$TEST_TMP" "( cd main && true ) && cd wt && git commit -m x"
+    [ "$status" -eq 0 ]
+    remote_has feat/some-thing-715
+}
+
+@test "git -C with a quoted path containing spaces is resolved" {
+    git -C "$TEST_TMP/main" worktree add -q -b feat/some-thing-715 "$TEST_TMP/wt dir" main
+    git -C "$TEST_TMP/wt dir" commit -q --allow-empty -m work
+    run run_hook "$TEST_TMP/main" "git -C \"$TEST_TMP/wt dir\" commit -m x"
+    [ "$status" -eq 0 ]
+    remote_has feat/some-thing-715
+}
+
+@test "a commit followed by a failing command still pushes (PostToolUseFailure payload)" {
+    add_worktree feat/some-thing-715
+    run run_hook "$TEST_TMP/wt" "git commit -m x && false"
+    [ "$status" -eq 0 ]
+    remote_has feat/some-thing-715
+}
+
+@test "settings.json registers the guard on both PostToolUse and PostToolUseFailure" {
+    S="$BATS_TEST_DIRNAME/../ai_clients/claude/settings.json"
+    # Each event on its own, under its Bash matcher: a total of 2 could hide a missing event.
+    run jq -e '[.hooks.PostToolUse, .hooks.PostToolUseFailure]
+        | all(any(.[]; .matcher == "Bash" and any(.hooks[]; .command | test("agent_branch_push_guard"))))' "$S"
+    [ "$status" -eq 0 ]
+}
