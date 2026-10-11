@@ -1064,6 +1064,9 @@ Every brief carries:
   directory but not the implicit-HEAD half of the bug (dotfiles-linux-dev#229);
 - 🔴 **confirm before writing** — the feature/defect check above; state the command and its output;
 - 🔴 **commit and push at the first coherent point, then keep committing** (the measurement above);
+  `agent_branch_push_guard.sh` pushes every commit on a loop-owned branch (a linked worktree on
+  `<type>/<slug>-<issue>`), so the pushed branch is the cross-machine "in progress" marker
+  (dotfiles-linux-dev#715); a failed push never blocks and is retried on the next commit;
 - 🔴 **verify HEAD belongs to you and holds your diff — not just that it exists.** `git log -1`
   shows an empty commit and a foreign commit exactly as it shows a real one; the same
   `[branch abc1234] N files changed` success line prints regardless. Confirm with

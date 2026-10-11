@@ -318,6 +318,10 @@
           },
           {
             "type": "command",
+            "command": "bash \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/agent_branch_push_guard.sh\""
+          },
+          {
+            "type": "command",
             "command": "bash \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/kanban_lifecycle.sh\""
           },
           {
