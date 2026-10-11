@@ -278,7 +278,8 @@ install_coderabbit() {
 
     # `cr` is only a short alias for `coderabbit`; guard on the real command name.
     if command_exists coderabbit; then
-        print_status "info" "coderabbit already installed"
+        print_status "info" "coderabbit already installed ($(timeout 10 coderabbit --version 2>/dev/null | head -n1 || echo "unknown"))"
+        print_status "config" "Authenticate manually if signed out: coderabbit auth login"
         return 0
     fi
 

@@ -456,6 +456,75 @@ install_kimi() {
 }
 
 # ============================================================================
+# HOSTED-REVIEWER CLIs: Graphite (gt) and Greptile (dotfiles-linux-dev#713)
+# ============================================================================
+
+# Installers only install. Authentication is a manual, per-user step the
+# installer prints as a hint — a token is never embedded, requested, or logged.
+# (CodeRabbit's CLI installer lives in vcs.sh: install_coderabbit.)
+install_graphite() {
+    print_status "section" "GRAPHITE CLI INSTALLATION (gt)"
+
+    if command_exists gt; then
+        print_status "info" "Graphite CLI is already installed ($(timeout 10 gt --version 2>/dev/null | head -n1 || echo "unknown"))"
+        return 0
+    fi
+
+    if ! command_exists npm; then
+        print_status "error" "npm is not available. Please ensure Node.js is properly installed."
+        return 1
+    fi
+
+    print_status "info" "Installing @withgraphite/graphite-cli globally via npm..."
+    run_or_echo npm install -g @withgraphite/graphite-cli@stable &>> "$LOG_FILE"
+
+    if command_exists gt; then
+        print_status "success" "Graphite CLI installed (command: gt)"
+        print_status "success" "gt version: $(timeout 10 gt --version 2>/dev/null | head -n1 || echo "Not available")"
+        print_status "config" "  Login (manual): gt auth --token <token from the Graphite onboarding page>"
+        print_status "config" "  Update: npm update -g @withgraphite/graphite-cli"
+    else
+        print_status "error" "Graphite CLI installation failed — check $LOG_FILE"
+        return 1
+    fi
+}
+
+install_greptile() {
+    print_status "section" "GREPTILE CLI INSTALLATION"
+
+    if command_exists greptile; then
+        print_status "info" "Greptile CLI is already installed ($(timeout 10 greptile --version 2>/dev/null | head -n1 || echo "unknown"))"
+        return 0
+    fi
+
+    if ! command_exists npm; then
+        print_status "error" "npm is not available. Please ensure Node.js is properly installed."
+        return 1
+    fi
+
+    # The greptile package needs Node >= 22.
+    local node_major
+    node_major=$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')
+    if [[ ! "$node_major" =~ ^[0-9]+$ ]] || [ "$node_major" -lt 22 ]; then
+        print_status "error" "Greptile CLI needs Node.js >= 22 (found: ${node_major:-none})"
+        return 1
+    fi
+
+    print_status "info" "Installing greptile globally via npm..."
+    run_or_echo npm install -g greptile@latest &>> "$LOG_FILE"
+
+    if command_exists greptile; then
+        print_status "success" "Greptile CLI installed (command: greptile)"
+        print_status "success" "greptile version: $(timeout 10 greptile --version 2>/dev/null | head -n1 || echo "Not available")"
+        print_status "config" "  Login (manual, opens a browser): greptile login"
+        print_status "config" "  Update: npm update -g greptile"
+    else
+        print_status "error" "Greptile CLI installation failed — check $LOG_FILE"
+        return 1
+    fi
+}
+
+# ============================================================================
 # CLAUDESTATUS (+ display/api/cli patches)
 # ============================================================================
 
@@ -1023,6 +1092,8 @@ INSTALL_REGISTRY+=(
     "install_qwen:Qwen Code::"
     "install_codex:OpenAI Codex CLI::"
     "install_kimi:Kimi Code CLI (Moonshot AI)::"
+    "install_graphite:Graphite CLI (gt)::"
+    "install_greptile:Greptile CLI::"
     "install_claudestatus:claudestatus (Claude Usage Dashboard)::"
     "install_rtk:RTK (Rust Token Killer)::"
     "install_faster_whisper:faster-whisper (Speech-to-Text CLI)::"
