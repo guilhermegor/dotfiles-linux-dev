@@ -338,6 +338,7 @@ transcript_dev_loop_many_failed_agents() {
     stub_plan '{"dispatchable":[],"excluded":[{"issue":304,"reason":"HITL: human-in-the-loop label set"}]}'
     run run_guard "$(transcript_dev_loop)"
     [ "$status" -eq 0 ]
+    [[ "$output" == *"excluded: #304 (hitl)"* ]]
 }
 
 @test "an undeclared surface is listed alongside the issues that are dispatchable" {

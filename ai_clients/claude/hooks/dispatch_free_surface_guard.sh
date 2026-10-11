@@ -514,6 +514,7 @@ main() {
 		exit 2
 	fi
 
+	[ -z "$hitl" ] || printf '%s\n' "$hitl" >&2
 	exit 0
 }
 
