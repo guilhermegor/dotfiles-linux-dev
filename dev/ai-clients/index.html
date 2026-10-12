@@ -397,6 +397,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Permissions model (claude/settings.json)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ladder-wrapper-one-exact-allow-rule-dotfiles-linux-dev738" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ladder wrapper: one exact allow rule (dotfiles-linux-dev#738)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1135,6 +1152,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Permissions model (claude/settings.json)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ladder-wrapper-one-exact-allow-rule-dotfiles-linux-dev738" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ladder wrapper: one exact allow rule (dotfiles-linux-dev#738)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1618,6 +1652,20 @@ future audit must not relitigate them (dotfiles-linux-dev#68, #644):</p>
    the classifier like any other uncovered command.</p>
 </li>
 </ol>
+<h3 id="ladder-wrapper-one-exact-allow-rule-dotfiles-linux-dev738">Ladder wrapper: one exact allow rule (dotfiles-linux-dev#738)<a class="headerlink" href="#ladder-wrapper-one-exact-allow-rule-dotfiles-linux-dev738" title="Permanent link">&para;</a></h3>
+<p><code>hooks/run_ladder_review.sh &lt;pr-number&gt;</code> is the stable entry point for one
+reviewer-ladder fallback review. <code>permissions.allow</code> carries exactly
+<code>Bash(~/.claude/hooks/run_ladder_review.sh:*)</code> for it, because the same
+<code>source … &amp;&amp; run_fallback_review</code> compound was allowed on some PRs and refused
+as an "external system write" on others. There is deliberately <strong>no</strong> blanket
+<code>gh api -X POST</code> or <code>gh pr review</code> allow: the ladder's own guards (no paid or
+credit flags, free rungs first with the paid <code>claude</code> rung only as the
+owner-accepted last resort, one PR per call, no re-review of a covered head) are
+the boundary. Run it as <code>cd &lt;absolute-repo-path&gt; &amp;&amp; …</code>, since OWNER/REPO come
+from the cwd's <code>origin</code>. The
+wrapper takes one positive integer, and derives the pushed epoch from the
+head commit's committer date (a NOW epoch makes the ladder refuse the PR as
+"recently pushed"). The rule only takes effect after <code>make ai_clients</code>.</p>
 <h2 id="body-template-guards-pr-and-issue">Body-template guards: PR and issue<a class="headerlink" href="#body-template-guards-pr-and-issue" title="Permanent link">&para;</a></h2>
 <p>Two <code>PreToolUse</code> hooks enforce a repo's own body templates on <code>gh</code>, so a
 non-compliant PR/issue body is blocked (exit 2) with the template fed back,
