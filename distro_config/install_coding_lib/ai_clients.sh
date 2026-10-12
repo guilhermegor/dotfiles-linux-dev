@@ -456,40 +456,12 @@ install_kimi() {
 }
 
 # ============================================================================
-# HOSTED-REVIEWER CLIs: Graphite (gt) and Greptile (dotfiles-linux-dev#713)
+# HOSTED-REVIEWER CLI: Greptile (dotfiles-linux-dev#713)
 # ============================================================================
 
 # Installers only install. Authentication is a manual, per-user step the
 # installer prints as a hint — a token is never embedded, requested, or logged.
-# (CodeRabbit's CLI installer lives in vcs.sh: install_coderabbit.)
-install_graphite() {
-    print_status "section" "GRAPHITE CLI INSTALLATION (gt)"
-
-    if command_exists gt; then
-        print_status "info" "Graphite CLI is already installed ($(timeout 10 gt --version 2>/dev/null | head -n1 || echo "unknown"))"
-        print_status "config" "  Login (manual, if signed out): gt auth --token <token from the Graphite onboarding page>"
-        return 0
-    fi
-
-    if ! command_exists npm; then
-        print_status "error" "npm is not available. Please ensure Node.js is properly installed."
-        return 1
-    fi
-
-    print_status "info" "Installing @withgraphite/graphite-cli globally via npm..."
-    run_or_echo npm install -g @withgraphite/graphite-cli@stable &>> "$LOG_FILE"
-
-    if command_exists gt; then
-        print_status "success" "Graphite CLI installed (command: gt)"
-        print_status "success" "gt version: $(timeout 10 gt --version 2>/dev/null | head -n1 || echo "Not available")"
-        print_status "config" "  Login (manual): gt auth --token <token from the Graphite onboarding page>"
-        print_status "config" "  Update: npm update -g @withgraphite/graphite-cli"
-    else
-        print_status "error" "Graphite CLI installation failed — check $LOG_FILE"
-        return 1
-    fi
-}
-
+# (CodeRabbit and Graphite are GitHub-workflow tools: install_coding_lib/vcs.sh.)
 install_greptile() {
     print_status "section" "GREPTILE CLI INSTALLATION"
 
@@ -514,6 +486,12 @@ install_greptile() {
 
     print_status "info" "Installing greptile globally via npm..."
     run_or_echo npm install -g greptile@latest &>> "$LOG_FILE"
+
+    # A DRY_RUN preview installs nothing, so the binary check below would be a false failure.
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        print_status "info" "DRY_RUN: would install greptile; skipping verification"
+        return 0
+    fi
 
     if command_exists greptile; then
         print_status "success" "Greptile CLI installed (command: greptile)"
@@ -1094,7 +1072,6 @@ INSTALL_REGISTRY+=(
     "install_qwen:Qwen Code::"
     "install_codex:OpenAI Codex CLI::"
     "install_kimi:Kimi Code CLI (Moonshot AI)::"
-    "install_graphite:Graphite CLI (gt)::"
     "install_greptile:Greptile CLI::"
     "install_claudestatus:claudestatus (Claude Usage Dashboard)::"
     "install_rtk:RTK (Rust Token Killer)::"

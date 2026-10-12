@@ -15,7 +15,7 @@ setup() {
     mkdir -p "$TMP/sys"
     local tool path
     ORIG_PATH="$PATH"
-    for tool in bash sed head cat timeout mktemp rm chmod mkdir dirname env sh; do
+    for tool in bash sed head cat timeout mktemp rm chmod mkdir dirname env sh grep; do
         path="$(command -v "$tool")" && ln -s "$path" "$TMP/sys/$tool"
     done
     export PATH="$TMP/bin:$TMP/sys"
@@ -23,6 +23,8 @@ setup() {
     source "$REPO_ROOT/distro_config/install_lib/_common.sh"
     # shellcheck source=../distro_config/install_coding_lib/ai_clients.sh
     source "$REPO_ROOT/distro_config/install_coding_lib/ai_clients.sh"
+    # shellcheck source=../distro_config/install_coding_lib/vcs.sh
+    source "$REPO_ROOT/distro_config/install_coding_lib/vcs.sh"
 }
 
 teardown() {
@@ -130,6 +132,24 @@ stub_node() {
     [[ "$output" == *"gt auth --token <token"* ]]
     run install_greptile
     [[ "$output" == *"greptile login"* ]]
+}
+
+@test "DRY_RUN previews both installers as success without installing" {
+    stub_npm gt
+    stub_node 25
+    DRY_RUN=1 run install_graphite
+    [ "$status" -eq 0 ]
+    DRY_RUN=1 run install_greptile
+    [ "$status" -eq 0 ]
+    [ ! -e "$TMP/bin/gt" ]
+    [ ! -e "$TMP/bin/greptile" ]
+}
+
+@test "install_graphite lives in vcs.sh (GitHub workflow tool), not ai_clients.sh" {
+    run grep -c '^install_graphite()' "$REPO_ROOT/distro_config/install_coding_lib/vcs.sh"
+    [ "$output" = "1" ]
+    run grep -c '^install_graphite()' "$REPO_ROOT/distro_config/install_coding_lib/ai_clients.sh"
+    [ "$output" = "0" ]
 }
 
 @test "no system npm is reachable from the test PATH" {

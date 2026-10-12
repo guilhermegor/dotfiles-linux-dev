@@ -151,11 +151,20 @@ JSON"
 }
 
 @test "hosted: an ask already posted for this head is pending, not re-asked" {
-    echo "[{\"user\":{\"login\":\"owner-login\"},\"created_at\":\"2026-10-11T10:00:00Z\",\"body\":\"<!-- ladder-ask:greptile head=$HEAD_SHA -->\"}]" \
+    echo "[{\"user\":{\"login\":\"owner-login\"},\"created_at\":\"$(ts 5)\",\"body\":\"<!-- ladder-ask:greptile head=$HEAD_SHA -->\"}]" \
         >"$BATS_TEST_TMPDIR/comments.json"
     run run_hosted_rungs o r 7
     [ "$status" -eq 0 ]
     [[ "$output" == *"already posted"* ]]
+    [ ! -s "$ASK_LOG" ]
+}
+
+@test "hosted: an ask unanswered past its lifetime falls through, no re-ask" {
+    echo "[{\"user\":{\"login\":\"owner-login\"},\"created_at\":\"$(ts 300)\",\"body\":\"<!-- ladder-ask:greptile head=$HEAD_SHA -->\"}]" \
+        >"$BATS_TEST_TMPDIR/comments.json"
+    run run_hosted_rungs o r 7
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"unanswered past its lifetime"* ]]
     [ ! -s "$ASK_LOG" ]
 }
 

@@ -937,11 +937,21 @@ run_hosted_rungs() {
 		return 1
 	fi
 
-	if [ -n "$ask_author" ] && printf '%s' "$comments" | jq -e --arg a "$ask_author" \
-		--arg m "ladder-ask:greptile head=${head_sha:0:12}" \
-		'any(.[]; .user.login == $a and ((.body // "") | contains($m)))' >/dev/null 2>&1; then
+	# A pending ask has a bounded lifetime: an ask that drew no review within
+	# GREPTILE_ASK_TTL seconds (default 2h) is dead, so the ladder falls through
+	# to the local reviewers instead of reporting "pending" forever.
+	local pending
+	pending="$(printf '%s' "$comments" | jq -r --arg a "$ask_author" \
+		--arg m "ladder-ask:greptile head=${head_sha:0:12}" --argjson ttl "${GREPTILE_ASK_TTL:-7200}" \
+		'[.[] | select(.user.login == $a and ((.body // "") | contains($m)))] | last // empty
+		 | if ((now - (.created_at | fromdateiso8601)) <= $ttl) then "fresh" else "stale" end' 2>/dev/null)"
+	if [ -n "$ask_author" ] && [ "$pending" = "fresh" ]; then
 		print_status "info" "rung greptile: ask for this head already posted — verdict pending"
 		return 0
+	fi
+	if [ -n "$ask_author" ] && [ "$pending" = "stale" ]; then
+		print_status "info" "rung greptile skipped: ask for this head went unanswered past its lifetime"
+		return 1
 	fi
 
 	# One ask per window, shared with CodeRabbit's (dotfiles-linux-dev#548).
