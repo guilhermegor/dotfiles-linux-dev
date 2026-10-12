@@ -149,11 +149,12 @@ LADDER_ATTRIBUTION_RE = re.compile("^Fallback review — runtime:", re.MULTILINE
 # re-review, so a fan-out ask on top of one spends a rung for nothing.
 RECENT_PUSH_SECONDS = int(os.environ.get("REVIEW_FANOUT_RECENT_PUSH_SECONDS", "600"))
 
-# Merge-only head detection (dotfiles-linux-dev#736) reads at most this many previously reviewed
-# heads per PR (newest first) and COMPARE_PAGES x REST_PAGE files per head -- a bounded call
-# budget: one parents read plus at most 3 x COMPARE_PAGES compare reads (head + <=2 parents), and only for a PR that already
-# passed every other eligibility rule.
-COMPARE_PAGES = 3
+# Merge-only head detection (dotfiles-linux-dev#736): at most 4 REST reads per PR -- the head's
+# parents, then one compare per candidate (the head plus at most 2 parents) -- and only for a PR
+# that already passed every other eligibility rule.
+# GitHub's compare lists at most 300 files, on its first page only (per_page/page page the
+# COMMITS); a list that long may be truncated, so it is no evidence and reads as unreadable.
+COMPARE_FILE_CAP = 300
 _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", re.MULTILINE)
 _REVIEWED_HEAD_RE = re.compile(r"^Reviewed head: ([0-9a-fA-F]+)$")
 SLOT_CLASSIFY_PY = LIB_DIR / "slot_classify.py"
@@ -655,31 +656,24 @@ def _patch_signature(base: str, oid: str) -> list | None:
 	line numbers are dropped so a base that moved above an untouched-by-conflict hunk does not
 	read as a changed patch; context lines and every +/- line still count. A file GitHub
 	returns with no ``patch`` (binary, too large) contributes its blob ``sha`` instead, which
-	is equal only for identical content. A failed read, or more files than the page bound, is
-	None -- never a guess.
+	is equal only for identical content. A failed read, a malformed file entry, or a list at the
+	file cap is None -- never a guess.
 	"""
-	files: list[dict] = []
 	try:
-		for page in range(1, COMPARE_PAGES + 1):
-			batch = _rest(f"compare/{base}...{oid}?per_page={REST_PAGE}&page={page}")["files"]
-			files.extend(batch)
-			if len(batch) < REST_PAGE:
-				break
-		else:
-			return None
-	except _READ_ERRORS:
+		files = _rest(f"compare/{base}...{oid}")["files"]
+		if not files or len(files) >= COMPARE_FILE_CAP:
+			return None  # empty is no evidence; at the cap the list may be truncated
+		return sorted(
+			[
+				f["filename"],
+				f.get("status") or "",
+				f.get("previous_filename") or "",
+				_HUNK_HEADER_RE.sub("@@", f["patch"]) if f.get("patch") else f"blob:{f.get('sha')}",
+			]
+			for f in files
+		)
+	except (*_READ_ERRORS, AttributeError):
 		return None
-	if not files:
-		return None  # an empty file list is no evidence of anything
-	return sorted(
-		[
-			f["filename"],
-			f.get("status") or "",
-			f.get("previous_filename") or "",
-			_HUNK_HEADER_RE.sub("@@", f["patch"]) if f.get("patch") else f"blob:{f.get('sha')}",
-		]
-		for f in files
-	)
 
 
 def reviewed_heads(pr: dict) -> list[str]:
@@ -713,19 +707,21 @@ def merge_only_covered_head(pr: dict) -> str | None:
 	reviewed = reviewed_heads(pr)
 	if not base or not head or not reviewed:
 		return None
-	# Only a DIRECT PARENT of the head can be the covered head: that ties the comparison to a real
-	# merge of the base into the reviewed head. Hunk positions are dropped from the signature (a
-	# base merge shifts them), so without this a relocated edit in a file with repeated blocks
-	# could match an older head (Greptile, PR #737). At most 2 parents also bounds the reads and
-	# removes any need to rank reviewed heads by age.
+	# Only a DIRECT PARENT of a MERGE commit can be the covered head: that ties the comparison to
+	# a real merge of the base into the reviewed head (a single-parent commit is ordinary new
+	# work). Hunk positions are dropped from the signature (a base merge shifts them), so without
+	# this a relocated edit in a file with repeated blocks could match an older head (Greptile,
+	# PR #737). At most 2 parents also bounds the reads and removes any need to rank heads by age.
 	try:
 		parents = [p["sha"] for p in _rest(f"git/commits/{head}")["parents"]]
 	except _READ_ERRORS:
 		return None
+	if len(parents) != 2:
+		return None
 	candidates = [oid for oid in reviewed if oid in parents]
 	if not candidates:
 		return None
-	current = _patch_signature(base, pr.get("headRefOid") or "")
+	current = _patch_signature(base, head)
 	if current is None:
 		return None
 	return next((oid for oid in candidates if _patch_signature(base, oid) == current), None)

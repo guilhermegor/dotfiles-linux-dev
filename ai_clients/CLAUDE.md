@@ -419,12 +419,13 @@ head has a `review-pr-<N>` agent in flight" is already its pass condition.
 
 **Merge-only heads and ASK-ONLY repos (#736).** A head whose PR patch (`compare/<base>...<oid>`,
 hunk line numbers normalised) equals that of an already-covered head (either channel) that is a direct
-parent of the current head (so the update is a real merge; at most 2 candidates, `COMPARE_PAGES`
-bound) is excluded as covered: GitHub's update-branch moves the head without
+parent of the current head, which must itself be a merge commit (2 parents; at most 4 REST reads,
+one compare read each; a file list at GitHub's 300-file cap is unreadable) is excluded as covered: GitHub's update-branch moves the head without
 changing what was reviewed. Patches are compared, never SHAs, so conflict resolution or new code
 stays a new head; an unreadable or empty patch read fails closed to "needs review". The
 `RECENT_PUSH_SECONDS` exclusion is skipped when `slot_classify.py` reads `ASK-ONLY` (a push
-triggers no review there); any other or unreadable verdict keeps it.
+triggers no review there); any other or unreadable verdict keeps it. The roster is the 100 newest
+repo comments, so on a busy repo the notice can scroll out and the exclusion returns (conservative).
 
 **Merge-ready (#705).** On a strict base the plan also carries a separate `merge_ready` list:
 PRs `BEHIND` with every check clean and the repo's own review gate (`REVIEW_FANOUT_GATE_CHECK`,
