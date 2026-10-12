@@ -628,7 +628,15 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    to: `ai_clients/claude/hooks/lib/reviewer_ladder.sh` resolves one fallback rung and posts a
    review instead of leaving the window unspent (dotfiles-linux-dev#444).
 
-   **The rungs, in order (dotfiles-linux-dev#626, #628): qwen, codex, kimi, coderabbit CLI, copilot, then `claude` last.**
+   **The rungs, in order (dotfiles-linux-dev#626, #628, #713): the CodeRabbit ask, then hosted `greptile`
+   (`run_hosted_rungs OWNER REPO PR`, called BEFORE `run_fallback_review`), then qwen, codex, kimi,
+   coderabbit CLI, copilot, and `claude` last.** `run_hosted_rungs` returns 0 when Greptile is engaged
+   (ask posted or already pending for this head: report "requested — verdict pending", do not poll) and
+   1 to fall through. It is queue-only: Greptile's auto-review is off repo-side (blueprintx#737), so the
+   ladder's explicit ask is the only trigger, spent via the shared `claim_review_ask`, and a Greptile
+   review on a head the ladder never asked about is printed as a CONFIGURATION DEFECT, never counted as a
+   free review. An unrecognised Greptile notice reads BUSY (fail closed). `graphite` is NOT a rung yet:
+   no Graphite review has ever been observed, so its login and notice format are unmeasured.
    Each is gated by a bounded live probe; a rung that fails it (401/403 subscription, quota,
    expired login, timeout) is skipped in one log line and the ladder falls through. When none
    resolves it reports `no rung available` and exits non-zero — wait for the primary. A rung is
@@ -769,7 +777,8 @@ applies unchanged) — it never gates DISPATCH, and DISPATCH never waits for it.
 1. **Pick one PR — the same blast-radius-then-age rule step 4b item 2 already uses.** Do not invent
    a second ranking.
 2. **Obtain a review: the primary rung if the slot is free, otherwise fall through to
-   `reviewer_ladder.sh`** (qwen → codex) rather than stopping. A PR the planner tags with a
+   `reviewer_ladder.sh`** (`run_hosted_rungs` greptile → qwen → codex → kimi → coderabbit CLI →
+   copilot → claude; step 4b item 5) rather than stopping. A PR the planner tags with a
    non-null `ladder` (`backlog` or `bot-skipped`, step 4b item 5) goes straight to the ladder
    whatever the slot reads — the ladder was built for this (dotfiles-linux-dev#444) and used to fire
    only on an already-BUSY primary rung, which left a 50-PR backlog unreviewed while the slot read

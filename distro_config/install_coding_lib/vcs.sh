@@ -278,7 +278,8 @@ install_coderabbit() {
 
     # `cr` is only a short alias for `coderabbit`; guard on the real command name.
     if command_exists coderabbit; then
-        print_status "info" "coderabbit already installed"
+        print_status "info" "coderabbit already installed ($(timeout 10 coderabbit --version 2>/dev/null | head -n1 || echo "unknown"))"
+        print_status "config" "Authenticate manually if signed out: coderabbit auth login"
         return 0
     fi
 
@@ -318,7 +319,44 @@ install_coderabbit() {
     rm -rf "$tmp_dir"
 }
 
+# Graphite (dotfiles-linux-dev#713): a stacking/submit CLI. The installer only
+# installs; the token (from the Graphite onboarding page) is never handled here.
+install_graphite() {
+    print_status "section" "GRAPHITE CLI INSTALLATION (gt)"
+
+    if command_exists gt; then
+        print_status "info" "Graphite CLI is already installed ($(timeout 10 gt --version 2>/dev/null | head -n1 || echo "unknown"))"
+        print_status "config" "  Login (manual, if signed out): gt auth --token <token from the Graphite onboarding page>"
+        return 0
+    fi
+
+    if ! command_exists npm; then
+        print_status "error" "npm is not available. Please ensure Node.js is properly installed."
+        return 1
+    fi
+
+    print_status "info" "Installing @withgraphite/graphite-cli globally via npm..."
+    run_or_echo npm install -g @withgraphite/graphite-cli@stable &>> "$LOG_FILE"
+
+    # A DRY_RUN preview installs nothing, so the binary check below would be a false failure.
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        print_status "info" "DRY_RUN: would install gt; skipping verification"
+        return 0
+    fi
+
+    if command_exists gt; then
+        print_status "success" "Graphite CLI installed (command: gt)"
+        print_status "success" "gt version: $(timeout 10 gt --version 2>/dev/null | head -n1 || echo "Not available")"
+        print_status "config" "  Login (manual): gt auth --token <token from the Graphite onboarding page>"
+        print_status "config" "  Update: npm update -g @withgraphite/graphite-cli"
+    else
+        print_status "error" "Graphite CLI installation failed — check $LOG_FILE"
+        return 1
+    fi
+}
+
 INSTALL_REGISTRY+=(
+    "install_graphite:Graphite CLI (gt)::"
     "install_github_cli:GitHub CLI::"
     "install_act:act (Run GitHub Actions Locally)::"
     "install_gitleaks:Gitleaks (Secret Scanner)::"

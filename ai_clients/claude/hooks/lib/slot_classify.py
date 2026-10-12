@@ -228,18 +228,136 @@ def classify(list_comments: list) -> str:
 	return str_verdict
 
 
+# --- Greptile (dotfiles-linux-dev#713) ---------------------------------------
+# Measured 2026-10-11 on blueprintx and this repo: login `greptile-apps[bot]`; every
+# review comment it posted opens with one of these two HTML markers (a summary issue
+# comment, and a "Comments Outside Diff" issue comment); findings are inline threads.
+# No allowance-exhausted notice has been observed, so its wording is NOT guessed: any
+# Greptile issue comment that is not one of those two known review shapes is treated as
+# a possible exhaustion notice and reads BUSY until a known review lands after it.
+GREPTILE_LOGIN = "greptile-apps[bot]"
+GREPTILE_REVIEW_MARKERS = ("<!-- greptile_summary -->", "<!-- greptile_outside_diff -->")
+GREPTILE_ASK_MARKER = re.compile(r"<!-- ladder-ask:greptile head=([0-9a-f]+) -->")
+
+
+def is_greptile(dict_comment: dict) -> bool:
+	"""Return whether a record was posted by the real Greptile bot.
+
+	The EXACT login is required (a ``[bot]`` login cannot be registered by a human, a
+	substring match would trust ``not-greptile``), and a present ``user.type`` must be
+	``Bot``. An absent type is tolerated so a real notice is never ignored (fail closed
+	toward BUSY); body text and display names are never consulted.
+
+	Parameters
+	----------
+	dict_comment : dict
+		One comment or review record.
+
+	Returns
+	-------
+	bool
+		True when the author is the Greptile App.
+	"""
+	dict_user = dict_comment.get("user") or {}
+	if dict_user.get("login") != GREPTILE_LOGIN:
+		return False
+	return dict_user.get("type", "Bot") == "Bot"
+
+
+def classify_greptile(list_comments: list) -> str:
+	"""Return the Greptile slot verdict for one page of issue comments, failing closed.
+
+	Parameters
+	----------
+	list_comments : list
+		Issue-comment records as returned by the forge's REST comment listing.
+
+	Returns
+	-------
+	str
+		``FREE|<reason>``, ``BUSY|<reason>`` or ``UNKNOWN``.
+	"""
+	if list_comments and not is_rest_shaped(list_comments):
+		return "UNKNOWN"
+	list_bot = sorted(
+		(c for c in list_comments if is_greptile(c)),
+		key=lambda c: c.get("created_at") or "",
+		reverse=True,
+	)
+	if not list_bot:
+		return "FREE|no-greptile-comment-on-this-page"
+	dict_unknown = next(
+		(c for c in list_bot if not any(m in (c.get("body") or "") for m in GREPTILE_REVIEW_MARKERS)),
+		None,
+	)
+	if dict_unknown is None:
+		return "FREE|only-known-review-comments"
+	dict_review = next(
+		(c for c in list_bot if any(m in (c.get("body") or "") for m in GREPTILE_REVIEW_MARKERS)),
+		None,
+	)
+	if dict_review is not None and (dict_review.get("created_at") or "") > (
+		dict_unknown.get("created_at") or ""
+	):
+		return "FREE|a-review-landed-after-the-last-unrecognised-notice"
+	return "BUSY|unrecognised-greptile-notice"
+
+
+def greptile_unsolicited(dict_payload: dict) -> str:
+	"""Report Greptile reviews on heads the ladder never asked about.
+
+	Parameters
+	----------
+	dict_payload : dict
+		``{"reviews": [...], "comments": [...], "ask_author": "<login>"}`` as the forge's
+		REST listings return them.
+
+	Returns
+	-------
+	str
+		``OK`` when every Greptile review head was asked for, else
+		``UNSOLICITED|<sha>,<sha>`` (a configuration defect, never a free review).
+	"""
+	# An ask marker counts only from the ladder's own poster (``ask_author``): anyone can
+	# type the marker text. No known poster means no ask is credited (fail closed).
+	str_author = dict_payload.get("ask_author") or ""
+	set_asked = {
+		cls_match.group(1)[:12]
+		for c in dict_payload.get("comments") or []
+		if str_author and (c.get("user") or {}).get("login") == str_author
+		for cls_match in [GREPTILE_ASK_MARKER.search(c.get("body") or "")]
+		if cls_match
+	}
+	list_unasked = sorted(
+		{
+			(r.get("commit_id") or "")[:12]
+			for r in dict_payload.get("reviews") or []
+			if is_greptile(r) and (r.get("commit_id") or "")[:12] not in set_asked
+		}
+	)
+	return "UNSOLICITED|" + ",".join(list_unasked) if list_unasked else "OK"
+
+
 def main() -> int:
 	"""Read the comment page on stdin and print the slot verdict.
+
+	An optional first argument selects the reviewer: none is CodeRabbit,
+	``greptile`` is the Greptile slot, ``greptile-unsolicited`` reads
+	``{"reviews": [...], "comments": [...]}`` instead of a page.
 
 	Returns
 	-------
 	int
 		Always 0; the verdict is the stdout token.
 	"""
+	str_mode = sys.argv[1] if len(sys.argv) > 1 else "coderabbit"
 	try:
 		list_comments = json.load(sys.stdin)
 	except (json.JSONDecodeError, ValueError):
 		print("UNKNOWN")
+		return 0
+	if str_mode == "greptile-unsolicited":
+		print(greptile_unsolicited(list_comments) if isinstance(list_comments, dict) else "UNKNOWN")
 		return 0
 	# A forge error body (403 quota, 404) parses as JSON but is an object, not a page
 	# of comments. Everything that is not a list of records is UNKNOWN, never free.
@@ -248,7 +366,7 @@ def main() -> int:
 		return 0
 
 	try:
-		print(classify(list_comments))
+		print(classify_greptile(list_comments) if str_mode == "greptile" else classify(list_comments))
 	except (AttributeError, KeyError, TypeError, ValueError):
 		print("UNKNOWN")
 	return 0
