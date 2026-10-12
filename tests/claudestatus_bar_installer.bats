@@ -49,7 +49,8 @@ STUB
     [ "$status" -eq 0 ]
     [ ! -e "$DATA" ]
     [ ! -e "$HOME/.local/share/gnome-shell" ]
-    ! grep -q '^enable' "$BATS_TEST_TMPDIR/ge.log" 2>/dev/null
+    run grep -qs '^enable' "$BATS_TEST_TMPDIR/ge.log"
+    [ "$status" -ne 0 ]
 }
 
 @test "uninstall removes the extension and the helpers" {
