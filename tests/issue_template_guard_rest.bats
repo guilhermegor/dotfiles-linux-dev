@@ -194,6 +194,46 @@ BAD_BODY='**Python · PyPI · public repo**\n\nNo definition of done here.'
     done
 }
 
+# --- PR #730 review findings ---------------------------------------------------------------
+
+@test "nested bash -c parse error does not hide a later outer gh issue create" {
+    run bash -c "payload 'bash -c \"'\"'\"; gh issue create --title x --body nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "a printed example after a wrapper is not an issue write" {
+    run bash -c "payload 'env echo gh issue create --body nope' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "a state-only REST edit does not hide a later gh issue create" {
+    run bash -c "payload 'gh api repos/{owner}/{repo}/issues/5 -X PATCH -f state=closed; gh issue create --title x --body nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "an unknown (shell variable) method on a numbered endpoint is judged as a possible edit" {
+    run bash -c "payload 'M=PATCH; gh api repos/{owner}/{repo}/issues/5 -X \"\$M\" -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "JSON --input labels count: if-label requirement is enforced" {
+    cat >> .github/ISSUE_TEMPLATE/seed.md <<'EOF'
+<!-- issue-template-guard: require "**Blocked by:**" if-label state:blocked -->
+EOF
+    jq -nc --arg b "$(printf '**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [ ] a')" \
+        '{title:"x", body:$b, labels:["state:blocked"]}' > "$REPO/p.json"
+    run bash -c "payload 'gh api repos/{owner}/{repo}/issues --input $REPO/p.json' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Blocked by"* ]]
+}
+
+@test "a dynamic endpoint that is a plain GET, or an issue comment, is not an issue write" {
+    run bash -c "payload 'gh api \"repos/\$R/issues\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api \"repos/\$R/issues/5/comments\" -f body=x' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
 @test "REST create in a repo with no template is untouched" {
     rm -rf .github/ISSUE_TEMPLATE
     run bash -c "payload 'gh api repos/{owner}/{repo}/issues -X POST -f title=x -f body=nope' | '$GUARD'"

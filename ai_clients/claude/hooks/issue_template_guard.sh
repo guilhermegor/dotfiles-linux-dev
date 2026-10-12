@@ -53,6 +53,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 main() {
     local payload tool command root body_source labels
+    local -a json_labels=()
     local -a templates=() best_missing=()
     local template best_template="" best_count=-1
 
@@ -67,19 +68,27 @@ main() {
     # mirrors pr_template_guard.sh's resolve_gh_command call exactly (see its comment for the
     # bypasses a start-anchored regex missed: chained after `;`/`&&`/`||`/`|`/`&`/a newline, or
     # fooled by flag-shaped text inside an unrelated quoted argument).
-    # The REST twin (dotfiles-linux-dev#714) is checked FIRST and independently of the `gh issue`
-    # parse: `gh api repos/O/R/issues -X POST|PATCH ...` creates/edits an issue without ever
-    # passing `gh issue`, and an unparseable command that looks like one is refused, not allowed.
-    if resolve_gh_command "$command" "api-issue" && [[ "$GH_MATCHED" == "true" ]]; then
-        if [[ "$GH_UNPARSEABLE" == "true" ]]; then
-            echo "BLOCKED: this command looks like a REST write to .../issues but could not be parsed" >&2
-            echo "(unbalanced quote or unterminated heredoc), so its body was never verified." >&2
-            echo "Re-run it as a plain, tokenizable \`gh api repos/O/R/issues ...\` command." >&2
-            exit 2
-        fi
-    else
-        resolve_gh_command "$command" "issue" || exit 0   # unparseable → unknown, not non-compliant
-        [[ "$GH_MATCHED" == "true" ]] || exit 0
+    # Both command forms are judged INDEPENDENTLY (dotfiles-linux-dev#714): one command string can
+    # carry a state-only REST edit AND a `gh issue create`, and either may be the bad one. The
+    # script re-invokes itself once per noun (ITG_NOUN) and any exit 2 wins.
+    if [[ -z "${ITG_NOUN:-}" ]]; then
+        local noun rc
+        for noun in api-issue issue; do
+            rc=0
+            printf '%s' "$payload" | ITG_NOUN="$noun" bash "${BASH_SOURCE[0]}" || rc=$?
+            [[ $rc -eq 2 ]] && exit 2
+        done
+        exit 0
+    fi
+    # `gh api repos/O/R/issues -X POST|PATCH ...` creates/edits an issue without passing
+    # `gh issue`; text that looks like one but cannot be tokenized is refused, not allowed.
+    resolve_gh_command "$command" "$ITG_NOUN" || exit 0   # unparseable -> unknown (gh issue)
+    [[ "$GH_MATCHED" == "true" ]] || exit 0
+    if [[ "$GH_UNPARSEABLE" == "true" ]]; then
+        echo "BLOCKED: this command looks like a REST write to .../issues but could not be parsed" >&2
+        echo "(unbalanced quote or unterminated heredoc), so its body was never verified." >&2
+        echo "Re-run it as a plain, tokenizable \`gh api repos/O/R/issues ...\` command." >&2
+        exit 2
     fi
     # Only when a body is actually being set (skip title/label-only edits, editor-mode create).
     [[ "$GH_HAS_BODY" == "true" || "$GH_HAS_BODY_FILE" == "true" ]] || exit 0
@@ -105,6 +114,10 @@ main() {
                 # `gh api --input`: a JSON payload, the body is its `.body` member.
                 body_source="$(jq -r '.body // ""' "$GH_BODY_FILE" 2>/dev/null)" \
                     || block_unresolved_body_file "$GH_BODY_FILE" "$root"
+                # The payload's own labels count as positively known labels too.
+                mapfile -t json_labels < <(jq -r '.labels[]? | if type == "object" then .name else . end' \
+                    "$GH_BODY_FILE" 2>/dev/null)
+                GH_LABELS+=("${json_labels[@]}")
             else
                 body_source="$(cat "$GH_BODY_FILE")"
             fi

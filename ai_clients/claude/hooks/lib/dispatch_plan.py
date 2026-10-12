@@ -834,7 +834,14 @@ def build_plan() -> dict:
 		else:
 			verdict = verdicts.get(number, "")
 			if verdict == "free" or verdict.startswith("would-need-a-held-file"):
-				hot_files = [f for f in expanded[number] if any(fnmatch.fnmatch(f, p) for p in hot)]
+				# Declared TOKENS, not only expanded files: a glob token can match a file that
+				# exists only on an open PR (never in the checkout), so it must be compared with
+				# the PR's hot paths directly. Either direction of fnmatch: token vs pattern.
+				hot_files = [
+					t
+					for t in surfaces[number] + expanded[number]
+					if any(fnmatch.fnmatch(t, p) or fnmatch.fnmatch(p, t) for p in hot)
+				]
 				if hot_files and hot_holders is None and not hot_read_failed:
 					try:
 						hot_holders = open_pr_hot_holders(slug, prs, hot)
@@ -843,7 +850,14 @@ def build_plan() -> dict:
 				if hot_files and hot_read_failed:
 					excluded.append({"issue": number, "reason": HOT_UNKNOWN_REASON})
 					continue
-				clash = next((f for f in hot_files if f in (hot_holders or {})), None)
+				clash = next(
+					(
+						h
+						for h in sorted(hot_holders or {})
+						if any(fnmatch.fnmatch(h, t) for t in surfaces[number] + expanded[number])
+					),
+					None,
+				)
 				if clash is not None:
 					excluded.append(
 						{

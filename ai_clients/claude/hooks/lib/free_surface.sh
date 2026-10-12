@@ -294,27 +294,39 @@ free_hot_patterns() {
 	return 0
 }
 
-# free_hot_overlap FILE...
+# free_hot_overlap OWNER REPO FILE...
 # The ONLY open-PR overlap that blocks dispatch (#714): a candidate FILE that matches a declared
-# hot pattern AND is held by an open PR (FREE_HELD_PATHS from a prior gate_free_surface). Prints
-#   none                 — no hot overlap (also: no list declared, or no candidate file is hot)
-#   hot:<paths>          — hot paths of the candidate an open PR holds; exclude the candidate
-#   UNKNOWN              — FREE_STATUS != ok; returns 1 (fail closed, never "none")
+# hot pattern AND is changed by an OPEN PR. Reads the open PRs' files itself over REST - never
+# FREE_HELD_PATHS, which also unions pushed branches with no PR (not open-PR overlap). No network
+# call at all unless some FILE is hot. Prints
+#   none                 - no hot overlap (also: no list declared, or no candidate file is hot)
+#   hot:<paths>          - hot paths of the candidate an open PR holds; exclude the candidate
+#   UNKNOWN              - the open-PR read failed; returns 1 (fail closed, never "none")
 # Every non-hot overlap is still only the free_classify_files annotation.
 free_hot_overlap() {
-	[ "${FREE_STATUS:-}" = "ok" ] || { echo UNKNOWN; return 1; }
-	local -a pats=()
-	local pat f held hits=""
+	local owner="$1" repo="$2"
+	shift 2
+	local -a pats=() hot=()
+	local pat f n files="" hits="" numbers
 	mapfile -t pats < <(free_hot_patterns)
-	if [ ${#pats[@]} -eq 0 ]; then echo none; return 0; fi
+	[ ${#pats[@]} -gt 0 ] || { echo none; return 0; }
 	for f in "$@"; do
 		for pat in "${pats[@]}"; do
 			# shellcheck disable=SC2053  # the pattern is intentionally a glob
-			[[ "$f" == $pat ]] || continue
-			held="$(printf '%s\n' "${FREE_HELD_PATHS:-}" | grep -xF -- "$f" || true)"
-			[ -n "$held" ] && hits="${hits:+$hits,}$f"
-			break
+			[[ "$f" == $pat ]] && { hot+=("$f"); break; }
 		done
+	done
+	[ ${#hot[@]} -gt 0 ] || { echo none; return 0; }
+	numbers="$(gh api --paginate "repos/$owner/$repo/pulls?state=open&per_page=100" --jq '.[].number' 2>/dev/null)" \
+		|| { echo UNKNOWN; return 1; }
+	while read -r n; do
+		[ -n "$n" ] || continue
+		f="$(gh api --paginate "repos/$owner/$repo/pulls/$n/files" --jq '.[].filename' 2>/dev/null)" \
+			|| { echo UNKNOWN; return 1; }
+		files="$(printf '%s\n%s' "$files" "$f")"
+	done <<<"$numbers"
+	for f in "${hot[@]}"; do
+		printf '%s\n' "$files" | grep -qxF -- "$f" && hits="${hits:+$hits,}$f"
 	done
 	if [ -n "$hits" ]; then echo "hot:$hits"; else echo none; fi
 }

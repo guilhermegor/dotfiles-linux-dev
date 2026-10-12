@@ -320,11 +320,12 @@ check-and-append under `flock` to `$(git rev-parse --git-common-dir)/dispatch-cl
    `DISPATCH_HOT_FILES_FILE` overrides the path. `dispatch_plan.py` excludes a candidate whose
    surface overlaps an OPEN PR on a hot file with a `HOT-FILE:` reason naming file and PR (open-PR
    files are read over REST, lazily, only when some candidate touches a hot file); bash callers use
-   `free_hot_overlap FILE...` (`lib/free_surface.sh`). **A missing or unreadable list means none
+   `free_hot_overlap OWNER REPO FILE...` (`lib/free_surface.sh`; reads open-PR files itself, never the branch-inclusive `FREE_HELD_PATHS`). **A missing or unreadable list means none
    declared** (annotation-only everywhere); a failing open-PR file read excludes only the
    hot-touching candidates, by name (`UNREADABLE`), never the whole plan. Option (b) — block any
    open-PR overlap — was rejected: #433 measured it nearly stopping dispatch.
-   `/issue` makes the `## File surface` block and a milestone mandatory at creation, and
+   `/issue` makes the `## File surface` block mandatory and requires milestone handling at creation
+   (assign one, or say that none fits / the repo has none), and
    `issue_template_guard.sh` also judges the REST twin (`gh api repos/O/R/issues -X POST|PATCH`,
    implicit POST when a field is given) through `gh_cmd_match.py`'s `api-issue` noun.
 

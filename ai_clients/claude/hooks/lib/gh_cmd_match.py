@@ -106,6 +106,8 @@ def split_segments(command):
 
 
 WRAPPERS = {"rtk", "proxy", "env", "command", "exec", "nohup", "time", "sudo", "xargs", "builtin"}
+WRAPPER_VALUE_FLAGS = {"-u", "-g", "-C", "-I", "-L"}
+NESTED_ERRORS = []
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 
 
@@ -123,16 +125,21 @@ def gh_start(argv):
     and accepts an absolute path to gh. With NO wrapper, `gh` must be the first word.
     """
     wrapped = False
+    skip_next = False
     for i, tok in enumerate(argv):
         word = _word(tok)
-        if word in WRAPPERS:
+        if skip_next:
+            skip_next = False
+        elif word in WRAPPERS:
             wrapped = True
         elif word == "" or re.match(r"^\w+=", word):
             continue
+        elif wrapped and word.startswith("-"):
+            skip_next = word in WRAPPER_VALUE_FLAGS  # `sudo -u root gh`: -u takes a value
         elif word.rsplit("/", 1)[-1] == "gh":
             return i
-        elif not wrapped:
-            return -1
+        else:
+            return -1  # the real command is not gh (`env echo gh issue create` only prints)
     return -1
 
 
@@ -170,7 +177,11 @@ def iter_argvs(segments, depth=0):
             if w not in WRAPPERS and not re.match(r"^\w+=", w) and w != "":
                 break
         if inner:
-            yield from iter_argvs(split_segments(inner), depth + 1)
+            try:
+                yield from iter_argvs(split_segments(inner), depth + 1)
+            except ValueError:
+                # The inner script is broken but the outer shell still runs what follows it.
+                NESTED_ERRORS.append(inner)
 
 
 def matching_argv(segments, noun):
@@ -329,15 +340,21 @@ def api_issue_match(segments):
                 i += 1
         path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", (endpoint or "").split("?", 1)[0])
         path = path.rstrip("/")
-        dynamic = "$" in path or "`" in path  # endpoint built by the shell: cannot be read here
+        dynamic = "$" in path or "`" in path  # endpoint built by the shell
         m = API_ISSUE_ENDPOINT.match(path)
-        if not m and not (dynamic and "issues" in path):
+        dyn = re.search(r"(?:^|/)issues(?:/([^/]*))?$", path) if dynamic and not m else None
+        if not m and not dyn:
             continue
         method = method or ("POST" if fields or input_file else "GET")
         if "$" in method or "`" in method:
-            method = "POST"  # unreadable method on an issues endpoint: judge as a write
-        number = m.group(3) if m else None
-        if m and not ((method == "POST" and not number) or (method in ("PATCH", "PUT") and number)):
+            method = "?"  # unreadable method: may be POST or PATCH, judged as either
+        number = (m.group(3) if m else dyn.group(1)) or None
+        is_write = (
+            method == "?"
+            or (method == "POST" and not number)
+            or (method in ("PATCH", "PUT") and number)
+        )
+        if not is_write:
             continue
         if m:
             owner, name = m.group(1), m.group(2)
@@ -358,7 +375,7 @@ def api_issue_match(segments):
         body_json = False
         if input_file is not None:
             has_body_file, body_file, body_json, has_body, body = True, input_file, True, False, None
-        if method == "POST" and not (has_body or has_body_file):
+        if method in ("POST", "?") and not number and not (has_body or has_body_file):
             has_body, body = True, ""  # REST create has no editor mode: no body IS an empty body
         return {
             "matched": True, "repo": repo, "head": None, "has_body": has_body, "body": body,
@@ -379,6 +396,8 @@ def main():
         segments = split_segments(command)
         if noun == "api-issue":
             match = api_issue_match(segments)
+            if match is None and any("issues" in e for e in NESTED_ERRORS):
+                match = {"matched": True, "unparseable": True}
             print(json.dumps(match or {"matched": False}))
             return 0
         argv = matching_argv(segments, noun)

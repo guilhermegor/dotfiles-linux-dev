@@ -8,59 +8,77 @@
 
 setup() {
     source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/free_surface.sh"
-    FREE_STATUS="ok"
-    FREE_HELD_PATHS='.github/workflows/ci.yml
-shared/x.sh'
+    BIN="$(mktemp -d)"
+    PATH="$BIN:$PATH"
+    # Open PR 7 changes ci.yml, shared/x.sh and mkdocs.yml. A pushed branch with no PR (old.yml)
+    # is NOT served: it must never count as open-PR overlap.
+    cat >"$BIN/gh" <<'STUB'
+#!/bin/bash
+case "$*" in
+*"pulls?state=open"*) [ "${GH_FAIL:-0}" = 1 ] && exit 1; echo 7 ;;
+*"pulls/7/files"*) printf '.github/workflows/ci.yml\nshared/x.sh\nmkdocs.yml\n' ;;
+*) exit 1 ;;
+esac
+STUB
+    chmod +x "$BIN/gh"
     HOT="$(mktemp)"
     export DISPATCH_HOT_FILES_FILE="$HOT"
     printf '# append points\n.github/workflows/ci.yml\nmkdocs.*\n' >"$HOT"
 }
 
 teardown() {
-    rm -f "$HOT"
+    rm -rf "$HOT" "$BIN"
 }
 
 @test "a hot file held by an open PR is reported as hot:<path>" {
-    run free_hot_overlap .github/workflows/ci.yml new/a.sh
+    run free_hot_overlap o r .github/workflows/ci.yml new/a.sh
     [ "$status" -eq 0 ]
     [ "$output" = "hot:.github/workflows/ci.yml" ]
 }
 
 @test "a NON-hot file held by an open PR is not a hot overlap (annotation only)" {
-    run free_hot_overlap shared/x.sh
+    run free_hot_overlap o r shared/x.sh
     [ "$output" = "none" ]
+    FREE_STATUS=ok
+    FREE_HELD_PATHS='shared/x.sh'
     run free_classify_files shared/x.sh
     [ "$output" = "held:shared/x.sh" ]
 }
 
 @test "a hot file that no open PR holds is none" {
-    run free_hot_overlap mkdocs.yml
+    printf 'unheld.yml\n' >>"$HOT"
+    run free_hot_overlap o r unheld.yml
     [ "$output" = "none" ]
 }
 
 @test "hot patterns are globs" {
-    FREE_HELD_PATHS='mkdocs.yml'
-    run free_hot_overlap mkdocs.yml
+    run free_hot_overlap o r mkdocs.yml
     [ "$output" = "hot:mkdocs.yml" ]
 }
 
 @test "a missing list declares nothing: none, status 0" {
     export DISPATCH_HOT_FILES_FILE="$HOT.absent"
-    run free_hot_overlap .github/workflows/ci.yml
+    run free_hot_overlap o r .github/workflows/ci.yml
     [ "$status" -eq 0 ]
     [ "$output" = "none" ]
 }
 
 @test "an unreadable list (a directory) declares nothing: none, status 0" {
     export DISPATCH_HOT_FILES_FILE="$BATS_TEST_DIRNAME"
-    run free_hot_overlap .github/workflows/ci.yml
+    run free_hot_overlap o r .github/workflows/ci.yml
     [ "$status" -eq 0 ]
     [ "$output" = "none" ]
 }
 
-@test "an unprimed gate fails closed: UNKNOWN, never none" {
-    FREE_STATUS=unknown
-    run free_hot_overlap .github/workflows/ci.yml
+@test "a branch-only hot file (no open PR) is not open-PR overlap" {
+    printf '.github/workflows/old.yml\n' >>"$HOT"
+    run free_hot_overlap o r .github/workflows/old.yml
+    [ "$output" = "none" ]
+}
+
+@test "a failing open-PR read fails closed: UNKNOWN, never none" {
+    export GH_FAIL=1
+    run free_hot_overlap o r .github/workflows/ci.yml
     [ "$status" -eq 1 ]
     [ "$output" = "UNKNOWN" ]
 }

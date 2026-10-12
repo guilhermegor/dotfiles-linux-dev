@@ -1006,6 +1006,16 @@ hot_list() {
     [ "$(field '.dispatchable[0].issue')" = "11" ]
 }
 
+@test "a glob token is matched against hot files that exist only on an open PR" {
+    hot_list ".github/workflows/*.yml"
+    printf '.github/workflows/new.yml\n' >"$BIN/prfiles.77"
+    stub_gh "[$(issue_json 14 '.github/workflows/*')]" "" "" 0 "" "$OTHER_PR"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [[ "$(field '.excluded[0].reason')" == "HOT-FILE: "*"new.yml"*"#77"* ]]
+}
+
 @test "open-PR file read failing excludes a hot-touching candidate by name, spares a non-hot one" {
     hot_list ".github/workflows/ci.yml"
     stub_gh "[$(issue_json 12 .github/workflows/ci.yml),$(issue_json 13 free/b.sh)]" "" "" 0 "" "$OTHER_PR"

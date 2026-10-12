@@ -910,7 +910,7 @@ is the unrecoverable case, and that is what blocks:
   per repo, one path or glob per line, in `$(git rev-parse --git-common-dir)/dispatch-hot-files.txt`
   (next to the claims registry; `#` comments, `*` crosses `/`; `DISPATCH_HOT_FILES_FILE`
   overrides). `dispatch_plan.py` excludes such a candidate with a `HOT-FILE:` reason naming the
-  file and the PR; bash callers use `free_hot_overlap FILE...` (`free_surface.sh`). A **missing or
+  file and the PR; bash callers use `free_hot_overlap OWNER REPO FILE...` (`free_surface.sh`). A **missing or
   unreadable list means none declared** — everything stays an annotation, never a crash and never a
   blanket block. An unreadable open-PR file read excludes only hot-touching candidates, by name.
 - **Merge-risk annotation only, never a blocker:** every OTHER open-PR overlap —
@@ -998,6 +998,7 @@ agent-vs-{open,merged}-PR, left untouched by this rule):
 gate_free_surface <owner> <repo> || echo "free surface UNKNOWN — do not dispatch on it"
 printf '%s\n' "$FREE_UNCLAIMED_ISSUES"            # open issues no PR (open OR merged) closes
 free_classify_files <paths the issue would touch>  # heads-up note only — never gates dispatch
+free_hot_overlap <owner> <repo> <paths>            # hot:<paths> = BLOCKS (declared hot file held by an open PR); none = dispatch
 ```
 
 The candidate file list per issue is still yours to supply — that needs reading the issue.
@@ -1023,7 +1024,8 @@ Name three states, not two, for the **live-agent** gate above — collapsing the
 
 The open-PR gate's own `held`/`would-need-a-held-file` verdict (`free_classify_files`) is never
 read this way — it answers the separate, non-blocking merge-risk question above, and its result is
-a note in the brief, never a reason to exclude a candidate.
+a note in the brief, never a reason to exclude a candidate. The one exception is `free_hot_overlap`
+above (declared hot files, #714), whose `hot:` result does exclude.
 
 🔴 **Before dispatching anything, confirm it is not already done.** A file-collision check only
 sees PR-vs-PR overlap; it cannot see an issue already satisfied by code that already merged.
