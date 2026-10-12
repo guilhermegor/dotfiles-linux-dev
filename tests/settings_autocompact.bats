@@ -17,7 +17,7 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
-@test "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE is set to 70 in env" {
+@test "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE is set to 75 in env" {
     run jq -r '.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE' "$SETTINGS"
     [ "$status" -eq 0 ]
     [ "$output" = "75" ]
