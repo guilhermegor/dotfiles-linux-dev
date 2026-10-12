@@ -59,7 +59,7 @@ origin_names_repo() {
 resolve_gh_command() {
     local command="$1" noun="$2" json rc
     GH_MATCHED=false GH_REPO="" GH_HAS_BODY=false GH_BODY=""
-    GH_HAS_BODY_FILE=false GH_BODY_FILE="" GH_BODY_FILE_JSON=false
+    GH_HAS_BODY_FILE=false GH_BODY_FILE="" GH_BODY_FILE_JSON=false GH_UNPARSEABLE=false
     GH_LABELS=()
 
     command -v python3 >/dev/null 2>&1 || return 1
@@ -84,6 +84,8 @@ resolve_gh_command() {
     GH_HAS_BODY_FILE="$(printf '%s' "$json" | jq -r '.has_body_file')"
     # shellcheck disable=SC2034
     GH_BODY_FILE="$(printf '%s' "$json" | jq -r '.body_file // empty')"
+    # shellcheck disable=SC2034
+    GH_UNPARSEABLE="$(printf '%s' "$json" | jq -r '.unparseable // false')"
     # shellcheck disable=SC2034
     GH_BODY_FILE_JSON="$(printf '%s' "$json" | jq -r '.body_json // false')"
     # shellcheck disable=SC2034

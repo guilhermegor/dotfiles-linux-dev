@@ -988,7 +988,8 @@ hot_list() {
     run_planner
     [ "$status" -eq 0 ]
     [ "$(field '.dispatchable[0].issue')" = "9" ]
-    ! grep -q "pulls/77/files" "$BIN/gh.calls"
+    run grep -q "pulls/77/files" "$BIN/gh.calls"
+    [ "$status" -ne 0 ]
 }
 
 @test "unreadable hot list (a directory) is treated as none declared" {

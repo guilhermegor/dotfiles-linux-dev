@@ -105,16 +105,39 @@ def split_segments(command):
     return segments
 
 
+WRAPPERS = {"rtk", "env", "command", "exec", "nohup", "time"}
+
+
+def gh_start(argv):
+    """Index of the `gh` token in a simple command, or -1.
+
+    Skips `VAR=x` assignments, `rtk`/`env`/`command`/... wrappers (and `env`'s -flags), a leading
+    `$(`/`(`/`{`/backtick group opener, and accepts an absolute path to gh (`/usr/bin/gh`).
+    """
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        sub = re.match(r"^\w+=.*?(?:\$\(|`)(.*)$", tok)  # x=$(gh ...) / x=`gh ...`
+        tok = (sub.group(1) if sub else tok).lstrip("$({`!")
+        if tok in WRAPPERS or re.match(r"^\w+=", tok) or (tok.startswith("-") and i > 0):
+            i += 1
+        elif tok == "":
+            i += 1
+        else:
+            return i if tok.rsplit("/", 1)[-1] == "gh" else -1
+    return -1
+
+
 def matching_argv(segments, noun):
     """Return the argv of the first segment shaped like `[rtk] gh <noun> create|edit|merge`, or
     None.
     """
     for segment in segments:
         argv = shlex.split(segment, posix=True)  # ValueError propagates: caller must fail open
-        idx = 1 if argv[:1] == ["rtk"] else 0
+        idx = gh_start(argv)
         if (
-            len(argv) >= idx + 3
-            and argv[idx] == "gh"
+            idx >= 0
+            and len(argv) >= idx + 3
             and argv[idx + 1] == noun
             and argv[idx + 2] in ("create", "edit", "merge")
         ):
@@ -224,14 +247,17 @@ def api_issue_match(segments):
     """
     for segment in segments:
         argv = shlex.split(segment, posix=True)
-        idx = 1 if argv[:1] == ["rtk"] else 0
-        if argv[idx:idx + 2] != ["gh", "api"]:
+        idx = gh_start(argv)
+        if idx < 0 or argv[idx + 1:idx + 2] != ["api"]:
             continue
         rest = argv[idx + 2:]
         endpoint, method, fields, input_file = None, None, [], None
         i = 0
         while i < len(rest):
             tok = rest[i]
+            if tok == "--":  # end of options: the rest are positionals
+                endpoint = endpoint or (rest[i + 1] if i + 1 < len(rest) else None)
+                break
             name, _, inline = tok.partition("=") if tok.startswith("--") else (tok, "", "")
             if tok.startswith("-") and tok[1:2] != "-" and len(tok) > 2 and tok[:2] in API_VALUE_FLAGS:
                 name, inline = tok[:2], tok[2:].lstrip("=")  # attached short value: -XPOST
@@ -257,28 +283,37 @@ def api_issue_match(segments):
             else:
                 endpoint = endpoint or tok
                 i += 1
-        m = API_ISSUE_ENDPOINT.match((endpoint or "").split("?", 1)[0])
-        if not m:
+        path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", (endpoint or "").split("?", 1)[0])
+        path = path.rstrip("/")
+        dynamic = "$" in path or "`" in path  # endpoint built by the shell: cannot be read here
+        m = API_ISSUE_ENDPOINT.match(path)
+        if not m and not (dynamic and "issues" in path):
             continue
         method = method or ("POST" if fields or input_file else "GET")
-        number = m.group(3)
-        if not ((method == "POST" and not number) or (method in ("PATCH", "PUT") and number)):
+        if "$" in method or "`" in method:
+            method = "POST"  # unreadable method on an issues endpoint: judge as a write
+        number = m.group(3) if m else None
+        if m and not ((method == "POST" and not number) or (method in ("PATCH", "PUT") and number)):
             continue
-        owner, name = m.group(1), m.group(2)
-        repo = None if "{" in owner + name else f"{owner}/{name}"
+        if m:
+            owner, name = m.group(1), m.group(2)
+            repo = None if "{" in owner + name or "$" in owner + name else f"{owner}/{name}"
+        else:
+            repo = None
         has_body, body, has_body_file, body_file, labels = False, None, False, None, []
         for typed, field in fields:
             key, _, val = field.partition("=")
             if key == "body":
+                # A later body= overwrites an earlier one (gh keeps the last), whatever its kind.
                 if typed and val.startswith("@"):  # only -F/--field reads a file via @
-                    has_body_file, body_file = True, val[1:]
+                    has_body_file, body_file, has_body, body = True, val[1:], False, None
                 else:
-                    has_body, body = True, val
+                    has_body, body, has_body_file, body_file = True, val, False, None
             elif key in ("labels[]", "labels"):
                 labels.extend(p for p in val.split(",") if p)
         body_json = False
         if input_file is not None:
-            has_body_file, body_file, body_json = True, input_file, True
+            has_body_file, body_file, body_json, has_body, body = True, input_file, True, False, None
         if method == "POST" and not (has_body or has_body_file):
             has_body, body = True, ""  # REST create has no editor mode: no body IS an empty body
         return {
@@ -304,6 +339,11 @@ def main():
             return 0
         argv = matching_argv(segments, noun)
     except ValueError:
+        if noun == "api-issue" and re.search(r"\bapi\b[\s\S]*issues", command):
+            # Fail CLOSED for the REST path (#714): text that looks like an issues write but
+            # cannot be tokenized is reported, never silently allowed.
+            print(json.dumps({"matched": True, "unparseable": True}))
+            return 0
         return 1  # unparseable: caller must fail open, never guess
 
     if argv is None:

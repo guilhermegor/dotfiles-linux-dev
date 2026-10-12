@@ -118,6 +118,55 @@ BAD_BODY='**Python · PyPI · public repo**\n\nNo definition of done here.'
     [[ "$output" == *"could not resolve the issue template"* ]]
 }
 
+# --- spelling parity: every way of writing the same call reaches the same verdict ------------
+
+@test "REST spellings all blocked: --method=POST, lowercase, -X=POST, URL, trailing slash, query" {
+    local spelling
+    for spelling in \
+        'gh api repos/{owner}/{repo}/issues --method=POST -f body=nope' \
+        'gh api repos/{owner}/{repo}/issues -X post -f body=nope' \
+        'gh api repos/{owner}/{repo}/issues -X=POST -f body=nope' \
+        'gh api https://api.github.com/repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'gh api repos/{owner}/{repo}/issues/ -X POST -f body=nope' \
+        'gh api "repos/{owner}/{repo}/issues?x=1" -X POST -f body=nope' \
+        'gh api -X POST -f body=nope -- repos/{owner}/{repo}/issues' \
+        '/usr/bin/gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'env GH_TOKEN=x gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'GH_TOKEN=x gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'rtk gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'x=$(gh api repos/{owner}/{repo}/issues -X POST -f body=nope)' \
+        'gh api repos/{owner}/{repo}/issues \
+          -X POST -f body=nope'; do
+        run bash -c "payload '$spelling' | '$GUARD'"
+        [ "$status" -eq 2 ] || { echo "NOT BLOCKED: $spelling"; return 1; }
+    done
+}
+
+@test "REST: the LAST body= wins, so a compliant first body cannot mask a bad last one" {
+    run bash -c "payload 'gh api repos/{owner}/{repo}/issues -f body=\"$COMPLIANT_BODY\" -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: an endpoint or method built by the shell is judged as a write, not skipped" {
+    run bash -c "payload 'gh api \"repos/\$R/issues\" -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api repos/{owner}/{repo}/issues -X \"\$M\" -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: text that looks like an issues write but cannot be tokenized fails CLOSED" {
+    run bash -c "payload 'gh api repos/{owner}/{repo}/issues -X POST -f body=\"unterminated' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"could not be parsed"* ]]
+}
+
+@test "gh issue create via an absolute gh path or env is still judged" {
+    run bash -c "payload '/usr/bin/gh issue create --title x --body nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'env X=1 gh issue create --title x --body nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
 @test "REST create in a repo with no template is untouched" {
     rm -rf .github/ISSUE_TEMPLATE
     run bash -c "payload 'gh api repos/{owner}/{repo}/issues -X POST -f title=x -f body=nope' | '$GUARD'"

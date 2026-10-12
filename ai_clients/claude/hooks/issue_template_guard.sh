@@ -67,13 +67,20 @@ main() {
     # mirrors pr_template_guard.sh's resolve_gh_command call exactly (see its comment for the
     # bypasses a start-anchored regex missed: chained after `;`/`&&`/`||`/`|`/`&`/a newline, or
     # fooled by flag-shaped text inside an unrelated quoted argument).
-    resolve_gh_command "$command" "issue" || exit 0   # unparseable → unknown, not non-compliant
-    if [[ "$GH_MATCHED" != "true" ]]; then
-        # The REST twin (dotfiles-linux-dev#714): `gh api repos/O/R/issues -X POST|PATCH ...`
-        # creates/edits an issue without ever passing `gh issue`; same real-argv tokenizer.
-        resolve_gh_command "$command" "api-issue" || exit 0
+    # The REST twin (dotfiles-linux-dev#714) is checked FIRST and independently of the `gh issue`
+    # parse: `gh api repos/O/R/issues -X POST|PATCH ...` creates/edits an issue without ever
+    # passing `gh issue`, and an unparseable command that looks like one is refused, not allowed.
+    if resolve_gh_command "$command" "api-issue" && [[ "$GH_MATCHED" == "true" ]]; then
+        if [[ "$GH_UNPARSEABLE" == "true" ]]; then
+            echo "BLOCKED: this command looks like a REST write to .../issues but could not be parsed" >&2
+            echo "(unbalanced quote or unterminated heredoc), so its body was never verified." >&2
+            echo "Re-run it as a plain, tokenizable \`gh api repos/O/R/issues ...\` command." >&2
+            exit 2
+        fi
+    else
+        resolve_gh_command "$command" "issue" || exit 0   # unparseable → unknown, not non-compliant
+        [[ "$GH_MATCHED" == "true" ]] || exit 0
     fi
-    [[ "$GH_MATCHED" == "true" ]] || exit 0
     # Only when a body is actually being set (skip title/label-only edits, editor-mode create).
     [[ "$GH_HAS_BODY" == "true" || "$GH_HAS_BODY_FILE" == "true" ]] || exit 0
 
