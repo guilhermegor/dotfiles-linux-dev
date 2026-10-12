@@ -324,8 +324,26 @@ setup_neovim_config() {
 
     run_or_echo mkdir -p "$nvim_dir"
 
-    if [ ! -f "$init_file" ]; then
-        cat > "$init_file" << 'EOF'
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        print_status "info" "[dry-run] would write $init_file (backing up any existing one) and run PlugInstall"
+        return 0
+    fi
+
+    if [ -f "$init_file" ] && [ "${NVIM_REGEN_CONFIG:-0}" != "1" ]; then
+        print_status "warning" "Neovim configuration already exists at $init_file; set NVIM_REGEN_CONFIG=1 to back it up and regenerate"
+        return 0
+    fi
+
+    if [ -f "$init_file" ]; then
+        local backup_file
+        # mktemp suffix: two regenerations in the same second must not overwrite
+        # the first backup (the user's original init.vim).
+        backup_file="$(mktemp "$init_file.bak.$(date +%Y%m%d%H%M%S).XXXXXX")" || return 1
+        cp "$init_file" "$backup_file" || return 1
+        print_status "info" "Existing init.vim backed up to $backup_file"
+    fi
+
+    cat > "$init_file" << 'EOF' || { print_status "error" "Could not write $init_file"; return 1; }
 " Basic Neovim Configuration
 set number
 set relativenumber
@@ -381,8 +399,8 @@ Plug 'folke/which-key.nvim'
 
 call plug#end()
 
-" Color scheme
-colorscheme onedark
+" Color scheme (silent: plugins are absent until :PlugInstall has run)
+silent! colorscheme onedark
 
 " Key mappings
 let mapleader = " "
@@ -419,7 +437,7 @@ nnoremap <leader>wq :wq<CR>
 nnoremap <leader><CR> :so ~/.config/nvim/init.vim<CR>
 
 " Auto commands
-autocmd VimEnter * NERDTree | wincmd p
+autocmd VimEnter * if exists(':NERDTree') | NERDTree | wincmd p | endif
 
 " COC configuration
 nmap <silent> gd <Plug>(coc-definition)
@@ -443,11 +461,43 @@ endfunction
 inoremap <silent><expr> <CR> coc#pum#visible() ? coc#pum#confirm() : "\<C-g>u\<CR>\<c-r>=coc#on_enter()\<CR>"
 EOF
 
-        print_status "success" "Basic Neovim configuration created at $init_file"
-        print_status "info" "After first launch, run :PlugInstall to install plugins"
-    else
-        print_status "info" "Neovim configuration already exists at $init_file"
+    print_status "success" "Basic Neovim configuration created at $init_file"
+    _neovim_plug_install
+}
+
+# Fetch the plugins so the first launch has onedark/NERDTree. Never fatal.
+_neovim_plug_install() {
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        run_or_echo nvim --headless '+PlugInstall --sync' +qall
+        return 0
     fi
+    print_status "info" "Installing Neovim plugins (headless PlugInstall)..."
+    # --sync blocks until downloads finish; without it +qall quits first
+    if ! nvim --headless '+PlugInstall --sync' +qall; then
+        print_status "warning" "PlugInstall failed; run :PlugInstall inside nvim"
+        return 0
+    fi
+    # vim-plug reports a failed clone in its buffer but nvim still exits 0, so the
+    # exit code alone cannot say every plugin landed: check each Plug's directory.
+    local missing
+    missing="$(_neovim_missing_plugins "$HOME/.config/nvim/init.vim" "$HOME/.vim/plugged")"
+    if [ -n "$missing" ]; then
+        print_status "warning" "Neovim plugins incomplete (missing: ${missing% }); run :PlugInstall inside nvim"
+    else
+        print_status "success" "Neovim plugins installed"
+    fi
+    return 0
+}
+
+# _neovim_missing_plugins INIT_FILE PLUG_DIR: names of every `Plug 'owner/name'`
+# in INIT_FILE with no PLUG_DIR/name directory, space-separated; empty if all exist.
+_neovim_missing_plugins() {
+    local init_file="$1" plug_dir="$2" repo name missing=""
+    while read -r repo; do
+        name="${repo##*/}"
+        [ -d "$plug_dir/$name" ] || missing+="$name "
+    done < <(sed -n "s/^[[:space:]]*Plug '\([^']*\)'.*/\1/p" "$init_file")
+    printf '%s' "$missing"
 }
 
 install_warp_terminal() {
