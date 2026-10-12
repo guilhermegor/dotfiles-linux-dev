@@ -74,13 +74,13 @@ async function readBillingPage(profileDir, storagePath, headless) {
         const deadline = Date.now() + BILLING_WAIT_MS;
         while (Date.now() < deadline) {
             text = await page.evaluate(() => document.body.innerText || "");
-            if (/just a moment/i.test(text))
-                return { text, blocked: true };
-            if (parseBillingText(text).renewalAt)
+            if (!/just a moment/i.test(text) && parseBillingText(text).renewalAt)
                 break;
             await page.waitForTimeout(1000);
         }
-        return { text, blocked: false };
+        // The Cloudflare interstitial clears on its own, so only a page STILL showing it at the
+        // deadline counts as blocked.
+        return { text, blocked: /just a moment/i.test(text) };
     }
     finally {
         // Read-only flow -- never persist storageState (would clobber the session).
@@ -93,7 +93,9 @@ async function scrapeBilling(name, profileDir, storagePath) {
         try {
             const page = await readBillingPage(profileDir, storagePath, headless);
             text = page.text;
-            if (!page.blocked && parseBillingText(text).renewalAt)
+            // A fully loaded, unblocked page is final even when no date parsed: a headed retry
+            // would read the same text. Retry only when blocked or the browser failed.
+            if (!page.blocked)
                 break;
         }
         catch {
@@ -103,7 +105,12 @@ async function scrapeBilling(name, profileDir, storagePath) {
     const parsed = parseBillingText(text);
     if (!parsed.renewalAt && text) {
         // Always keep the page text when nothing parsed, so the regexes can be fixed from it.
-        fs.writeFileSync(`/tmp/claudestatus_billing_${name}.txt`, text, { mode: 0o600 });
+        try {
+            fs.writeFileSync(`/tmp/claudestatus_billing_${name}.txt`, text, { mode: 0o600 });
+        }
+        catch (err) {
+            console.error(`claudestatus: cannot write billing dump for ${name}: ${err.message}`);
+        }
     }
     return parsed;
 }

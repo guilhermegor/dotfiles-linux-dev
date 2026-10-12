@@ -31,6 +31,7 @@ const END_RE = /cancel|encerr|termina|expir|ends?\s+on|will\s+end|acaba/gi;
 const RENEW_RE = /renov|renew|pr[óo]xima\s+cobran|next\s+(?:billing|payment|charge)|billing\s+date|data\s+de\s+cobran/gi;
 const NEGATED_RENEW_RE = /(?:not|n[ãa]o)\s+(?:ser[áa]\s+|be\s+|vai\s+)?renov|(?:not|n[ãa]o)\s+(?:be\s+)?renew/i;
 const KEYWORD_WINDOW = 120;
+const NEGATION_LEAD = 20;
 
 function dateFromMatch(m) {
     const [day, monthStr, year] = m[1] ? [m[1], m[2], m[3]] : m[4] ? [m[5], m[4], m[6]] : [m[7], m[8], m[9]];
@@ -65,11 +66,13 @@ export function parseBillingText(rawText, now = new Date()) {
 
     for (const m of text.matchAll(DATE_RE)) {
         const date = dateFromMatch(m);
-        if (!date) continue;
+        // A past date ("Paid on Oct 5") is history, not the next renewal.
+        if (!date || date.getTime() <= now.getTime()) continue;
         const kw = lastKeywordBefore(text, m.index);
         if (!kw) continue;
-        const between = kw.window.slice(kw.index);
-        const ends = kw.kind === "end" || NEGATED_RENEW_RE.test(between);
+        // Include the few words BEFORE the keyword so "will not renew" / "não será renovada" negate.
+        const clause = kw.window.slice(Math.max(0, kw.index - NEGATION_LEAD));
+        const ends = kw.kind === "end" || NEGATED_RENEW_RE.test(clause);
         autoRenew = !ends;
         renewalAt = date.toISOString();
         break;
@@ -143,7 +146,8 @@ export function recordBilling(cache, name, { renewalAt, autoRenew }, now = new D
 }
 
 export function recordWeeklyReset(cache, name, resetsAt, now = new Date()) {
-    if (!resetsAt || Number.isNaN(Date.parse(resetsAt))) return;
+    // Only a FUTURE reset is worth remembering; a past one must not clobber a good cached value.
+    if (!resetsAt || !(Date.parse(resetsAt) > now.getTime())) return;
     cache[name] = { ...(cache[name] ?? {}), weeklyResetAt: stamp(new Date(resetsAt).toISOString(), now) };
 }
 

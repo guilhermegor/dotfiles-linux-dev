@@ -96,8 +96,9 @@ src = src.replace(old_plan, "        const plan = classifyPlan(org.capabilities)
 # 3) billing_cache import, after the accounts.js import.
 if IMPORT not in src:
     m = re.search(r'^import \{[^}]*\} from "\./accounts\.js";\n', src, re.M)
-    if m:
-        src = src[:m.end()] + IMPORT + src[m.end():]
+    if not m:
+        sys.exit("  api.js layout not recognised (accounts.js import missing); not patched")
+    src = src[:m.end()] + IMPORT + src[m.end():]
 
 # 4) The marked billing block: replace in place, else replace the legacy unmarked block
 #    (it ran from `const PT_MONTHS` to waitForLoginSignal, or to EOF when appended), else append.
@@ -130,7 +131,7 @@ src = path.read_text()
 original = src
 
 if "fetchAllBilling" not in src:
-    for old, new in [
+    edits = [
         ('import { addAccount, fetchAllUsage } from "./api.js";',
          'import { addAccount, fetchAllUsage, fetchAllBilling } from "./api.js";'),
         ('import { displayUsageTable, displayQuickRecommendation } from "./display.js";',
@@ -141,7 +142,12 @@ if "fetchAllBilling" not in src:
          'if (options.quick) { displayQuickRecommendation(usage); return; } displayUsageTable(usage); '
          'console.log(chalk.gray("\\nFetching billing data...\\n")); '
          'const billing = await fetchAllBilling(names); displayBillingTable(billing); if (false) {'),
-    ]:
+    ]
+    # All anchors or none: a partial rewrite leaves calls to names that were never defined.
+    missing = [old for old, _ in edits if old not in src]
+    if missing:
+        sys.exit("  cli.js layout not recognised; not patched: " + "; ".join(missing))
+    for old, new in edits:
         src = src.replace(old, new, 1)
 
 src = src.replace(
@@ -172,7 +178,9 @@ main() {
     cp "$SCRIPT_DIR/claudestatus_billing.mjs" "$dist_dir/billing_cache.js"
     cp "$SCRIPT_DIR/claudestatus_display.js" "$dist_dir/display.js"
     patch_api_js "$dist_dir/api.js"
-    [[ -f "$dist_dir/cli.js" ]] && patch_cli_js "$dist_dir/cli.js"
+    if [[ -f "$dist_dir/cli.js" ]]; then
+        patch_cli_js "$dist_dir/cli.js"
+    fi
 
     print_status "success" "claudestatus patch complete (api.js, display.js, cli.js, billing_cache.js)"
     print_status "info" "Run 'claudestatus' to verify. Plan/paid come from the API; renewal and"

@@ -28,6 +28,20 @@ for (const [text, day, auto] of cases) {
     assert.equal(p.renewalAt?.slice(0, 10), day, text);
     assert.equal(p.autoRenew, auto, text);
 }
+// negation placed before the keyword; a past "paid on" date must not hide the next renewal
+for (const t of ["Your subscription will not renew on November 5, 2026",
+                 "Sua assinatura não será renovada em 5 de nov. de 2026"]) {
+    assert.equal(m.parseBillingText(t, NOW).autoRenew, false, t);
+}
+const hist = m.parseBillingText("Paid on Oct 5, 2026. Next billing date Nov 5, 2026", NOW);
+assert.equal(hist.renewalAt.slice(0, 10), "2026-11-05");
+assert.equal(hist.autoRenew, true);
+// a past API reset must not overwrite a future cached one
+const wc = {};
+m.recordWeeklyReset(wc, "a", "2026-10-15T09:00:00Z", NOW);
+m.recordWeeklyReset(wc, "a", "2026-10-01T09:00:00Z", NOW);
+assert.equal(wc.a.weeklyResetAt.value, "2026-10-15T09:00:00.000Z");
+assert.equal(m.effectiveWeeklyReset(wc.a, "2026-10-01T09:00:00Z", NOW), "2026-10-15T09:00:00.000Z");
 const rel = m.parseBillingText("Seu plano termina em 12 dias", NOW);
 assert.equal(rel.renewalAt, "2026-10-24T12:00:00.000Z");
 const none = m.parseBillingText("Settings Billing Plan Upgrade plan Fazer upgrade", NOW);

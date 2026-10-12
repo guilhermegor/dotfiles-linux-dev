@@ -63,13 +63,17 @@ function getAvailability(account) {
     }
     const weekly = account.usage.seven_day;
     const session = account.usage.five_hour;
-    if (weekly && weekly.utilization >= 100) {
-        const waitMs = Math.max(0, new Date(weekly.resets_at).getTime() - Date.now());
-        return { status: waitMs <= 0 ? "available" : "wait", waitLabel: formatResetTime(weekly.resets_at), waitMs, reason: "weekly" };
-    }
-    if (session && session.utilization >= 100) {
-        const waitMs = Math.max(0, new Date(session.resets_at).getTime() - Date.now());
-        return { status: waitMs <= 0 ? "available" : "wait", waitLabel: formatResetTime(session.resets_at), waitMs, reason: "session" };
+    // Every exhausted limit must reset before the account is usable, so the LATER reset decides.
+    // An exhausted limit with no readable reset time is an unknown (infinite) wait, never NaN.
+    const exhausted = [["weekly", weekly], ["session", session]].filter(([, l]) => l && l.utilization >= 100);
+    if (exhausted.length > 0) {
+        const waits = exhausted.map(([reason, l]) => {
+            const t = new Date(l.resets_at).getTime();
+            const waitMs = Number.isNaN(t) ? Number.POSITIVE_INFINITY : Math.max(0, t - Date.now());
+            return { reason, waitMs, waitLabel: Number.isNaN(t) ? "?" : formatResetTime(l.resets_at) };
+        });
+        const worst = waits.reduce((a, b) => (b.waitMs > a.waitMs ? b : a));
+        return { status: worst.waitMs <= 0 ? "available" : "wait", ...worst };
     }
     return { status: "available", waitLabel: "now", waitMs: 0, reason: "none" };
 }
@@ -176,6 +180,10 @@ export function displayBillingTable(billingData) {
 }
 
 export function displayQuickRecommendation(accounts) {
+    // Quick mode skips displayUsageTable, so apply the cached weekly reset here too.
+    const cache = loadCache();
+    for (const account of accounts) if (!account.error) cacheWeeklyReset(cache, account);
+    saveCache(cache);
     const next = pickNextAccount(accounts);
     if (!next) {
         console.log(chalk.red("No accounts available. Run: claudestatus add <name>"));
