@@ -105,7 +105,7 @@ def split_segments(command):
     return segments
 
 
-WRAPPERS = {"rtk", "proxy", "env", "command", "exec", "nohup", "time", "sudo", "xargs", "builtin"}
+WRAPPERS = {"timeout", "nice", "ionice", "setsid", "stdbuf", "rtk", "proxy", "env", "command", "exec", "nohup", "time", "sudo", "xargs", "builtin"}
 WRAPPER_VALUE_FLAGS = {"-u", "-g", "-C", "-I", "-L"}
 NESTED_ERRORS = []
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
@@ -134,6 +134,8 @@ def gh_start(argv):
             wrapped = True
         elif word == "" or re.match(r"^\w+=", word):
             continue
+        elif wrapped and re.match(r"^\d+(\.\d+)?[smhd]?$", word):
+            continue  # `timeout 5 gh ...`: a duration is the wrapper's operand, not the command
         elif wrapped and word.startswith("-"):
             skip_next = word in WRAPPER_VALUE_FLAGS  # `sudo -u root gh`: -u takes a value
         elif word.rsplit("/", 1)[-1] == "gh":
@@ -303,9 +305,10 @@ def api_issue_match(segments):
     and `--input f` are file-valued (`body_json` marks that the file is a JSON payload).
     """
     for argv in iter_argvs(segments):
-        # FAIL CLOSED BY CONSTRUCTION (#714): `gh` at ANY position (after any wrapper) followed by
-        # an `api` word is a candidate, whatever precedes it - no wrapper list to keep complete.
-        gh_at = next((k for k, t in enumerate(argv) if _word(t).rsplit("/", 1)[-1] == "gh"), -1)
+        # Same command-word rule as the `gh issue` path: gh must be the command itself (after
+        # wrappers), so printed text like `echo gh api ...` is not a write. The fail-closed part
+        # lives below, in how an understood-vs-unknown `gh api` call is judged.
+        gh_at = gh_start(argv)
         if gh_at < 0:
             continue
         sub = gh_sub(argv, gh_at)

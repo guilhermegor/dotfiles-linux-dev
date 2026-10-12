@@ -227,6 +227,23 @@ EOF
     [[ "$output" == *"Blocked by"* ]]
 }
 
+@test "printed gh api text is not a write; env/absolute/bash -c gh api writes still are" {
+    local s
+    for s in \
+        'env echo gh api repos/o/r/issues -f title=x' \
+        'echo gh api repos/o/r/issues/5 -X PATCH -f state=closed'; do
+        run bash -c "payload '$s' | '$GUARD'"
+        [ "$status" -eq 0 ] || { echo "WRONGLY BLOCKED: $s"; return 1; }
+    done
+    for s in \
+        'env gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        '/usr/bin/gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        "bash -c 'gh api repos/{owner}/{repo}/issues -X POST -f body=nope'"; do
+        run bash -c "payload \"\$1\" | '$GUARD'" _ "$s"
+        [ "$status" -eq 2 ] || { echo "NOT BLOCKED: $s"; return 1; }
+    done
+}
+
 @test "understood non-writes pass: plain GET (literal or dynamic), literal sub-resources" {
     local s
     for s in \
