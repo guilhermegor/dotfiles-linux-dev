@@ -71,16 +71,18 @@ async function readBillingPage(profileDir, storagePath, headless) {
         // Wait for the billing card itself (a parseable date), not for words the page chrome
         // already contains ("plan", "billing") -- that returned before the card rendered.
         let text = "";
+        let blocked = false;
         const deadline = Date.now() + BILLING_WAIT_MS;
         while (Date.now() < deadline) {
             text = await page.evaluate(() => document.body.innerText || "");
-            if (!/just a moment/i.test(text) && parseBillingText(text).renewalAt)
+            blocked = isCloudflareChallenge(await page.content());
+            if (!blocked && parseBillingText(text).renewalAt)
                 break;
             await page.waitForTimeout(1000);
         }
         // The Cloudflare interstitial clears on its own, so only a page STILL showing it at the
-        // deadline counts as blocked.
-        return { text, blocked: /just a moment/i.test(text) };
+        // deadline counts as blocked. Checked on the markup: the visible text is localised.
+        return { text, blocked };
     }
     finally {
         // Read-only flow -- never persist storageState (would clobber the session).

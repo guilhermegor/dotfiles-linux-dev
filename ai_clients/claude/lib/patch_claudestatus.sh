@@ -56,7 +56,8 @@ original = src
 
 BEGIN = "// claudestatus-billing:begin (managed by patch_claudestatus.sh)\n"
 END = "// claudestatus-billing:end\n"
-IMPORT = ('import { billingFromCache, loadCache, needsScrape, parseBillingText, recordBilling, saveCache } '
+IMPORT = ('import { billingFromCache, isCloudflareChallenge, loadCache, needsScrape, parseBillingText, '
+          'recordBilling, saveCache } '
           'from "./billing_cache.js";\n')
 
 CLASSIFIER = r'''
@@ -93,7 +94,10 @@ old_plan = (
 )
 src = src.replace(old_plan, "        const plan = classifyPlan(org.capabilities);")
 
-# 3) billing_cache import, after the accounts.js import.
+# 3) billing_cache import, after the accounts.js import. An older patch's import names a
+#    different set, so drop any existing billing_cache import first: two would be a duplicate
+#    binding and a SyntaxError on load.
+src = re.sub(r'^import \{[^}]*\} from "\./billing_cache\.js";\n', "", src, flags=re.M)
 if IMPORT not in src:
     m = re.search(r'^import \{[^}]*\} from "\./accounts\.js";\n', src, re.M)
     if not m:
