@@ -2011,6 +2011,15 @@ any dispatchable PR sits on a strict base. The invariants hold: every
 PR still carries a reason, no bare override, and an unreadable policy falls back to the
 parallel plan, never to a guessed serial one. The guard needs no new branch — "the queue
 head has a <code>review-pr-&lt;N&gt;</code> agent in flight" is already its pass condition.</p>
+<p><strong>Merge-only heads and ASK-ONLY repos (#736).</strong> A head whose PR patch (<code>compare/&lt;base&gt;...&lt;oid&gt;</code>,
+hunk line numbers normalised) equals that of an already-covered head (either channel) that is a direct
+parent of the current head, which must itself be a merge commit (2 parents; at most 4 REST reads,
+one compare read each; a file list at GitHub's 300-file cap is unreadable) is excluded as covered: GitHub's update-branch moves the head without
+changing what was reviewed. Patches are compared, never SHAs, so conflict resolution or new code
+stays a new head; an unreadable or empty patch read fails closed to "needs review". The
+<code>RECENT_PUSH_SECONDS</code> exclusion is skipped when <code>slot_classify.py</code> reads <code>ASK-ONLY</code> (a push
+triggers no review there); any other or unreadable verdict keeps it. The roster is the 100 newest
+repo comments, so on a busy repo the notice can scroll out and the exclusion returns (conservative).</p>
 <p><strong>Merge-ready (#705).</strong> On a strict base the plan also carries a separate <code>merge_ready</code> list:
 PRs <code>BEHIND</code> with every check clean and the repo's own review gate (<code>REVIEW_FANOUT_GATE_CHECK</code>,
 default <code>Review threads answered</code>) present and green on the current head — a gate that carries
