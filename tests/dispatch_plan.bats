@@ -249,6 +249,9 @@ JSON
     [ "\${PR_FILES_FAIL:-0}" = 1 ] && { echo "gh: HTTP 502" >&2; exit 1; }
     [ -n "\${PR_FILES_SLEEP:-}" ] && exec sleep "\$PR_FILES_SLEEP"
     n="\${3#repos/acme/widgets/pulls/}"; n="\${n%%/*}"
+    # PR_FILES_SLEEP_<n>: this PR's read is slow but succeeds; PR_FILES_HANG_<n>: it never returns.
+    v="PR_FILES_HANG_\$n"; [ -n "\${!v:-}" ] && exec sleep "\${!v}"
+    v="PR_FILES_SLEEP_\$n"; [ -n "\${!v:-}" ] && sleep "\${!v}"
     [ -f "$BIN/prfiles.\$n" ] && cat "$BIN/prfiles.\$n"
     exit 0
     ;;
@@ -1064,6 +1067,21 @@ hot_list() {
     elapsed=$((SECONDS - start))
     [ "$status" -eq 0 ]
     [ "$elapsed" -lt 4 ]
+    [[ "$(field '[.excluded[] | select(.issue==18)][0].reason')" == "HOT-FILE: "*"UNREADABLE"* ]]
+}
+
+@test "the second read gets only the budget left after the first, not the whole budget" {
+    hot_list ".github/workflows/ci.yml"
+    printf 'unrelated.sh\n' >"$BIN/prfiles.77"
+    printf 'unrelated.sh\n' >"$BIN/prfiles.78"
+    stub_gh "[$(issue_json 18 .github/workflows/ci.yml)]" "" "" 0 "" \
+        '[{"number":77,"title":"a","body":"","closingIssuesReferences":[]},{"number":78,"title":"b","body":"","closingIssuesReferences":[]}]'
+    start=$(date +%s%N)
+    DISPATCH_HOT_READ_BUDGET=1.5 PR_FILES_SLEEP_77=1 PR_FILES_HANG_78=8 run_planner
+    elapsed_ms=$((($(date +%s%N) - start) / 1000000))
+    [ "$status" -eq 0 ]
+    # Cut at the shared deadline (~1.5 s); a per-read full budget would end near 2.5 s.
+    [ "$elapsed_ms" -lt 2100 ]
     [[ "$(field '[.excluded[] | select(.issue==18)][0].reason')" == "HOT-FILE: "*"UNREADABLE"* ]]
 }
 
