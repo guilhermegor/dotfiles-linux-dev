@@ -11,6 +11,13 @@
 #   - coderabbit v0.7.6 is on PATH (~/.local/bin/coderabbit), wired nowhere, and
 #     `coderabbit auth status` reports "signed out" — installed, unusable.
 #
+# Hosted reviewers (dotfiles-linux-dev#713) are not probed here: CodeRabbit's ask and
+# the Greptile rung (reviewer_ladder.sh run_hosted_rungs) are forge comments, not
+# binaries on PATH. Their CLIs (coderabbit, greptile, gt) install via
+# install_coding_lib; only `coderabbit` is a wired local rung below. `greptile`
+# and `gt` are deliberately absent: the local CLI review is unmeasured and `gt`
+# has no review command, so reporting them "installed, unwired" would be noise.
+#
 # Three independent columns per rung, because any two can be true while the third
 # is false: on PATH, wired into the ladder, authenticated/usable. Warn only on the
 # two ACTIONABLE combinations (installed-but-unwired, installed-but-unauthenticated)

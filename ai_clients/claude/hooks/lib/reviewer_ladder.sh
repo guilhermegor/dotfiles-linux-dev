@@ -839,6 +839,93 @@ _post_pr_review() {
 		GH_TOKEN="$token" gh api --method POST "repos/$owner/$repo/pulls/$pr_number/reviews" --input -
 }
 
+# --- hosted rung: greptile (dotfiles-linux-dev#713) -------------------------
+#
+# Order: coderabbit (the primary ask) -> greptile -> qwen -> codex -> kimi ->
+# coderabbit CLI -> copilot -> claude. Graphite is deliberately NOT a rung yet: no
+# Graphite review exists on any repo, so its bot login and notice format are
+# unmeasured and are not guessed here.
+#
+# Queue-only: Greptile's automatic path is switched off repo-side (`autoReview: []`,
+# blueprintx#737), so this function is the ONLY thing that starts a Greptile review,
+# and only when the rung above is unavailable. A Greptile review on a head this
+# ladder never asked about is reported as a configuration defect, never counted as a
+# free review. The explicit ask text is NOT measured (every observed review was
+# automatic); override with GREPTILE_ASK_TEXT. Never spends money: it posts a comment.
+GREPTILE_ASK_TEXT="${GREPTILE_ASK_TEXT:-@greptileai review}"
+
+# _pr_issue_comments_json OWNER REPO PR_NUMBER — REST, `[]`-unsafe on purpose:
+# a failed read prints nothing so the caller fails closed.
+_pr_issue_comments_json() {
+	local owner="$1" repo="$2" pr_number="$3"
+	if [ -n "${REVIEWER_LADDER_COMMENTS_CMD:-}" ]; then
+		"$REVIEWER_LADDER_COMMENTS_CMD" "$owner" "$repo" "$pr_number"
+		return $?
+	fi
+	gh api --paginate "repos/$owner/$repo/issues/$pr_number/comments?per_page=100" 2>/dev/null |
+		jq -s 'add // []' 2>/dev/null
+}
+
+_post_issue_comment() {
+	local owner="$1" repo="$2" pr_number="$3" body="$4"
+	if [ -n "${REVIEWER_LADDER_ASK_POST_CMD:-}" ]; then
+		"$REVIEWER_LADDER_ASK_POST_CMD" "$owner" "$repo" "$pr_number" "$body"
+		return $?
+	fi
+	gh api --method POST "repos/$owner/$repo/issues/$pr_number/comments" -f body="$body" >/dev/null
+}
+
+# run_hosted_rungs OWNER REPO PR_NUMBER
+# Returns 0 when the greptile rung is engaged for this head (ask posted, ask already
+# pending, or already reviewed), 1 when the ladder should fall through to
+# run_fallback_review. Fails closed: any unreadable input is a fall-through.
+run_hosted_rungs() {
+	local owner="$1" repo="$2" pr_number="$3" head_sha comments reviews verdict unsolicited ask_body
+
+	head_sha="$(_pr_head_sha "$owner" "$repo" "$pr_number")"
+	comments="$(_pr_issue_comments_json "$owner" "$repo" "$pr_number")"
+	reviews="$(_pr_reviews_json "$owner" "$repo" "$pr_number")"
+	if [ -z "$head_sha" ] || [ -z "$comments" ]; then
+		print_status "info" "rung greptile skipped: head or comments unreadable"
+		return 1
+	fi
+
+	unsolicited="$(jq -cn --argjson r "$reviews" --argjson c "$comments" '{reviews: $r, comments: $c}' |
+		python3 "$LIB_DIR/slot_classify.py" greptile-unsolicited)"
+	if [[ "$unsolicited" == UNSOLICITED\|* ]]; then
+		print_status "warning" "greptile CONFIGURATION DEFECT on PR #$pr_number: unsolicited review on head(s) ${unsolicited#UNSOLICITED|} (autoReview should be off, blueprintx#737)"
+	fi
+
+	if [[ "$comments" == *"ladder-ask:greptile head=${head_sha:0:12}"* ]]; then
+		print_status "info" "rung greptile: ask for this head already posted — verdict pending"
+		return 0
+	fi
+
+	verdict="$(printf '%s' "$comments" | python3 "$LIB_DIR/slot_classify.py" greptile)"
+	if [[ "$verdict" != FREE\|* ]]; then
+		print_status "info" "rung greptile skipped: slot reads $verdict"
+		return 1
+	fi
+
+	# One ask per window, shared with CodeRabbit's (dotfiles-linux-dev#548).
+	if [ -z "${REVIEWER_LADDER_CLAIM_CMD:-}" ]; then
+		# shellcheck source=dispatch_claims.sh
+		source "$LIB_DIR/dispatch_claims.sh" 2>/dev/null || true
+	fi
+	if [ "$("${REVIEWER_LADDER_CLAIM_CMD:-claim_review_ask}" 2>/dev/null)" != "GRANTED" ]; then
+		print_status "info" "rung greptile skipped: the shared review-ask budget is spent or undecidable"
+		return 1
+	fi
+
+	ask_body="$GREPTILE_ASK_TEXT"$'\n\n'"<!-- ladder-ask:greptile head=$head_sha -->"
+	if ! _post_issue_comment "$owner" "$repo" "$pr_number" "$ask_body"; then
+		print_status "error" "rung greptile: posting the ask failed"
+		return 1
+	fi
+	print_status "info" "rung greptile: ask posted for ${head_sha:0:12} — requested, verdict pending"
+	return 0
+}
+
 # run_fallback_review OWNER REPO PR_NUMBER MERGE_STATE PUSHED_EPOCH NOW_EPOCH COMMENTS_JSON [--dry-run]
 # The one entrypoint callers use. One PR per call is the blast-radius cap
 # (issue #444 item 6) — there is no loop-over-PRs form of this function.
