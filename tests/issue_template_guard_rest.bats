@@ -227,11 +227,73 @@ EOF
     [[ "$output" == *"Blocked by"* ]]
 }
 
-@test "a dynamic endpoint that is a plain GET, or an issue comment, is not an issue write" {
-    run bash -c "payload 'gh api \"repos/\$R/issues\"' | '$GUARD'"
-    [ "$status" -eq 0 ]
-    run bash -c "payload 'gh api \"repos/\$R/issues/5/comments\" -f body=x' | '$GUARD'"
-    [ "$status" -eq 0 ]
+@test "understood non-writes pass: plain GET (literal or dynamic), literal sub-resources" {
+    local s
+    for s in \
+        'gh api "repos/$R/issues"' \
+        'gh api -X GET "repos/$R/issues"' \
+        'gh api repos/{owner}/{repo}/issues/5/comments -f body=x' \
+        'gh api repos/{owner}/{repo}/issues/5/labels -f labels[]=a' \
+        'gh api repos/{owner}/{repo}/pulls -X POST -f body=x'; do
+        run bash -c "payload '$s' | '$GUARD'"
+        [ "$status" -eq 0 ] || { echo "WRONGLY BLOCKED: $s"; return 1; }
+    done
+}
+
+@test "FAIL CLOSED: anything mentioning issues that is not understood as a non-write is judged" {
+    local s
+    for s in \
+        'gh api "repos/$R/issues/5/comments" -f body=x' \
+        'gh api repos/{owner}/{repo}//issues -f body=x' \
+        'xargs -n1 gh api repos/{owner}/{repo}/issues -f body=nope' \
+        'sudo -n gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'timeout 5 gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'nice gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'gh api repos/{owner}/{repo}/issues --method "$M" --input "$F"'; do
+        run bash -c "payload '$s' | '$GUARD'"
+        [ "$status" -eq 2 ] || { echo "NOT BLOCKED: $s"; return 1; }
+    done
+}
+
+# --- no control regression: everything the PRE-#730 guard blocked is still blocked ------------
+
+@test "REGRESSION: every gh issue create/edit shape the old guard blocked is still blocked" {
+    local s
+    for s in \
+        'gh issue create --title x --body nope' \
+        'rtk gh issue create --title x --body nope' \
+        'gh issue create --title x -b nope' \
+        'gh issue create --title x -bnope' \
+        'gh issue create --title x --body=nope' \
+        'gh issue edit 5 --body nope' \
+        'gh issue edit 5 -b=nope' \
+        'true && gh issue create --title x --body nope' \
+        'true; gh issue create --title x --body nope' \
+        'false || gh issue create --title x --body nope' \
+        'echo a | gh issue create --title x --body nope' \
+        'sleep 1 & gh issue create --title x --body nope' \
+        'gh issue create --repo o/r --title x --body nope'; do
+        run bash -c "payload '$s' | '$GUARD'"
+        [ "$status" -eq 2 ] || { echo "REGRESSION, NOT BLOCKED: $s"; return 1; }
+    done
+    printf '%s' 'nope' > "$REPO/b.md"
+    run bash -c "payload 'gh issue create --title x --body-file $REPO/b.md' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh issue create --title x --body-file /no/such/file' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REGRESSION: the old guard's allowed cases are still allowed" {
+    local s
+    for s in \
+        'gh issue edit 5 --add-label x' \
+        'gh issue list' \
+        'gh pr create --body nope' \
+        'echo "gh issue create --body nope"' \
+        'git commit -m "gh api repos/o/r/issues -X POST"'; do
+        run bash -c "payload '$s' | '$GUARD'"
+        [ "$status" -eq 0 ] || { echo "WRONGLY BLOCKED: $s"; return 1; }
+    done
 }
 
 @test "REST create in a repo with no template is untouched" {

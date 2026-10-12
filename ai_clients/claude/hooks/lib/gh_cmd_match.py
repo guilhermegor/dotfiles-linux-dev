@@ -280,6 +280,10 @@ def scan_flags(argv):
 
 
 API_ISSUE_ENDPOINT = re.compile(r"^/?repos/([^/]+)/([^/]+)/issues(?:/(\d+))?$")
+API_ISSUE_SUBRESOURCE = re.compile(
+    r"^repos/[^/]+/[^/]+/issues/(?:\d+/(?:comments|labels|assignees|events|timeline|reactions|"
+    r"lock|sub_issues|dependencies)(?:/.*)?|comments(?:/\d+(?:/reactions)?)?|events(?:/\d+)?)$"
+)
 API_VALUE_FLAGS = {
     "-X": "method", "--method": "method",
     "-f": "field", "--raw-field": "field", "-F": "field", "--field": "field",
@@ -299,10 +303,12 @@ def api_issue_match(segments):
     and `--input f` are file-valued (`body_json` marks that the file is a JSON payload).
     """
     for argv in iter_argvs(segments):
-        idx = gh_start(argv)
-        if idx < 0:
+        # FAIL CLOSED BY CONSTRUCTION (#714): `gh` at ANY position (after any wrapper) followed by
+        # an `api` word is a candidate, whatever precedes it - no wrapper list to keep complete.
+        gh_at = next((k for k, t in enumerate(argv) if _word(t).rsplit("/", 1)[-1] == "gh"), -1)
+        if gh_at < 0:
             continue
-        sub = gh_sub(argv, idx)
+        sub = gh_sub(argv, gh_at)
         if argv[sub:sub + 1] != ["api"]:
             continue
         rest = argv[sub + 1:]
@@ -340,15 +346,21 @@ def api_issue_match(segments):
                 i += 1
         path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", (endpoint or "").split("?", 1)[0])
         path = path.rstrip("/")
-        dynamic = "$" in path or "`" in path  # endpoint built by the shell
+        dynamic = "$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
         m = API_ISSUE_ENDPOINT.match(path)
-        dyn = re.search(r"(?:^|/)issues(?:/([^/]*))?$", path) if dynamic and not m else None
-        if not m and not dyn:
+        mentions = any("issues" in t for t in rest)
+        # Understood as NOT an issue write only when the endpoint is a literal that either does
+        # not mention `issues` at all or is a known issue sub-resource (comments, labels, ...).
+        # Anything else that mentions `issues` is judged as a write (unknown never means allowed).
+        if not m and not dynamic and (not mentions or API_ISSUE_SUBRESOURCE.match(path)):
             continue
+        if not m and not mentions:
+            continue
+        dyn = None if m else re.search(r"(?:^|/)issues(?:/([^/]*))?$", path)
         method = method or ("POST" if fields or input_file else "GET")
         if "$" in method or "`" in method:
             method = "?"  # unreadable method: may be POST or PATCH, judged as either
-        number = (m.group(3) if m else dyn.group(1)) or None
+        number = (m.group(3) if m else (dyn.group(1) if dyn else None)) or None
         is_write = (
             method == "?"
             or (method == "POST" and not number)
