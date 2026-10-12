@@ -92,7 +92,7 @@ STUB
     run bash "$SCRIPT" <<< "n"
     [ "$status" -eq 0 ]
     [ ! -s "$STATE/dups.log" ]
-    [ "$(cat "$STATE/slot_10")" = '<Super><Shift>u' ]
+    [ "$(cat "$STATE/slot_10")" = '<Super><Alt>b' ]
 }
 
 @test "retired M/E slots left in dconf are blanked, none survives a run (#669)" {
@@ -107,6 +107,13 @@ STUB
     for i in 12 13 14 15; do
         [ -z "$(cat "$STATE/slot_$i")" ]
     done
-    [ "$(cat "$STATE/slot_10")" = '<Super><Shift>u' ]
-    [ "$(cat "$STATE/slot_11")" = '<Super><Alt>b' ]
+    [ "$(cat "$STATE/slot_10")" = '<Super><Alt>b' ]
+    [ -z "$(cat "$STATE/slot_11")" ]
+}
+
+@test "Super+Shift+U dashboard shortcut is gone; old slot 11 is dconf-reset (#734)" {
+    run grep -nE '<Super><Shift>u"|claudestatus-dashboard|Claude Usage Dashboard' "$SCRIPT"
+    [ "$status" -ne 0 ]
+    run grep -F 'dconf reset -f /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom11/' "$SCRIPT"
+    [ "$status" -eq 0 ]
 }

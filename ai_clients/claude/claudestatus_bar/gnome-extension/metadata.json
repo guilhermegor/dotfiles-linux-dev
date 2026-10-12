@@ -1,0 +1,7 @@
+{
+  "uuid": "claudestatus-bar@dotfiles-dev",
+  "name": "claudestatus bar",
+  "description": "Top-bar icon with the recommended account's session % and a stacked popover.",
+  "shell-version": ["46", "47", "48"],
+  "version": 1
+}

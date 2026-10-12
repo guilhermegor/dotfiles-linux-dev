@@ -6,7 +6,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
 # Slots custom0..custom<N-1> are owned by this script; keep in sync with the
 # set_individual_keybinding calls (tests/custom_shortcuts_slots.bats enforces it).
 # shellcheck disable=SC2034  # read by tests/custom_shortcuts_slots.bats
-MANAGED_SLOT_COUNT=12
+MANAGED_SLOT_COUNT=11
 # Highest slot count this script ever managed. Slots MANAGED_SLOT_COUNT..CLEARED_SLOT_COUNT-1
 # are retired (Super+{Shift,Alt}+{E,M}, #669) but still blanked on every run so a
 # stale binding cannot survive in dconf on a machine set up before the retirement.
@@ -75,8 +75,7 @@ set_keybindings_array() {
     '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom7/', \
     '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom8/', \
     '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom9/', \
-    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom10/', \
-    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom11/']"
+    '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom10/']"
 }
 
 # function to set individual keybindings
@@ -305,49 +304,12 @@ create_claudestatus_aliases() {
     print_status warning "  cs-add <name> → add account (e.g. work, personal_1, personal_2)"
 }
 
-# function to create the claudestatus dashboard launcher script
-create_claudestatus_dashboard_script() {
-    local script_path="$HOME/.local/bin/claudestatus-dashboard.sh"
-    print_status info "Creating claudestatus-dashboard.sh at $script_path..."
-    mkdir -p "$HOME/.local/bin"
-    
-    cat > "$script_path" << 'EOF'
-#!/bin/bash
-# Open the claudestatus usage dashboard + current auth status in a terminal window.
-# Uses bash -i so ~/.bashrc is sourced (npm global bin in PATH).
-# Falls back through gnome-terminal → xterm → notify-send.
-
-cmd='
-echo "=== Claude Authentication Status ==="
-claude auth status --text
-echo
-echo "=== Claudestatus Dashboard ==="
-claudestatus
-echo
-echo "=================================="
-read -rp "Press Enter to close..."
-'
-
-if command -v gnome-terminal &>/dev/null; then
-    gnome-terminal --maximize -- bash -ic "$cmd"
-elif command -v xterm &>/dev/null; then
-    xterm -maximized -e bash -ic "$cmd"
-else
-    notify-send "claudestatus" \
-        "No terminal emulator found. Run 'claudestatus' manually in a terminal."
-fi
-EOF
-
-    chmod +x "$script_path"
-    print_status success "claudestatus-dashboard.sh created successfully!"
-}
-
 # Modified main function to set up all keybindings 
 set_all_keybindings() {
     print_status success "Configuring GNOME custom keybindings..."
     
     # Define the keybindings we'll be using
-    local bindings=("<Super>e" "<Super>r" "<Super>t" "<Super><Ctrl>s" "<Ctrl><Shift>c" "<Ctrl><Shift>v" "<Ctrl><Shift>Escape" "<Super>c" "<Super><Shift>b" "<Super>j" "<Super><Shift>u" "<Super><Alt>b")
+    local bindings=("<Super>e" "<Super>r" "<Super>t" "<Super><Ctrl>s" "<Ctrl><Shift>c" "<Ctrl><Shift>v" "<Ctrl><Shift>Escape" "<Super>c" "<Super><Shift>b" "<Super>j" "<Super><Alt>b")
     
     # Ask user if they want to verify conflicts
     read -p "Do you want to verify for shortcut conflicts before proceeding? [Y/n] " -r
@@ -356,9 +318,8 @@ set_all_keybindings() {
         verify_keybindings "${bindings[@]}"
     fi
     
-    # Set up claudestatus shell aliases and dashboard launcher
+    # Set up claudestatus shell aliases
     create_claudestatus_aliases
-    create_claudestatus_dashboard_script
 
     # Create the enhanced copy-path script and set up Nautilus integration
     create_copy_path_script
@@ -367,6 +328,9 @@ set_all_keybindings() {
     create_show_shortcuts_script
 
     clear_managed_bindings
+    # Retired slot (Super+Shift+U dashboard, #734): shrinking the array only orphans the
+    # path, so drop it from dconf on machines that already ran an older version.
+    dconf reset -f /org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom11/
     set_keybindings_array
 
     # Set individual keybindings
@@ -380,8 +344,7 @@ set_all_keybindings() {
     set_individual_keybinding 7 "Open Characters" "gnome-characters" "<Super>c"
     set_individual_keybinding 8 "Back Up AI State" "$HOME/.local/bin/ai-state-sync push" "<Super><Shift>b"
     set_individual_keybinding 9 "Show All Shortcuts" "$HOME/.local/bin/show-shortcuts.sh" "<Super>j"
-    set_individual_keybinding 10 "Claude Usage Dashboard" "$HOME/.local/bin/claudestatus-dashboard.sh" "<Super><Shift>u"
-    set_individual_keybinding 11 "Restore AI State" "$HOME/.local/bin/ai-state-sync pull" "<Super><Alt>b"
+    set_individual_keybinding 10 "Restore AI State" "$HOME/.local/bin/ai-state-sync pull" "<Super><Alt>b"
 
     print_status success "All keybindings have been configured successfully!"
     print_status warning "You can now use:"
@@ -392,7 +355,6 @@ set_all_keybindings() {
     print_status warning "  - Super+Shift+B to back up AI state (ai-state-sync push)"
     print_status warning "  - Super+J to open the shortcut cheat-sheet (rofi popup)"
     print_status warning "  - Super+Alt+B to restore AI state (ai-state-sync pull; a conflict is reported, never resolved)"
-    print_status warning "  - Super+Shift+U to open the Claude usage dashboard (claudestatus)"
     print_status warning "Shell aliases added to ~/.bashrc (reload with: source ~/.bashrc):"
     print_status warning "  - cs            → claudestatus (usage dashboard)"
     print_status warning "  - cs-quick      → claudestatus --quick"
