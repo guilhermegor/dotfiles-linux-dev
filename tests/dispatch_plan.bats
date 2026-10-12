@@ -243,6 +243,14 @@ JSON
 "pr list --repo acme/widgets --state all --limit 200 --json headRefName,headRefOid,state,isCrossRepository")
     echo '$dead_prs'
     ;;
+"api --paginate repos/acme/widgets/pulls/"*"/files --jq .[].filename")
+    # dotfiles-linux-dev#714: open_pr_hot_holders() reads each open PR's files over REST. A
+    # per-PR fixture \$BIN/prfiles.<N> serves them; PR_FILES_FAIL=1 makes the read fail.
+    [ "\${PR_FILES_FAIL:-0}" = 1 ] && { echo "gh: HTTP 502" >&2; exit 1; }
+    n="\${3#repos/acme/widgets/pulls/}"; n="\${n%%/*}"
+    [ -f "$BIN/prfiles.\$n" ] && cat "$BIN/prfiles.\$n"
+    exit 0
+    ;;
 "api graphql -f query="*)
     [ "$fail" = 1 ] && exit 1
     echo '{"data":{"search":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":$claimed_nodes}}}'
@@ -925,4 +933,83 @@ print(dispatch_plan.expand_tokens(["*", "**", "*/?", "src/*"], Path(".").resolve
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"['src/a.py']" ]]
 	[[ "$output" == *"rejected surface token"* ]]
+}
+
+# --- dotfiles-linux-dev#714: hot files (owner option (c)) ------------------------------------
+# Open-PR overlap blocks dispatch ONLY on a declared hot file; every other overlap stays the
+# #433 annotation. The list is `<git-common-dir>/dispatch-hot-files.txt`.
+
+OTHER_PR='[{"number":77,"title":"other work","body":"no refs","closingIssuesReferences":[]}]'
+
+hot_list() {
+    local f
+    f="$(/usr/bin/git rev-parse --path-format=absolute --git-common-dir)/dispatch-hot-files.txt"
+    printf '%s\n' "$@" >"$f"
+}
+
+@test "hot file held by an open PR excludes the candidate, naming file and PR" {
+    hot_list "# append points" ".github/workflows/ci.yml"
+    printf '.github/workflows/ci.yml\nother.sh\n' >"$BIN/prfiles.77"
+    stub_gh "[$(issue_json 5 .github/workflows/ci.yml new/a.sh)]" "" "" 0 "" "$OTHER_PR"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [[ "$(field '.excluded[0].reason')" == "HOT-FILE: "*".github/workflows/ci.yml"*"#77"* ]]
+}
+
+@test "non-hot overlap with an open PR stays annotation only (still dispatchable)" {
+    hot_list ".github/workflows/ci.yml"
+    printf 'shared/x.sh\n' >"$BIN/prfiles.77"
+    stub_gh "[$(issue_json 6 shared/x.sh)]" "" "" 0 "" "$OTHER_PR"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable[0].issue')" = "6" ]
+}
+
+@test "hot file declared but NOT held by any open PR does not block" {
+    hot_list ".github/workflows/ci.yml"
+    printf 'unrelated.sh\n' >"$BIN/prfiles.77"
+    stub_gh "[$(issue_json 7 .github/workflows/ci.yml)]" "" "" 0 "" "$OTHER_PR"
+    run_planner
+    [ "$(field '.dispatchable[0].issue')" = "7" ]
+}
+
+@test "hot patterns are globs: mkdocs.* matches mkdocs.yml" {
+    hot_list "mkdocs.*"
+    printf 'mkdocs.yml\n' >"$BIN/prfiles.77"
+    stub_gh "[$(issue_json 8 mkdocs.yml)]" "" "" 0 "" "$OTHER_PR"
+    run_planner
+    [[ "$(field '.excluded[0].reason')" == "HOT-FILE: "* ]]
+}
+
+@test "missing hot list: no crash, nothing blocked, no PR file reads" {
+    printf 'shared/x.sh\n' >"$BIN/prfiles.77"
+    stub_gh "[$(issue_json 9 shared/x.sh)]" "" "" 0 "" "$OTHER_PR"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable[0].issue')" = "9" ]
+    ! grep -q "pulls/77/files" "$BIN/gh.calls"
+}
+
+@test "unreadable hot list (a directory) is treated as none declared" {
+    stub_gh "[$(issue_json 10 shared/x.sh)]" "" "" 0 "" "$OTHER_PR"
+    DISPATCH_HOT_FILES_FILE="$TEST_TMP" run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable[0].issue')" = "10" ]
+}
+
+@test "empty / comment-only hot list declares nothing" {
+    hot_list "# nothing" "" "   "
+    stub_gh "[$(issue_json 11 shared/x.sh)]" "" "" 0 "" "$OTHER_PR"
+    run_planner
+    [ "$(field '.dispatchable[0].issue')" = "11" ]
+}
+
+@test "open-PR file read failing excludes a hot-touching candidate by name, spares a non-hot one" {
+    hot_list ".github/workflows/ci.yml"
+    stub_gh "[$(issue_json 12 .github/workflows/ci.yml),$(issue_json 13 free/b.sh)]" "" "" 0 "" "$OTHER_PR"
+    PR_FILES_FAIL=1 run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable[0].issue')" = "13" ]
+    [[ "$(field '[.excluded[] | select(.issue==12)][0].reason')" == "HOT-FILE: "*"UNREADABLE"* ]]
 }
