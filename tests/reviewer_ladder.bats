@@ -1502,3 +1502,49 @@ _claude_review_with_output() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"## Verdict"* ]]
 }
+
+# --- run_ladder_review.sh wrapper (dotfiles-linux-dev#738) -------------------
+# The wrapper is copied beside a stub lib so run_fallback_review just prints its
+# arguments; `gh` and `git` are stubbed on PATH. No network, no runtime.
+
+make_wrapper_sandbox() {
+    SANDBOX="$BATS_TEST_TMPDIR/hooks"
+    mkdir -p "$SANDBOX/lib" "$BATS_TEST_TMPDIR/bin"
+    cp "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/run_ladder_review.sh" "$SANDBOX/"
+    cat > "$SANDBOX/lib/reviewer_ladder.sh" <<'STUB'
+run_fallback_review() { printf 'ARGS %s\n' "$*"; }
+STUB
+    cat > "$BATS_TEST_TMPDIR/bin/git" <<'STUB'
+#!/bin/bash
+echo "git@github.com:acme/widgets.git"
+STUB
+    cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$*" in
+    *pulls/7*) echo "abc123 dirty" ;;
+    *commits/abc123*) echo "2026-01-02T03:04:05Z" ;;
+    *comments*) echo '{"id":1}' ;;
+esac
+STUB
+    chmod +x "$BATS_TEST_TMPDIR/bin/"*
+}
+
+@test "run_ladder_review rejects a non-integer PR argument" {
+    make_wrapper_sandbox
+    for bad in "" abc 0 -1 "7; rm -rf x" 1.5; do
+        run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash "$SANDBOX/run_ladder_review.sh" "$bad"
+        [ "$status" -eq 2 ]
+    done
+    run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash "$SANDBOX/run_ladder_review.sh" 7 8
+    [ "$status" -eq 2 ]
+}
+
+@test "run_ladder_review derives the pushed epoch from the head commit, not NOW" {
+    make_wrapper_sandbox
+    run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash "$SANDBOX/run_ladder_review.sh" 7
+    [ "$status" -eq 0 ]
+    expected="$(date -d 2026-01-02T03:04:05Z +%s)"
+    [[ "$output" == "ARGS acme widgets 7 DIRTY $expected "* ]]
+    now="$(echo "$output" | awk '{print $7}')"
+    [ "$now" -gt "$expected" ]
+}

@@ -63,6 +63,7 @@
       "Bash(rtk gain:*)",
       "Bash(rtk discover:*)",
       "Bash(rtk --version)",
+      "Bash(~/.claude/hooks/run_ladder_review.sh:*)",
       "Bash(diff:*)",
       "Bash(cut:*)",
       "Bash(tr:*)",
