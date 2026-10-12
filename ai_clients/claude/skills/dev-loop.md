@@ -143,6 +143,9 @@ The only reliable signal was inspecting the worktree and asking the forge for PR
    preserves the transcript, so the agent continues at zero re-reading cost; a new `Agent` starts
    from nothing and **re-does work already committed** — exactly the cost an exhausted quota cannot
    afford. Measured: four agents resumed by `SendMessage` continued cleanly from where they died.
+   Re-claim its surface when you resume it (`claim_files <issue> <paths…>`, idempotent for the same
+   issue) so the registry counts it in flight; the Stop guard also counts a `SendMessage` resume
+   for `DISPATCH_CLAIM_TTL`, after which a finished agent no longer counts (#729).
 4. **Brief the resumed agent on what moved underneath it while it was dead** — commits or pushes
    landed on its behalf, files or surfaces another agent has since taken, PRs opened or merged. An
    agent resumes assuming its pre-death world still holds; measured twice that assumption was false
