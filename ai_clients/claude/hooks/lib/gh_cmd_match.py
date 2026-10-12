@@ -203,15 +203,105 @@ def scan_flags(argv):
     return repo, head, has_body, body, has_body_file, body_file, labels
 
 
+API_ISSUE_ENDPOINT = re.compile(r"^/?repos/([^/]+)/([^/]+)/issues(?:/(\d+))?$")
+API_VALUE_FLAGS = {
+    "-X": "method", "--method": "method",
+    "-f": "field", "--raw-field": "field", "-F": "field", "--field": "field",
+    "--input": "input",
+}
+API_OTHER_VALUE_FLAGS = {"-H", "--header", "-q", "--jq", "-t", "--template", "--hostname",
+                         "--cache", "-p", "--preview"}
+
+
+def api_issue_match(segments):
+    """Return the match dict for `[rtk] gh api repos/O/R/issues[/N]` writes, or None.
+
+    The REST twin of `gh issue create|edit` (dotfiles-linux-dev#714): `gh api` creates an issue on
+    POST (explicit `-X POST`/`--method POST`, or implicit when any field/--input is given and
+    no method is) and edits one on PATCH, so a guard that only sees `gh issue ...` is bypassed
+    by it. Body is read from a `body=` field (`-f`/`-F`/`--raw-field`/`--field`); `-F body=@f`
+    and `--input f` are file-valued (`body_json` marks that the file is a JSON payload).
+    """
+    for segment in segments:
+        argv = shlex.split(segment, posix=True)
+        idx = 1 if argv[:1] == ["rtk"] else 0
+        if argv[idx:idx + 2] != ["gh", "api"]:
+            continue
+        rest = argv[idx + 2:]
+        endpoint, method, fields, input_file = None, None, [], None
+        i = 0
+        while i < len(rest):
+            tok = rest[i]
+            name, _, inline = tok.partition("=") if tok.startswith("--") else (tok, "", "")
+            if tok.startswith("-") and tok[1:2] != "-" and len(tok) > 2 and tok[:2] in API_VALUE_FLAGS:
+                name, inline = tok[:2], tok[2:].lstrip("=")  # attached short value: -XPOST
+            if name in API_VALUE_FLAGS:
+                if inline or tok != name:
+                    value, step = inline, 1
+                elif i + 1 < len(rest):
+                    value, step = rest[i + 1], 2
+                else:
+                    value, step = "", 1
+                kind = API_VALUE_FLAGS[name]
+                if kind == "method":
+                    method = value.upper()
+                elif kind == "field":
+                    fields.append((name in ("-F", "--field"), value))
+                else:
+                    input_file = value
+                i += step
+            elif name in API_OTHER_VALUE_FLAGS:
+                i += 1 if inline else 2
+            elif tok.startswith("-"):
+                i += 1
+            else:
+                endpoint = endpoint or tok
+                i += 1
+        m = API_ISSUE_ENDPOINT.match((endpoint or "").split("?", 1)[0])
+        if not m:
+            continue
+        method = method or ("POST" if fields or input_file else "GET")
+        number = m.group(3)
+        if not ((method == "POST" and not number) or (method in ("PATCH", "PUT") and number)):
+            continue
+        owner, name = m.group(1), m.group(2)
+        repo = None if "{" in owner + name else f"{owner}/{name}"
+        has_body, body, has_body_file, body_file, labels = False, None, False, None, []
+        for typed, field in fields:
+            key, _, val = field.partition("=")
+            if key == "body":
+                if typed and val.startswith("@"):  # only -F/--field reads a file via @
+                    has_body_file, body_file = True, val[1:]
+                else:
+                    has_body, body = True, val
+            elif key in ("labels[]", "labels"):
+                labels.extend(p for p in val.split(",") if p)
+        body_json = False
+        if input_file is not None:
+            has_body_file, body_file, body_json = True, input_file, True
+        if method == "POST" and not (has_body or has_body_file):
+            has_body, body = True, ""  # REST create has no editor mode: no body IS an empty body
+        return {
+            "matched": True, "repo": repo, "head": None, "has_body": has_body, "body": body,
+            "has_body_file": has_body_file, "body_file": body_file, "body_json": body_json,
+            "labels": labels, "auto": False, "method": method,
+        }
+    return None
+
+
 def main():
     noun = sys.argv[1] if len(sys.argv) > 1 else ""
-    if noun not in ("pr", "issue"):
+    if noun not in ("pr", "issue", "api-issue"):
         print(json.dumps({"matched": False}))
         return 0
 
     command = sys.stdin.read()
     try:
         segments = split_segments(command)
+        if noun == "api-issue":
+            match = api_issue_match(segments)
+            print(json.dumps(match or {"matched": False}))
+            return 0
         argv = matching_argv(segments, noun)
     except ValueError:
         return 1  # unparseable: caller must fail open, never guess

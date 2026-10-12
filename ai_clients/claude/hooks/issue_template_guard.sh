@@ -3,6 +3,12 @@
 # `gh issue edit` — the same mechanism pr_template_guard.sh already applies to PR bodies, aimed at
 # .github/ISSUE_TEMPLATE/*.md instead of .github/PULL_REQUEST_TEMPLATE.md.
 #
+# Also judges the REST twin (dotfiles-linux-dev#714): `gh api repos/O/R/issues -X POST` (create) and
+# `gh api repos/O/R/issues/N -X PATCH|PUT` (edit), incl. the implicit POST when a -f/-F/--input
+# is given with no -X. The body comes from a `body=` field, `-F body=@file`, or `--input` JSON;
+# a REST create with no body counts as an EMPTY body (REST has no editor mode). Found by the
+# same real-argv tokenizer (`gh_cmd_match.py api-issue`), never a raw-string regex.
+#
 # Generic and data-driven: a target repo with no issue template is untouched (exit 0) — this is
 # what keeps `/issue` (ai_clients/claude/commands/issue.md), which files its own Goal/Scope/
 # Documentation body into repos that ship no issue template (dotfiles-dev, blueprintx, ...), from
@@ -62,6 +68,11 @@ main() {
     # bypasses a start-anchored regex missed: chained after `;`/`&&`/`||`/`|`/`&`/a newline, or
     # fooled by flag-shaped text inside an unrelated quoted argument).
     resolve_gh_command "$command" "issue" || exit 0   # unparseable → unknown, not non-compliant
+    if [[ "$GH_MATCHED" != "true" ]]; then
+        # The REST twin (dotfiles-linux-dev#714): `gh api repos/O/R/issues -X POST|PATCH ...`
+        # creates/edits an issue without ever passing `gh issue`; same real-argv tokenizer.
+        resolve_gh_command "$command" "api-issue" || exit 0
+    fi
     [[ "$GH_MATCHED" == "true" ]] || exit 0
     # Only when a body is actually being set (skip title/label-only edits, editor-mode create).
     [[ "$GH_HAS_BODY" == "true" || "$GH_HAS_BODY_FILE" == "true" ]] || exit 0
@@ -83,7 +94,13 @@ main() {
 
     if [[ "$GH_HAS_BODY_FILE" == "true" ]]; then
         if [[ -r "$GH_BODY_FILE" ]]; then
-            body_source="$(cat "$GH_BODY_FILE")"
+            if [[ "$GH_BODY_FILE_JSON" == "true" ]]; then
+                # `gh api --input`: a JSON payload, the body is its `.body` member.
+                body_source="$(jq -r '.body // ""' "$GH_BODY_FILE" 2>/dev/null)" \
+                    || block_unresolved_body_file "$GH_BODY_FILE" "$root"
+            else
+                body_source="$(cat "$GH_BODY_FILE")"
+            fi
         else
             block_unresolved_body_file "$GH_BODY_FILE" "$root"
         fi
