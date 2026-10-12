@@ -78,6 +78,22 @@ future audit must not relitigate them (dotfiles-linux-dev#68, #644):
    would let `sed -i` rewrite files with no prompt. Read-only `sed` goes through
    the classifier like any other uncovered command.
 
+### Ladder wrapper: one exact allow rule (dotfiles-linux-dev#738)
+
+`hooks/run_ladder_review.sh <pr-number>` is the stable entry point for one
+reviewer-ladder fallback review. `permissions.allow` carries exactly
+`Bash(~/.claude/hooks/run_ladder_review.sh:*)` for it, because the same
+`source … && run_fallback_review` compound was allowed on some PRs and refused
+as an "external system write" on others. There is deliberately **no** blanket
+`gh api -X POST` or `gh pr review` allow: the ladder's own guards (no paid or
+credit flags, free rungs first with the paid `claude` rung only as the
+owner-accepted last resort, one PR per call, no re-review of a covered head) are
+the boundary. Run it as `cd <absolute-repo-path> && …`, since OWNER/REPO come
+from the cwd's `origin`. The
+wrapper takes one positive integer, and derives the pushed epoch from the
+head commit's committer date (a NOW epoch makes the ladder refuse the PR as
+"recently pushed"). The rule only takes effect after `make ai_clients`.
+
 ## Body-template guards: PR and issue
 
 Two `PreToolUse` hooks enforce a repo's own body templates on `gh`, so a

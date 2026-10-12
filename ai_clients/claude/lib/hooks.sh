@@ -118,6 +118,8 @@ install_hooks() {
     # event. Missing here is the exact defect dotfiles-linux-dev#532 reported: tested
     # and documented, but never installed, so it never ran either way.
     copy_hook_file "pr_body_orphan_check.sh" "$hooks_dir"
+    # Stable ladder entry point (dotfiles-linux-dev#738): the one path settings.json allows.
+    copy_hook_file "run_ladder_review.sh" "$hooks_dir"
 
     invalidate_hook_caches
 }
