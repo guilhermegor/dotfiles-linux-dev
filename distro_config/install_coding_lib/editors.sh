@@ -329,8 +329,8 @@ setup_neovim_config() {
         return 0
     fi
 
-    if [ -f "$init_file" ] && ! _neovim_confirm_regenerate "$init_file"; then
-        print_status "info" "Neovim configuration already exists at $init_file"
+    if [ -f "$init_file" ] && [ "${NVIM_REGEN_CONFIG:-0}" != "1" ]; then
+        print_status "warning" "Neovim configuration already exists at $init_file; set NVIM_REGEN_CONFIG=1 to back it up and regenerate"
         return 0
     fi
 
@@ -461,15 +461,6 @@ EOF
 
     print_status "success" "Basic Neovim configuration created at $init_file"
     _neovim_plug_install
-}
-
-# Ask before replacing an existing init.vim. NVIM_REGEN_CONFIG=1 answers yes
-# non-interactively; closed stdin or an empty answer keeps the file (default N).
-_neovim_confirm_regenerate() {
-    local answer=""
-    [ "${NVIM_REGEN_CONFIG:-0}" = "1" ] && return 0
-    read -r -p "  Back up and regenerate $1? [y/N] " answer || return 1
-    [[ "$answer" == [yY]* ]]
 }
 
 # Fetch the plugins so the first launch has onedark/NERDTree. Never fatal.

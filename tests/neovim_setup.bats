@@ -37,8 +37,6 @@ teardown() {
     DRY_RUN=1 NVIM_REGEN_CONFIG=1 run setup_neovim_config
     [ "$status" -eq 0 ]
     cmp "$INIT" "$TMP/before"
-    DRY_RUN=1 run setup_neovim_config <<< "y"
-    cmp "$INIT" "$TMP/before"
     backups=("$HOME"/.config/nvim/init.vim.bak.*)
     [ ! -e "${backups[0]}" ]
 }
@@ -61,11 +59,12 @@ teardown() {
     grep -q "if exists(':NERDTree') | NERDTree" "$INIT"
 }
 
-@test "existing init.vim is kept when regeneration is declined" {
+@test "default keeps the existing init.vim and warns" {
     mkdir -p "$(dirname "$INIT")"
     echo "old" > "$INIT"
-    run setup_neovim_config < /dev/null
+    run setup_neovim_config
     [ "$status" -eq 0 ]
+    [[ "$output" == *"NVIM_REGEN_CONFIG=1"* ]]
     [ "$(cat "$INIT")" = "old" ]
     [ ! -s "$NVIM_LOG" ]
 }
@@ -79,13 +78,4 @@ teardown() {
     [ -f "${backups[0]}" ]
     [ "$(cat "${backups[0]}")" = "old" ]
     grep -q '^silent! colorscheme onedark' "$INIT"
-}
-
-@test "answering y at the prompt regenerates with a backup" {
-    mkdir -p "$(dirname "$INIT")"
-    echo "old" > "$INIT"
-    run setup_neovim_config <<< "y"
-    [ "$status" -eq 0 ]
-    backups=("$HOME"/.config/nvim/init.vim.bak.*)
-    [ "$(cat "${backups[0]}")" = "old" ]
 }
