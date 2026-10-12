@@ -210,7 +210,7 @@ done
 """
 
 
-def _run(cmd: list[str]) -> str:
+def _run(cmd: list[str], timeout: float = GH_TIMEOUT) -> str:
 	"""Run a command and return its stripped stdout.
 
 	Raises on any non-zero exit or timeout, deliberately: a broken read here must surface as
@@ -218,7 +218,7 @@ def _run(cmd: list[str]) -> str:
 	silently empty answer.
 	"""
 	result = subprocess.run(  # noqa: S603 - fixed argv lists, no shell, no user input
-		cmd, capture_output=True, text=True, timeout=GH_TIMEOUT, check=True
+		cmd, capture_output=True, text=True, timeout=timeout, check=True
 	)
 	return result.stdout.strip()
 
@@ -689,10 +689,12 @@ def open_pr_hot_holders(slug: str, prs: list[dict], patterns: list[str]) -> dict
 	budget = float(os.environ.get("DISPATCH_HOT_READ_BUDGET", HOT_READ_BUDGET))
 	deadline = time.monotonic() + budget
 	for pr in sorted(prs, key=lambda p: p["number"]):
-		if time.monotonic() > deadline:
+		remaining = deadline - time.monotonic()
+		if remaining <= 0:
 			raise subprocess.TimeoutExpired("open-PR file reads", budget)
 		out = _run(
-			["gh", "api", "--paginate", f"repos/{slug}/pulls/{pr['number']}/files", "--jq", ".[].filename"]
+			["gh", "api", "--paginate", f"repos/{slug}/pulls/{pr['number']}/files", "--jq", ".[].filename"],
+			timeout=min(GH_TIMEOUT, remaining),
 		)
 		for name in out.splitlines():
 			if any(fnmatch.fnmatch(name, pat) for pat in patterns):
