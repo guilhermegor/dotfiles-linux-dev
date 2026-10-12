@@ -41,9 +41,20 @@ teardown() {
     [ ! -e "${backups[0]}" ]
 }
 
-@test "DRY_RUN does not call nvim" {
+@test "DRY_RUN with no init.vim writes no file and does not call nvim" {
     DRY_RUN=1 run setup_neovim_config
     [ "$status" -eq 0 ]
+    [ ! -e "$INIT" ]
+    [ ! -s "$NVIM_LOG" ]
+}
+
+@test "a failed init.vim write returns 1 and skips PlugInstall" {
+    mkdir -p "$(dirname "$INIT")"
+    chmod a-w "$(dirname "$INIT")"
+    run setup_neovim_config
+    chmod u+w "$(dirname "$INIT")"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Could not write"* ]]
     [ ! -s "$NVIM_LOG" ]
 }
 

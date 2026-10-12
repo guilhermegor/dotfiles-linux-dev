@@ -324,8 +324,8 @@ setup_neovim_config() {
 
     run_or_echo mkdir -p "$nvim_dir"
 
-    if [ -f "$init_file" ] && [ "${DRY_RUN:-0}" = "1" ]; then
-        print_status "info" "[dry-run] would back up and regenerate $init_file"
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        print_status "info" "[dry-run] would write $init_file (backing up any existing one) and run PlugInstall"
         return 0
     fi
 
@@ -341,7 +341,7 @@ setup_neovim_config() {
         print_status "info" "Existing init.vim backed up to $backup_file"
     fi
 
-    cat > "$init_file" << 'EOF'
+    cat > "$init_file" << 'EOF' || { print_status "error" "Could not write $init_file"; return 1; }
 " Basic Neovim Configuration
 set number
 set relativenumber
