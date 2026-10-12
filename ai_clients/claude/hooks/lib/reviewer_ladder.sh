@@ -862,8 +862,23 @@ _pr_issue_comments_json() {
 		"$REVIEWER_LADDER_COMMENTS_CMD" "$owner" "$repo" "$pr_number"
 		return $?
 	fi
-	gh api --paginate "repos/$owner/$repo/issues/$pr_number/comments?per_page=100" 2>/dev/null |
-		jq -s 'add // []' 2>/dev/null
+	_gh_page_strict "repos/$owner/$repo/issues/$pr_number/comments?per_page=100"
+}
+
+# _gh_page_strict ENDPOINT — a paginated REST list, or NOTHING and rc 1 when the read
+# failed. Unlike a bare `gh | jq -s`, a failed `gh` never becomes a valid `[]`.
+_gh_page_strict() {
+	local raw
+	raw="$(gh api --paginate "$1" 2>/dev/null)" || return 1
+	printf '%s' "$raw" | jq -s 'add // []' 2>/dev/null
+}
+
+_pr_reviews_json_strict() {
+	if [ -n "${REVIEWER_LADDER_REVIEWS_CMD:-}" ]; then
+		"$REVIEWER_LADDER_REVIEWS_CMD" "$1" "$2" "$3"
+		return $?
+	fi
+	_gh_page_strict "repos/$1/$2/pulls/$3/reviews?per_page=100"
 }
 
 # _ladder_ask_author — the login the ask comment is posted as (empty when unknown).
@@ -892,10 +907,10 @@ run_hosted_rungs() {
 	local owner="$1" repo="$2" pr_number="$3" head_sha comments reviews verdict unsolicited ask_body ask_author
 
 	head_sha="$(_pr_head_sha "$owner" "$repo" "$pr_number")"
-	comments="$(_pr_issue_comments_json "$owner" "$repo" "$pr_number")"
-	reviews="$(_pr_reviews_json "$owner" "$repo" "$pr_number")"
-	if [ -z "$head_sha" ] || [ -z "$comments" ]; then
-		print_status "info" "rung greptile skipped: head or comments unreadable"
+	comments="$(_pr_issue_comments_json "$owner" "$repo" "$pr_number")" || comments=""
+	reviews="$(_pr_reviews_json_strict "$owner" "$repo" "$pr_number")" || reviews=""
+	if [ -z "$head_sha" ] || [ -z "$comments" ] || [ -z "$reviews" ]; then
+		print_status "info" "rung greptile skipped: head, comments or reviews unreadable"
 		return 1
 	fi
 
@@ -907,6 +922,19 @@ run_hosted_rungs() {
 		python3 "$LIB_DIR/slot_classify.py" greptile-unsolicited)"
 	if [[ "$unsolicited" == UNSOLICITED\|* ]]; then
 		print_status "warning" "greptile CONFIGURATION DEFECT on PR #$pr_number: unsolicited review on head(s) ${unsolicited#UNSOLICITED|} (autoReview should be off, blueprintx#737)"
+		# The current head is already reviewed: a further ask would duplicate it.
+		if [[ "${unsolicited#UNSOLICITED|}" == *"${head_sha:0:12}"* ]]; then
+			print_status "info" "rung greptile: current head already reviewed unasked — not asking again"
+			return 1
+		fi
+	fi
+
+	# Classify BEFORE honouring a pending ask: an exhaustion notice posted after our
+	# ask must still fall through, not read as "verdict pending" forever.
+	verdict="$(printf '%s' "$comments" | python3 "$LIB_DIR/slot_classify.py" greptile)"
+	if [[ "$verdict" != FREE\|* ]]; then
+		print_status "info" "rung greptile skipped: slot reads $verdict"
+		return 1
 	fi
 
 	if [ -n "$ask_author" ] && printf '%s' "$comments" | jq -e --arg a "$ask_author" \
@@ -914,12 +942,6 @@ run_hosted_rungs() {
 		'any(.[]; .user.login == $a and ((.body // "") | contains($m)))' >/dev/null 2>&1; then
 		print_status "info" "rung greptile: ask for this head already posted — verdict pending"
 		return 0
-	fi
-
-	verdict="$(printf '%s' "$comments" | python3 "$LIB_DIR/slot_classify.py" greptile)"
-	if [[ "$verdict" != FREE\|* ]]; then
-		print_status "info" "rung greptile skipped: slot reads $verdict"
-		return 1
 	fi
 
 	# One ask per window, shared with CodeRabbit's (dotfiles-linux-dev#548).

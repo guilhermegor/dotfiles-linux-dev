@@ -228,3 +228,39 @@ JSON"
     [ "$status" -eq 1 ]
     [ ! -s "$ASK_LOG" ]
 }
+
+# --- review findings on #728 ---------------------------------------------------
+
+@test "hosted: a failed gh read is not an empty listing (no ask posted)" {
+    unset REVIEWER_LADDER_COMMENTS_CMD REVIEWER_LADDER_REVIEWS_CMD
+    gh() { return 1; }
+    export -f gh
+    run run_hosted_rungs o r 7
+    [ "$status" -eq 1 ]
+    [ ! -s "$ASK_LOG" ]
+}
+
+@test "hosted: a failed reviews read falls through without asking" {
+    export REVIEWER_LADDER_REVIEWS_CMD=_no_author
+    run run_hosted_rungs o r 7
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"unreadable"* ]]
+    [ ! -s "$ASK_LOG" ]
+}
+
+@test "hosted: a head already reviewed unasked is not asked again" {
+    echo "[{\"user\":{\"login\":\"greptile-apps[bot]\"},\"commit_id\":\"$HEAD_SHA\"}]" >"$BATS_TEST_TMPDIR/reviews.json"
+    run run_hosted_rungs o r 7
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"CONFIGURATION DEFECT"* ]]
+    [ ! -s "$ASK_LOG" ]
+}
+
+@test "hosted: an exhaustion notice after our ask falls through instead of pending" {
+    echo "[{\"user\":{\"login\":\"owner-login\"},\"created_at\":\"2026-10-11T10:00:00Z\",\"body\":\"<!-- ladder-ask:greptile head=$HEAD_SHA -->\"},
+          {\"user\":{\"login\":\"greptile-apps[bot]\"},\"created_at\":\"2026-10-11T10:05:00Z\",\"body\":\"out of credits\"}]" \
+        >"$BATS_TEST_TMPDIR/comments.json"
+    run run_hosted_rungs o r 7
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"BUSY"* ]]
+}

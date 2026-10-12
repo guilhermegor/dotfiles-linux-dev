@@ -467,6 +467,7 @@ install_graphite() {
 
     if command_exists gt; then
         print_status "info" "Graphite CLI is already installed ($(timeout 10 gt --version 2>/dev/null | head -n1 || echo "unknown"))"
+        print_status "config" "  Login (manual, if signed out): gt auth --token <token from the Graphite onboarding page>"
         return 0
     fi
 
@@ -494,6 +495,7 @@ install_greptile() {
 
     if command_exists greptile; then
         print_status "info" "Greptile CLI is already installed ($(timeout 10 greptile --version 2>/dev/null | head -n1 || echo "unknown"))"
+        print_status "config" "  Login (manual, if signed out, opens a browser): greptile login"
         return 0
     fi
 

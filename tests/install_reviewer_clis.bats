@@ -10,8 +10,15 @@ setup() {
     HOME="$TMP/home"
     mkdir -p "$HOME" "$TMP/bin"
     export HOME LOG_FILE="$TMP/log" TMP
-    # Only the stub dir + system essentials, so a real gt/greptile/npm never leaks in.
-    export PATH="$TMP/bin:/usr/bin:/bin"
+    # Stub dir + symlinks to only the utilities the installers need, so no system
+    # npm/node/gt/greptile can ever resolve (a real global install would hit the network).
+    mkdir -p "$TMP/sys"
+    local tool path
+    ORIG_PATH="$PATH"
+    for tool in bash sed head cat timeout mktemp rm chmod mkdir dirname env sh; do
+        path="$(command -v "$tool")" && ln -s "$path" "$TMP/sys/$tool"
+    done
+    export PATH="$TMP/bin:$TMP/sys"
     # shellcheck source=../distro_config/install_lib/_common.sh
     source "$REPO_ROOT/distro_config/install_lib/_common.sh"
     # shellcheck source=../distro_config/install_coding_lib/ai_clients.sh
@@ -19,6 +26,7 @@ setup() {
 }
 
 teardown() {
+    PATH="$ORIG_PATH"
     rm -rf "$TMP"
 }
 
@@ -112,4 +120,19 @@ stub_node() {
     run install_graphite
     [ "$status" -eq 0 ]
     [[ ! "$(cat "$TMP/npm_args")" == *auth* ]]
+}
+
+@test "already-installed paths still print the manual login hint" {
+    printf '#!/bin/bash\necho "gt 1.0.0"\n' > "$TMP/bin/gt"
+    printf '#!/bin/bash\necho "greptile 2.0.0"\n' > "$TMP/bin/greptile"
+    chmod +x "$TMP/bin/gt" "$TMP/bin/greptile"
+    run install_graphite
+    [[ "$output" == *"gt auth --token <token"* ]]
+    run install_greptile
+    [[ "$output" == *"greptile login"* ]]
+}
+
+@test "no system npm is reachable from the test PATH" {
+    run command -v npm
+    [ "$status" -ne 0 ]
 }
