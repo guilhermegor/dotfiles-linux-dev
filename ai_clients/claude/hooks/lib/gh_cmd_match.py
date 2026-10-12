@@ -106,7 +106,19 @@ def split_segments(command):
 
 
 WRAPPERS = {"timeout", "nice", "ionice", "setsid", "stdbuf", "rtk", "proxy", "env", "command", "exec", "nohup", "time", "sudo", "xargs", "builtin"}
-WRAPPER_VALUE_FLAGS = {"-u", "-g", "-C", "-I", "-L"}
+# Options that take a SEPARATE value, per wrapper: a shared list let `timeout -s KILL 5 gh ...`
+# leave KILL as the "command" and miss the real gh call. A `--long=value` form needs no entry.
+WRAPPER_VALUE_FLAGS = {
+    "timeout": {"-s", "-k", "--signal", "--kill-after"},
+    "stdbuf": {"-i", "-o", "-e", "--input", "--output", "--error"},
+    "nice": {"-n", "--adjustment"},
+    "ionice": {"-c", "-n", "-p", "-P", "-u", "--class", "--classdata", "--pid", "--pgid", "--uid"},
+    "env": {"-u", "-C", "-S", "--unset", "--chdir", "--split-string"},
+    "sudo": {"-u", "-g", "-C", "-I", "-L", "-h", "-p", "-r", "-t", "-T", "-U",
+             "--user", "--group", "--host", "--prompt", "--role", "--type"},
+    "xargs": {"-n", "-I", "-L", "-P", "-d", "-E", "-s", "-a", "--max-args", "--max-procs",
+              "--delimiter", "--arg-file", "--max-lines", "--max-chars"},
+}
 NESTED_ERRORS = []
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 
@@ -126,18 +138,19 @@ def gh_start(argv):
     """
     wrapped = False
     skip_next = False
+    wrapper = ""
     for i, tok in enumerate(argv):
         word = _word(tok)
         if skip_next:
             skip_next = False
         elif word in WRAPPERS:
-            wrapped = True
+            wrapped, wrapper = True, word
         elif word == "" or re.match(r"^\w+=", word):
             continue
-        elif wrapped and re.match(r"^\d+(\.\d+)?[smhd]?$", word):
-            continue  # `timeout 5 gh ...`: a duration is the wrapper's operand, not the command
+        elif wrapper == "timeout" and re.match(r"^\d+(\.\d+)?[smhd]?$", word):
+            continue  # `timeout 5 gh ...`: the duration is timeout's operand, not the command
         elif wrapped and word.startswith("-"):
-            skip_next = word in WRAPPER_VALUE_FLAGS  # `sudo -u root gh`: -u takes a value
+            skip_next = word in WRAPPER_VALUE_FLAGS.get(wrapper, ())  # `sudo -u root gh`
         elif word.rsplit("/", 1)[-1] == "gh":
             return i
         else:

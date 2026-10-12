@@ -244,6 +244,28 @@ EOF
     done
 }
 
+@test "wrapper options that take a value do not hide the real gh call" {
+    local s
+    for s in \
+        'timeout -s KILL 5 gh issue create -t a -b b' \
+        'stdbuf -o L gh issue create -t a -b b' \
+        'nice -n 5 gh issue create -t a -b b' \
+        'ionice -c 3 gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'timeout --signal=KILL 5 gh issue create -t a -b b' \
+        'env -u FOO gh issue create -t a -b b' \
+        'sudo -u root gh issue create -t a -b b' \
+        'xargs -n 1 gh issue create -t a -b b'; do
+        run bash -c "payload \"\$1\" | '$GUARD'" _ "$s"
+        [ "$status" -eq 2 ] || { echo "NOT BLOCKED: $s"; return 1; }
+    done
+    for s in \
+        'env echo gh api repos/o/r/issues -f title=x' \
+        'timeout -s KILL 5 echo gh issue create --body nope'; do
+        run bash -c "payload \"\$1\" | '$GUARD'" _ "$s"
+        [ "$status" -eq 0 ] || { echo "WRONGLY BLOCKED: $s"; return 1; }
+    done
+}
+
 @test "understood non-writes pass: plain GET (literal or dynamic), literal sub-resources" {
     local s
     for s in \
