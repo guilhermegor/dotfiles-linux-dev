@@ -265,6 +265,85 @@ free_classify_files() {
 	_classify_files_against "${FREE_STATUS:-}" "${FREE_HELD_PATHS:-}" "$@"
 }
 
+# free_hot_files_path
+# The per-repo hot-file list (dotfiles-linux-dev#714, owner option (c)): one exact path or glob per
+# line, `#` comments and blank lines ignored, fnmatch semantics (`*` crosses `/`). It lives next to
+# the claims registry, in the git common dir (untracked, shared by every worktree):
+#   $(git rev-parse --git-common-dir)/dispatch-hot-files.txt
+# DISPATCH_HOT_FILES_FILE overrides the path. A hot file is one nearly every PR appends to
+# (a CI workflow step list, .pre-commit-config.yaml, mkdocs.yml nav).
+free_hot_files_path() {
+	local dir
+	if [ -n "${DISPATCH_HOT_FILES_FILE:-}" ]; then
+		printf '%s\n' "$DISPATCH_HOT_FILES_FILE"
+		return 0
+	fi
+	dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+	[ -n "$dir" ] || return 1
+	printf '%s/dispatch-hot-files.txt\n' "$dir"
+}
+
+# free_hot_patterns — print the declared hot patterns. A missing or unreadable list prints
+# nothing and returns 0: no hot files declared means the open-PR overlap stays annotation-only
+# (#433), never a crash and never a blanket block.
+free_hot_patterns() {
+	local file
+	file="$(free_hot_files_path)" || return 0
+	[ -r "$file" ] || return 0
+	sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$file" 2>/dev/null | sed '/^$/d'
+	return 0
+}
+
+# free_hot_overlap OWNER REPO FILE...
+# The ONLY open-PR overlap that blocks dispatch (#714): a candidate FILE that matches a declared
+# hot pattern AND is changed by an OPEN PR. Reads the open PRs' files itself over REST - never
+# FREE_HELD_PATHS, which also unions pushed branches with no PR (not open-PR overlap). No network
+# call at all unless some FILE is hot. Prints
+#   none                 - no hot overlap (also: no list declared, or no candidate file is hot)
+#   hot:<paths>          - hot paths of the candidate an open PR holds; exclude the candidate
+#   UNKNOWN              - the open-PR read failed; returns 1 (fail closed, never "none")
+# Every non-hot overlap is still only the free_classify_files annotation.
+free_hot_overlap() {
+	local owner="$1" repo="$2"
+	shift 2
+	local -a pats=() hot=()
+	local pat f n files="" hits="" numbers
+	mapfile -t pats < <(free_hot_patterns)
+	[ ${#pats[@]} -gt 0 ] || { echo none; return 0; }
+	for f in "$@"; do
+		for pat in "${pats[@]}"; do
+			# shellcheck disable=SC2053  # the pattern is intentionally a glob
+			[[ "$f" == $pat ]] && { hot+=("$f"); break; }
+		done
+	done
+	# Two globs cannot be proven disjoint by matching one against the other, so a glob FILE with
+	# any hot pattern declared still reads the open PRs; only an all-literal FILE list may skip it.
+	local has_glob=0
+	for f in "$@"; do [[ "$f" == *[*?[]* ]] && has_glob=1; done
+	[ ${#hot[@]} -gt 0 ] || [ "$has_glob" = 1 ] || { echo none; return 0; }
+	numbers="$(gh api --paginate "repos/$owner/$repo/pulls?state=open&per_page=100" --jq '.[].number' 2>/dev/null)" \
+		|| { echo UNKNOWN; return 1; }
+	while read -r n; do
+		[ -n "$n" ] || continue
+		f="$(gh api --paginate "repos/$owner/$repo/pulls/$n/files" --jq '.[].filename' 2>/dev/null)" \
+			|| { echo UNKNOWN; return 1; }
+		files="$(printf '%s\n%s' "$files" "$f")"
+	done <<<"$numbers"
+	local name pf
+	while IFS= read -r name; do
+		[ -n "$name" ] || continue
+		for pat in "${pats[@]}"; do
+			# shellcheck disable=SC2053  # both sides are intentionally globs
+			[[ "$name" == $pat ]] || continue
+			for pf in "$@"; do
+				# shellcheck disable=SC2053
+				[[ "$name" == $pf ]] && { hits="${hits:+$hits,}$name"; break 2; }
+			done
+		done
+	done <<<"$files"
+	if [ -n "$hits" ]; then echo "hot:$hits"; else echo none; fi
+}
+
 # live_agent_classify_files FILE... — see _classify_files_against; classifies against the
 # live-agent surface (LIVE_AGENT_STATUS/LIVE_AGENT_PATHS, set by gate_live_agent_surface). This
 # is the verdict that actually blocks dispatch (dotfiles-linux-dev#501).

@@ -509,6 +509,29 @@ sweep_roadmap_boards() {
 	fi
 }
 
+# sweep_issue_hygiene REPO — report-only backstop for issue_template_guard.sh (#714): open issues
+# with no ```surface block or no milestone, whatever route created them (a hook cannot see every
+# spelling of a REST write). Read over REST; an unreadable list is UNKNOWN, never "all clean".
+sweep_issue_hygiene() {
+	local repo="$1" rows
+	if ! rows="$(gh api --paginate "repos/$repo/issues?state=open&per_page=100" --jq \
+		'.[] | select(.pull_request == null) | [.number, ((.body // "") | contains("```surface")), (.milestone != null)] | @tsv' 2>/dev/null)"; then
+		echo "issue hygiene: UNKNOWN — open issues could not be read, not 'all clean'"
+		return 0
+	fi
+	local n has_surface has_ms out=""
+	while IFS=$'\t' read -r n has_surface has_ms; do
+		[ -n "$n" ] || continue
+		[ "$has_surface" = "true" ] || out="${out}  #$n: no \`\`\`surface block\n"
+		[ "$has_ms" = "true" ] || out="${out}  #$n: no milestone\n"
+	done <<<"$rows"
+	if [ -n "$out" ]; then
+		printf 'issues missing a surface block or milestone (report only):\n%b' "$out"
+	else
+		echo "every open issue has a surface block and a milestone"
+	fi
+}
+
 main() {
 	local payload cwd repo owner name db roster_file report agent_type
 	if [ ! -t 0 ]; then payload="$(cat)"; else payload=""; fi
@@ -577,6 +600,8 @@ dispatch: UNKNOWN — $BUDGET_GATE_REASON"
 		else
 			echo "kanban reconcile (Done/No Status): UNKNOWN — $RECONCILE_DONE_REPORT"
 		fi
+		echo "[10] issue hygiene (surface block + milestone, report only)"
+		sweep_issue_hygiene "$repo"
 	)"
 
 	emit "$report"

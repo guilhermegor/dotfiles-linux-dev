@@ -31,7 +31,9 @@ command entirely via bare `gh issue create`, so step 4's classification table ne
 and no card was ever placed). `--quick` keeps that classification reachable without the
 full interactive cost: it requires `--work <type>` (step 4's ask is already skipped by
 `--work` alone), forces a flat issue (step 5's ask never fires), and skips step 8 (no
-branch — you are not switching context to this work now). Title/slug inference, the
+branch — you are not switching context to this work now). The `## File surface` block is
+still mandatory and is inferred, never omitted; a milestone proposal is accepted without the
+ask (step 6). Title/slug inference, the
 issue create, and the board-card column set (step 7) all still run. If `--quick` is
 passed without `--work`, stop and ask for the work type — never default it silently.
 
@@ -296,17 +298,57 @@ requirement. It is written in English, like the rest of this repo's durable reco
 (`gh_prose_language_guard.sh` enforces exactly that for whatever is published here — a template
 demanding non-English prose would fight its own guard, dotfiles-linux-dev#187):
 
-```
+````
 ## Goal
 <one-paragraph statement of what this work delivers>
 
 ## Scope
 - <bullet(s) scoping the change>
 
+## File surface
+```surface
+<exact repo-relative path, one per line; globs allowed>
+```
+
 ## Documentation
 - Update `docs/` and the `README.md` where relevant — new behaviour, a change to the public API,
   or a new usage example. The work is not complete until the documentation matches it.
-```
+````
+
+**The `## File surface` section is mandatory, independent of the target repo's own issue
+template** (dotfiles-linux-dev#714; measured on blueprintx: 6 of 33 open issues had no `surface`
+block, so `s:dev-loop` step 6 could not plan them). The fenced block lists the exact paths the
+work will touch, one per line; a glob is allowed and `*` crosses `/` (`docs/*` ≡ `docs/**`), but
+a token with no literal path component (`*`, `**`, `*/?`) is rejected by the planner as
+UNDECLARED. Derive it from the Scope bullets by reading the repo (`Grep`/`Read`); for a file the
+work will create, name its path anyway.
+
+- **Refuse to create without one.** If no surface can be derived, ask the user for it
+  (AskUserQuestion). If none is supplied, stop and say the issue cannot be filed without a
+  surface; do not call `issue create` / `issueCreate`.
+- **`--quick` may infer the block, never omit it.** Infer from the description and a repo
+  search; report the inferred paths in step 9. A surface that cannot be inferred under
+  `--quick` stops the command exactly as above.
+- The same applies on the **REST path**: if `rtk gh api repos/<o>/<r>/issues -X POST` is used
+  instead of `gh issue create` (e.g. GraphQL is rate-limited), the body carries the identical
+  `## File surface` block, and `issue_template_guard.sh` now judges that call too.
+- Parents carry no surface of their own (they are containers); every child does.
+
+### Milestone — every issue, never blank silently
+
+*(github only. Linear's project milestones are a different object; skip this on Linear.)*
+
+Read the repo's open milestones once: `rtk gh api repos/<owner>/<repo>/milestones --jq '.[] | "\(.number)\t\(.title)\t\(.description // "")"'`.
+
+- **Milestones exist and one fits the surface** → propose the best match (by the milestone's
+  title/description against the surface and Goal) and confirm with AskUserQuestion; **accept the
+  proposal without asking under `--quick`**. Pass `--milestone "<title>"` to `gh issue create`
+  (or `-F milestone=<number>` on the REST path).
+- **Milestones exist and none fits** → say so in one line and ask (pick one anyway, or
+  proceed without). Never leave it blank silently; under `--quick`, proceed without and name
+  that in step 9.
+- **The repo has no milestones at all** → report it in one line (`Milestone: none (repo has no
+  milestones)`); this is not a blocker.
 
 A quoted non-English literal (a UI string, a Gherkin keyword, a foreign source identifier) is
 data, not prose — keep it verbatim in backticks so it stays greppable in the code it describes;
@@ -321,6 +363,7 @@ Per-tracker operations — one spine, two arms:
 | mode | `--label hitl\|afk` | label id |
 | oracle | `--label oracle:strong\|oracle:weak` | label id |
 | extra label | `--label <name>` when `--label` was passed | label id |
+| milestone | `--milestone "<title>"` (see above) | *(n/a)* |
 | parent | `--parent <n>` | `parentId` on `issueCreate` |
 | score | *(not an issue attribute — set on the board's `Points` field in step 7)* | `estimate` on `issueCreate` (native field, set here directly) |
 
@@ -489,6 +532,8 @@ Tracker: github | linear
 Issue:   #<N> <url>                    (or <TEAM>-<n>)
 Type:    <conventional> / <work-type> (<hitl|afk>)
 Score:   <n> (<justification>)         (parent: <n> = sum of children)
+Surface: <n> path(s)                   (say "inferred" under --quick)
+Milestone: <title> | none (repo has no milestones) | none (no fit)   (omit for linear)
 Parent:  #<P>                          (omit when flat)
 Board:   <project> → <column>          (omit for linear)
 Branch:  <type>/<ref>-<slug> (checked out)   (omit for parents)
