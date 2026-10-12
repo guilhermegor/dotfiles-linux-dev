@@ -1016,6 +1016,32 @@ hot_list() {
     [[ "$(field '.excluded[0].reason')" == "HOT-FILE: "*"new.yml"*"#77"* ]]
 }
 
+@test "candidate glob and hot glob that meet only on an open-PR file are an overlap" {
+    hot_list "docs/*b.md"
+    printf 'docs/ab.md\n' >"$BIN/prfiles.77"
+    stub_gh "[$(issue_json 15 'docs/a*.md')]" "" "" 0 "" "$OTHER_PR"
+    run_planner
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [[ "$(field '.excluded[0].reason')" == "HOT-FILE: "*"docs/ab.md"*"#77"* ]]
+}
+
+@test "same globs, open PR touches only a file outside the intersection: dispatchable" {
+    hot_list "docs/*b.md"
+    printf 'docs/zz.md\n' >"$BIN/prfiles.77"
+    stub_gh "[$(issue_json 16 'docs/a*.md')]" "" "" 0 "" "$OTHER_PR"
+    run_planner
+    [ "$(field '.dispatchable[0].issue')" = "16" ]
+}
+
+@test "all-literal non-hot surface makes no open-PR file read" {
+    hot_list "docs/*b.md"
+    stub_gh "[$(issue_json 17 new/a.sh)]" "" "" 0 "" "$OTHER_PR"
+    run_planner
+    [ "$(field '.dispatchable[0].issue')" = "17" ]
+    run grep -q "pulls/77/files" "$BIN/gh.calls"
+    [ "$status" -ne 0 ]
+}
+
 @test "open-PR file read failing excludes a hot-touching candidate by name, spares a non-hot one" {
     hot_list ".github/workflows/ci.yml"
     stub_gh "[$(issue_json 12 .github/workflows/ci.yml),$(issue_json 13 free/b.sh)]" "" "" 0 "" "$OTHER_PR"

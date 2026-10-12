@@ -14,9 +14,10 @@ setup() {
     # is NOT served: it must never count as open-PR overlap.
     cat >"$BIN/gh" <<'STUB'
 #!/bin/bash
+echo "$*" >>"$(dirname "$0")/calls"
 case "$*" in
 *"pulls?state=open"*) [ "${GH_FAIL:-0}" = 1 ] && exit 1; echo 7 ;;
-*"pulls/7/files"*) printf '.github/workflows/ci.yml\nshared/x.sh\nmkdocs.yml\n' ;;
+*"pulls/7/files"*) printf '.github/workflows/ci.yml\nshared/x.sh\nmkdocs.yml\n'; [ -n "${PR_EXTRA:-}" ] && echo "$PR_EXTRA"; exit 0 ;;
 *) exit 1 ;;
 esac
 STUB
@@ -74,6 +75,34 @@ teardown() {
     printf '.github/workflows/old.yml\n' >>"$HOT"
     run free_hot_overlap o r .github/workflows/old.yml
     [ "$output" = "none" ]
+}
+
+# --- glob vs glob: pattern-against-pattern matching cannot prove two globs disjoint ----------
+
+@test "candidate glob and hot glob that meet only on an open-PR file overlap" {
+    printf 'docs/*b.md\n' >>"$HOT"
+    PR_EXTRA='docs/ab.md' run free_hot_overlap o r 'docs/a*.md'
+    [ "$status" -eq 0 ]
+    [ "$output" = "hot:docs/ab.md" ]
+}
+
+@test "same globs, open PR touches only a file outside the intersection: none" {
+    printf 'docs/*b.md\n' >>"$HOT"
+    PR_EXTRA='docs/zz.md' run free_hot_overlap o r 'docs/a*.md'
+    [ "$output" = "none" ]
+}
+
+@test "glob candidate with a failing open-PR read fails closed" {
+    printf 'docs/*b.md\n' >>"$HOT"
+    GH_FAIL=1 run free_hot_overlap o r 'docs/a*.md'
+    [ "$status" -eq 1 ]
+    [ "$output" = "UNKNOWN" ]
+}
+
+@test "all-literal, non-hot candidate keeps the no-read shortcut" {
+    run free_hot_overlap o r new/a.sh
+    [ "$output" = "none" ]
+    [ ! -e "$BIN/calls" ]
 }
 
 @test "a failing open-PR read fails closed: UNKNOWN, never none" {

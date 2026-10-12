@@ -316,7 +316,11 @@ free_hot_overlap() {
 			[[ "$f" == $pat ]] && { hot+=("$f"); break; }
 		done
 	done
-	[ ${#hot[@]} -gt 0 ] || { echo none; return 0; }
+	# Two globs cannot be proven disjoint by matching one against the other, so a glob FILE with
+	# any hot pattern declared still reads the open PRs; only an all-literal FILE list may skip it.
+	local has_glob=0
+	for f in "$@"; do [[ "$f" == *[*?[]* ]] && has_glob=1; done
+	[ ${#hot[@]} -gt 0 ] || [ "$has_glob" = 1 ] || { echo none; return 0; }
 	numbers="$(gh api --paginate "repos/$owner/$repo/pulls?state=open&per_page=100" --jq '.[].number' 2>/dev/null)" \
 		|| { echo UNKNOWN; return 1; }
 	while read -r n; do
@@ -325,9 +329,18 @@ free_hot_overlap() {
 			|| { echo UNKNOWN; return 1; }
 		files="$(printf '%s\n%s' "$files" "$f")"
 	done <<<"$numbers"
-	for f in "${hot[@]}"; do
-		printf '%s\n' "$files" | grep -qxF -- "$f" && hits="${hits:+$hits,}$f"
-	done
+	local name pf
+	while IFS= read -r name; do
+		[ -n "$name" ] || continue
+		for pat in "${pats[@]}"; do
+			# shellcheck disable=SC2053  # both sides are intentionally globs
+			[[ "$name" == $pat ]] || continue
+			for pf in "$@"; do
+				# shellcheck disable=SC2053
+				[[ "$name" == $pf ]] && { hits="${hits:+$hits,}$name"; break 2; }
+			done
+		done
+	done <<<"$files"
 	if [ -n "$hits" ]; then echo "hot:$hits"; else echo none; fi
 }
 

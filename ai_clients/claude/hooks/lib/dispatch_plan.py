@@ -842,12 +842,19 @@ def build_plan() -> dict:
 					for t in surfaces[number] + expanded[number]
 					if any(fnmatch.fnmatch(t, p) or fnmatch.fnmatch(p, t) for p in hot)
 				]
-				if hot_files and hot_holders is None and not hot_read_failed:
+				# Two globs (`docs/a*.md` vs hot `docs/*b.md`) cannot be proven disjoint by matching
+				# one pattern against the other, so a glob token with ANY hot list declared always
+				# reads the open PRs; the per-file check below then judges each PR filename
+				# against both sides. Only an all-literal surface may take the no-read shortcut.
+				needs_read = bool(hot_files) or (
+					bool(hot) and any(ch in t for t in surfaces[number] for ch in GLOB_CHARS)
+				)
+				if needs_read and hot_holders is None and not hot_read_failed:
 					try:
 						hot_holders = open_pr_hot_holders(slug, prs, hot)
 					except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
 						hot_read_failed = True
-				if hot_files and hot_read_failed:
+				if needs_read and hot_read_failed:
 					excluded.append({"issue": number, "reason": HOT_UNKNOWN_REASON})
 					continue
 				clash = next(
