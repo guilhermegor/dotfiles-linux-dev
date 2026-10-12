@@ -336,7 +336,9 @@ setup_neovim_config() {
 
     if [ -f "$init_file" ]; then
         local backup_file
-        backup_file="$init_file.bak.$(date +%Y%m%d%H%M%S)"
+        # mktemp suffix: two regenerations in the same second must not overwrite
+        # the first backup (the user's original init.vim).
+        backup_file="$(mktemp "$init_file.bak.$(date +%Y%m%d%H%M%S).XXXXXX")" || return 1
         cp "$init_file" "$backup_file" || return 1
         print_status "info" "Existing init.vim backed up to $backup_file"
     fi

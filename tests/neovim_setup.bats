@@ -49,10 +49,9 @@ teardown() {
 }
 
 @test "a failed init.vim write returns 1 and skips PlugInstall" {
-    mkdir -p "$(dirname "$INIT")"
-    chmod a-w "$(dirname "$INIT")"
+    # A directory at $INIT fails the write even for root (a read-only parent would not).
+    mkdir -p "$INIT"
     run setup_neovim_config
-    chmod u+w "$(dirname "$INIT")"
     [ "$status" -eq 1 ]
     [[ "$output" == *"Could not write"* ]]
     [ ! -s "$NVIM_LOG" ]
@@ -89,4 +88,16 @@ teardown() {
     [ -f "${backups[0]}" ]
     [ "$(cat "${backups[0]}")" = "old" ]
     grep -q '^silent! colorscheme onedark' "$INIT"
+}
+
+@test "two regenerations keep the original init.vim in a distinct backup" {
+    mkdir -p "$(dirname "$INIT")"
+    echo "original" > "$INIT"
+    NVIM_REGEN_CONFIG=1 run setup_neovim_config
+    [ "$status" -eq 0 ]
+    NVIM_REGEN_CONFIG=1 run setup_neovim_config
+    [ "$status" -eq 0 ]
+    backups=("$INIT".bak.*)
+    [ "${#backups[@]}" -eq 2 ]
+    grep -lx "original" "${backups[@]}"
 }
