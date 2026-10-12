@@ -7,8 +7,10 @@
 # run_fallback_review …` compound, which the auto-mode classifier judged
 # inconsistently. It takes ONE positive-integer PR number — the ladder's
 # one-PR-per-invocation cap — and nothing else. Never passes paid/credit flags;
-# the ladder's own guards (free rungs only, no re-review of a covered head) stay
-# the safety boundary.
+# the ladder's own guards (free rungs first, the paid `claude` rung only as the
+# owner-accepted last resort, no re-review of a covered head) stay the safety
+# boundary. Run it as `cd <absolute-repo-path> && …`: OWNER/REPO come from the
+# cwd's origin.
 #
 # The pushed epoch is the HEAD COMMIT's committer date, never NOW: a NOW epoch
 # makes the ladder refuse every PR as "recently pushed".
