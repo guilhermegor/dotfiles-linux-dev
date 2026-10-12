@@ -1408,6 +1408,51 @@ uninstall_google_authenticator() {
 # `bash -c 'source distro_config/install_lib/system_utils.sh; uninstall_dim_calendar_events'`
 # if you need to remove the extension.
 
+# ============================================================================
+# CLAUDESTATUS TOP-BAR (GNOME Shell extension, #734)
+# ============================================================================
+
+CLAUDESTATUS_BAR_UUID="claudestatus-bar@dotfiles-dev"
+
+# Copies (never symlinks) the extension to the user extensions dir, and its data helpers to
+# ~/.local/share/claudestatus-bar/, which extension.js reads. The helper layout mirrors the
+# repo (claudestatus_bar/ + lib/) because model.mjs imports ../lib/claudestatus_billing.mjs.
+install_claudestatus_bar() {
+    local src data_dir ext_dir
+    src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../ai_clients/claude" && pwd)" || return 1
+    data_dir="$HOME/.local/share/claudestatus-bar"
+    ext_dir="$HOME/.local/share/gnome-shell/extensions/$CLAUDESTATUS_BAR_UUID"
+
+    if ! command_exists gnome-shell; then
+        print_status "warning" "GNOME Shell not detected; skipping the claudestatus top-bar."
+        return 0
+    fi
+    command_exists node || print_status "warning" "node not on PATH: the top-bar needs it to read usage."
+
+    run_or_echo mkdir -p "$data_dir/claudestatus_bar" "$data_dir/lib" "$(dirname "$ext_dir")"
+    run_or_echo cp -f "$src/claudestatus_bar/model.mjs" "$src/claudestatus_bar/refresh.mjs" \
+        "$data_dir/claudestatus_bar/"
+    run_or_echo cp -f "$src/lib/claudestatus_billing.mjs" "$data_dir/lib/"
+    # rm -rf on a symlink removes the link only, so an old dev symlink is replaced, not followed.
+    run_or_echo rm -rf "$ext_dir"
+    run_or_echo cp -a "$src/claudestatus_bar/gnome-extension" "$ext_dir"
+
+    if gnome-extensions info "$CLAUDESTATUS_BAR_UUID" 2>/dev/null | grep -q "ENABLED"; then
+        print_status "success" "claudestatus top-bar already enabled; files refreshed."
+    else
+        run_or_echo gnome-extensions enable "$CLAUDESTATUS_BAR_UUID" \
+            || print_status "info" "Enable it after the restart: gnome-extensions enable $CLAUDESTATUS_BAR_UUID"
+    fi
+    print_status "config" "Restart GNOME Shell to load it: Alt+F2, 'r', Enter (X11) or log out and in (Wayland)."
+}
+
+uninstall_claudestatus_bar() {
+    run_or_echo gnome-extensions disable "$CLAUDESTATUS_BAR_UUID" 2>/dev/null || true
+    run_or_echo rm -rf "$HOME/.local/share/gnome-shell/extensions/$CLAUDESTATUS_BAR_UUID" \
+        "$HOME/.local/share/claudestatus-bar"
+    print_status "success" "claudestatus top-bar removed (restart GNOME Shell to drop the icon)."
+}
+
 INSTALL_REGISTRY+=(
     "install_utilities:System Utilities::"
     "install_openlogi:openlogi (Logitech HID++ manager):Sistema:"
@@ -1431,4 +1476,6 @@ INSTALL_REGISTRY+=(
     "install_google_authenticator:Google Authenticator (TOTP 2FA)::"
     "install_dim_calendar_events:Calendar Events Enhancement::"
     "configure_gsconnect:GSConnect::"
+    # Shell extension, no launcher: no app-folder placement.
+    "install_claudestatus_bar:claudestatus top-bar (GNOME extension)::"
 )
