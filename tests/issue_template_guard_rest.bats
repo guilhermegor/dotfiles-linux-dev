@@ -234,7 +234,9 @@ EOF
         'gh api -X GET "repos/$R/issues"' \
         'gh api repos/{owner}/{repo}/issues/5/comments -f body=x' \
         'gh api repos/{owner}/{repo}/issues/5/labels -f labels[]=a' \
-        'gh api repos/{owner}/{repo}/pulls -X POST -f body=x'; do
+        'gh api repos/{owner}/{repo}/pulls -X POST -f body=x' \
+        'gh api user/repos -f name=x' \
+        'gh api "$EP"'; do
         run bash -c "payload '$s' | '$GUARD'"
         [ "$status" -eq 0 ] || { echo "WRONGLY BLOCKED: $s"; return 1; }
     done
@@ -246,6 +248,11 @@ EOF
         'gh api "repos/$R/issues/5/comments" -f body=x' \
         'gh api repos/{owner}/{repo}//issues -f body=x' \
         'xargs -n1 gh api repos/{owner}/{repo}/issues -f body=nope' \
+        'gh api "$EP" -f body=x' \
+        'gh api "repos/$R/issues" -X POST' \
+        'gh api `echo x` --input f' \
+        'gh api "$(echo repos/x)" --field body=x' \
+        'gh api "$EP" -X PATCH' \
         'sudo -n gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
         'timeout 5 gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
         'nice gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \

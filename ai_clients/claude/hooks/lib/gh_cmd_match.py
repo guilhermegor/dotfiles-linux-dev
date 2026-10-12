@@ -354,7 +354,11 @@ def api_issue_match(segments):
         # Anything else that mentions `issues` is judged as a write (unknown never means allowed).
         if not m and not dynamic and (not mentions or API_ISSUE_SUBRESOURCE.match(path)):
             continue
-        if not m and not mentions:
+        # A shell-built endpoint is not statically known: with any body field/--input or a
+        # non-GET method it is judged as a write even when `issues` appears nowhere (deliberate
+        # cost: shell-built writes to non-issue endpoints are judged too).
+        unknown_write = dynamic and (fields or input_file or (method or "GET") != "GET")
+        if not m and not mentions and not unknown_write:
             continue
         dyn = None if m else re.search(r"(?:^|/)issues(?:/([^/]*))?$", path)
         method = method or ("POST" if fields or input_file else "GET")
@@ -363,6 +367,7 @@ def api_issue_match(segments):
         number = (m.group(3) if m else (dyn.group(1) if dyn else None)) or None
         is_write = (
             method == "?"
+            or (unknown_write and method != "GET")  # endpoint not statically known
             or (method == "POST" and not number)
             or (method in ("PATCH", "PUT") and number)
         )
@@ -387,7 +392,8 @@ def api_issue_match(segments):
         body_json = False
         if input_file is not None:
             has_body_file, body_file, body_json, has_body, body = True, input_file, True, False, None
-        if method in ("POST", "?") and not number and not (has_body or has_body_file):
+        no_body = not (has_body or has_body_file)
+        if no_body and (unknown_write or (method in ("POST", "?") and not number)):
             has_body, body = True, ""  # REST create has no editor mode: no body IS an empty body
         return {
             "matched": True, "repo": repo, "head": None, "has_body": has_body, "body": body,
