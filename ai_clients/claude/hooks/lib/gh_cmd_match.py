@@ -105,43 +105,85 @@ def split_segments(command):
     return segments
 
 
-WRAPPERS = {"rtk", "env", "command", "exec", "nohup", "time"}
+WRAPPERS = {"rtk", "proxy", "env", "command", "exec", "nohup", "time", "sudo", "xargs", "builtin"}
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+
+
+def _word(tok):
+    """A command word stripped of group openers, `x=$(` prefixes and a leading backslash."""
+    sub = re.match(r"^\w+=.*?(?:\$\(|`)(.*)$", tok)  # x=$(gh ...) / x=`gh ...`
+    return (sub.group(1) if sub else tok).lstrip("$({`!\\")
 
 
 def gh_start(argv):
     """Index of the `gh` token in a simple command, or -1.
 
-    Skips `VAR=x` assignments, `rtk`/`env`/`command`/... wrappers (and `env`'s -flags), a leading
-    `$(`/`(`/`{`/backtick group opener, and accepts an absolute path to gh (`/usr/bin/gh`).
+    Skips `VAR=x` assignments, wrappers (`rtk [proxy]`, `env`, `command`, `sudo`, ...) together
+    with whatever flags/values follow them, a `$(`/`(`/`{`/backtick group opener, a leading `\\`
+    and accepts an absolute path to gh. With NO wrapper, `gh` must be the first word.
     """
-    i = 0
-    while i < len(argv):
-        tok = argv[i]
-        sub = re.match(r"^\w+=.*?(?:\$\(|`)(.*)$", tok)  # x=$(gh ...) / x=`gh ...`
-        tok = (sub.group(1) if sub else tok).lstrip("$({`!")
-        if tok in WRAPPERS or re.match(r"^\w+=", tok) or (tok.startswith("-") and i > 0):
-            i += 1
-        elif tok == "":
-            i += 1
-        else:
-            return i if tok.rsplit("/", 1)[-1] == "gh" else -1
+    wrapped = False
+    for i, tok in enumerate(argv):
+        word = _word(tok)
+        if word in WRAPPERS:
+            wrapped = True
+        elif word == "" or re.match(r"^\w+=", word):
+            continue
+        elif word.rsplit("/", 1)[-1] == "gh":
+            return i
+        elif not wrapped:
+            return -1
     return -1
 
 
-def matching_argv(segments, noun):
-    """Return the argv of the first segment shaped like `[rtk] gh <noun> create|edit|merge`, or
-    None.
+def gh_sub(argv, idx):
+    """Index of gh's subcommand after `idx`, skipping gh's global -R/--repo/-h flags."""
+    i = idx + 1
+    while i < len(argv) and argv[i].startswith("-"):
+        i += 2 if argv[i] in ("-R", "--repo", "--hostname") else 1
+    return i
+
+
+def iter_argvs(segments, depth=0):
+    """Yield the argv of every simple command, descending into `bash -c '...'` / `eval ...`.
+
+    ValueError (unbalanced quote) propagates from any level, so nothing is skipped silently.
     """
     for segment in segments:
-        argv = shlex.split(segment, posix=True)  # ValueError propagates: caller must fail open
+        argv = shlex.split(segment, posix=True)
+        yield argv
+        if depth >= 3:
+            continue
+        words = [_word(t) for t in argv]
+        inner = None
+        for i, w in enumerate(words):
+            base = w.rsplit("/", 1)[-1]
+            if base in SHELLS:
+                for j in range(i + 1, len(argv) - 1):
+                    if re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", argv[j]):
+                        inner = argv[j + 1]
+                        break
+                break
+            if base == "eval":
+                inner = " ".join(argv[i + 1:])
+                break
+            if w not in WRAPPERS and not re.match(r"^\w+=", w) and w != "":
+                break
+        if inner:
+            yield from iter_argvs(split_segments(inner), depth + 1)
+
+
+def matching_argv(segments, noun):
+    """Return the argv of the first command shaped like `[wrappers] gh [-R x] <noun>
+    create|edit|merge`, or None.
+    """
+    for argv in iter_argvs(segments):  # ValueError propagates: caller must fail open
         idx = gh_start(argv)
-        if (
-            idx >= 0
-            and len(argv) >= idx + 3
-            and argv[idx + 1] == noun
-            and argv[idx + 2] in ("create", "edit", "merge")
-        ):
-            return argv[idx + 3:]
+        if idx < 0:
+            continue
+        sub = gh_sub(argv, idx)
+        if len(argv) >= sub + 2 and argv[sub] == noun and argv[sub + 1] in ("create", "edit", "merge"):
+            return argv[idx + 1:sub] + argv[sub + 2:]
     return None
 
 
@@ -245,12 +287,14 @@ def api_issue_match(segments):
     by it. Body is read from a `body=` field (`-f`/`-F`/`--raw-field`/`--field`); `-F body=@f`
     and `--input f` are file-valued (`body_json` marks that the file is a JSON payload).
     """
-    for segment in segments:
-        argv = shlex.split(segment, posix=True)
+    for argv in iter_argvs(segments):
         idx = gh_start(argv)
-        if idx < 0 or argv[idx + 1:idx + 2] != ["api"]:
+        if idx < 0:
             continue
-        rest = argv[idx + 2:]
+        sub = gh_sub(argv, idx)
+        if argv[sub:sub + 1] != ["api"]:
+            continue
+        rest = argv[sub + 1:]
         endpoint, method, fields, input_file = None, None, [], None
         i = 0
         while i < len(rest):
