@@ -139,6 +139,9 @@ elif [ "$1" = "api" ] && [[ "$2" == */issues/*/comments* ]]; then
     jq --argjson n "$n" --argjson p "$p" '[.[] | select(.number == $n) | (.comments // [])[]
         | {body, created_at: .createdAt, user: {login: .author.login}}]
         | .[($p - 1) * 100:$p * 100]' "$FIXTURE"
+elif [ "$1" = "api" ] && [[ "$2" == */git/commits/* ]]; then
+    # parents of the head (#736): the fixture's per-PR `parents` list, default the reviewed 1111aaaa
+    jq '{parents: ([.[].parents // ["1111aaaa"]] | first | map({sha: .}))}' "$FIXTURE"
 elif [ "$1" = "api" ] && [[ "$2" == */compare/* ]]; then
     # the PR patch at <oid> (#736): the fixture's per-PR `patches` map, oid -> file list
     [ -n "${GH_COMPARE_FAIL:-}" ] && { echo "gh: HTTP 502" >&2; exit 1; }
@@ -1216,6 +1219,38 @@ EOF
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "733" ]
+}
+
+@test "an equal-signature head that is not a child of the reviewed head is a new head (#737)" {
+    # a relocated edit has the same position-less signature, but the reviewed head is no parent
+    stub_gh_prs <<EOF
+[{"number":736,"headRefOid":"2222aaaa","baseRefName":"master","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"1111aaaa"}}],"comments":[],"parents":["9999cccc"],
+  "commits":[{"oid":"2222aaaa","committedDate":"$(ago 3600)"}],"statusCheckRollup":[],
+  "patches":{"1111aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -1 +1 @@\n+x"}],
+             "2222aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -9 +9 @@\n+x"}]}}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "736" ]
+}
+
+@test "many older comment heads do not crowd out the parent's review (#737)" {
+    stub_gh_prs <<EOF
+[{"number":737,"headRefOid":"2222aaaa","baseRefName":"master","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"1111aaaa"}}],
+  "comments":[{"body":"Fallback review — runtime: codex, model: m (selected by: s)\nReviewed head: aa01","createdAt":"$(ago 7000)"},
+              {"body":"Fallback review — runtime: codex, model: m (selected by: s)\nReviewed head: aa02","createdAt":"$(ago 7000)"},
+              {"body":"Fallback review — runtime: codex, model: m (selected by: s)\nReviewed head: aa03","createdAt":"$(ago 7000)"},
+              {"body":"Fallback review — runtime: codex, model: m (selected by: s)\nReviewed head: aa04","createdAt":"$(ago 7000)"}],
+  "commits":[{"oid":"2222aaaa","committedDate":"$(ago 3600)"}],"statusCheckRollup":[],
+  "patches":{"1111aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -1 +1 @@\n+x"}],
+             "2222aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -4 +4 @@\n+x"}]}}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 737)" == *"merge-only update"* ]]
 }
 
 # recent_pr PR — head pushed 60s ago, never reviewed.

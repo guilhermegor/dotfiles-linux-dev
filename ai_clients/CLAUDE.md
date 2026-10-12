@@ -418,8 +418,9 @@ parallel plan, never to a guessed serial one. The guard needs no new branch — 
 head has a `review-pr-<N>` agent in flight" is already its pass condition.
 
 **Merge-only heads and ASK-ONLY repos (#736).** A head whose PR patch (`compare/<base>...<oid>`,
-hunk line numbers normalised) equals that of an already-covered head (either channel; newest 3,
-`COMPARE_PAGES` bound) is excluded as covered: GitHub's update-branch moves the head without
+hunk line numbers normalised) equals that of an already-covered head (either channel) that is a direct
+parent of the current head (so the update is a real merge; at most 2 candidates, `COMPARE_PAGES`
+bound) is excluded as covered: GitHub's update-branch moves the head without
 changing what was reviewed. Patches are compared, never SHAs, so conflict resolution or new code
 stays a new head; an unreadable or empty patch read fails closed to "needs review". The
 `RECENT_PUSH_SECONDS` exclusion is skipped when `slot_classify.py` reads `ASK-ONLY` (a push

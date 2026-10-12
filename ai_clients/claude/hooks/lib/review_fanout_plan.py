@@ -151,9 +151,8 @@ RECENT_PUSH_SECONDS = int(os.environ.get("REVIEW_FANOUT_RECENT_PUSH_SECONDS", "6
 
 # Merge-only head detection (dotfiles-linux-dev#736) reads at most this many previously reviewed
 # heads per PR (newest first) and COMPARE_PAGES x REST_PAGE files per head -- a bounded call
-# budget: at most (MAX_REVIEWED_HEADS + 1) x COMPARE_PAGES reads, and only for a PR that already
+# budget: one parents read plus at most 3 x COMPARE_PAGES compare reads (head + <=2 parents), and only for a PR that already
 # passed every other eligibility rule.
-MAX_REVIEWED_HEADS = 3
 COMPARE_PAGES = 3
 _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", re.MULTILINE)
 _REVIEWED_HEAD_RE = re.compile(r"^Reviewed head: ([0-9a-fA-F]+)$")
@@ -684,7 +683,7 @@ def _patch_signature(base: str, oid: str) -> list | None:
 
 
 def reviewed_heads(pr: dict) -> list[str]:
-	"""Return the other heads that have review coverage, newest first, at most the budget.
+	"""Return every other head that has review coverage (order is irrelevant).
 
 	Both channels, the same two the module docstring describes: a submitted review's commit and
 	a ladder attribution comment's ``Reviewed head:`` line. The current head is never its own
@@ -698,8 +697,7 @@ def reviewed_heads(pr: dict) -> list[str]:
 		if LADDER_ATTRIBUTION_RE.search(body) and len(lines) > 1:
 			match = _REVIEWED_HEAD_RE.match(lines[1])
 			found.append(match.group(1) if match else "")
-	distinct = list(dict.fromkeys(oid for oid in reversed(found) if oid and oid != head))
-	return distinct[:MAX_REVIEWED_HEADS]
+	return list(dict.fromkeys(oid for oid in found if oid and oid != head))
 
 
 def merge_only_covered_head(pr: dict) -> str | None:
@@ -711,8 +709,21 @@ def merge_only_covered_head(pr: dict) -> str | None:
 	a new head. Fails closed: an unreadable patch on either side is None, i.e. "needs review".
 	"""
 	base = pr.get("baseRefName") or ""
-	candidates = reviewed_heads(pr)
-	if not base or not candidates:
+	head = pr.get("headRefOid") or ""
+	reviewed = reviewed_heads(pr)
+	if not base or not head or not reviewed:
+		return None
+	# Only a DIRECT PARENT of the head can be the covered head: that ties the comparison to a real
+	# merge of the base into the reviewed head. Hunk positions are dropped from the signature (a
+	# base merge shifts them), so without this a relocated edit in a file with repeated blocks
+	# could match an older head (Greptile, PR #737). At most 2 parents also bounds the reads and
+	# removes any need to rank reviewed heads by age.
+	try:
+		parents = [p["sha"] for p in _rest(f"git/commits/{head}")["parents"]]
+	except _READ_ERRORS:
+		return None
+	candidates = [oid for oid in reviewed if oid in parents]
+	if not candidates:
 		return None
 	current = _patch_signature(base, pr.get("headRefOid") or "")
 	if current is None:
