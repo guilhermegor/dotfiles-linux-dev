@@ -1077,11 +1077,11 @@ hot_list() {
     stub_gh "[$(issue_json 18 .github/workflows/ci.yml)]" "" "" 0 "" \
         '[{"number":77,"title":"a","body":"","closingIssuesReferences":[]},{"number":78,"title":"b","body":"","closingIssuesReferences":[]}]'
     start=$(date +%s%N)
-    DISPATCH_HOT_READ_BUDGET=1.5 PR_FILES_SLEEP_77=1 PR_FILES_HANG_78=8 run_planner
+    DISPATCH_HOT_READ_BUDGET=4 PR_FILES_SLEEP_77=3 PR_FILES_HANG_78=15 run_planner
     elapsed_ms=$((($(date +%s%N) - start) / 1000000))
     [ "$status" -eq 0 ]
-    # Cut at the shared deadline (~1.5 s); a per-read full budget would end near 2.5 s.
-    [ "$elapsed_ms" -lt 2100 ]
+    # Cut at the shared deadline (~4 s plus planner startup); a per-read full budget would end near 8 s.
+    [ "$elapsed_ms" -lt 6200 ]
     [[ "$(field '[.excluded[] | select(.issue==18)][0].reason')" == "HOT-FILE: "*"UNREADABLE"* ]]
 }
 
