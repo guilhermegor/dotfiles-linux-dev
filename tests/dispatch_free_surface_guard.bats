@@ -505,6 +505,104 @@ transcript_dev_loop_many_failed_agents() {
     [[ "$output" == *"bg-agent"* ]]
 }
 
+# --- a resumed agent is IN FLIGHT, not merely "not on the rescue list" (dotfiles-linux-dev#729) ---
+# A SendMessage resume keeps the ORIGINAL Agent dispatch's failed notification, so before #729 the
+# resumed agent was neither failed nor unresolved: its issue read as "nothing working it" and the
+# guard demanded the duplicate dispatch s:dev-loop step 1 forbids. Two sources now cover it: the
+# resume itself (while recent) and the registry claim the resume path re-takes.
+
+# transcript_resumed_agent ISSUE EPOCH — dispatch failed, then SendMessage'd at EPOCH.
+transcript_resumed_agent() {
+    local f
+    f="$(transcript_dev_loop_background_agent_status_named "$1" failed)"
+    jq -nc --arg n "issue-$1-bg-agent" --arg ts "$(date -u -d "@$2" +%Y-%m-%dT%H:%M:%S.123Z)" \
+        '{type:"assistant",timestamp:$ts,message:{content:[{type:"tool_use",id:"sm1",name:"SendMessage",input:{to:$n,message:"resume"}}]}}' \
+        >>"$f"
+    printf '%s\n' "$f"
+}
+
+@test "a recently SendMessage-resumed agent counts as in flight — no duplicate demanded" {
+    plan_of "4"
+    run run_guard "$(transcript_resumed_agent 4 "$(date +%s)")"
+    [ "$status" -eq 0 ]
+    [[ ! "$output" == *"#4"* ]]
+}
+
+@test "a resumed agent occupies a concurrency slot" {
+    plan_of "4 5"
+    DISPATCH_MAX_CONCURRENT=1
+    export DISPATCH_MAX_CONCURRENT
+    run run_guard "$(transcript_resumed_agent 4 "$(date +%s)")"
+    [ "$status" -eq 0 ]
+}
+
+@test "a resumed agent that also holds its claim takes ONE slot, not two" {
+    plan_of "4 5"
+    DISPATCH_MAX_CONCURRENT=2
+    export DISPATCH_MAX_CONCURRENT
+    claim_issue 4
+    run run_guard "$(transcript_resumed_agent 4 "$(date +%s)")"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#5"* ]]
+}
+
+@test "a resume whose delivery failed (success:false) does not count as running" {
+    plan_of "4"
+    local f
+    f="$(transcript_resumed_agent 4 "$(date +%s)")"
+    jq -nc '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"sm1",content:"{\"success\":false,\"message\":\"no such agent\"}"}]}}' >>"$f"
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#4"* ]]
+}
+
+@test "a resume whose delivery succeeded still counts as running" {
+    plan_of "4"
+    local f
+    f="$(transcript_resumed_agent 4 "$(date +%s)")"
+    jq -nc '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"sm1",content:"{\"success\":true,\"message\":\"Message sent to issue-4-bg-agent\"}"}]}}' >>"$f"
+    run run_guard "$f"
+    [ "$status" -eq 0 ]
+}
+
+@test "a resume older than the claim TTL stops counting — the finished agent is not in flight forever" {
+    plan_of "4"
+    DISPATCH_CLAIM_TTL=60
+    export DISPATCH_CLAIM_TTL
+    run run_guard "$(transcript_resumed_agent 4 "$(($(date +%s) - 3600))")"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#4"* ]]
+    [[ ! "$output" == *"RESCUE"* ]]
+}
+
+@test "a resume of a DIFFERENT agent does not cover this issue" {
+    plan_of "4"
+    local f
+    f="$(transcript_dev_loop_background_agent_status_named 4 failed)"
+    jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.123Z)" \
+        '{type:"assistant",timestamp:$ts,message:{content:[{type:"tool_use",id:"sm1",name:"SendMessage",input:{to:"issue-9-other",message:"resume"}}]}}' \
+        >>"$f"
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE"* ]]
+}
+
+@test "a failed agent re-claimed in the registry is covered; once the claim expires it is demanded" {
+    plan_of "4"
+    local f
+    f="$(transcript_dev_loop_background_agent_status_named 4 failed)"
+    claim_issue 4
+    run run_guard "$f"
+    [ "$status" -eq 0 ]
+    : >"$TEST_TMP/.git/dispatch-claims.tsv"
+    printf '%s\t%s\t%s\n' "$(($(date +%s) - 3600))" 4 held.sh >>"$TEST_TMP/.git/dispatch-claims.tsv"
+    DISPATCH_CLAIM_TTL=60
+    export DISPATCH_CLAIM_TTL
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#4"* ]]
+}
+
 @test "an undeclared failed dispatch is never dropped by the tab split" {
     # Review finding on this file: bash's `read` strips a LEADING tab even under a custom IFS,
     # so a record with an empty decl_issue lost its name into the wrong field and the undeclared
