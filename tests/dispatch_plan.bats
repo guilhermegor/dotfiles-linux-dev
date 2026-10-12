@@ -247,6 +247,7 @@ JSON
     # dotfiles-linux-dev#714: open_pr_hot_holders() reads each open PR's files over REST. A
     # per-PR fixture \$BIN/prfiles.<N> serves them; PR_FILES_FAIL=1 makes the read fail.
     [ "\${PR_FILES_FAIL:-0}" = 1 ] && { echo "gh: HTTP 502" >&2; exit 1; }
+    [ -n "\${PR_FILES_SLEEP:-}" ] && sleep "\$PR_FILES_SLEEP"
     n="\${3#repos/acme/widgets/pulls/}"; n="\${n%%/*}"
     [ -f "$BIN/prfiles.\$n" ] && cat "$BIN/prfiles.\$n"
     exit 0
@@ -1040,6 +1041,18 @@ hot_list() {
     [ "$(field '.dispatchable[0].issue')" = "17" ]
     run grep -q "pulls/77/files" "$BIN/gh.calls"
     [ "$status" -ne 0 ]
+}
+
+@test "open-PR file reads past the overall deadline exclude hot-touching candidates, never dispatch" {
+    hot_list ".github/workflows/ci.yml"
+    printf 'unrelated.sh\n' >"$BIN/prfiles.77"
+    printf 'unrelated.sh\n' >"$BIN/prfiles.78"
+    stub_gh "[$(issue_json 18 .github/workflows/ci.yml),$(issue_json 19 free/c.sh)]" "" "" 0 "" \
+        '[{"number":77,"title":"a","body":"","closingIssuesReferences":[]},{"number":78,"title":"b","body":"","closingIssuesReferences":[]}]'
+    DISPATCH_HOT_READ_BUDGET=0.5 PR_FILES_SLEEP=1 run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable[0].issue')" = "19" ]
+    [[ "$(field '[.excluded[] | select(.issue==18)][0].reason')" == "HOT-FILE: "*"UNREADABLE"* ]]
 }
 
 @test "open-PR file read failing excludes a hot-touching candidate by name, spares a non-hot one" {

@@ -84,6 +84,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from open_pr_pages import read_open_prs
@@ -92,6 +93,11 @@ LIB_DIR = Path(__file__).resolve().parent
 FREE_SURFACE_SH = LIB_DIR / "free_surface.sh"
 ROADMAP_UNBLOCK_SH = LIB_DIR / "roadmap_unblock.sh"
 GH_TIMEOUT = 20
+# Overall budget for the serial per-PR file reads behind the hot-file rule. round_dispatch_guard.sh
+# kills the whole planner at 60s, which would leave NO per-issue exclusion; staying well under
+# it lets the existing hot_read_failed path exclude the affected candidates by name instead.
+# DISPATCH_HOT_READ_BUDGET overrides it (tests).
+HOT_READ_BUDGET = 30.0
 GATE_TIMEOUT = 25
 # One `_ru_native_blockers` call per open issue, sequential inside a single subprocess (same
 # reasoning as GATE_TIMEOUT for the free-surface gate) — generous because a 500-issue repo would
@@ -680,7 +686,11 @@ def open_pr_hot_holders(slug: str, prs: list[dict], patterns: list[str]) -> dict
 	read so the caller can exclude by name rather than treat a partial read as "no holder".
 	"""
 	holders: dict[str, int] = {}
+	budget = float(os.environ.get("DISPATCH_HOT_READ_BUDGET", HOT_READ_BUDGET))
+	deadline = time.monotonic() + budget
 	for pr in sorted(prs, key=lambda p: p["number"]):
+		if time.monotonic() > deadline:
+			raise subprocess.TimeoutExpired("open-PR file reads", budget)
 		out = _run(
 			["gh", "api", "--paginate", f"repos/{slug}/pulls/{pr['number']}/files", "--jq", ".[].filename"]
 		)

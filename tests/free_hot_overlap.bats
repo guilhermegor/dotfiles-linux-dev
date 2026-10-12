@@ -1,10 +1,11 @@
 #!/usr/bin/env bats
 #
 # free_hot_overlap in ai_clients/claude/hooks/lib/free_surface.sh (dotfiles-linux-dev#714, owner option
-# (c)): the bash twin of dispatch_plan.py's hot-file rule. Pure set math over FREE_HELD_PATHS plus
-# a per-repo list file (DISPATCH_HOT_FILES_FILE here; in real use
-# `<git-common-dir>/dispatch-hot-files.txt`). Hot overlap blocks; every other open-PR overlap is
-# still only free_classify_files' annotation.
+# (c)): the bash twin of dispatch_plan.py's hot-file rule. It matches the candidate FILE arguments
+# against a per-repo hot-pattern list (DISPATCH_HOT_FILES_FILE here; in real use
+# `<git-common-dir>/dispatch-hot-files.txt`), then reads the open PRs' files over REST (a stubbed
+# `gh` here) and reports a file that is hot AND changed by an open PR. Hot overlap blocks; every
+# other open-PR overlap is still only free_classify_files' annotation.
 
 setup() {
     source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/free_surface.sh"
