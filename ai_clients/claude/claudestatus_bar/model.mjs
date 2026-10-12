@@ -1,0 +1,104 @@
+// Shapes the stored claudestatus data into the stacked popover model (#734).
+//
+// Pure read: usage.json (written by refresh.mjs usage) + the billing cache (#733). Opening the
+// popover runs this and nothing else, so it never calls an API or scrapes. Both prototypes
+// (GNOME extension, AppIndicator window) only display what render() returns, so the two cannot
+// differ in content.
+//
+//   node model.mjs            -> JSON { bar, accounts: [{ name, text }] }
+
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import { cachePath, effectiveWeeklyReset, loadCache } from "../lib/claudestatus_billing.mjs";
+
+const BAR_WIDTH = 10;
+const SECOND = 1000;
+const MINUTE = 60 * SECOND;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+export function usagePath() {
+    return process.env.CLAUDESTATUS_USAGE_FILE || path.join(path.dirname(cachePath()), "usage.json");
+}
+
+function loadUsage() {
+    try {
+        return JSON.parse(fs.readFileSync(usagePath(), "utf8"));
+    } catch {
+        return { at: null, accounts: [] };
+    }
+}
+
+export function countdown(iso, now) {
+    const ms = Date.parse(iso) - now.getTime();
+    if (!(ms > 0)) return "now";
+    if (ms < HOUR) return `${Math.floor(ms / MINUTE)}m`;
+    if (ms < DAY) return `${Math.floor(ms / HOUR)}h${String(Math.floor((ms % HOUR) / MINUTE)).padStart(2, "0")}m`;
+    return `${Math.floor(ms / DAY)}d${Math.floor((ms % DAY) / HOUR)}h`;
+}
+
+export function ago(iso, now) {
+    const ms = now.getTime() - Date.parse(iso);
+    if (!(ms >= 0)) return "never";
+    if (ms < MINUTE) return "just now";
+    if (ms < HOUR) return `${Math.floor(ms / MINUTE)} min ago`;
+    if (ms < DAY) return `${Math.floor(ms / HOUR)} h ago`;
+    return `${Math.floor(ms / DAY)} d ago`;
+}
+
+function bar(pct) {
+    const filled = Math.round((pct / 100) * BAR_WIDTH);
+    return "█".repeat(filled) + "░".repeat(BAR_WIDTH - filled);
+}
+
+function limitLine(label, limit, resetsAt, now) {
+    if (!limit) return `${label}  —`;
+    const reset = resetsAt ? `resets in ${countdown(resetsAt, now)}` : "reset unknown";
+    return `${label}  ${bar(limit.utilization)} ${String(limit.utilization).padStart(3)}%  ${reset}`;
+}
+
+function renewalLine(entry, now) {
+    const at = entry?.renewalAt ? Date.parse(entry.renewalAt.value) : NaN;
+    if (!(at > now.getTime())) return "Renewal unknown";
+    const date = new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+    return entry.autoRenew?.value === false ? `Ends ${date}` : `Renews ${date}`;
+}
+
+// Same rule as claudestatus's pickNextAccount (display.js), reduced to what the bar needs:
+// skip errored and Free accounts, then take the lowest session+weekly sum that is not exhausted.
+export function recommend(accounts) {
+    const usable = accounts.filter((a) => !a.error && a.plan !== "free");
+    const open = usable.filter((a) => (a.usage?.five_hour?.utilization ?? 0) < 100 && (a.usage?.seven_day?.utilization ?? 0) < 100);
+    const score = (a) => (a.usage?.five_hour?.utilization ?? 0) + (a.usage?.seven_day?.utilization ?? 0);
+    const pool = open.length ? open : usable;
+    return pool.reduce((best, a) => (best && score(best) <= score(a) ? best : a), null);
+}
+
+function accountText(account, entry, usageAt, now) {
+    const plan = account.plan === "unknown" ? "?" : account.plan[0].toUpperCase() + account.plan.slice(1);
+    const badge = account.plan === "free" ? "  ⚠ unpaid" : "";
+    if (account.error) return `${account.name}  ${plan}${badge}\n✗ ${account.error.split(".")[0]}`;
+    const weeklyReset = effectiveWeeklyReset(entry, account.usage?.seven_day?.resets_at, now);
+    return [
+        `${account.name}  ${plan}${badge}`,
+        limitLine("Session", account.usage?.five_hour, account.usage?.five_hour?.resets_at, now),
+        limitLine("Weekly ", account.usage?.seven_day, weeklyReset, now),
+        `${renewalLine(entry, now)}  ·  updated ${usageAt ? ago(usageAt, now) : "never"}`,
+    ].join("\n");
+}
+
+export function buildModel(usage, cache, now = new Date()) {
+    const accounts = usage.accounts ?? [];
+    const best = recommend(accounts);
+    const pct = best?.usage?.five_hour?.utilization;
+    return {
+        bar: pct === undefined ? "—" : `${pct}%`,
+        recommended: best?.name ?? null,
+        accounts: accounts.map((a) => ({ name: a.name, text: accountText(a, cache[a.name], usage.at, now) })),
+    };
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+    console.log(JSON.stringify(buildModel(loadUsage(), loadCache())));
+}
