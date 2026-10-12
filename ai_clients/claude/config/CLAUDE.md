@@ -182,14 +182,14 @@ rule**, grep the tracked docs for the OLD rule — a tracked doc outranks memory
 
 ## Compaction
 
-Auto-compact fires natively at **70%** of the context window
-(`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "70"` in `env`, `ai_clients/claude/settings.json`,
+Auto-compact fires natively at **75%** of the context window
+(`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "75"` in `env`, `ai_clients/claude/settings.json`,
 dotfiles-linux-dev#406), not at the near-100% default. Not a `s:dev-loop` step or a
 hook: no remaining-context signal reaches a hook environment (dotfiles-linux-dev#167),
 and `/compact` is typed by the user, not callable through a tool — this env var
 is the only native lever. Verified against the installed binary's own threshold
 function (`compactionThreshold = min(floor(window * pct/100), window - buffer)`):
-`70` means "compact once 70% of the window is used," not "leave 70% free." The
+`75` means "compact once 75% of the window is used," not "leave 75% free." The
 `env` block is process-wide, so a subagent compacting mid-task still keeps this
 priority order below — it inherits the same trigger point as its parent.
 
