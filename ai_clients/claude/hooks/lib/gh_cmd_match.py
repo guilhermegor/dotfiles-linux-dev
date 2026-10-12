@@ -105,20 +105,126 @@ def split_segments(command):
     return segments
 
 
-def matching_argv(segments, noun):
-    """Return the argv of the first segment shaped like `[rtk] gh <noun> create|edit|merge`, or
-    None.
+WRAPPERS = {"timeout", "nice", "ionice", "setsid", "stdbuf", "rtk", "proxy", "env", "command", "exec", "nohup", "time", "sudo", "xargs", "builtin"}
+# Options that take a SEPARATE value, per wrapper: a shared list let `timeout -s KILL 5 gh ...`
+# leave KILL as the "command" and miss the real gh call. A `--long=value` form needs no entry.
+WRAPPER_VALUE_FLAGS = {
+    "timeout": {"-s", "-k", "--signal", "--kill-after"},
+    "stdbuf": {"-i", "-o", "-e", "--input", "--output", "--error"},
+    "nice": {"-n", "--adjustment"},
+    "ionice": {"-c", "-n", "-p", "-P", "-u", "--class", "--classdata", "--pid", "--pgid", "--uid"},
+    "env": {"-u", "-C", "-S", "--unset", "--chdir", "--split-string"},
+    "sudo": {"-u", "-g", "-C", "-I", "-L", "-h", "-p", "-r", "-t", "-T", "-U",
+             "--user", "--group", "--host", "--prompt", "--role", "--type"},
+    "xargs": {"-n", "-I", "-L", "-P", "-d", "-E", "-s", "-a", "--max-args", "--max-procs",
+              "--delimiter", "--arg-file", "--max-lines", "--max-chars"},
+}
+NESTED_ERRORS = []
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+
+
+def _word(tok):
+    """A command word stripped of group openers, `x=$(` prefixes and a leading backslash."""
+    sub = re.match(r"^\w+=.*?(?:\$\(|`)(.*)$", tok)  # x=$(gh ...) / x=`gh ...`
+    return (sub.group(1) if sub else tok).lstrip("$({`!\\")
+
+
+def gh_start(argv):
+    """Index of the `gh` token in a simple command, or -1.
+
+    Skips `VAR=x` assignments, wrappers (`rtk [proxy]`, `env`, `command`, `sudo`, ...) together
+    with whatever flags/values follow them, a `$(`/`(`/`{`/backtick group opener, a leading `\\`
+    and accepts an absolute path to gh. With NO wrapper, `gh` must be the first word.
+    """
+    wrapped = False
+    skip_next = False
+    wrapper = ""
+    for i, tok in enumerate(argv):
+        word = _word(tok)
+        if skip_next:
+            skip_next = False
+        elif word in WRAPPERS:
+            wrapped, wrapper = True, word
+        elif word == "" or re.match(r"^\w+=", word):
+            continue
+        elif wrapper == "timeout" and re.match(r"^\d+(\.\d+)?[smhd]?$", word):
+            continue  # `timeout 5 gh ...`: the duration is timeout's operand, not the command
+        elif wrapped and word.startswith("-"):
+            skip_next = word in WRAPPER_VALUE_FLAGS.get(wrapper, ())  # `sudo -u root gh`
+        elif word.rsplit("/", 1)[-1] == "gh":
+            return i
+        else:
+            return -1  # the real command is not gh (`env echo gh issue create` only prints)
+    return -1
+
+
+def gh_sub(argv, idx):
+    """Index of gh's subcommand after `idx`, skipping gh's global -R/--repo/-h flags."""
+    i = idx + 1
+    while i < len(argv) and argv[i].startswith("-"):
+        i += 2 if argv[i] in ("-R", "--repo", "--hostname") else 1
+    return i
+
+
+def iter_argvs(segments, depth=0):
+    """Yield the argv of every simple command, descending into `bash -c '...'` / `eval ...`.
+
+    ValueError (unbalanced quote) propagates from any level, so nothing is skipped silently.
     """
     for segment in segments:
-        argv = shlex.split(segment, posix=True)  # ValueError propagates: caller must fail open
-        idx = 1 if argv[:1] == ["rtk"] else 0
-        if (
-            len(argv) >= idx + 3
-            and argv[idx] == "gh"
-            and argv[idx + 1] == noun
-            and argv[idx + 2] in ("create", "edit", "merge")
-        ):
-            return argv[idx + 3:]
+        argv = shlex.split(segment, posix=True)
+        yield argv
+        if depth >= 3:
+            continue
+        words = [_word(t) for t in argv]
+        inner = None
+        for i, w in enumerate(words):
+            base = w.rsplit("/", 1)[-1]
+            if base in SHELLS:
+                for j in range(i + 1, len(argv) - 1):
+                    if re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", argv[j]):
+                        inner = argv[j + 1]
+                        break
+                break
+            if base == "env":
+                # `env -S 'cmd args'` / `--split-string=...` splits its one argument into a
+                # command line: nested shell text, like `bash -c`.
+                for j in range(i + 1, len(argv)):
+                    a = argv[j]
+                    if a in ("-S", "--split-string") and j + 1 < len(argv):
+                        inner = argv[j + 1]
+                    elif a.startswith("--split-string="):
+                        inner = a.split("=", 1)[1]
+                    elif a.startswith("-S") and len(a) > 2:
+                        inner = a[2:]
+                    if inner:
+                        break
+                if inner:
+                    break
+            if base == "eval":
+                inner = " ".join(argv[i + 1:])
+                break
+            if w not in WRAPPERS and not re.match(r"^\w+=", w) and w != "":
+                break
+        if inner:
+            try:
+                yield from iter_argvs(split_segments(inner), depth + 1)
+            except ValueError:
+                # The inner script is broken but the outer shell still runs what follows it.
+                NESTED_ERRORS.append(inner)
+
+
+def matching_argv(segments, noun):
+    """Return the argv of the first command shaped like `[wrappers] gh [-R x] <noun>
+    create|edit|merge`, or None.
+    """
+    for argv in iter_argvs(segments):  # ValueError propagates: caller must fail open
+        idx = gh_start(argv)
+        if idx < 0:
+            continue
+        sub = gh_sub(argv, idx)
+        if len(argv) >= sub + 2 and argv[sub] == noun and argv[sub + 1] in ("create", "edit", "merge"):
+            return argv[idx + 1:sub] + argv[sub + 2:]
     return None
 
 
@@ -203,17 +309,153 @@ def scan_flags(argv):
     return repo, head, has_body, body, has_body_file, body_file, labels
 
 
+API_ISSUE_ENDPOINT = re.compile(r"^/?repos/([^/]+)/([^/]+)/issues(?:/(\d+))?$")
+API_ISSUE_SUBRESOURCE = re.compile(
+    r"^repos/[^/]+/[^/]+/issues/(?:\d+/(?:comments|labels|assignees|events|timeline|reactions|"
+    r"lock|sub_issues|dependencies)(?:/.*)?|comments(?:/\d+(?:/reactions)?)?|events(?:/\d+)?)$"
+)
+API_VALUE_FLAGS = {
+    "-X": "method", "--method": "method",
+    "-f": "field", "--raw-field": "field", "-F": "field", "--field": "field",
+    "--input": "input",
+}
+API_OTHER_VALUE_FLAGS = {"-H", "--header", "-q", "--jq", "-t", "--template", "--hostname",
+                         "--cache", "-p", "--preview"}
+
+
+def api_issue_match(segments):
+    """Return the match dict for `[rtk] gh api repos/O/R/issues[/N]` writes, or None.
+
+    The REST twin of `gh issue create|edit` (dotfiles-linux-dev#714): `gh api` creates an issue on
+    POST (explicit `-X POST`/`--method POST`, or implicit when any field/--input is given and
+    no method is) and edits one on PATCH, so a guard that only sees `gh issue ...` is bypassed
+    by it. Body is read from a `body=` field (`-f`/`-F`/`--raw-field`/`--field`); `-F body=@f`
+    and `--input f` are file-valued (`body_json` marks that the file is a JSON payload).
+    """
+    for argv in iter_argvs(segments):
+        # Same command-word rule as the `gh issue` path: gh must be the command itself (after
+        # wrappers), so printed text like `echo gh api ...` is not a write. The fail-closed part
+        # lives below, in how an understood-vs-unknown `gh api` call is judged.
+        gh_at = gh_start(argv)
+        if gh_at < 0:
+            continue
+        sub = gh_sub(argv, gh_at)
+        if argv[sub:sub + 1] != ["api"]:
+            continue
+        rest = argv[sub + 1:]
+        endpoint, method, fields, input_file = None, None, [], None
+        i = 0
+        while i < len(rest):
+            tok = rest[i]
+            if tok == "--":  # end of options: the rest are positionals
+                endpoint = endpoint or (rest[i + 1] if i + 1 < len(rest) else None)
+                break
+            name, _, inline = tok.partition("=") if tok.startswith("--") else (tok, "", "")
+            if tok.startswith("-") and tok[1:2] != "-" and len(tok) > 2 and tok[:2] in API_VALUE_FLAGS:
+                name, inline = tok[:2], tok[2:].lstrip("=")  # attached short value: -XPOST
+            if name in API_VALUE_FLAGS:
+                if inline or tok != name:
+                    value, step = inline, 1
+                elif i + 1 < len(rest):
+                    value, step = rest[i + 1], 2
+                else:
+                    value, step = "", 1
+                kind = API_VALUE_FLAGS[name]
+                if kind == "method":
+                    method = value.upper()
+                elif kind == "field":
+                    fields.append((name in ("-F", "--field"), value))
+                else:
+                    input_file = value
+                i += step
+            elif name in API_OTHER_VALUE_FLAGS:
+                i += 1 if inline else 2
+            elif tok.startswith("-"):
+                i += 1
+            else:
+                endpoint = endpoint or tok
+                i += 1
+        path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", (endpoint or "").split("?", 1)[0])
+        path = path.rstrip("/")
+        dynamic = "$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
+        m = API_ISSUE_ENDPOINT.match(path)
+        mentions = any("issues" in t for t in rest)
+        # Understood as NOT an issue write only when the endpoint is a literal that either does
+        # not mention `issues` at all or is a known issue sub-resource (comments, labels, ...).
+        # Anything else that mentions `issues` is judged as a write (unknown never means allowed).
+        if not m and not dynamic and (not mentions or API_ISSUE_SUBRESOURCE.match(path)):
+            continue
+        # A shell-built endpoint is not statically known: with any body field/--input or a
+        # non-GET method it is judged as a write even when `issues` appears nowhere (deliberate
+        # cost: shell-built writes to non-issue endpoints are judged too).
+        unknown_write = dynamic and (fields or input_file or (method or "GET") != "GET")
+        if not m and not mentions and not unknown_write:
+            continue
+        dyn = None if m else re.search(r"(?:^|/)issues(?:/([^/]*))?$", path)
+        method = method or ("POST" if fields or input_file else "GET")
+        if "$" in method or "`" in method:
+            method = "?"  # unreadable method: may be POST or PATCH, judged as either
+        number = (m.group(3) if m else (dyn.group(1) if dyn else None)) or None
+        is_write = (
+            method == "?"
+            or (unknown_write and method != "GET")  # endpoint not statically known
+            or (method == "POST" and not number)
+            or (method in ("PATCH", "PUT") and number)
+        )
+        if not is_write:
+            continue
+        if m:
+            owner, name = m.group(1), m.group(2)
+            repo = None if "{" in owner + name or "$" in owner + name else f"{owner}/{name}"
+        else:
+            repo = None
+        has_body, body, has_body_file, body_file, labels = False, None, False, None, []
+        for typed, field in fields:
+            key, _, val = field.partition("=")
+            if key == "body":
+                # A later body= overwrites an earlier one (gh keeps the last), whatever its kind.
+                if typed and val.startswith("@"):  # only -F/--field reads a file via @
+                    has_body_file, body_file, has_body, body = True, val[1:], False, None
+                else:
+                    has_body, body, has_body_file, body_file = True, val, False, None
+            elif key in ("labels[]", "labels"):
+                labels.extend(p for p in val.split(",") if p)
+        body_json = False
+        if input_file is not None:
+            has_body_file, body_file, body_json, has_body, body = True, input_file, True, False, None
+        no_body = not (has_body or has_body_file)
+        if no_body and (unknown_write or (method in ("POST", "?") and not number)):
+            has_body, body = True, ""  # REST create has no editor mode: no body IS an empty body
+        return {
+            "matched": True, "repo": repo, "head": None, "has_body": has_body, "body": body,
+            "has_body_file": has_body_file, "body_file": body_file, "body_json": body_json,
+            "labels": labels, "auto": False, "method": method,
+        }
+    return None
+
+
 def main():
     noun = sys.argv[1] if len(sys.argv) > 1 else ""
-    if noun not in ("pr", "issue"):
+    if noun not in ("pr", "issue", "api-issue"):
         print(json.dumps({"matched": False}))
         return 0
 
     command = sys.stdin.read()
     try:
         segments = split_segments(command)
+        if noun == "api-issue":
+            match = api_issue_match(segments)
+            if match is None and any("issues" in e for e in NESTED_ERRORS):
+                match = {"matched": True, "unparseable": True}
+            print(json.dumps(match or {"matched": False}))
+            return 0
         argv = matching_argv(segments, noun)
     except ValueError:
+        if noun == "api-issue" and re.search(r"\bapi\b[\s\S]*issues", command):
+            # Fail CLOSED for the REST path (#714): text that looks like an issues write but
+            # cannot be tokenized is reported, never silently allowed.
+            print(json.dumps({"matched": True, "unparseable": True}))
+            return 0
         return 1  # unparseable: caller must fail open, never guess
 
     if argv is None:

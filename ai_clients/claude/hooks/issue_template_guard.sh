@@ -3,6 +3,12 @@
 # `gh issue edit` — the same mechanism pr_template_guard.sh already applies to PR bodies, aimed at
 # .github/ISSUE_TEMPLATE/*.md instead of .github/PULL_REQUEST_TEMPLATE.md.
 #
+# Also judges the REST twin (dotfiles-linux-dev#714): `gh api repos/O/R/issues -X POST` (create) and
+# `gh api repos/O/R/issues/N -X PATCH|PUT` (edit), incl. the implicit POST when a -f/-F/--input
+# is given with no -X. The body comes from a `body=` field, `-F body=@file`, or `--input` JSON;
+# a REST create with no body counts as an EMPTY body (REST has no editor mode). Found by the
+# same real-argv tokenizer (`gh_cmd_match.py api-issue`), never a raw-string regex.
+#
 # Generic and data-driven: a target repo with no issue template is untouched (exit 0) — this is
 # what keeps `/issue` (ai_clients/claude/commands/issue.md), which files its own Goal/Scope/
 # Documentation body into repos that ship no issue template (dotfiles-dev, blueprintx, ...), from
@@ -47,6 +53,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 main() {
     local payload tool command root body_source labels
+    local -a json_labels=()
     local -a templates=() best_missing=()
     local template best_template="" best_count=-1
 
@@ -61,8 +68,28 @@ main() {
     # mirrors pr_template_guard.sh's resolve_gh_command call exactly (see its comment for the
     # bypasses a start-anchored regex missed: chained after `;`/`&&`/`||`/`|`/`&`/a newline, or
     # fooled by flag-shaped text inside an unrelated quoted argument).
-    resolve_gh_command "$command" "issue" || exit 0   # unparseable → unknown, not non-compliant
+    # Both command forms are judged INDEPENDENTLY (dotfiles-linux-dev#714): one command string can
+    # carry a state-only REST edit AND a `gh issue create`, and either may be the bad one. The
+    # script re-invokes itself once per noun (ITG_NOUN) and any exit 2 wins.
+    if [[ -z "${ITG_NOUN:-}" ]]; then
+        local noun rc
+        for noun in api-issue issue; do
+            rc=0
+            printf '%s' "$payload" | ITG_NOUN="$noun" bash "${BASH_SOURCE[0]}" || rc=$?
+            [[ $rc -eq 2 ]] && exit 2
+        done
+        exit 0
+    fi
+    # `gh api repos/O/R/issues -X POST|PATCH ...` creates/edits an issue without passing
+    # `gh issue`; text that looks like one but cannot be tokenized is refused, not allowed.
+    resolve_gh_command "$command" "$ITG_NOUN" || exit 0   # unparseable -> unknown (gh issue)
     [[ "$GH_MATCHED" == "true" ]] || exit 0
+    if [[ "$GH_UNPARSEABLE" == "true" ]]; then
+        echo "BLOCKED: this command looks like a REST write to .../issues but could not be parsed" >&2
+        echo "(unbalanced quote or unterminated heredoc), so its body was never verified." >&2
+        echo "Re-run it as a plain, tokenizable \`gh api repos/O/R/issues ...\` command." >&2
+        exit 2
+    fi
     # Only when a body is actually being set (skip title/label-only edits, editor-mode create).
     [[ "$GH_HAS_BODY" == "true" || "$GH_HAS_BODY_FILE" == "true" ]] || exit 0
 
@@ -83,7 +110,17 @@ main() {
 
     if [[ "$GH_HAS_BODY_FILE" == "true" ]]; then
         if [[ -r "$GH_BODY_FILE" ]]; then
-            body_source="$(cat "$GH_BODY_FILE")"
+            if [[ "$GH_BODY_FILE_JSON" == "true" ]]; then
+                # `gh api --input`: a JSON payload, the body is its `.body` member.
+                body_source="$(jq -r '.body // ""' "$GH_BODY_FILE" 2>/dev/null)" \
+                    || block_unresolved_body_file "$GH_BODY_FILE" "$root"
+                # The payload's own labels count as positively known labels too.
+                mapfile -t json_labels < <(jq -r '.labels[]? | if type == "object" then .name else . end' \
+                    "$GH_BODY_FILE" 2>/dev/null)
+                GH_LABELS+=("${json_labels[@]}")
+            else
+                body_source="$(cat "$GH_BODY_FILE")"
+            fi
         else
             block_unresolved_body_file "$GH_BODY_FILE" "$root"
         fi

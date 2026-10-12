@@ -48,6 +48,8 @@ origin_names_repo() {
 #   GH_BODY          --body/-b value, or empty
 #   GH_HAS_BODY_FILE "true"/"false" — was --body-file/-F given
 #   GH_BODY_FILE     --body-file/-F value, or empty
+#   GH_BODY_FILE_JSON "true" when the body file is a JSON payload (`gh api --input`, noun
+#                    "api-issue" only — dotfiles-linux-dev#714): the body is its `.body` member
 #   GH_LABELS        array of --label/-l/--add-label values (comma-separated values split out)
 #
 # Returns 1 if python3 is unavailable or the command could not be tokenized at all (an
@@ -57,7 +59,7 @@ origin_names_repo() {
 resolve_gh_command() {
     local command="$1" noun="$2" json rc
     GH_MATCHED=false GH_REPO="" GH_HAS_BODY=false GH_BODY=""
-    GH_HAS_BODY_FILE=false GH_BODY_FILE=""
+    GH_HAS_BODY_FILE=false GH_BODY_FILE="" GH_BODY_FILE_JSON=false GH_UNPARSEABLE=false
     GH_LABELS=()
 
     command -v python3 >/dev/null 2>&1 || return 1
@@ -82,6 +84,10 @@ resolve_gh_command() {
     GH_HAS_BODY_FILE="$(printf '%s' "$json" | jq -r '.has_body_file')"
     # shellcheck disable=SC2034
     GH_BODY_FILE="$(printf '%s' "$json" | jq -r '.body_file // empty')"
+    # shellcheck disable=SC2034
+    GH_UNPARSEABLE="$(printf '%s' "$json" | jq -r '.unparseable // false')"
+    # shellcheck disable=SC2034
+    GH_BODY_FILE_JSON="$(printf '%s' "$json" | jq -r '.body_json // false')"
     # shellcheck disable=SC2034
     mapfile -t GH_LABELS < <(printf '%s' "$json" | jq -r '.labels[]?')
     return 0

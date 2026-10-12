@@ -84,6 +84,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from open_pr_pages import read_open_prs
@@ -92,6 +93,11 @@ LIB_DIR = Path(__file__).resolve().parent
 FREE_SURFACE_SH = LIB_DIR / "free_surface.sh"
 ROADMAP_UNBLOCK_SH = LIB_DIR / "roadmap_unblock.sh"
 GH_TIMEOUT = 20
+# Overall budget for the serial per-PR file reads behind the hot-file rule. round_dispatch_guard.sh
+# kills the whole planner at 60s, which would leave NO per-issue exclusion; staying well under
+# it lets the existing hot_read_failed path exclude the affected candidates by name instead.
+# DISPATCH_HOT_READ_BUDGET overrides it (tests).
+HOT_READ_BUDGET = 30.0
 GATE_TIMEOUT = 25
 # One `_ru_native_blockers` call per open issue, sequential inside a single subprocess (same
 # reasoning as GATE_TIMEOUT for the free-surface gate) — generous because a 500-issue repo would
@@ -139,6 +145,15 @@ UNDECLARED_TOKEN = "UNDECLARED"
 UNDECLARED_REASON = (
 	f"{UNDECLARED_TOKEN}: no declared file surface (no ```surface block in the issue body) — "
 	"declare the surface and this issue becomes dispatchable; it is never assumed free"
+)
+
+# Open-PR overlap on a declared hot file (dotfiles-linux-dev#714, owner option (c)) is the one
+# open-PR overlap that blocks dispatch; the token leads the reason like UNDECLARED_TOKEN. All
+# other open-PR overlap stays the #433 merge-risk annotation.
+HOT_TOKEN = "HOT-FILE"
+HOT_UNKNOWN_REASON = (
+	f"{HOT_TOKEN}: open-PR files UNREADABLE (gh api pulls/<n>/files failed) — surface touches a "
+	"declared hot file, never assumed free"
 )
 
 # Classifies every request against a caller-supplied held-paths set (the live-agent set,
@@ -643,6 +658,48 @@ def run_gate(
 	return True, unclaimed, verdicts
 
 
+def hot_patterns(root: Path) -> list[str]:
+	"""Return the repo's declared hot-file patterns (dotfiles-linux-dev#714, owner option (c)).
+
+	One exact path or fnmatch glob per line in ``<git-common-dir>/dispatch-hot-files.txt`` (next
+	to the claims registry; ``DISPATCH_HOT_FILES_FILE`` overrides), ``#`` comments and blank
+	lines ignored. A missing or unreadable list is ``[]``: no hot files declared, so every
+	open-PR overlap stays the #433 annotation. It never raises and never blocks everything.
+	"""
+	path = os.environ.get("DISPATCH_HOT_FILES_FILE")
+	try:
+		if not path:
+			common = _run(
+				["git", "-C", str(root), "rev-parse", "--path-format=absolute", "--git-common-dir"]
+			)
+			path = str(Path(common) / "dispatch-hot-files.txt")
+		lines = Path(path).read_text().splitlines()
+	except (OSError, UnicodeDecodeError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+		return []
+	return [t for t in (line.split("#", 1)[0].strip() for line in lines) if t]
+
+
+def open_pr_hot_holders(slug: str, prs: list[dict], patterns: list[str]) -> dict[str, int]:
+	"""Return ``{hot_path: lowest open PR number}`` for every open-PR file matching a hot pattern.
+
+	REST ``pulls/<n>/files`` per open PR (bounded by ``OPEN_PR_LIST_CAP``); raises on a failing
+	read so the caller can exclude by name rather than treat a partial read as "no holder".
+	"""
+	holders: dict[str, int] = {}
+	budget = float(os.environ.get("DISPATCH_HOT_READ_BUDGET", HOT_READ_BUDGET))
+	deadline = time.monotonic() + budget
+	for pr in sorted(prs, key=lambda p: p["number"]):
+		if time.monotonic() > deadline:
+			raise subprocess.TimeoutExpired("open-PR file reads", budget)
+		out = _run(
+			["gh", "api", "--paginate", f"repos/{slug}/pulls/{pr['number']}/files", "--jq", ".[].filename"]
+		)
+		for name in out.splitlines():
+			if any(fnmatch.fnmatch(name, pat) for pat in patterns):
+				holders.setdefault(name, pr["number"])
+	return holders
+
+
 def select_disjoint(candidates: list[dict]) -> tuple[list[dict], list[dict]]:
 	"""Greedily select the largest disjoint set of candidates and name every collision.
 
@@ -747,6 +804,10 @@ def build_plan() -> dict:
 	if live_ok and gate_ok and issue_numbers:
 		native_refs = native_open_blockers(slug, sorted(issue_numbers))
 
+	hot = hot_patterns(root)
+	hot_holders: dict[str, int] | None = None  # read lazily, once: only a hot-touching candidate needs it
+	hot_read_failed = False
+
 	candidates: list[dict] = []
 	excluded: list[dict] = []
 	for issue in issues:
@@ -783,6 +844,46 @@ def build_plan() -> dict:
 		else:
 			verdict = verdicts.get(number, "")
 			if verdict == "free" or verdict.startswith("would-need-a-held-file"):
+				# Declared TOKENS, not only expanded files: a glob token can match a file that
+				# exists only on an open PR (never in the checkout), so it must be compared with
+				# the PR's hot paths directly. Either direction of fnmatch: token vs pattern.
+				hot_files = [
+					t
+					for t in surfaces[number] + expanded[number]
+					if any(fnmatch.fnmatch(t, p) or fnmatch.fnmatch(p, t) for p in hot)
+				]
+				# Two globs (`docs/a*.md` vs hot `docs/*b.md`) cannot be proven disjoint by matching
+				# one pattern against the other, so a glob token with ANY hot list declared always
+				# reads the open PRs; the per-file check below then judges each PR filename
+				# against both sides. Only an all-literal surface may take the no-read shortcut.
+				needs_read = bool(hot_files) or (
+					bool(hot) and any(ch in t for t in surfaces[number] for ch in GLOB_CHARS)
+				)
+				if needs_read and hot_holders is None and not hot_read_failed:
+					try:
+						hot_holders = open_pr_hot_holders(slug, prs, hot)
+					except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+						hot_read_failed = True
+				if needs_read and hot_read_failed:
+					excluded.append({"issue": number, "reason": HOT_UNKNOWN_REASON})
+					continue
+				clash = next(
+					(
+						h
+						for h in sorted(hot_holders or {})
+						if any(fnmatch.fnmatch(h, t) for t in surfaces[number] + expanded[number])
+					),
+					None,
+				)
+				if clash is not None:
+					excluded.append(
+						{
+							"issue": number,
+							"reason": f"{HOT_TOKEN}: hot file {clash} is held by open PR "
+							f"#{(hot_holders or {})[clash]} — wait for it to merge",
+						}
+					)
+					continue
 				candidates.append({"issue": number, "surface": expanded[number]})
 			else:
 				held_paths = (

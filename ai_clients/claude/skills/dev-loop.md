@@ -916,12 +916,24 @@ merge conflict, not a reason to withhold dispatch. Two live agents writing the s
 is the unrecoverable case, and that is what blocks:
 - **Blocks dispatch:** the candidate's files intersect a file surface this session already has a
   live, unresolved agent working (`ListAgents` against what this session dispatched).
-- **Merge-risk annotation only, never a blocker:** `free_classify_files`'s `held` /
-  `would-need-a-held-file` verdict below is computed against *open PRs*, not live agents — note it
-  in the dispatched agent's brief as a heads-up, dispatch anyway.
+- **Blocks dispatch, the one open-PR exception (owner decision, dotfiles-linux-dev#714, option (c)):**
+  the candidate's surface overlaps an OPEN PR on a declared **hot file** — a file nearly every PR
+  appends to (a CI workflow's step list, `.pre-commit-config.yaml`, `mkdocs.yml`'s nav). The list is
+  per repo, one path or glob per line, in `$(git rev-parse --git-common-dir)/dispatch-hot-files.txt`
+  (next to the claims registry; `#` comments, `*` crosses `/`; `DISPATCH_HOT_FILES_FILE`
+  overrides). `dispatch_plan.py` excludes such a candidate with a `HOT-FILE:` reason naming the
+  file and the PR; bash callers use `free_hot_overlap OWNER REPO FILE...` (`free_surface.sh`). A **missing or
+  unreadable list means none declared** — everything stays an annotation, never a crash and never a
+  blanket block. An unreadable open-PR file read excludes only hot-touching candidates, by name.
+- **Merge-risk annotation only, never a blocker:** every OTHER open-PR overlap —
+  `free_classify_files`'s `held` / `would-need-a-held-file` verdict below is computed against *open
+  PRs*, not live agents — note it in the dispatched agent's brief as a heads-up, dispatch anyway.
+  (Option (b), blocking any open-PR overlap, was rejected: #433 measured it nearly stopping dispatch.)
 
-A missing file-surface declaration on an issue blocks **planning that one issue**, never the whole
-round. Measured the same day: 7 of 10 unclaimed issues had no declared surface, and the planner
+`/issue` now makes the `## File surface` block and a milestone mandatory at creation (#714), and
+`issue_template_guard.sh` also judges `gh api …/issues` POST/PATCH, so an undeclared surface should
+be rare; it is still handled as follows. A missing file-surface declaration on an issue blocks
+**planning that one issue**, never the whole round. Measured the same day: 7 of 10 unclaimed issues had no declared surface, and the planner
 used that gap to conclude "nothing to dispatch" instead of writing the surface — refinement work
 this round can do — for the ones missing it.
 
@@ -998,6 +1010,7 @@ agent-vs-{open,merged}-PR, left untouched by this rule):
 gate_free_surface <owner> <repo> || echo "free surface UNKNOWN — do not dispatch on it"
 printf '%s\n' "$FREE_UNCLAIMED_ISSUES"            # open issues no PR (open OR merged) closes
 free_classify_files <paths the issue would touch>  # heads-up note only — never gates dispatch
+free_hot_overlap <owner> <repo> <paths>            # hot:<paths> = BLOCKS (declared hot file held by an open PR); none = dispatch
 ```
 
 The candidate file list per issue is still yours to supply — that needs reading the issue.
@@ -1023,7 +1036,8 @@ Name three states, not two, for the **live-agent** gate above — collapsing the
 
 The open-PR gate's own `held`/`would-need-a-held-file` verdict (`free_classify_files`) is never
 read this way — it answers the separate, non-blocking merge-risk question above, and its result is
-a note in the brief, never a reason to exclude a candidate.
+a note in the brief, never a reason to exclude a candidate. The one exception is `free_hot_overlap`
+above (declared hot files, #714), whose `hot:` result does exclude.
 
 🔴 **Before dispatching anything, confirm it is not already done.** A file-collision check only
 sees PR-vs-PR overlap; it cannot see an issue already satisfied by code that already merged.
