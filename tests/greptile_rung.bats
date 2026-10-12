@@ -29,6 +29,10 @@ setup() {
     _claim_granted() { echo GRANTED; }
     _claim_busy() { echo BUSY; return 1; }
     export -f _fake_head _fake_comments _fake_reviews _fake_ask_post _claim_granted _claim_busy
+    _fake_author() { echo "owner-login"; }
+    _no_author() { return 1; }
+    export -f _fake_author _no_author
+    export REVIEWER_LADDER_ASK_AUTHOR_CMD=_fake_author
     export REVIEWER_LADDER_HEAD_SHA_CMD=_fake_head
     export REVIEWER_LADDER_COMMENTS_CMD=_fake_comments
     export REVIEWER_LADDER_REVIEWS_CMD=_fake_reviews
@@ -108,12 +112,12 @@ JSON"
 
 @test "unsolicited: a review on an asked head is OK, on any other head is reported" {
     run bash -c "cat <<JSON | python3 '$CLASSIFY' greptile-unsolicited
-{\"comments\": [{\"body\": \"@greptileai review\\n\\n<!-- ladder-ask:greptile head=aaaaaaaaaaaa1111 -->\"}],
+{\"ask_author\": \"owner\", \"comments\": [{\"user\": {\"login\": \"owner\"}, \"body\": \"@greptileai review\\n\\n<!-- ladder-ask:greptile head=aaaaaaaaaaaa1111 -->\"}],
  \"reviews\": [{\"user\": {\"login\": \"greptile-apps[bot]\"}, \"commit_id\": \"aaaaaaaaaaaa1111\"}]}
 JSON"
     [ "$output" = "OK" ]
     run bash -c "cat <<JSON | python3 '$CLASSIFY' greptile-unsolicited
-{\"comments\": [{\"body\": \"<!-- ladder-ask:greptile head=aaaaaaaaaaaa1111 -->\"}],
+{\"ask_author\": \"owner\", \"comments\": [{\"user\": {\"login\": \"owner\"}, \"body\": \"<!-- ladder-ask:greptile head=aaaaaaaaaaaa1111 -->\"}],
  \"reviews\": [{\"user\": {\"login\": \"greptile-apps[bot]\"}, \"commit_id\": \"bbbbbbbbbbbb2222\"},
                {\"user\": {\"login\": \"coderabbitai[bot]\"}, \"commit_id\": \"cccccccccccc3333\"}]}
 JSON"
@@ -147,12 +151,66 @@ JSON"
 }
 
 @test "hosted: an ask already posted for this head is pending, not re-asked" {
-    echo "[{\"user\":{\"login\":\"x\"},\"created_at\":\"2026-10-11T10:00:00Z\",\"body\":\"<!-- ladder-ask:greptile head=$HEAD_SHA -->\"}]" \
+    echo "[{\"user\":{\"login\":\"owner-login\"},\"created_at\":\"2026-10-11T10:00:00Z\",\"body\":\"<!-- ladder-ask:greptile head=$HEAD_SHA -->\"}]" \
         >"$BATS_TEST_TMPDIR/comments.json"
     run run_hosted_rungs o r 7
     [ "$status" -eq 0 ]
     [[ "$output" == *"already posted"* ]]
     [ ! -s "$ASK_LOG" ]
+}
+
+@test "spoof: a non-ladder account typing the ask marker does not suppress the ask" {
+    echo "[{\"user\":{\"login\":\"mallory\"},\"created_at\":\"2026-10-11T10:00:00Z\",\"body\":\"<!-- ladder-ask:greptile head=$HEAD_SHA -->\"}]" \
+        >"$BATS_TEST_TMPDIR/comments.json"
+    run run_hosted_rungs o r 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"requested, verdict pending"* ]]
+    [ "$(grep -c '@greptileai review' "$ASK_LOG")" -eq 1 ]
+}
+
+@test "spoof: an unknown ask identity credits no marker (fail closed)" {
+    export REVIEWER_LADDER_ASK_AUTHOR_CMD=_no_author
+    echo "[{\"user\":{\"login\":\"owner-login\"},\"created_at\":\"2026-10-11T10:00:00Z\",\"body\":\"<!-- ladder-ask:greptile head=$HEAD_SHA -->\"}]" \
+        >"$BATS_TEST_TMPDIR/comments.json"
+    run run_hosted_rungs o r 7
+    [[ "$output" != *"already posted"* ]]
+}
+
+@test "spoof: a forged ask marker does not hide an unsolicited review" {
+    echo '[{"user":{"login":"greptile-apps[bot]"},"commit_id":"deadbeefcafe0000"}]' >"$BATS_TEST_TMPDIR/reviews.json"
+    echo '[{"user":{"login":"mallory"},"created_at":"2026-10-11T10:00:00Z","body":"<!-- ladder-ask:greptile head=deadbeefcafe0000 -->"}]' \
+        >"$BATS_TEST_TMPDIR/comments.json"
+    run run_hosted_rungs o r 7
+    [[ "$output" == *"CONFIGURATION DEFECT"* ]]
+}
+
+@test "spoof: a human whose login merely contains greptile cannot clear a BUSY slot" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY' greptile
+[
+  {\"user\": {\"login\": \"greptile-apps[bot]\", \"type\": \"Bot\"}, \"created_at\": \"$(ts 9)\", \"body\": \"credits exhausted\"},
+  {\"user\": {\"login\": \"not-greptile-apps\", \"type\": \"User\"}, \"created_at\": \"$(ts 2)\",
+   \"body\": \"<!-- greptile_summary -->\"}
+]
+JSON"
+    [ "$output" = "BUSY|unrecognised-greptile-notice" ]
+}
+
+@test "spoof: the exact bot login with a non-Bot type is ignored" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY' greptile
+[
+  {\"user\": {\"login\": \"greptile-apps[bot]\", \"type\": \"User\"}, \"created_at\": \"$(ts 2)\", \"body\": \"credits exhausted\"}
+]
+JSON"
+    [[ "$output" == FREE\|* ]]
+}
+
+@test "spoof: a human quoting a notice cannot force the greptile slot BUSY" {
+    run bash -c "cat <<JSON | python3 '$CLASSIFY' greptile
+[
+  {\"user\": {\"login\": \"mallory\", \"type\": \"User\"}, \"created_at\": \"$(ts 2)\", \"body\": \"credits exhausted\"}
+]
+JSON"
+    [[ "$output" == FREE\|* ]]
 }
 
 @test "hosted: a greptile review on a head never asked about is a configuration defect" {

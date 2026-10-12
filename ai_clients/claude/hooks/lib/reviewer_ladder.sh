@@ -866,6 +866,15 @@ _pr_issue_comments_json() {
 		jq -s 'add // []' 2>/dev/null
 }
 
+# _ladder_ask_author — the login the ask comment is posted as (empty when unknown).
+_ladder_ask_author() {
+	if [ -n "${REVIEWER_LADDER_ASK_AUTHOR_CMD:-}" ]; then
+		"$REVIEWER_LADDER_ASK_AUTHOR_CMD"
+		return $?
+	fi
+	gh api user --jq .login 2>/dev/null
+}
+
 _post_issue_comment() {
 	local owner="$1" repo="$2" pr_number="$3" body="$4"
 	if [ -n "${REVIEWER_LADDER_ASK_POST_CMD:-}" ]; then
@@ -880,7 +889,7 @@ _post_issue_comment() {
 # pending, or already reviewed), 1 when the ladder should fall through to
 # run_fallback_review. Fails closed: any unreadable input is a fall-through.
 run_hosted_rungs() {
-	local owner="$1" repo="$2" pr_number="$3" head_sha comments reviews verdict unsolicited ask_body
+	local owner="$1" repo="$2" pr_number="$3" head_sha comments reviews verdict unsolicited ask_body ask_author
 
 	head_sha="$(_pr_head_sha "$owner" "$repo" "$pr_number")"
 	comments="$(_pr_issue_comments_json "$owner" "$repo" "$pr_number")"
@@ -890,13 +899,19 @@ run_hosted_rungs() {
 		return 1
 	fi
 
-	unsolicited="$(jq -cn --argjson r "$reviews" --argjson c "$comments" '{reviews: $r, comments: $c}' |
+	# The marker is plain text anyone can type: it is credited only from the account the
+	# ladder posts as. An unreadable identity credits nothing (fail closed).
+	ask_author="$(_ladder_ask_author)"
+	unsolicited="$(jq -cn --argjson r "$reviews" --argjson c "$comments" --arg a "$ask_author" \
+		'{reviews: $r, comments: $c, ask_author: $a}' |
 		python3 "$LIB_DIR/slot_classify.py" greptile-unsolicited)"
 	if [[ "$unsolicited" == UNSOLICITED\|* ]]; then
 		print_status "warning" "greptile CONFIGURATION DEFECT on PR #$pr_number: unsolicited review on head(s) ${unsolicited#UNSOLICITED|} (autoReview should be off, blueprintx#737)"
 	fi
 
-	if [[ "$comments" == *"ladder-ask:greptile head=${head_sha:0:12}"* ]]; then
+	if [ -n "$ask_author" ] && printf '%s' "$comments" | jq -e --arg a "$ask_author" \
+		--arg m "ladder-ask:greptile head=${head_sha:0:12}" \
+		'any(.[]; .user.login == $a and ((.body // "") | contains($m)))' >/dev/null 2>&1; then
 		print_status "info" "rung greptile: ask for this head already posted — verdict pending"
 		return 0
 	fi

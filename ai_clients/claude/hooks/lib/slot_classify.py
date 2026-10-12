@@ -235,13 +235,18 @@ def classify(list_comments: list) -> str:
 # No allowance-exhausted notice has been observed, so its wording is NOT guessed: any
 # Greptile issue comment that is not one of those two known review shapes is treated as
 # a possible exhaustion notice and reads BUSY until a known review lands after it.
-GREPTILE_LOGIN_SUBSTRING = "greptile"
+GREPTILE_LOGIN = "greptile-apps[bot]"
 GREPTILE_REVIEW_MARKERS = ("<!-- greptile_summary -->", "<!-- greptile_outside_diff -->")
 GREPTILE_ASK_MARKER = re.compile(r"<!-- ladder-ask:greptile head=([0-9a-f]+) -->")
 
 
 def is_greptile(dict_comment: dict) -> bool:
-	"""Return whether a record was posted by the Greptile bot.
+	"""Return whether a record was posted by the real Greptile bot.
+
+	The EXACT login is required (a ``[bot]`` login cannot be registered by a human, a
+	substring match would trust ``not-greptile``), and a present ``user.type`` must be
+	``Bot``. An absent type is tolerated so a real notice is never ignored (fail closed
+	toward BUSY); body text and display names are never consulted.
 
 	Parameters
 	----------
@@ -251,10 +256,12 @@ def is_greptile(dict_comment: dict) -> bool:
 	Returns
 	-------
 	bool
-		True when the author login names Greptile.
+		True when the author is the Greptile App.
 	"""
-	str_login = (dict_comment.get("user") or {}).get("login") or ""
-	return GREPTILE_LOGIN_SUBSTRING in str_login.lower()
+	dict_user = dict_comment.get("user") or {}
+	if dict_user.get("login") != GREPTILE_LOGIN:
+		return False
+	return dict_user.get("type", "Bot") == "Bot"
 
 
 def classify_greptile(list_comments: list) -> str:
@@ -302,7 +309,8 @@ def greptile_unsolicited(dict_payload: dict) -> str:
 	Parameters
 	----------
 	dict_payload : dict
-		``{"reviews": [...], "comments": [...]}`` as the forge's REST listings return them.
+		``{"reviews": [...], "comments": [...], "ask_author": "<login>"}`` as the forge's
+		REST listings return them.
 
 	Returns
 	-------
@@ -310,9 +318,13 @@ def greptile_unsolicited(dict_payload: dict) -> str:
 		``OK`` when every Greptile review head was asked for, else
 		``UNSOLICITED|<sha>,<sha>`` (a configuration defect, never a free review).
 	"""
+	# An ask marker counts only from the ladder's own poster (``ask_author``): anyone can
+	# type the marker text. No known poster means no ask is credited (fail closed).
+	str_author = dict_payload.get("ask_author") or ""
 	set_asked = {
 		cls_match.group(1)[:12]
 		for c in dict_payload.get("comments") or []
+		if str_author and (c.get("user") or {}).get("login") == str_author
 		for cls_match in [GREPTILE_ASK_MARKER.search(c.get("body") or "")]
 		if cls_match
 	}
