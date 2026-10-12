@@ -49,3 +49,14 @@ test("no usage snapshot yet renders an empty, safe model", () => {
 test("countdown clamps a past time to now", () => {
     assert.equal(countdown("2026-10-12T11:00:00Z", now), "now");
 });
+
+test("all exhausted: recommends the account that frees up first, like pickNextAccount", async () => {
+    const { recommend } = await import("../model.mjs");
+    const now = new Date("2026-10-12T12:00:00Z");
+    const at = (h) => new Date(now.getTime() + h * 3600e3).toISOString();
+    const accounts = [
+        { name: "slow", plan: "pro", usage: { five_hour: { utilization: 0 }, seven_day: { utilization: 100, resets_at: at(10) } } },
+        { name: "fast", plan: "pro", usage: { five_hour: { utilization: 100, resets_at: at(1) }, seven_day: { utilization: 100, resets_at: at(1) } } },
+    ];
+    assert.equal(recommend(accounts, now).name, "fast");
+});

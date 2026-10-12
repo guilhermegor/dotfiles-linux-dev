@@ -15,17 +15,22 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 // which is copied to ~/.local/share/gnome-shell/extensions/).
 const HELPER_DIR = `${GLib.get_user_data_dir()}/claudestatus-bar/claudestatus_bar`;
 
+// done(stdout) on success; done(null, message) when node cannot run or exits non-zero.
 function node(helperPath, script, args, done) {
     const nodeBin = GLib.find_program_in_path('node') ?? `${GLib.get_home_dir()}/.asdf/shims/node`;
     const proc = Gio.Subprocess.new(
         [nodeBin, `${helperPath}/${script}`, ...args],
-        Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
+        Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
     proc.communicate_utf8_async(null, null, (p, res) => {
         try {
-            done(p.communicate_utf8_finish(res)[1]);
+            const [, out, err] = p.communicate_utf8_finish(res);
+            if (p.get_successful())
+                done(out);
+            else
+                done(null, (err || '').trim().split('\n').pop() || `exit ${p.get_exit_status()}`);
         } catch (e) {
             logError(e, 'claudestatus-bar');
-            done(null);
+            done(null, e.message);
         }
     });
 }
@@ -55,14 +60,28 @@ class Indicator extends PanelMenu.Button {
         const item = new PopupMenu.PopupMenuItem(title);
         item.connect('activate', () => {
             this._label.text = '…';
-            node(this._dir, 'refresh.mjs', [kind], () => this._reload());
+            node(this._dir, 'refresh.mjs', [kind], (_out, err) => {
+                if (this._destroyed)
+                    return;
+                this._reload(err ? `Refresh ${kind} failed: ${err}` : null);
+            });
         });
         this.menu.addMenuItem(item);
     }
 
-    _reload() {
+    destroy() {
+        // Pending node() callbacks outlive the indicator; they check this before touching it.
+        this._destroyed = true;
+        super.destroy();
+    }
+
+    _reload(refreshError = null) {
         node(this._dir, 'model.mjs', [], out => {
+            if (this._destroyed)
+                return;
             this._blocks.removeAll();
+            if (refreshError)
+                this._blocks.addMenuItem(new PopupMenu.PopupMenuItem(`✗ ${refreshError}`, {reactive: false}));
             if (!out) {
                 this._label.text = '—';
                 this._blocks.addMenuItem(new PopupMenu.PopupMenuItem('model.mjs failed (is node on PATH?)', {reactive: false}));

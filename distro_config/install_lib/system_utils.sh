@@ -1420,8 +1420,8 @@ CLAUDESTATUS_BAR_UUID="claudestatus-bar@dotfiles-dev"
 install_claudestatus_bar() {
     local src data_dir ext_dir
     src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../ai_clients/claude" && pwd)" || return 1
-    data_dir="$HOME/.local/share/claudestatus-bar"
-    ext_dir="$HOME/.local/share/gnome-shell/extensions/$CLAUDESTATUS_BAR_UUID"
+    data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/claudestatus-bar"
+    ext_dir="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/$CLAUDESTATUS_BAR_UUID"
 
     if ! command_exists gnome-shell; then
         print_status "warning" "GNOME Shell not detected; skipping the claudestatus top-bar."
@@ -1429,13 +1429,14 @@ install_claudestatus_bar() {
     fi
     command_exists node || print_status "warning" "node not on PATH: the top-bar needs it to read usage."
 
-    run_or_echo mkdir -p "$data_dir/claudestatus_bar" "$data_dir/lib" "$(dirname "$ext_dir")"
+    # run_install calls this inside an `if`, where set -e is off: check every copy explicitly.
+    run_or_echo mkdir -p "$data_dir/claudestatus_bar" "$data_dir/lib" "$(dirname "$ext_dir")" || return 1
     run_or_echo cp -f "$src/claudestatus_bar/model.mjs" "$src/claudestatus_bar/refresh.mjs" \
-        "$data_dir/claudestatus_bar/"
-    run_or_echo cp -f "$src/lib/claudestatus_billing.mjs" "$data_dir/lib/"
+        "$data_dir/claudestatus_bar/" || return 1
+    run_or_echo cp -f "$src/lib/claudestatus_billing.mjs" "$data_dir/lib/" || return 1
     # rm -rf on a symlink removes the link only, so an old dev symlink is replaced, not followed.
-    run_or_echo rm -rf "$ext_dir"
-    run_or_echo cp -a "$src/claudestatus_bar/gnome-extension" "$ext_dir"
+    run_or_echo rm -rf "$ext_dir" || return 1
+    run_or_echo cp -a "$src/claudestatus_bar/gnome-extension" "$ext_dir" || return 1
 
     if gnome-extensions info "$CLAUDESTATUS_BAR_UUID" 2>/dev/null | grep -q "ENABLED"; then
         print_status "success" "claudestatus top-bar already enabled; files refreshed."
@@ -1448,8 +1449,8 @@ install_claudestatus_bar() {
 
 uninstall_claudestatus_bar() {
     run_or_echo gnome-extensions disable "$CLAUDESTATUS_BAR_UUID" 2>/dev/null || true
-    run_or_echo rm -rf "$HOME/.local/share/gnome-shell/extensions/$CLAUDESTATUS_BAR_UUID" \
-        "$HOME/.local/share/claudestatus-bar"
+    local base="${XDG_DATA_HOME:-$HOME/.local/share}"
+    run_or_echo rm -rf "$base/gnome-shell/extensions/$CLAUDESTATUS_BAR_UUID" "$base/claudestatus-bar"
     print_status "success" "claudestatus top-bar removed (restart GNOME Shell to drop the icon)."
 }
 

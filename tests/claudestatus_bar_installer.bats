@@ -61,6 +61,23 @@ STUB
     grep -qx "disable claudestatus-bar@dotfiles-dev" "$BATS_TEST_TMPDIR/ge.log"
 }
 
+@test "honours XDG_DATA_HOME for the extension and the helpers" {
+    export XDG_DATA_HOME="$BATS_TEST_TMPDIR/xdg"
+    run install_claudestatus_bar
+    [ "$status" -eq 0 ]
+    [ -f "$XDG_DATA_HOME/gnome-shell/extensions/claudestatus-bar@dotfiles-dev/extension.js" ]
+    [ -f "$XDG_DATA_HOME/claudestatus-bar/claudestatus_bar/model.mjs" ]
+    [ ! -e "$HOME/.local/share/claudestatus-bar" ]
+}
+
+@test "a failed copy makes the install fail instead of reporting success" {
+    mkdir -p "$HOME/.local/share"
+    : > "$HOME/.local/share/claudestatus-bar"   # a file where the data dir must go
+    run install_claudestatus_bar
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"Restart GNOME Shell"* ]]
+}
+
 @test "registered with an empty GNOME folder" {
     run grep -F '"install_claudestatus_bar:claudestatus top-bar (GNOME extension)::"' \
         "$REPO_ROOT/distro_config/install_lib/system_utils.sh"

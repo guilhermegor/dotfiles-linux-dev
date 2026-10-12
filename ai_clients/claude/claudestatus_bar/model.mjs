@@ -65,14 +65,31 @@ function renewalLine(entry, now) {
     return entry.autoRenew?.value === false ? `Ends ${date}` : `Renews ${date}`;
 }
 
-// Same rule as claudestatus's pickNextAccount (display.js), reduced to what the bar needs:
-// skip errored and Free accounts, then take the lowest session+weekly sum that is not exhausted.
-export function recommend(accounts) {
-    const usable = accounts.filter((a) => !a.error && a.plan !== "free");
-    const open = usable.filter((a) => (a.usage?.five_hour?.utilization ?? 0) < 100 && (a.usage?.seven_day?.utilization ?? 0) < 100);
+// Same rule as claudestatus's pickNextAccount (display.js), reduced to what the bar needs: skip
+// errored and Free accounts; among accounts usable now take the lowest session+weekly sum; when
+// all are exhausted take the one that frees up first (the LATER of its exhausted resets).
+export function recommend(accounts, now = new Date()) {
     const score = (a) => (a.usage?.five_hour?.utilization ?? 0) + (a.usage?.seven_day?.utilization ?? 0);
-    const pool = open.length ? open : usable;
-    return pool.reduce((best, a) => (best && score(best) <= score(a) ? best : a), null);
+    const waitMs = (a) => {
+        const waits = [a.usage?.seven_day, a.usage?.five_hour]
+            .filter((l) => l && l.utilization >= 100)
+            .map((l) => {
+                const t = Date.parse(l.resets_at);
+                return Number.isNaN(t) ? Infinity : Math.max(0, t - now.getTime());
+            });
+        return waits.length ? Math.max(...waits) : 0;
+    };
+    const scored = accounts
+        .filter((a) => !a.error && a.plan !== "free")
+        .map((a) => ({ a, score: score(a), wait: waitMs(a) }));
+    const open = scored.filter((x) => x.wait <= 0);
+    const pool = open.length ? open : scored;
+    const best = pool.reduce((m, x) => {
+        if (!m) return x;
+        if (!open.length && x.wait !== m.wait) return x.wait < m.wait ? x : m;
+        return m.score <= x.score ? m : x;
+    }, null);
+    return best?.a ?? null;
 }
 
 function accountText(account, entry, usageAt, now) {
@@ -90,7 +107,7 @@ function accountText(account, entry, usageAt, now) {
 
 export function buildModel(usage, cache, now = new Date()) {
     const accounts = usage.accounts ?? [];
-    const best = recommend(accounts);
+    const best = recommend(accounts, now);
     const pct = best?.usage?.five_hour?.utilization;
     return {
         bar: pct === undefined ? "—" : `${pct}%`,
