@@ -1843,7 +1843,8 @@ check-and-append under <code>flock</code> to <code>$(git rev-parse --git-common-
    killed agent never calls it, and a registry that reads "everything is in
    flight" forever is dotfiles-linux-dev#404 — a guard that never fires — with a
    different cause.</li>
-<li><strong>Cross-machine "held elsewhere" (#715).</strong> The same once-per-round rule:
+<li>
+<p><strong>Cross-machine "held elsewhere" (#715).</strong> The same once-per-round rule:
    <code>refresh_elsewhere_held_paths &lt;owner&gt; &lt;repo&gt;</code> writes <code>elsewhere-held-paths.tsv</code>
    from the forge (cards In progress, plus pushed <code>*-&lt;issue&gt;</code> branches that have no
    local worktree, via each issue's <code>surface</code> block); <code>claim_files</code> then answers
@@ -1857,7 +1858,26 @@ check-and-append under <code>flock</code> to <code>$(git rev-parse --git-common-
    reconcile, a local claim the forge shows another issue holding is printed as
    <code>CONFLICT:#&lt;local&gt;:#&lt;remote&gt;:&lt;path&gt;</code> (one line per remote holder, live local
    claims only) and never resolved silently. Nothing
-   written names a host or machine.</li>
+   written names a host or machine.</p>
+</li>
+<li>
+<p><strong>Hot files (#714, owner option (c)).</strong> Open-PR overlap is a merge-risk annotation
+   (#433), with ONE exception: a file the repo declares <em>hot</em> — one nearly every PR appends
+   to (a CI workflow's step list, <code>.pre-commit-config.yaml</code>, <code>mkdocs.yml</code>'s nav). The list is
+   <code>&lt;git-common-dir&gt;/dispatch-hot-files.txt</code>, beside the claims registry: one exact path or
+   fnmatch glob per line (<code>*</code> crosses <code>/</code>), <code>#</code> comments and blank lines ignored,
+   <code>DISPATCH_HOT_FILES_FILE</code> overrides the path. <code>dispatch_plan.py</code> excludes a candidate whose
+   surface overlaps an OPEN PR on a hot file with a <code>HOT-FILE:</code> reason naming file and PR (open-PR
+   files are read over REST, lazily, only when some candidate touches a hot file); bash callers use
+   <code>free_hot_overlap OWNER REPO FILE...</code> (<code>lib/free_surface.sh</code>; reads open-PR files itself, never the branch-inclusive <code>FREE_HELD_PATHS</code>). <strong>A missing or unreadable list means none
+   declared</strong> (annotation-only everywhere); a failing open-PR file read excludes only the
+   hot-touching candidates, by name (<code>UNREADABLE</code>), never the whole plan. Option (b) — block any
+   open-PR overlap — was rejected: #433 measured it nearly stopping dispatch.
+   <code>/issue</code> makes the <code>## File surface</code> block mandatory and requires milestone handling at creation
+   (assign one, or say that none fits / the repo has none), and
+   <code>issue_template_guard.sh</code> also judges the REST twin (<code>gh api repos/O/R/issues -X POST|PATCH</code>,
+   implicit POST when a field is given) through <code>gh_cmd_match.py</code>'s <code>api-issue</code> noun.</p>
+</li>
 </ol>
 <p>An issue with no declared file surface is <code>UNDECLARED</code>: reported, never assumed
 free, never dispatched on a guess. The convention itself is named in exactly one
