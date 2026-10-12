@@ -324,6 +324,11 @@ setup_neovim_config() {
 
     run_or_echo mkdir -p "$nvim_dir"
 
+    if [ -f "$init_file" ] && [ "${DRY_RUN:-0}" = "1" ]; then
+        print_status "info" "[dry-run] would back up and regenerate $init_file"
+        return 0
+    fi
+
     if [ -f "$init_file" ] && ! _neovim_confirm_regenerate "$init_file"; then
         print_status "info" "Neovim configuration already exists at $init_file"
         return 0
@@ -470,11 +475,12 @@ _neovim_confirm_regenerate() {
 # Fetch the plugins so the first launch has onedark/NERDTree. Never fatal.
 _neovim_plug_install() {
     if [ "${DRY_RUN:-0}" = "1" ]; then
-        run_or_echo nvim --headless +PlugInstall +qall
+        run_or_echo nvim --headless '+PlugInstall --sync' +qall
         return 0
     fi
     print_status "info" "Installing Neovim plugins (headless PlugInstall)..."
-    if nvim --headless +PlugInstall +qall; then
+    # --sync blocks until downloads finish; without it +qall quits first
+    if nvim --headless '+PlugInstall --sync' +qall; then
         print_status "success" "Neovim plugins installed"
     else
         print_status "warning" "PlugInstall failed; run :PlugInstall inside nvim"

@@ -27,7 +27,20 @@ teardown() {
     run setup_neovim_config
     [ "$status" -eq 0 ]
     [ -f "$INIT" ]
-    grep -q -- '--headless +PlugInstall +qall' "$NVIM_LOG"
+    [ "$(cat "$NVIM_LOG")" = "--headless +PlugInstall --sync +qall" ]
+}
+
+@test "DRY_RUN leaves an existing init.vim byte-identical" {
+    mkdir -p "$(dirname "$INIT")"
+    echo "old" > "$INIT"
+    cp "$INIT" "$TMP/before"
+    DRY_RUN=1 NVIM_REGEN_CONFIG=1 run setup_neovim_config
+    [ "$status" -eq 0 ]
+    cmp "$INIT" "$TMP/before"
+    DRY_RUN=1 run setup_neovim_config <<< "y"
+    cmp "$INIT" "$TMP/before"
+    backups=("$HOME"/.config/nvim/init.vim.bak.*)
+    [ ! -e "${backups[0]}" ]
 }
 
 @test "DRY_RUN does not call nvim" {
