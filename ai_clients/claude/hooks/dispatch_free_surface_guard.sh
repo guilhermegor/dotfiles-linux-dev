@@ -201,8 +201,12 @@ _agent_dispatch_issue() {
 # reused the same `issue-<N>-slug` name — either of which would silence a rescue that is still
 # needed. The transcript is JSONL, one record per line, so `input_line_number` after jq finishes
 # reading a record is that record's own line — a cheap, exact proxy for "which happened first".
+#
+# Optional 4th arg MAX_AGE (seconds): also require that resume's own `.timestamp` to be that recent.
+# A record with no parsable timestamp is never recent — fail closed to "not provably live", so the
+# registry claim (dispatch_claims.sh) stays the only source for it (dotfiles-linux-dev#729).
 _sendmessage_resumed() {
-	local transcript="$1" id="$2" name="$3"
+	local transcript="$1" id="$2" name="$3" max_age="${4:-}"
 	[ -n "$name" ] || return 1
 	local fail_line
 	fail_line="$(jq -r --arg needle "<tool-use-id>${id}</tool-use-id>" '
@@ -211,8 +215,9 @@ _sendmessage_resumed() {
 		| input_line_number
 	' "$transcript" 2>/dev/null | tail -1)"
 	[ -n "$fail_line" ] || return 1
-	jq -e --arg n "$name" --argjson after "$fail_line" '
+	jq -e --arg n "$name" --argjson after "$fail_line" --arg age "$max_age" '
 		select(input_line_number > $after)
+		| select($age == "" or ((.timestamp // "" | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch 0) > (now - ($age | tonumber))))
 		| select(.message.content != null)
 		| .message.content[]?
 		| select(.type == "tool_use" and .name == "SendMessage" and .input.to == $n)' \
@@ -242,7 +247,9 @@ _sendmessage_resumed() {
 # for the same tool_use id settles it: status=completed means done; no notification yet means
 # still working, same as no tool_result at all; status=failed means neither — a quota kill is
 # not "running", it is the RESCUE case (resume it, don't dispatch a duplicate), so it is
-# recorded in FAILED_BACKGROUND_AGENTS and does NOT count as in flight.
+# recorded in FAILED_BACKGROUND_AGENTS and does NOT count as in flight — unless it was then
+# resumed by SendMessage within DISPATCH_CLAIM_TTL, which is a running agent again and counts
+# (#729; the TTL is the same bound that expires a registry claim, so a finished one ages out).
 #
 # Anything else (a synchronous call's real result already landed) is resolved, plainly.
 inflight_dispatch_issues() {
@@ -273,17 +280,25 @@ inflight_dispatch_issues() {
 						| (.input.name // "")' "$transcript" 2>/dev/null | head -1)"
 					# RESOLVED: the model already resumed this agent by name, AFTER this
 					# failure — do not re-nag for it (dotfiles-linux-dev#540, signal 2).
-					_sendmessage_resumed "$transcript" "$id" "$agent_name" && continue
-					desc="$(jq -r --arg id "$id" 'select(.message.content != null)
-						| .message.content[]?
-						| select(.type == "tool_use" and .id == $id)
-						| (.input.name // .input.description // $id)' "$transcript" 2>/dev/null | head -1)"
-					decl_issue="$(_agent_dispatch_issue "$transcript" "$id" 2>/dev/null)" || decl_issue=""
-					# "$decl_issue<TAB>$desc" — decl_issue is read back in rescue_note to
-					# check RESOLVED signal 3 (issue no longer in REMAINING). Empty
-					# decl_issue (name declares no issue) fails CLOSED there: always shown.
-					FAILED_BACKGROUND_AGENTS="$(printf '%s\n%s\t%s' "$FAILED_BACKGROUND_AGENTS" "$decl_issue" "$desc")"
-					continue
+					# And while that resume is recent the agent is RUNNING again: fall out of
+					# the case and count it in flight, or the guard demands the duplicate
+					# dispatch step 1 forbids (#729). An old resume is a finished agent.
+					if _sendmessage_resumed "$transcript" "$id" "$agent_name" "$DISPATCH_CLAIM_TTL"; then
+						: # resumed recently — falls out of the case, counted in flight below
+					elif _sendmessage_resumed "$transcript" "$id" "$agent_name"; then
+						continue
+					else
+						desc="$(jq -r --arg id "$id" 'select(.message.content != null)
+							| .message.content[]?
+							| select(.type == "tool_use" and .id == $id)
+							| (.input.name // .input.description // $id)' "$transcript" 2>/dev/null | head -1)"
+						decl_issue="$(_agent_dispatch_issue "$transcript" "$id" 2>/dev/null)" || decl_issue=""
+						# "$decl_issue<TAB>$desc" — decl_issue is read back in rescue_note to
+						# check RESOLVED signal 3 (issue no longer in REMAINING). Empty
+						# decl_issue (name declares no issue) fails CLOSED there: always shown.
+						FAILED_BACKGROUND_AGENTS="$(printf '%s\n%s\t%s' "$FAILED_BACKGROUND_AGENTS" "$decl_issue" "$desc")"
+						continue
+					fi
 					;;
 				esac
 				;;
