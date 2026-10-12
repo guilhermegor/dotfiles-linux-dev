@@ -38,8 +38,11 @@ read -r head merge_state < <(gh api "repos/$owner/$repo/pulls/$pr" --jq '"\(.hea
 committed="$(gh api "repos/$owner/$repo/commits/$head" --jq .commit.committer.date)"
 pushed="$(date -d "$committed" +%s 2>/dev/null)" || { echo "bad committer date: $committed" >&2; exit 1; }
 now="$(date +%s)"
-comments="$(gh api --paginate "repos/$owner/$repo/issues/$pr/comments" --jq '.[]' | jq -s .)"
-[ -n "$comments" ] || comments='[]'
+# Fail closed: the comments carry the "head already reviewed" markers, so a failed
+# read must stop here, never degrade to '[]' (which would re-review a covered head).
+raw_comments="$(gh api --paginate "repos/$owner/$repo/issues/$pr/comments" --jq '.[]')" ||
+	{ echo "cannot read PR #$pr comments; refusing to run the ladder blind" >&2; exit 1; }
+comments="$(jq -s . <<<"$raw_comments")" || { echo "bad comments JSON for PR #$pr" >&2; exit 1; }
 
 # REST reports lowercase `dirty`; the lib compares GraphQL's uppercase DIRTY.
 run_fallback_review "$owner" "$repo" "$pr" "${merge_state^^}" "$pushed" "$now" "$comments"

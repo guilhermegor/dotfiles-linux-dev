@@ -1548,3 +1548,18 @@ STUB
     now="$(echo "$output" | awk '{print $7}')"
     [ "$now" -gt "$expected" ]
 }
+
+@test "run_ladder_review fails closed when the comments read fails" {
+    make_wrapper_sandbox
+    cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$*" in
+    *pulls/7*) echo "abc123 dirty" ;;
+    *commits/abc123*) echo "2026-01-02T03:04:05Z" ;;
+    *comments*) echo "HTTP 502" >&2; exit 1 ;;
+esac
+STUB
+    run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash "$SANDBOX/run_ladder_review.sh" 7
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"ARGS"* ]]
+}
