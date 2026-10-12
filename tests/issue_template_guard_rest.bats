@@ -167,6 +167,33 @@ BAD_BODY='**Python · PyPI · public repo**\n\nNo definition of done here.'
     [ "$status" -eq 2 ]
 }
 
+@test "adversarial spellings are all judged (REST and gh issue)" {
+    local s
+    for s in \
+        'gh api -X post repos/{owner}/{repo}/issues -f body=nope' \
+        'gh api --method=PATCH repos/{owner}/{repo}/issues/3 -f body=nope' \
+        'gh api -XPOST repos/{owner}/{repo}/issues -f body=nope' \
+        'gh api /repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'gh -R o/r api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'bash -c "gh api repos/{owner}/{repo}/issues -X POST -f body=nope"' \
+        'command gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        '\gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'rtk proxy gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'true; gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'false || gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'echo hi | gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'sleep 1 & gh api repos/{owner}/{repo}/issues -X POST -f body=nope' \
+        'gh api repos/{owner}/{repo}/issues -X POST --field body=nope' \
+        'bash -c "gh issue create --title x --body nope"' \
+        'command gh issue create --title x --body nope' \
+        '\gh issue create --title x --body nope' \
+        'rtk proxy gh issue create --title x --body nope' \
+        'gh -R o/r issue create --title x --body nope'; do
+        run bash -c "payload '$s' | '$GUARD'"
+        [ "$status" -eq 2 ] || { echo "NOT BLOCKED: $s"; return 1; }
+    done
+}
+
 @test "REST create in a repo with no template is untouched" {
     rm -rf .github/ISSUE_TEMPLATE
     run bash -c "payload 'gh api repos/{owner}/{repo}/issues -X POST -f title=x -f body=nope' | '$GUARD'"
