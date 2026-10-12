@@ -1,0 +1,78 @@
+#!/usr/bin/env bats
+#
+# setup_neovim_config (distro_config/install_coding_lib/editors.sh): headless PlugInstall after
+# writing init.vim, guarded colorscheme/NERDTree lines, and backup-before-regenerate (#739).
+# nvim is a stub on PATH and HOME is a temp dir; the real config is never touched.
+
+setup() {
+    REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
+    TMP="$(mktemp -d)"
+    export HOME="$TMP/home" NVIM_LOG="$TMP/nvim.log" LOG_FILE="$TMP/log"
+    mkdir -p "$HOME" "$TMP/bin"
+    printf '#!/bin/bash\necho "$*" >> "$NVIM_LOG"\nexit "${NVIM_EXIT:-0}"\n' > "$TMP/bin/nvim"
+    printf '#!/bin/bash\nexit 0\n' > "$TMP/bin/curl"
+    chmod +x "$TMP/bin/"*
+    export PATH="$TMP/bin:$PATH"
+    : > "$NVIM_LOG"
+    INIT="$HOME/.config/nvim/init.vim"
+    source "$REPO_ROOT/distro_config/install_coding_lib/_common.sh"
+    source "$REPO_ROOT/distro_config/install_coding_lib/editors.sh"
+}
+
+teardown() {
+    rm -rf "$TMP"
+}
+
+@test "writes init.vim then runs headless PlugInstall" {
+    run setup_neovim_config
+    [ "$status" -eq 0 ]
+    [ -f "$INIT" ]
+    grep -q -- '--headless +PlugInstall +qall' "$NVIM_LOG"
+}
+
+@test "DRY_RUN does not call nvim" {
+    DRY_RUN=1 run setup_neovim_config
+    [ "$status" -eq 0 ]
+    [ ! -s "$NVIM_LOG" ]
+}
+
+@test "a failing PlugInstall warns but does not fail" {
+    NVIM_EXIT=1 run setup_neovim_config
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PlugInstall failed"* ]]
+}
+
+@test "generated init.vim guards colorscheme and NERDTree" {
+    run setup_neovim_config
+    grep -q '^silent! colorscheme onedark' "$INIT"
+    grep -q "if exists(':NERDTree') | NERDTree" "$INIT"
+}
+
+@test "existing init.vim is kept when regeneration is declined" {
+    mkdir -p "$(dirname "$INIT")"
+    echo "old" > "$INIT"
+    run setup_neovim_config < /dev/null
+    [ "$status" -eq 0 ]
+    [ "$(cat "$INIT")" = "old" ]
+    [ ! -s "$NVIM_LOG" ]
+}
+
+@test "existing init.vim is backed up before regeneration" {
+    mkdir -p "$(dirname "$INIT")"
+    echo "old" > "$INIT"
+    NVIM_REGEN_CONFIG=1 run setup_neovim_config
+    [ "$status" -eq 0 ]
+    backups=("$HOME"/.config/nvim/init.vim.bak.*)
+    [ -f "${backups[0]}" ]
+    [ "$(cat "${backups[0]}")" = "old" ]
+    grep -q '^silent! colorscheme onedark' "$INIT"
+}
+
+@test "answering y at the prompt regenerates with a backup" {
+    mkdir -p "$(dirname "$INIT")"
+    echo "old" > "$INIT"
+    run setup_neovim_config <<< "y"
+    [ "$status" -eq 0 ]
+    backups=("$HOME"/.config/nvim/init.vim.bak.*)
+    [ "$(cat "${backups[0]}")" = "old" ]
+}

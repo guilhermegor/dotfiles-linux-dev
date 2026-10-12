@@ -324,8 +324,19 @@ setup_neovim_config() {
 
     run_or_echo mkdir -p "$nvim_dir"
 
-    if [ ! -f "$init_file" ]; then
-        cat > "$init_file" << 'EOF'
+    if [ -f "$init_file" ] && ! _neovim_confirm_regenerate "$init_file"; then
+        print_status "info" "Neovim configuration already exists at $init_file"
+        return 0
+    fi
+
+    if [ -f "$init_file" ]; then
+        local backup_file
+        backup_file="$init_file.bak.$(date +%Y%m%d%H%M%S)"
+        cp "$init_file" "$backup_file" || return 1
+        print_status "info" "Existing init.vim backed up to $backup_file"
+    fi
+
+    cat > "$init_file" << 'EOF'
 " Basic Neovim Configuration
 set number
 set relativenumber
@@ -381,8 +392,8 @@ Plug 'folke/which-key.nvim'
 
 call plug#end()
 
-" Color scheme
-colorscheme onedark
+" Color scheme (silent: plugins are absent until :PlugInstall has run)
+silent! colorscheme onedark
 
 " Key mappings
 let mapleader = " "
@@ -419,7 +430,7 @@ nnoremap <leader>wq :wq<CR>
 nnoremap <leader><CR> :so ~/.config/nvim/init.vim<CR>
 
 " Auto commands
-autocmd VimEnter * NERDTree | wincmd p
+autocmd VimEnter * if exists(':NERDTree') | NERDTree | wincmd p | endif
 
 " COC configuration
 nmap <silent> gd <Plug>(coc-definition)
@@ -443,11 +454,32 @@ endfunction
 inoremap <silent><expr> <CR> coc#pum#visible() ? coc#pum#confirm() : "\<C-g>u\<CR>\<c-r>=coc#on_enter()\<CR>"
 EOF
 
-        print_status "success" "Basic Neovim configuration created at $init_file"
-        print_status "info" "After first launch, run :PlugInstall to install plugins"
-    else
-        print_status "info" "Neovim configuration already exists at $init_file"
+    print_status "success" "Basic Neovim configuration created at $init_file"
+    _neovim_plug_install
+}
+
+# Ask before replacing an existing init.vim. NVIM_REGEN_CONFIG=1 answers yes
+# non-interactively; closed stdin or an empty answer keeps the file (default N).
+_neovim_confirm_regenerate() {
+    local answer=""
+    [ "${NVIM_REGEN_CONFIG:-0}" = "1" ] && return 0
+    read -r -p "  Back up and regenerate $1? [y/N] " answer || return 1
+    [[ "$answer" == [yY]* ]]
+}
+
+# Fetch the plugins so the first launch has onedark/NERDTree. Never fatal.
+_neovim_plug_install() {
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        run_or_echo nvim --headless +PlugInstall +qall
+        return 0
     fi
+    print_status "info" "Installing Neovim plugins (headless PlugInstall)..."
+    if nvim --headless +PlugInstall +qall; then
+        print_status "success" "Neovim plugins installed"
+    else
+        print_status "warning" "PlugInstall failed; run :PlugInstall inside nvim"
+    fi
+    return 0
 }
 
 install_warp_terminal() {
