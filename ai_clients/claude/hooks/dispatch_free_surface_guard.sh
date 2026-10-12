@@ -215,13 +215,32 @@ _sendmessage_resumed() {
 		| input_line_number
 	' "$transcript" 2>/dev/null | tail -1)"
 	[ -n "$fail_line" ] || return 1
-	jq -e --arg n "$name" --argjson after "$fail_line" --arg age "$max_age" '
+	local ids sid
+	ids="$(jq -r --arg n "$name" --argjson after "$fail_line" --arg age "$max_age" '
 		select(input_line_number > $after)
 		| select($age == "" or ((.timestamp // "" | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch 0) > (now - ($age | tonumber))))
 		| select(.message.content != null)
 		| .message.content[]?
-		| select(.type == "tool_use" and .name == "SendMessage" and .input.to == $n)' \
-		"$transcript" >/dev/null 2>&1
+		| select(.type == "tool_use" and .name == "SendMessage" and .input.to == $n)
+		| .id' "$transcript" 2>/dev/null)"
+	# A resume whose delivery came back success:false never reached the agent (#729 review).
+	# No result yet counts as delivered: it is pending, not refused.
+	while read -r sid; do
+		[ -n "$sid" ] || continue
+		_sendmessage_delivery_failed "$transcript" "$sid" || return 0
+	done <<<"$ids"
+	return 1
+}
+
+# _sendmessage_delivery_failed TRANSCRIPT TOOL_USE_ID
+# True when the matching tool_result is a JSON receipt with success:false.
+_sendmessage_delivery_failed() {
+	jq -e --arg id "$2" 'select(.message.content != null)
+		| .message.content[]?
+		| select(.type == "tool_result" and .tool_use_id == $id)
+		| .content
+		| if type == "string" then . else ([.[]? | .text // ""] | join("\n")) end
+		| select(try (fromjson | .success == false) catch false)' "$1" >/dev/null 2>&1
 }
 
 # inflight_dispatch_issues TRANSCRIPT
@@ -471,7 +490,7 @@ main() {
 	# one agent of another session, which is why the claims are counted and not the union — the
 	# union would double-count an issue that is both claimed and dispatched here.
 	slots=$((DISPATCH_MAX_CONCURRENT - IN_FLIGHT_AGENTS \
-		- $(printf '%s\n' "$claimed" | sed '/^$/d' | wc -l)))
+		- $(printf '%s\n' "$claimed" | sed '/^$/d' | { grep -vxF -f <(printf '%s\n' "$IN_FLIGHT_ISSUES" | sed '/^$/d') || true; } | wc -l)))
 	[ "$slots" -lt 0 ] && slots=0
 	missing="$(printf '%s\n' "$remaining" | sed '/^$/d' | head -n "$slots")"
 	queued="$(printf '%s\n' "$remaining" | sed '/^$/d' | tail -n +"$((slots + 1))")"

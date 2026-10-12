@@ -536,6 +536,35 @@ transcript_resumed_agent() {
     [ "$status" -eq 0 ]
 }
 
+@test "a resumed agent that also holds its claim takes ONE slot, not two" {
+    plan_of "4 5"
+    DISPATCH_MAX_CONCURRENT=2
+    export DISPATCH_MAX_CONCURRENT
+    claim_issue 4
+    run run_guard "$(transcript_resumed_agent 4 "$(date +%s)")"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#5"* ]]
+}
+
+@test "a resume whose delivery failed (success:false) does not count as running" {
+    plan_of "4"
+    local f
+    f="$(transcript_resumed_agent 4 "$(date +%s)")"
+    jq -nc '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"sm1",content:"{\"success\":false,\"message\":\"no such agent\"}"}]}}' >>"$f"
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#4"* ]]
+}
+
+@test "a resume whose delivery succeeded still counts as running" {
+    plan_of "4"
+    local f
+    f="$(transcript_resumed_agent 4 "$(date +%s)")"
+    jq -nc '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"sm1",content:"{\"success\":true,\"message\":\"Message sent to issue-4-bg-agent\"}"}]}}' >>"$f"
+    run run_guard "$f"
+    [ "$status" -eq 0 ]
+}
+
 @test "a resume older than the claim TTL stops counting — the finished agent is not in flight forever" {
     plan_of "4"
     DISPATCH_CLAIM_TTL=60
