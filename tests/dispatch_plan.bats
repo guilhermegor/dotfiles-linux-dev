@@ -247,8 +247,11 @@ JSON
     # dotfiles-linux-dev#714: open_pr_hot_holders() reads each open PR's files over REST. A
     # per-PR fixture \$BIN/prfiles.<N> serves them; PR_FILES_FAIL=1 makes the read fail.
     [ "\${PR_FILES_FAIL:-0}" = 1 ] && { echo "gh: HTTP 502" >&2; exit 1; }
-    [ -n "\${PR_FILES_SLEEP:-}" ] && sleep "\$PR_FILES_SLEEP"
+    [ -n "\${PR_FILES_SLEEP:-}" ] && exec sleep "\$PR_FILES_SLEEP"
     n="\${3#repos/acme/widgets/pulls/}"; n="\${n%%/*}"
+    # PR_FILES_SLEEP_<n>: this PR's read is slow but succeeds; PR_FILES_HANG_<n>: it never returns.
+    v="PR_FILES_HANG_\$n"; [ -n "\${!v:-}" ] && exec sleep "\${!v}"
+    v="PR_FILES_SLEEP_\$n"; [ -n "\${!v:-}" ] && sleep "\${!v}"
     [ -f "$BIN/prfiles.\$n" ] && cat "$BIN/prfiles.\$n"
     exit 0
     ;;
@@ -1052,6 +1055,33 @@ hot_list() {
     DISPATCH_HOT_READ_BUDGET=0.5 PR_FILES_SLEEP=1 run_planner
     [ "$status" -eq 0 ]
     [ "$(field '.dispatchable[0].issue')" = "19" ]
+    [[ "$(field '[.excluded[] | select(.issue==18)][0].reason')" == "HOT-FILE: "*"UNREADABLE"* ]]
+}
+
+@test "a read that starts inside the budget is cut at the deadline, not at GH_TIMEOUT" {
+    hot_list ".github/workflows/ci.yml"
+    printf 'unrelated.sh\n' >"$BIN/prfiles.77"
+    stub_gh "[$(issue_json 18 .github/workflows/ci.yml)]" "" "" 0 "" "$OTHER_PR"
+    start=$SECONDS
+    DISPATCH_HOT_READ_BUDGET=1 PR_FILES_SLEEP=8 run_planner
+    elapsed=$((SECONDS - start))
+    [ "$status" -eq 0 ]
+    [ "$elapsed" -lt 4 ]
+    [[ "$(field '[.excluded[] | select(.issue==18)][0].reason')" == "HOT-FILE: "*"UNREADABLE"* ]]
+}
+
+@test "the second read gets only the budget left after the first, not the whole budget" {
+    hot_list ".github/workflows/ci.yml"
+    printf 'unrelated.sh\n' >"$BIN/prfiles.77"
+    printf 'unrelated.sh\n' >"$BIN/prfiles.78"
+    stub_gh "[$(issue_json 18 .github/workflows/ci.yml)]" "" "" 0 "" \
+        '[{"number":77,"title":"a","body":"","closingIssuesReferences":[]},{"number":78,"title":"b","body":"","closingIssuesReferences":[]}]'
+    start=$(date +%s%N)
+    DISPATCH_HOT_READ_BUDGET=4 PR_FILES_SLEEP_77=3 PR_FILES_HANG_78=15 run_planner
+    elapsed_ms=$((($(date +%s%N) - start) / 1000000))
+    [ "$status" -eq 0 ]
+    # Cut at the shared deadline (~4 s plus planner startup); a per-read full budget would end near 8 s.
+    [ "$elapsed_ms" -lt 6200 ]
     [[ "$(field '[.excluded[] | select(.issue==18)][0].reason')" == "HOT-FILE: "*"UNREADABLE"* ]]
 }
 
