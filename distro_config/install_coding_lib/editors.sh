@@ -473,12 +473,31 @@ _neovim_plug_install() {
     fi
     print_status "info" "Installing Neovim plugins (headless PlugInstall)..."
     # --sync blocks until downloads finish; without it +qall quits first
-    if nvim --headless '+PlugInstall --sync' +qall; then
-        print_status "success" "Neovim plugins installed"
-    else
+    if ! nvim --headless '+PlugInstall --sync' +qall; then
         print_status "warning" "PlugInstall failed; run :PlugInstall inside nvim"
+        return 0
+    fi
+    # vim-plug reports a failed clone in its buffer but nvim still exits 0, so the
+    # exit code alone cannot say every plugin landed: check each Plug's directory.
+    local missing
+    missing="$(_neovim_missing_plugins "$HOME/.config/nvim/init.vim" "$HOME/.vim/plugged")"
+    if [ -n "$missing" ]; then
+        print_status "warning" "Neovim plugins incomplete (missing: ${missing% }); run :PlugInstall inside nvim"
+    else
+        print_status "success" "Neovim plugins installed"
     fi
     return 0
+}
+
+# _neovim_missing_plugins INIT_FILE PLUG_DIR: names of every `Plug 'owner/name'`
+# in INIT_FILE with no PLUG_DIR/name directory, space-separated; empty if all exist.
+_neovim_missing_plugins() {
+    local init_file="$1" plug_dir="$2" repo name missing=""
+    while read -r repo; do
+        name="${repo##*/}"
+        [ -d "$plug_dir/$name" ] || missing+="$name "
+    done < <(sed -n "s/^[[:space:]]*Plug '\([^']*\)'.*/\1/p" "$init_file")
+    printf '%s' "$missing"
 }
 
 install_warp_terminal() {

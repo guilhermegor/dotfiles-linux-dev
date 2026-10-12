@@ -9,7 +9,16 @@ setup() {
     TMP="$(mktemp -d)"
     export HOME="$TMP/home" NVIM_LOG="$TMP/nvim.log" LOG_FILE="$TMP/log"
     mkdir -p "$HOME" "$TMP/bin"
-    printf '#!/bin/bash\necho "$*" >> "$NVIM_LOG"\nexit "${NVIM_EXIT:-0}"\n' > "$TMP/bin/nvim"
+    # The nvim stub "installs" every Plug from init.vim except NVIM_SKIP_PLUG.
+    cat > "$TMP/bin/nvim" <<'STUB'
+#!/bin/bash
+echo "$*" >> "$NVIM_LOG"
+sed -n "s/^[[:space:]]*Plug '[^']*\/\([^']*\)'.*/\1/p" "$HOME/.config/nvim/init.vim" 2>/dev/null |
+    while read -r name; do
+        [ "$name" = "${NVIM_SKIP_PLUG:-}" ] || mkdir -p "$HOME/.vim/plugged/$name"
+    done
+exit "${NVIM_EXIT:-0}"
+STUB
     printf '#!/bin/bash\nexit 0\n' > "$TMP/bin/curl"
     chmod +x "$TMP/bin/"*
     export PATH="$TMP/bin:$PATH"
@@ -100,4 +109,17 @@ teardown() {
     backups=("$INIT".bak.*)
     [ "${#backups[@]}" -eq 2 ]
     grep -lx "original" "${backups[@]}"
+}
+
+@test "PlugInstall success with every plugin present reports installed" {
+    run setup_neovim_config
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Neovim plugins installed"* ]]
+}
+
+@test "a plugin missing after a clean PlugInstall exit warns incomplete" {
+    NVIM_SKIP_PLUG=nerdtree run setup_neovim_config
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"incomplete (missing: nerdtree)"* ]]
+    [[ "$output" != *"Neovim plugins installed"* ]]
 }
