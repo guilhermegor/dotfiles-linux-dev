@@ -417,6 +417,14 @@ PR still carries a reason, no bare override, and an unreadable policy falls back
 parallel plan, never to a guessed serial one. The guard needs no new branch — "the queue
 head has a `review-pr-<N>` agent in flight" is already its pass condition.
 
+**Merge-only heads and ASK-ONLY repos (#736).** A head whose PR patch (`compare/<base>...<oid>`,
+hunk line numbers normalised) equals that of an already-covered head (either channel; newest 3,
+`COMPARE_PAGES` bound) is excluded as covered: GitHub's update-branch moves the head without
+changing what was reviewed. Patches are compared, never SHAs, so conflict resolution or new code
+stays a new head; an unreadable or empty patch read fails closed to "needs review". The
+`RECENT_PUSH_SECONDS` exclusion is skipped when `slot_classify.py` reads `ASK-ONLY` (a push
+triggers no review there); any other or unreadable verdict keeps it.
+
 **Merge-ready (#705).** On a strict base the plan also carries a separate `merge_ready` list:
 PRs `BEHIND` with every check clean and the repo's own review gate (`REVIEW_FANOUT_GATE_CHECK`,
 default `Review threads answered`) present and green on the current head — a gate that carries
