@@ -46,20 +46,20 @@ setup() {
 
     GH_LOG="$TEST_TMP/gh.log"
     : >"$GH_LOG"
-    export GH_LOG
+    export GH_LOG TEST_TMP
 
     # A rung resolved, so no predicate test is silently masked by the rung's own exclusion
     # reason (which is checked on purpose by its own tests below).
     export REVIEW_FANOUT_RUNG="qwen|qwen3-coder-plus|configured-default"
     unset REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
-    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED GH_PAGING_FAIL
+    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED GH_PAGING_FAIL GH_COMPARE_FAIL GH_PARENTS_FAIL GH_SLOT_FAIL
 }
 
 teardown() {
     cd /
     rm -rf "$TEST_TMP"
     unset REVIEW_FANOUT_RUNG REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
-    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED GH_PAGING_FAIL
+    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED GH_PAGING_FAIL GH_COMPARE_FAIL GH_PARENTS_FAIL GH_SLOT_FAIL
 }
 
 # ago SECONDS — an ISO-8601 UTC timestamp that many seconds in the past.
@@ -139,6 +139,21 @@ elif [ "$1" = "api" ] && [[ "$2" == */issues/*/comments* ]]; then
     jq --argjson n "$n" --argjson p "$p" '[.[] | select(.number == $n) | (.comments // [])[]
         | {body, created_at: .createdAt, user: {login: .author.login}}]
         | .[($p - 1) * 100:$p * 100]' "$FIXTURE"
+elif [ "$1" = "api" ] && [[ "$2" == */git/commits/* ]]; then
+    # parents of <oid> (#736), keyed on the SHA; default a merge of the reviewed 1111aaaa and a base commit
+    [ -n "${GH_PARENTS_FAIL:-}" ] && { echo "gh: HTTP 502" >&2; exit 1; }
+    oid="${2##*/}"
+    jq --arg oid "$oid" '{parents: ([.[] | select(.headRefOid == $oid) | .parents // ["1111aaaa", "9999base"]] | first // [] | map({sha: .}))}' "$FIXTURE"
+elif [ "$1" = "api" ] && [[ "$2" == */compare/* ]]; then
+    # the PR patch at <oid> (#736): the fixture's per-PR `patches` map, oid -> file list
+    [ -n "${GH_COMPARE_FAIL:-}" ] && { echo "gh: HTTP 502" >&2; exit 1; }
+    oid="${2#*...}"
+    jq --arg oid "$oid" '{files: ([.[].patches[$oid]? // empty] | first // [])}' "$FIXTURE"
+elif [ "$1" = "api" ] && [[ "$2" == */issues/comments\?* ]]; then
+    # the roster page slot_classify.py reads (#736); absent file => empty output => UNKNOWN
+    [ -n "${GH_SLOT_FAIL:-}" ] && { echo "gh: HTTP 403" >&2; exit 1; }
+    cat "$TEST_TMP/slot.json" 2>/dev/null
+    exit 0
 elif [ "$1" = "api" ] && [[ "$2" == */commits/*/check-runs* ]]; then
     oid="${2#*/commits/}"; oid="${oid%%/*}"
     jq --arg oid "$oid" '{check_runs: [.[] | select(.headRefOid == $oid) | (.statusCheckRollup // [])[]
@@ -1157,4 +1172,169 @@ not_ready() {
 @test "must-fail: a null or empty checks list is never merge-ready (#705)" {
     not_ready '.statusCheckRollup = null'
     not_ready '.statusCheckRollup = []'
+}
+
+# --- merge-only heads and ASK-ONLY just-pushed PRs (#736) -----------------------------
+
+# merge_pr PR PATCHES — a PR whose head 2222aaaa was reviewed as 1111aaaa; PATCHES is the
+# `patches` map (the PR patch at each head). Both heads clear the recent-push window.
+merge_pr() {
+    stub_gh_prs <<EOF
+[{"number":$1,"headRefOid":"2222aaaa","baseRefName":"master","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"1111aaaa"}}],"comments":[],
+  "commits":[{"oid":"2222aaaa","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[],
+  "patches":$2}]
+EOF
+}
+
+@test "a merge-only update (same patch, shifted hunk lines) counts as covered (#736)" {
+    merge_pr 730 '{"1111aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -0,0 +1,2 @@\n+x\n+y"}],
+                   "2222aaaa":[{"filename":"a.sh","status":"added","sha":"s2","patch":"@@ -4,0 +5,2 @@\n+x\n+y"}]}'
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 730)" == *"merge-only update"* ]]
+}
+
+@test "an update that changes the patch is still a new head" {
+    merge_pr 731 '{"1111aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -0,0 +1,2 @@\n+x\n+y"}],
+                   "2222aaaa":[{"filename":"a.sh","status":"added","sha":"s2","patch":"@@ -0,0 +1,3 @@\n+x\n+y\n+conflict-fix"}]}'
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "731" ]
+}
+
+@test "an update touching an extra file is still a new head" {
+    merge_pr 732 '{"1111aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -0,0 +1 @@\n+x"}],
+                   "2222aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -0,0 +1 @@\n+x"},
+                               {"filename":"b.sh","status":"added","sha":"s3","patch":"@@ -0,0 +1 @@\n+z"}]}'
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "732" ]
+}
+
+@test "a failed patch read leaves the PR needing review (fail closed)" {
+    merge_pr 733 '{"1111aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -0,0 +1 @@\n+x"}],
+                   "2222aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -0,0 +1 @@\n+x"}]}'
+    export GH_COMPARE_FAIL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "733" ]
+}
+
+@test "an equal-signature head that is not a child of the reviewed head is a new head (#737)" {
+    # a relocated edit has the same position-less signature, but the reviewed head is no parent
+    stub_gh_prs <<EOF
+[{"number":736,"headRefOid":"2222aaaa","baseRefName":"master","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"1111aaaa"}}],"comments":[],"parents":["9999cccc"],
+  "commits":[{"oid":"2222aaaa","committedDate":"$(ago 3600)"}],"statusCheckRollup":[],
+  "patches":{"1111aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -1 +1 @@\n+x"}],
+             "2222aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -9 +9 @@\n+x"}]}}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "736" ]
+}
+
+@test "many older comment heads do not crowd out the parent's review (#737)" {
+    stub_gh_prs <<EOF
+[{"number":737,"headRefOid":"2222aaaa","baseRefName":"master","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"1111aaaa"}}],
+  "comments":[{"body":"Fallback review — runtime: codex, model: m (selected by: s)\nReviewed head: aa01","createdAt":"$(ago 7000)"},
+              {"body":"Fallback review — runtime: codex, model: m (selected by: s)\nReviewed head: aa02","createdAt":"$(ago 7000)"},
+              {"body":"Fallback review — runtime: codex, model: m (selected by: s)\nReviewed head: aa03","createdAt":"$(ago 7000)"},
+              {"body":"Fallback review — runtime: codex, model: m (selected by: s)\nReviewed head: aa04","createdAt":"$(ago 7000)"}],
+  "commits":[{"oid":"2222aaaa","committedDate":"$(ago 3600)"}],"statusCheckRollup":[],
+  "patches":{"1111aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -1 +1 @@\n+x"}],
+             "2222aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -4 +4 @@\n+x"}]}}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 737)" == *"merge-only update"* ]]
+}
+
+@test "a single-parent child with an equal signature is a new head (#737)" {
+    stub_gh_prs <<EOF
+[{"number":740,"headRefOid":"2222aaaa","baseRefName":"master","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"1111aaaa"}}],"comments":[],"parents":["1111aaaa"],
+  "commits":[{"oid":"2222aaaa","committedDate":"$(ago 3600)"}],"statusCheckRollup":[],
+  "patches":{"1111aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -1 +1 @@\n+x"}],
+             "2222aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -9 +9 @@\n+x"}]}}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "740" ]
+}
+
+@test "a failed parents read leaves the PR needing review (fail closed)" {
+    merge_pr 741 '{"1111aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -0,0 +1 @@\n+x"}],
+                   "2222aaaa":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -0,0 +1 @@\n+x"}]}'
+    export GH_PARENTS_FAIL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "741" ]
+}
+
+@test "a binary file (no patch) is compared by blob sha: equal is covered" {
+    merge_pr 742 '{"1111aaaa":[{"filename":"a.png","status":"added","sha":"b1"}],
+                   "2222aaaa":[{"filename":"a.png","status":"added","sha":"b1"}]}'
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+}
+
+@test "a binary file whose blob sha differs is a new head" {
+    merge_pr 743 '{"1111aaaa":[{"filename":"a.png","status":"added","sha":"b1"}],
+                   "2222aaaa":[{"filename":"a.png","status":"added","sha":"b2"}]}'
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "743" ]
+}
+
+@test "a file list at the 300-file cap is unreadable, never compared (#737)" {
+    files=$(jq -cn '[range(300) | {filename: "f\(.)", status: "added", sha: "s", patch: "@@ -1 +1 @@\n+x"}]')
+    merge_pr 744 "{\"1111aaaa\":$files,\"2222aaaa\":$files}"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "744" ]
+}
+
+@test "an unreadable roster keeps the recent-push exclusion (#736, fail closed)" {
+    recent_pr 745
+    export GH_SLOT_FAIL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [[ "$(reason_for 745)" == *"already triggers a re-review"* ]]
+}
+
+# recent_pr PR — head pushed 60s ago, never reviewed.
+recent_pr() {
+    stub_gh_prs <<EOF
+[{"number":$1,"headRefOid":"7777bbbb","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"7777bbbb","committedDate":"$(ago 60)"}],
+  "statusCheckRollup":[]}]
+EOF
+}
+
+@test "on an ASK-ONLY repo a just-pushed PR stays dispatchable (#736)" {
+    recent_pr 734
+    cat >"$TEST_TMP/slot.json" <<EOF
+[{"user":{"login":"coderabbitai[bot]"},"created_at":"$(ago 30)",
+  "body":"> [!IMPORTANT]\n> ## Review skipped\n> This repository does not receive automatic reviews because it has fewer than 10 stars."}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "734" ]
+}
+
+@test "on an eligible repo a just-pushed PR is still excluded (#736)" {
+    recent_pr 735
+    echo '[]' >"$TEST_TMP/slot.json"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 735)" == *"already triggers a re-review"* ]]
 }

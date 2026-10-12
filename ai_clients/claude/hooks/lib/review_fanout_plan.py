@@ -149,6 +149,16 @@ LADDER_ATTRIBUTION_RE = re.compile("^Fallback review — runtime:", re.MULTILINE
 # re-review, so a fan-out ask on top of one spends a rung for nothing.
 RECENT_PUSH_SECONDS = int(os.environ.get("REVIEW_FANOUT_RECENT_PUSH_SECONDS", "600"))
 
+# Merge-only head detection (dotfiles-linux-dev#736): at most 4 REST reads per PR -- the head's
+# parents, then one compare per candidate (the head plus at most 2 parents) -- and only for a PR
+# that already passed every other eligibility rule.
+# GitHub's compare lists at most 300 files, on its first page only (per_page/page page the
+# COMMITS); a list that long may be truncated, so it is no evidence and reads as unreadable.
+COMPARE_FILE_CAP = 300
+_HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", re.MULTILINE)
+_REVIEWED_HEAD_RE = re.compile(r"^Reviewed head: ([0-9a-fA-F]+)$")
+SLOT_CLASSIFY_PY = LIB_DIR / "slot_classify.py"
+
 # Total budget for the rung probe. resolve_fallback_reviewer makes LIVE model calls (that is
 # the whole point of #479 — the cache lists what exists, never what this account may call)
 # and can walk several candidates at its own per-probe timeout. A Stop hook is synchronous,
@@ -639,6 +649,113 @@ def ladder_reason(pr: dict, now: datetime.datetime) -> str | None:
 	return None
 
 
+def _patch_signature(base: str, oid: str) -> list | None:
+	"""Return the PR patch at ``oid`` (``base...oid``), or None when it cannot be read whole.
+
+	Each file contributes its name, status, previous name and hunk-normalised patch. Hunk-header
+	line numbers are dropped so a base that moved above an untouched-by-conflict hunk does not
+	read as a changed patch; context lines and every +/- line still count. A file GitHub
+	returns with no ``patch`` (binary, too large) contributes its blob ``sha`` instead, which
+	is equal only for identical content. A failed read, a malformed file entry, or a list at the
+	file cap is None -- never a guess.
+	"""
+	try:
+		files = _rest(f"compare/{base}...{oid}")["files"]
+		if not files or len(files) >= COMPARE_FILE_CAP:
+			return None  # empty is no evidence; at the cap the list may be truncated
+		return sorted(
+			[
+				f["filename"],
+				f.get("status") or "",
+				f.get("previous_filename") or "",
+				_HUNK_HEADER_RE.sub("@@", f["patch"]) if f.get("patch") else f"blob:{f.get('sha')}",
+			]
+			for f in files
+		)
+	except (*_READ_ERRORS, AttributeError):
+		return None
+
+
+def reviewed_heads(pr: dict) -> list[str]:
+	"""Return every other head that has review coverage (order is irrelevant).
+
+	Both channels, the same two the module docstring describes: a submitted review's commit and
+	a ladder attribution comment's ``Reviewed head:`` line. The current head is never its own
+	candidate.
+	"""
+	head = pr.get("headRefOid") or ""
+	found = [((r.get("commit") or {}).get("oid") or "") for r in pr.get("reviews") or []]
+	for comment in pr.get("comments") or []:
+		body = comment.get("body") or ""
+		lines = body.split("\n")
+		if LADDER_ATTRIBUTION_RE.search(body) and len(lines) > 1:
+			match = _REVIEWED_HEAD_RE.match(lines[1])
+			found.append(match.group(1) if match else "")
+	return list(dict.fromkeys(oid for oid in found if oid and oid != head))
+
+
+def merge_only_covered_head(pr: dict) -> str | None:
+	"""Return a reviewed head whose PR patch equals the current head's, else None (#736).
+
+	GitHub's update-branch merges the base into the PR, moving the head with no change to the
+	PR's own patch; the review of the old head still describes this one. Decided by comparing
+	patches, never SHAs, so a merge with conflict resolution or any new code differs and stays
+	a new head. Fails closed: an unreadable patch on either side is None, i.e. "needs review".
+	"""
+	base = pr.get("baseRefName") or ""
+	head = pr.get("headRefOid") or ""
+	reviewed = reviewed_heads(pr)
+	if not base or not head or not reviewed:
+		return None
+	# Only a DIRECT PARENT of a MERGE commit can be the covered head: that ties the comparison to
+	# a real merge of the base into the reviewed head (a single-parent commit is ordinary new
+	# work). Hunk positions are dropped from the signature (a base merge shifts them), so without
+	# this a relocated edit in a file with repeated blocks could match an older head (Greptile,
+	# PR #737). At most 2 parents also bounds the reads and removes any need to rank heads by age.
+	try:
+		parents = [p["sha"] for p in _rest(f"git/commits/{head}")["parents"]]
+	except _READ_ERRORS:
+		return None
+	if len(parents) != 2:
+		return None
+	candidates = [oid for oid in reviewed if oid in parents]
+	if not candidates:
+		return None
+	current = _patch_signature(base, head)
+	if current is None:
+		return None
+	return next((oid for oid in candidates if _patch_signature(base, oid) == current), None)
+
+
+_SLOT_CACHE: list[str] = []
+
+
+def slot_is_ask_only() -> bool:
+	"""True when the repo's reviewer slot reads ``ASK-ONLY`` -- a push triggers no review (#736).
+
+	Classified by ``slot_classify.py`` (never re-derived), from one REST comment page read once
+	per plan. Any failure reads as not ASK-ONLY, which keeps the recent-push exclusion: the
+	only cost of a wrong "no" is one round's delay, while a wrong "yes" spends an ask.
+	"""
+	if not _SLOT_CACHE:
+		try:
+			page = _run(
+				["gh", "api", "repos/{owner}/{repo}/issues/comments?per_page=100&sort=created&direction=desc"]
+			)
+			verdict = subprocess.run(  # noqa: S603 - fixed argv, module-constant script
+				[sys.executable, str(SLOT_CLASSIFY_PY)],
+				input=page,
+				capture_output=True,
+				text=True,
+				timeout=GH_TIMEOUT,
+				check=True,
+			).stdout.strip()
+		except (OSError, subprocess.SubprocessError):
+			verdict = "UNKNOWN"
+		_SLOT_CACHE.append(verdict)
+	return _SLOT_CACHE[0].startswith("ASK-ONLY")
+
+
 def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None:
 	"""Return why this PR gets no reviewer this round, or None when it is dispatchable.
 
@@ -668,7 +785,10 @@ def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None
 			"head commit UNKNOWN (headRefOid absent from the commit list, or an unreadable "
 			"committedDate) — head coverage is undecidable, so no reviewer is assigned"
 		)
-	if (now - head_time).total_seconds() < RECENT_PUSH_SECONDS:
+	recent = (now - head_time).total_seconds() < RECENT_PUSH_SECONDS
+	# On an ASK-ONLY repo a push triggers no re-review, so the exclusion would withhold the only
+	# path a review arrives by (#736; dev-loop step 4b item 2 already says so).
+	if recent and not slot_is_ask_only():
 		return (
 			f"head pushed less than {RECENT_PUSH_SECONDS}s ago — a push already triggers a "
 			"re-review, so an ask on top of it spends a rung for nothing"
@@ -685,6 +805,12 @@ def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None
 		return (
 			f"{dropped} truncated (more than 100 entries; the read window dropped older "
 			"ones) — head coverage is undecidable, so no reviewer is assigned"
+		)
+	covered = merge_only_covered_head(pr)
+	if covered:
+		return (
+			f"already covered: this head is a merge-only update, its PR patch equals that of "
+			f"reviewed head {covered[:12]} (#736)"
 		)
 	return None
 
