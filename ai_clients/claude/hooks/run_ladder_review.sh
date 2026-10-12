@@ -37,7 +37,9 @@ fi
 read -r head merge_state < <(gh api "repos/$owner/$repo/pulls/$pr" --jq '"\(.head.sha) \(.mergeable_state)"')
 [ -n "${head:-}" ] || { echo "cannot resolve PR #$pr head" >&2; exit 1; }
 
-committed="$(gh api "repos/$owner/$repo/commits/$head" --jq .commit.committer.date)"
+# `date -d ""` exits 0 with today's midnight, so an empty read must be refused here.
+committed="$(gh api "repos/$owner/$repo/commits/$head" --jq .commit.committer.date)" && [ -n "$committed" ] ||
+	{ echo "cannot read PR #$pr head commit date" >&2; exit 1; }
 pushed="$(date -d "$committed" +%s 2>/dev/null)" || { echo "bad committer date: $committed" >&2; exit 1; }
 now="$(date +%s)"
 # Fail closed: the comments carry the "head already reviewed" markers, so a failed

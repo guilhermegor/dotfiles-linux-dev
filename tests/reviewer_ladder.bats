@@ -1563,3 +1563,18 @@ STUB
     [ "$status" -eq 1 ]
     [[ "$output" != *"ARGS"* ]]
 }
+
+@test "run_ladder_review fails closed on an empty head commit date" {
+    make_wrapper_sandbox
+    cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$*" in
+    *pulls/7*) echo "abc123 dirty" ;;
+    *commits/abc123*) echo "" ;;
+    *comments*) echo '{"id":1}' ;;
+esac
+STUB
+    run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash "$SANDBOX/run_ladder_review.sh" 7
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"ARGS"* ]]
+}
