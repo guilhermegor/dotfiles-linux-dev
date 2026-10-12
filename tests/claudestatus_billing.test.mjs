@@ -80,5 +80,15 @@ console.error = () => {};
 assert.deepEqual(m.loadCache(), {});
 console.error = realError;
 
+// --- Cloudflare challenge: detected from markup, whatever the page language (#747) ---------
+const cfPtBr = '<html><head><title>Um momento…</title></head><body><p>Executando verificação de segurança</p>'
+    + '<script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script></body></html>';
+const cfEn = '<body><div id="cf-chl-widget">Just a moment...</div></body>';
+assert.equal(m.isCloudflareChallenge(cfPtBr), true, "pt-BR interstitial must count as blocked");
+assert.equal(m.isCloudflareChallenge(cfEn), true);
+assert.equal(m.isCloudflareChallenge("<body>Próxima cobrança: 15 de dezembro de 2026</body>"), false);
+assert.equal(m.isCloudflareChallenge(""), false);
+assert.equal(m.isCloudflareChallenge(undefined), false);
+
 fs.rmSync(tmp, { recursive: true });
 console.log("ok");

@@ -36,6 +36,9 @@ ORPHAN_ALLOWLIST=(
     # /session-closeout-style flow -- never triggered by a live event. Was
     # tested and documented but not even INSTALLED until dotfiles-linux-dev#532.
     "pr_body_orphan_check.sh"
+    # Called by dispatched agents (allow rule in permissions, dotfiles-linux-dev#738),
+    # never fired by a harness event.
+    "run_ladder_review.sh"
 )
 
 # Every "hooks/<name>.sh" path named in settings.json, deduped.

@@ -706,7 +706,12 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    one-PR-per-invocation rule above stays exactly as written — it forbids `run_fallback_review`
    looping internally over a PR list. It says nothing about how many *invocations* run at once.
    Dispatch up to N subagents, each given exactly one starving PR (blast radius, then age — the
-   same ranking item 2 already uses) and told to invoke `run_fallback_review` on that PR alone,
+   same ranking item 2 already uses) and told to run
+   `cd <absolute-repo-path> && ~/.claude/hooks/run_ladder_review.sh <pr-number>` on that PR alone
+   (the `cd` is load-bearing: the wrapper picks OWNER/REPO from the cwd's `origin`, and a reset
+   cwd would review another repo's PR of the same number;
+   the allowed wrapper, dotfiles-linux-dev#738: it derives the pushed epoch from the head commit and calls
+   `run_fallback_review`; never source the lib inline),
    then judge every finding per-finding (never bulk-accept), fix, push, and arm auto-merge. Bound N
    by the real constraints, not by this rule: API budget (#445's latch is a prerequisite — parallel
    agents re-reading PR state exhausted the GraphQL bucket once already) and file collision between

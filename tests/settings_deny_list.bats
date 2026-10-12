@@ -147,3 +147,13 @@ setup() {
     [ "$status" -eq 0 ]
     [ "$output" -eq 8 ]
 }
+
+# --- ladder wrapper allow rule (dotfiles-linux-dev#738) ----------------------
+
+@test "allow carries the exact narrow ladder-wrapper rule and no blanket gh write" {
+    local settings="$BATS_TEST_DIRNAME/../ai_clients/claude/settings.json"
+    run jq -r '.permissions.allow[] | select(test("run_ladder_review"))' "$settings"
+    [ "$output" = 'Bash(~/.claude/hooks/run_ladder_review.sh:*)' ]
+    run jq -e '.permissions.allow | any(. == "Bash(gh api:*)" or . == "Bash(gh pr review:*)" or . == "Bash(rtk gh api:*)" or . == "Bash(rtk gh pr review:*)")' "$settings"
+    [ "$status" -ne 0 ]
+}

@@ -94,6 +94,13 @@ export function parseBillingText(rawText, now = new Date()) {
     return { period, autoRenew, renewalAt, daysLeft };
 }
 
+// Cloudflare localises its interstitial to the browser's language ("Just a moment" in English,
+// "Executando verificação de segurança" in pt-BR), so detect it from markup that does not change
+// with the language: the challenge-platform script and the cf-chl/cf_chl ids and params.
+export function isCloudflareChallenge(html) {
+    return /challenge-platform|cf-chl|cf_chl/i.test(html || "");
+}
+
 // ---- cache ---------------------------------------------------------------------------------
 
 export function cachePath() {
