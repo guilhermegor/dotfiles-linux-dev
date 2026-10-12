@@ -1,4 +1,4 @@
-// Prototype for #734. The panel button shows the icon + recommended account's session %.
+// #734. The panel button shows the icon + recommended account's session %.
 // Opening the menu runs `node model.mjs` (local file read only). The two buttons run
 // `node refresh.mjs usage|billing`, which call the installed claudestatus code.
 import Gio from 'gi://Gio';
@@ -11,15 +11,9 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-// The extension dir is symlinked into ~/.local/share/gnome-shell/extensions (see README);
-// the helpers live one level up from the real directory.
-function helperDir(extPath) {
-    let real = extPath;
-    try {
-        real = GLib.file_read_link(extPath);
-    } catch (e) { /* not a symlink: copied install, helpers must sit beside it */ }
-    return GLib.path_get_dirname(real);
-}
+// install_claudestatus_bar copies model.mjs and refresh.mjs here (not beside the extension,
+// which is copied to ~/.local/share/gnome-shell/extensions/).
+const HELPER_DIR = `${GLib.get_user_data_dir()}/claudestatus-bar/claudestatus_bar`;
 
 function node(helperPath, script, args, done) {
     const nodeBin = GLib.find_program_in_path('node') ?? `${GLib.get_home_dir()}/.asdf/shims/node`;
@@ -89,7 +83,7 @@ class Indicator extends PanelMenu.Button {
 
 export default class ClaudestatusBar extends Extension {
     enable() {
-        this._indicator = new Indicator(helperDir(this.path));
+        this._indicator = new Indicator(HELPER_DIR);
         Main.panel.addToStatusArea(this.uuid, this._indicator);
     }
 
