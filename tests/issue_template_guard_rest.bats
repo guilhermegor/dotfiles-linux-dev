@@ -254,12 +254,15 @@ EOF
         'timeout --signal=KILL 5 gh issue create -t a -b b' \
         'env -u FOO gh issue create -t a -b b' \
         'sudo -u root gh issue create -t a -b b' \
+        "env -S 'gh issue create -t a -b b'" \
+        "env --split-string='gh api repos/{owner}/{repo}/issues -X POST -f body=nope'" \
         'xargs -n 1 gh issue create -t a -b b'; do
         run bash -c "payload \"\$1\" | '$GUARD'" _ "$s"
         [ "$status" -eq 2 ] || { echo "NOT BLOCKED: $s"; return 1; }
     done
     for s in \
         'env echo gh api repos/o/r/issues -f title=x' \
+        "env -S 'echo gh issue create --body nope'" \
         'timeout -s KILL 5 echo gh issue create --body nope'; do
         run bash -c "payload \"\$1\" | '$GUARD'" _ "$s"
         [ "$status" -eq 0 ] || { echo "WRONGLY BLOCKED: $s"; return 1; }

@@ -186,6 +186,21 @@ def iter_argvs(segments, depth=0):
                         inner = argv[j + 1]
                         break
                 break
+            if base == "env":
+                # `env -S 'cmd args'` / `--split-string=...` splits its one argument into a
+                # command line: nested shell text, like `bash -c`.
+                for j in range(i + 1, len(argv)):
+                    a = argv[j]
+                    if a in ("-S", "--split-string") and j + 1 < len(argv):
+                        inner = argv[j + 1]
+                    elif a.startswith("--split-string="):
+                        inner = a.split("=", 1)[1]
+                    elif a.startswith("-S") and len(a) > 2:
+                        inner = a[2:]
+                    if inner:
+                        break
+                if inner:
+                    break
             if base == "eval":
                 inner = " ".join(argv[i + 1:])
                 break
