@@ -4,10 +4,11 @@
 # (distro_config/install_coding_lib/ai_clients.sh::_claudestatus_patch_display) calls it.
 #
 # Sources (all beside this script):
-#   claudestatus_billing.mjs      -> dist/billing_cache.js  billing-page parser + date cache
+#   claudestatus_billing.mjs      -> dist/billing_cache.js  subscription-API mapping + date cache
 #   claudestatus_api_billing.js   -> injected into dist/api.js (between the marker comments):
-#                                    API-first plan/paid, billing-page scrape only when the
-#                                    cache has no future renewal date
+#                                    API-only plan/paid/renewal (no browser); the
+#                                    subscription call runs only when the cache has no
+#                                    future renewal date
 #   claudestatus_display.js       -> dist/display.js        plan-aware usage table + billing table
 #
 # What it does to dist/api.js:
@@ -20,7 +21,7 @@
 #
 # The date cache lives at ${XDG_CACHE_HOME:-~/.cache}/claudestatus/billing.json (override with
 # CLAUDESTATUS_CACHE_FILE): absolute UTC timestamps + booleans, each with its readAt time, no
-# credentials or session data. Delete it to force a re-scrape.
+# credentials or session data. Delete it to force a re-fetch.
 
 set -euo pipefail
 
@@ -56,9 +57,8 @@ original = src
 
 BEGIN = "// claudestatus-billing:begin (managed by patch_claudestatus.sh)\n"
 END = "// claudestatus-billing:end\n"
-IMPORT = ('import { billingFromCache, cookiesFromStorageState, isCloudflareChallenge, '
-          'isLoginPage, loadCache, needsScrape, parseBillingText, recordBilling, saveCache } '
-          'from "./billing_cache.js";\n')
+IMPORT = ('import { billingFromCache, billingFromSubscription, loadCache, needsFetch, '
+          'recordBilling, saveCache } from "./billing_cache.js";\n')
 
 CLASSIFIER = r'''
 // Map claude.ai org capabilities to a plan tier. Order matters: a paid org keeps

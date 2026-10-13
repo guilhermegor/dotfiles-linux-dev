@@ -84,3 +84,10 @@ test("limit line pairs the countdown with the absolute time; unknown stays unkno
     const bad = buildModel({ at: fx.now, accounts: [{ name: "x", plan: "Pro", usage: { five_hour: { utilization: 5, resets_at: "not-a-date" } } }] }, fx.cache, now);
     assert.match(bad.accounts[0].text, /reset unknown/);
 });
+
+test("team member without billing access reads the admin note, not unknown", () => {
+    const cache = { ...fx.cache, lapsed: { ...fx.cache.lapsed, managedByAdmin: { value: true, readAt: fx.now } } };
+    const t = buildModel(fx.usage, cache, now).accounts.find((a) => a.name === "lapsed").text;
+    assert.match(t, /Billing managed by team admin/);
+    assert.doesNotMatch(t, /Renewal unknown/);
+});
