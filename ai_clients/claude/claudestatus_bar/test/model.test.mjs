@@ -81,4 +81,6 @@ test("limit line pairs the countdown with the absolute time; unknown stays unkno
     assert.match(text("personal"), /resets in 4h39m \(\w{3} \d{2}:\d{2}\)/);
     const m = buildModel({ at: fx.now, accounts: [{ name: "x", plan: "Pro", usage: { five_hour: { utilization: 5, resets_at: null } } }] }, fx.cache, now);
     assert.match(m.accounts[0].text, /reset unknown/);
+    const bad = buildModel({ at: fx.now, accounts: [{ name: "x", plan: "Pro", usage: { five_hour: { utilization: 5, resets_at: "not-a-date" } } }] }, fx.cache, now);
+    assert.match(bad.accounts[0].text, /reset unknown/);
 });

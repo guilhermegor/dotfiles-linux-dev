@@ -66,7 +66,8 @@ function bar(pct) {
 
 function limitLine(label, limit, resetsAt, now) {
     if (!limit) return `${label}  —`;
-    const reset = resetsAt ? `resets in ${countdown(resetsAt, now)} (${resetAt(resetsAt, now)})` : "reset unknown";
+    // A malformed timestamp would make Intl throw and blank the whole popover.
+    const reset = Number.isFinite(Date.parse(resetsAt)) ? `resets in ${countdown(resetsAt, now)} (${resetAt(resetsAt, now)})` : "reset unknown";
     return `${label}  ${bar(limit.utilization)} ${String(limit.utilization).padStart(3)}%  ${reset}`;
 }
 
