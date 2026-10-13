@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { buildModel, countdown } from "../model.mjs";
+import { buildModel, countdown, resetAt } from "../model.mjs";
 
 const fx = JSON.parse(fs.readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
 const now = new Date(fx.now);
@@ -59,4 +59,28 @@ test("all exhausted: recommends the account that frees up first, like pickNextAc
         { name: "fast", plan: "pro", usage: { five_hour: { utilization: 100, resets_at: at(1) }, seven_day: { utilization: 100, resets_at: at(1) } } },
     ];
     assert.equal(recommend(accounts, now).name, "fast");
+});
+
+test("resetAt shows local weekday and 24h time, date only from 7 days out", () => {
+    const prev = process.env.TZ;
+    process.env.TZ = "UTC";
+    try {
+        const n = new Date("2026-10-12T10:00:00Z"); // Monday
+        assert.equal(resetAt("2026-10-12T21:44:00Z", n), "Mon 21:44");
+        assert.equal(resetAt("2026-10-13T00:05:00Z", n), "Tue 00:05");
+        assert.equal(resetAt("2026-10-15T08:00:00Z", n), "Thu 08:00");
+        assert.equal(resetAt("2026-10-19T10:00:00Z", n), "Mon 19 Oct 10:00");
+        process.env.TZ = "America/Sao_Paulo"; // UTC-3
+        assert.equal(resetAt("2026-10-12T21:44:00Z", n), "Mon 18:44");
+    } finally {
+        if (prev === undefined) delete process.env.TZ; else process.env.TZ = prev;
+    }
+});
+
+test("limit line pairs the countdown with the absolute time; unknown stays unknown", () => {
+    assert.match(text("personal"), /resets in 4h39m \(\w{3} \d{2}:\d{2}\)/);
+    const m = buildModel({ at: fx.now, accounts: [{ name: "x", plan: "Pro", usage: { five_hour: { utilization: 5, resets_at: null } } }] }, fx.cache, now);
+    assert.match(m.accounts[0].text, /reset unknown/);
+    const bad = buildModel({ at: fx.now, accounts: [{ name: "x", plan: "Pro", usage: { five_hour: { utilization: 5, resets_at: "not-a-date" } } }] }, fx.cache, now);
+    assert.match(bad.accounts[0].text, /reset unknown/);
 });

@@ -38,6 +38,18 @@ export function countdown(iso, now) {
     return `${Math.floor(ms / DAY)}d${Math.floor((ms % DAY) / HOUR)}h`;
 }
 
+// Local absolute reset time: "Mon 21:44", plus the date from 7 days out ("Mon 19 Oct 21:44").
+export function resetAt(iso, now) {
+    const d = new Date(iso);
+    const p = Object.fromEntries(
+        new Intl.DateTimeFormat("en-GB", {
+            weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+        }).formatToParts(d).map((x) => [x.type, x.value]),
+    );
+    const date = d.getTime() - now.getTime() >= 7 * DAY ? `${p.day} ${p.month} ` : "";
+    return `${p.weekday} ${date}${p.hour}:${p.minute}`;
+}
+
 export function ago(iso, now) {
     const ms = now.getTime() - Date.parse(iso);
     if (!(ms >= 0)) return "never";
@@ -54,7 +66,8 @@ function bar(pct) {
 
 function limitLine(label, limit, resetsAt, now) {
     if (!limit) return `${label}  —`;
-    const reset = resetsAt ? `resets in ${countdown(resetsAt, now)}` : "reset unknown";
+    // A malformed timestamp would make Intl throw and blank the whole popover.
+    const reset = Number.isFinite(Date.parse(resetsAt)) ? `resets in ${countdown(resetsAt, now)} (${resetAt(resetsAt, now)})` : "reset unknown";
     return `${label}  ${bar(limit.utilization)} ${String(limit.utilization).padStart(3)}%  ${reset}`;
 }
 
