@@ -25,5 +25,6 @@ setup() {
 
 @test "extension.js uses the bundled symbolic icon" {
     grep -q 'icons/token-budget-symbolic.svg' "$EXT"
-    ! grep -q 'utilities-system-monitor-symbolic' "$EXT"
+    run grep -c 'utilities-system-monitor-symbolic' "$EXT"
+    [ "$output" = "0" ]
 }
