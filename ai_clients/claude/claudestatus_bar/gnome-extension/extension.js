@@ -10,8 +10,9 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 
-// install_claudestatus_bar copies model.mjs and refresh.mjs here (not beside the extension,
+// install_claudestatus_bar copies model.mjs, refresh.mjs and labels.mjs here (not beside the extension,
 // which is copied to ~/.local/share/gnome-shell/extensions/).
 const HELPER_DIR = `${GLib.get_user_data_dir()}/claudestatus-bar/claudestatus_bar`;
 
@@ -51,6 +52,9 @@ class Indicator extends PanelMenu.Button {
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addButton('Refresh usage', 'usage');
         this._addButton('Refresh billing', 'billing');
+        const add = new PopupMenu.PopupMenuItem('+ Add account');
+        add.connect('activate', () => this._addAccountDialog());
+        this.menu.addMenuItem(add);
 
         this.menu.connect('open-state-changed', (_m, open) => open && this._reload());
         this._reload();
@@ -69,6 +73,72 @@ class Indicator extends PanelMenu.Button {
         this.menu.addMenuItem(item);
     }
 
+    // Name (required) + optional label; refresh.mjs validates, runs `claudestatus add` (opens the
+    // browser login) and saves the label. Errors come back as its last stderr line.
+    _addAccountDialog() {
+        this.menu.close();
+        const dialog = new ModalDialog.ModalDialog({styleClass: 'prompt-dialog'});
+        const box = new St.BoxLayout({vertical: true, style: 'spacing: 8px;'});
+        const nameEntry = new St.Entry({hint_text: 'Account name', can_focus: true});
+        const labelEntry = new St.Entry({hint_text: 'Label (optional)', can_focus: true});
+        const status = new St.Label({text: ''});
+        [new St.Label({text: 'Add Claude account'}), nameEntry, labelEntry, status]
+            .forEach(w => box.add_child(w));
+        dialog.contentLayout.add_child(box);
+        dialog.addButton({label: 'Cancel', key: Clutter.KEY_Escape, action: () => dialog.close()});
+        dialog.addButton({
+            label: 'Add and log in',
+            default: true,
+            action: () => {
+                const name = nameEntry.text.trim();
+                if (!name || name.includes('/')) {
+                    status.text = name ? "Name must not contain '/'" : 'Name is required';
+                    return;
+                }
+                status.text = 'Waiting for the browser login…';
+                node(this._dir, 'refresh.mjs', ['add', name, labelEntry.text.trim()], (_out, err) => {
+                    if (err) {
+                        status.text = `✗ ${err}`;
+                        return;
+                    }
+                    dialog.close();
+                    if (!this._destroyed)
+                        this._reload();
+                });
+            },
+        });
+        dialog.open();
+        nameEntry.grab_key_focus();
+    }
+
+    // Click the label row -> entry; Enter saves, Esc cancels, empty clears (labels.mjs set).
+    _labelRow(name, label) {
+        const item = new PopupMenu.PopupMenuItem(label ? `🏷 ${label}` : '🏷 add label…');
+        // Overriding activate (as PopupSwitchMenuItem does) keeps the menu open for the entry.
+        item.activate = () => {
+            if (item._editing)
+                return;
+            item._editing = true;
+            const entry = new St.Entry({text: label ?? '', hint_text: 'Label', can_focus: true, x_expand: true});
+            item.label.hide();
+            item.add_child(entry);
+            entry.grab_key_focus();
+            entry.clutter_text.connect('key-press-event', (_t, ev) => {
+                const key = ev.get_key_symbol();
+                if (key === Clutter.KEY_Escape) {
+                    this._reload();
+                    return Clutter.EVENT_STOP;
+                }
+                if (key === Clutter.KEY_Return || key === Clutter.KEY_KP_Enter) {
+                    node(this._dir, 'labels.mjs', ['set', name, entry.text], () => !this._destroyed && this._reload());
+                    return Clutter.EVENT_STOP;
+                }
+                return Clutter.EVENT_PROPAGATE;
+            });
+        };
+        return item;
+    }
+
     destroy() {
         // Pending node() callbacks outlive the indicator; they check this before touching it.
         this._destroyed = true;
@@ -76,6 +146,15 @@ class Indicator extends PanelMenu.Button {
     }
 
     _reload(refreshError = null) {
+        // labels.mjs get: a hand edit of labels.json shows on the next open; failure = no labels.
+        node(this._dir, 'labels.mjs', ['get'], lout => this._render(refreshError, lout));
+    }
+
+    _render(refreshError, lout) {
+        let labels = {};
+        try {
+            labels = lout ? JSON.parse(lout) : {};
+        } catch (_e) { /* malformed output: show no labels */ }
         node(this._dir, 'model.mjs', [], out => {
             if (this._destroyed)
                 return;
@@ -97,6 +176,7 @@ class Indicator extends PanelMenu.Button {
                 const item = new PopupMenu.PopupMenuItem(a.text, {reactive: false});
                 item.label.style = 'font-family: monospace;';
                 this._blocks.addMenuItem(item);
+                this._blocks.addMenuItem(this._labelRow(a.name, labels[a.name]));
             }
         });
     }
