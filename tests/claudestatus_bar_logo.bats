@@ -24,7 +24,13 @@ setup() {
 }
 
 @test "extension.js uses the bundled symbolic icon" {
-    grep -q 'icons/token-budget-symbolic.svg' "$EXT"
+    run grep -E 'new Indicator\(HELPER_DIR, .*icons/token-budget-symbolic\.svg' "$EXT"
+    [ "$status" -eq 0 ]
     run grep -c 'utilities-system-monitor-symbolic' "$EXT"
     [ "$output" = "0" ]
+}
+
+@test "extension.js hands the icon path to the St.Icon gicon" {
+    run grep -E 'new St\.Icon\(\{gicon: Gio\.icon_new_for_string\(iconPath\)' "$EXT"
+    [ "$status" -eq 0 ]
 }
