@@ -1,11 +1,13 @@
 # claudestatus top-bar (#734)
 
-A GNOME Shell extension. The top bar shows the recommended account's session %; the popover
+A GNOME Shell extension. The top bar shows the active account's name and session % (the account Claude Code is logged in as; falls back to the recommended account's session % when that is unknown or has no usage); the popover
 shows four stacked account blocks (name, plan, unpaid badge, Session and Weekly bars with reset
 countdowns, renewal, data age) and two buttons. `model.mjs` shapes the data.
 
 - Opening the popover only reads stored files (`usage.json` next to the #733 billing cache,
-  plus that cache). It never calls an API or scrapes.
+  plus that cache, plus `~/.claude.json` or `$CLAUDE_CONFIG_DIR/.claude.json` for the active
+  account: only `oauthAccount.organizationUuid` is used, matched against the snapshot's `orgUuid`;
+  no match or two accounts in one org shows `active: unknown`). It never calls an API or scrapes.
 - **Refresh usage** runs `refresh.mjs usage`, which calls the installed claudestatus
   `fetchAllUsage` (API, no browser) and saves the snapshot.
 - **Refresh billing** runs `refresh.mjs billing`, which calls the installed, patched

@@ -89,7 +89,8 @@ class Indicator extends PanelMenu.Button {
             }
             const model = JSON.parse(out);
             this._label.text = model.bar;
-            this._blocks.addMenuItem(new PopupMenu.PopupMenuItem(model.activeLine, {reactive: false}));
+            if (model.activeLine)  // absent when a stale deployed model.mjs predates #752
+                this._blocks.addMenuItem(new PopupMenu.PopupMenuItem(model.activeLine, {reactive: false}));
             if (model.accounts.length === 0)
                 this._blocks.addMenuItem(new PopupMenu.PopupMenuItem('No data yet: press Refresh usage', {reactive: false}));
             for (const a of model.accounts) {

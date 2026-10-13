@@ -3,16 +3,16 @@
   "usage": {
     "at": "2026-10-12T11:57:00Z",
     "accounts": [
-      { "name": "personal", "plan": "pro",
+      { "name": "personal", "orgUuid": "org-0", "plan": "pro",
         "usage": { "five_hour": { "utilization": 54, "resets_at": "2026-10-12T16:39:00Z" },
                    "seven_day": { "utilization": 30, "resets_at": "2026-10-15T12:00:00Z" } } },
-      { "name": "work", "plan": "team",
+      { "name": "work", "orgUuid": "org-1", "plan": "team",
         "usage": { "five_hour": { "utilization": 10, "resets_at": "2026-10-12T15:00:00Z" },
                    "seven_day": { "utilization": 100, "resets_at": "2026-10-14T12:00:00Z" } } },
-      { "name": "lapsed", "plan": "free",
+      { "name": "lapsed", "orgUuid": "org-2", "plan": "free",
         "usage": { "five_hour": { "utilization": 0, "resets_at": "2026-10-12T15:00:00Z" },
                    "seven_day": { "utilization": 0, "resets_at": null } } },
-      { "name": "broken", "plan": "unknown", "error": "Session expired. Run refresh." }
+      { "name": "broken", "orgUuid": "org-3", "plan": "unknown", "error": "Session expired. Run refresh." }
     ]
   },
   "cache": {

@@ -8,6 +8,7 @@
 //   node model.mjs            -> JSON { bar, accounts: [{ name, text }] }
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { cachePath, effectiveWeeklyReset, loadCache } from "../lib/claudestatus_billing.mjs";
@@ -23,7 +24,11 @@ export function usagePath() {
 }
 
 export function claudeJsonPath() {
-    return process.env.CLAUDE_JSON_FILE || path.join(process.env.HOME ?? "", ".claude.json");
+    if (process.env.CLAUDE_JSON_FILE) return process.env.CLAUDE_JSON_FILE;
+    // Claude Code keeps .claude.json inside CLAUDE_CONFIG_DIR when set, else directly in $HOME.
+    // ponytail: gnome-shell sees one environment, so per-terminal config dirs are not detectable.
+    const dir = process.env.CLAUDE_CONFIG_DIR;
+    return dir ? path.join(dir, ".claude.json") : path.join(os.homedir(), ".claude.json");
 }
 
 // Name of the claudestatus account Claude Code is logged in as, or null. Read-only; matches only
@@ -130,10 +135,11 @@ export function buildModel(usage, cache, now = new Date(), activeName = null) {
     const accounts = usage.accounts ?? [];
     const best = recommend(accounts, now);
     const act = accounts.find((a) => a.name === activeName);
-    const shown = act ?? best;
-    const pct = shown?.usage?.five_hour?.utilization;
+    // An active account without usage data (errored) falls back to the recommended percent.
+    const named = act?.usage?.five_hour ? act : null;
+    const pct = (named ?? best)?.usage?.five_hour?.utilization;
     return {
-        bar: pct === undefined ? "—" : act ? `${act.name} ${pct}%` : `${pct}%`,
+        bar: pct === undefined ? "—" : named ? `${named.name} ${pct}%` : `${pct}%`,
         recommended: best?.name ?? null,
         active: act?.name ?? null,
         activeLine: act ? `active: ${act.name}` : "active: unknown",
@@ -142,8 +148,6 @@ export function buildModel(usage, cache, now = new Date(), activeName = null) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-    console.log(JSON.stringify((() => {
-        const usage = loadUsage();
-        return buildModel(usage, loadCache(), new Date(), detectActive(usage.accounts ?? []));
-    })()));
+    const usage = loadUsage();
+    console.log(JSON.stringify(buildModel(usage, loadCache(), new Date(), detectActive(usage.accounts ?? []))));
 }
