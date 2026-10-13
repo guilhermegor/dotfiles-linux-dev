@@ -70,8 +70,12 @@ export function resetAt(iso, now) {
             weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
         }).formatToParts(d).map((x) => [x.type, x.value]),
     );
-    const date = d.getTime() - now.getTime() >= 7 * DAY ? `${p.day} ${p.month} ` : "";
-    return `${p.weekday} ${date}${p.hour}:${p.minute}`;
+    const far = d.getTime() - now.getTime() >= 7 * DAY;
+    // Local calendar-day gap (not elapsed hours): 00:05 tomorrow is "tomorrow" even 10 min away.
+    const dayNo = (x) => Date.UTC(x.getFullYear(), x.getMonth(), x.getDate()) / DAY;
+    const gap = dayNo(d) - dayNo(now);
+    const label = far ? `${p.weekday} ${p.day} ${p.month}` : gap === 0 ? "today" : gap === 1 ? "tomorrow" : p.weekday;
+    return `${label} ${p.hour}:${p.minute}`;
 }
 
 export function ago(iso, now) {

@@ -61,24 +61,40 @@ test("all exhausted: recommends the account that frees up first, like pickNextAc
     assert.equal(recommend(accounts, now).name, "fast");
 });
 
-test("resetAt shows local weekday and 24h time, date only from 7 days out", () => {
+test("resetAt labels the local calendar day: today, tomorrow, weekday, then date from 7 days out", () => {
     const prev = process.env.TZ;
-    process.env.TZ = "UTC";
     try {
+        process.env.TZ = "UTC";
         const n = new Date("2026-10-12T10:00:00Z"); // Monday
-        assert.equal(resetAt("2026-10-12T21:44:00Z", n), "Mon 21:44");
-        assert.equal(resetAt("2026-10-13T00:05:00Z", n), "Tue 00:05");
+        assert.equal(resetAt("2026-10-12T21:44:00Z", n), "today 21:44");
+        assert.equal(resetAt("2026-10-12T23:59:00Z", n), "today 23:59");
+        assert.equal(resetAt("2026-10-13T00:05:00Z", n), "tomorrow 00:05");
+        assert.equal(resetAt("2026-10-14T08:00:00Z", n), "Wed 08:00"); // 2 days
         assert.equal(resetAt("2026-10-15T08:00:00Z", n), "Thu 08:00");
-        assert.equal(resetAt("2026-10-19T10:00:00Z", n), "Mon 19 Oct 10:00");
+        assert.equal(resetAt("2026-10-19T10:00:00Z", n), "Mon 19 Oct 10:00"); // exactly 7 days
         process.env.TZ = "America/Sao_Paulo"; // UTC-3
-        assert.equal(resetAt("2026-10-12T21:44:00Z", n), "Mon 18:44");
+        assert.equal(resetAt("2026-10-12T21:44:00Z", n), "today 18:44");
+    } finally {
+        if (prev === undefined) delete process.env.TZ; else process.env.TZ = prev;
+    }
+});
+
+test("resetAt: the same instant is today in one TZ and tomorrow in another", () => {
+    const prev = process.env.TZ;
+    try {
+        const n = new Date("2026-10-12T22:00:00Z");
+        const at = "2026-10-13T01:00:00Z";
+        process.env.TZ = "UTC"; // Mon 22:00 -> Tue 01:00
+        assert.equal(resetAt(at, n), "tomorrow 01:00");
+        process.env.TZ = "America/Sao_Paulo"; // Mon 19:00 -> Mon 22:00
+        assert.equal(resetAt(at, n), "today 22:00");
     } finally {
         if (prev === undefined) delete process.env.TZ; else process.env.TZ = prev;
     }
 });
 
 test("limit line pairs the countdown with the absolute time; unknown stays unknown", () => {
-    assert.match(text("personal"), /resets in 4h39m \(\w{3} \d{2}:\d{2}\)/);
+    assert.match(text("personal"), /resets in 4h39m \((today|tomorrow|\w{3}) \d{2}:\d{2}\)/);
     const m = buildModel({ at: fx.now, accounts: [{ name: "x", plan: "Pro", usage: { five_hour: { utilization: 5, resets_at: null } } }] }, fx.cache, now);
     assert.match(m.accounts[0].text, /reset unknown/);
     const bad = buildModel({ at: fx.now, accounts: [{ name: "x", plan: "Pro", usage: { five_hour: { utilization: 5, resets_at: "not-a-date" } } }] }, fx.cache, now);
