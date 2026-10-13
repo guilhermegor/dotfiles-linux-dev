@@ -51,7 +51,12 @@ if (kind === "add") {
         console.error(`claudestatus add failed (exit ${r.status ?? r.error?.message})`);
         process.exit(1);
     }
-    if (label) setLabel(name.trim(), label);
+    try {
+        if (label) setLabel(name.trim(), label);
+    } catch (e) {
+        console.error(`Account added, but the label was not saved: ${e.message}`);
+        process.exit(1);
+    }
 } else if (kind === "usage") {
     const accounts = await api.fetchAllUsage(names);
     const file = usagePath();

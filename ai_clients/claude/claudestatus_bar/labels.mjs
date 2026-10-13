@@ -26,15 +26,50 @@ export function readLabels(file = labelsPath()) {
     }
 }
 
-// Empty (or whitespace) label removes the entry.
-export function setLabel(name, label, file = labelsPath()) {
-    const labels = readLabels(file);
-    const text = String(label ?? "").trim();
-    if (text) labels[name] = text;
-    else delete labels[name];
+const LOCK_WAIT_MS = 5000;
+const LOCK_STALE_MS = 10000;
+
+// Saves are separate processes doing read-modify-write, so they take a mkdir lock (atomic on every
+// filesystem) around the whole step. A holder that crashed leaves the lock behind, so one older than
+// LOCK_STALE_MS is broken. ponytail: two waiters breaking the same stale lock can both proceed;
+// needs a crash plus two saves in the same 20 ms, switch to flock via a helper if it ever shows.
+function withLock(file, waitMs, fn) {
+    const lock = `${file}.lock`;
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(labels, null, 2) + "\n");
-    return labels;
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+        try {
+            fs.mkdirSync(lock);
+            break;
+        } catch (e) {
+            if (e.code !== "EEXIST") throw e;
+            try {
+                if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) fs.rmdirSync(lock);
+            } catch { /* released meanwhile */ }
+            if (Date.now() > deadline) throw new Error("labels file is locked by another save");
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+        }
+    }
+    try {
+        return fn();
+    } finally {
+        fs.rmdirSync(lock);
+    }
+}
+
+// Empty (or whitespace) label removes the entry. Written via rename so a reader (`get`, or a hand
+// edit) never sees a half-written file, which would read as "no labels".
+export function setLabel(name, label, file = labelsPath(), waitMs = LOCK_WAIT_MS) {
+    return withLock(file, waitMs, () => {
+        const labels = readLabels(file);
+        const text = String(label ?? "").trim();
+        if (text) labels[name] = text;
+        else delete labels[name];
+        const tmp = `${file}.${process.pid}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify(labels, null, 2) + "\n");
+        fs.renameSync(tmp, file);
+        return labels;
+    });
 }
 
 // Returns an error message, or null when the name may be added.
@@ -54,8 +89,14 @@ export function addCommand(name) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const [op, name, label] = process.argv.slice(2);
     if (op === "get") process.stdout.write(JSON.stringify(readLabels()));
-    else if (op === "set" && name) setLabel(name, label);
-    else {
+    else if (op === "set" && name) {
+        try {
+            setLabel(name, label);
+        } catch (e) {
+            console.error(`Could not save the label: ${e.message}`);
+            process.exit(1);
+        }
+    } else {
         console.error("usage: labels.mjs get | set <name> <label>");
         process.exit(2);
     }

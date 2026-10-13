@@ -52,9 +52,9 @@ class Indicator extends PanelMenu.Button {
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addButton('Refresh usage', 'usage');
         this._addButton('Refresh billing', 'billing');
-        const add = new PopupMenu.PopupMenuItem('+ Add account');
-        add.connect('activate', () => this._addAccountDialog());
-        this.menu.addMenuItem(add);
+        this._addItem = new PopupMenu.PopupMenuItem('+ Add account');
+        this._addItem.connect('activate', () => this._addAccountDialog());
+        this.menu.addMenuItem(this._addItem);
 
         this.menu.connect('open-state-changed', (_m, open) => open && this._reload());
         this._reload();
@@ -73,11 +73,16 @@ class Indicator extends PanelMenu.Button {
         this.menu.addMenuItem(item);
     }
 
-    // Name (required) + optional label; refresh.mjs validates, runs `claudestatus add` (opens the
-    // browser login) and saves the label. Errors come back as its last stderr line.
+    // Name (required) + optional label. The dialog only collects them; _runAdd does the login.
     _addAccountDialog() {
         this.menu.close();
         const dialog = new ModalDialog.ModalDialog({styleClass: 'prompt-dialog'});
+        this._dialog = dialog;
+        dialog.connect('closed', () => {
+            if (this._dialog === dialog)
+                this._dialog = null;
+            dialog.destroy();
+        });
         const box = new St.BoxLayout({vertical: true, style: 'spacing: 8px;'});
         const nameEntry = new St.Entry({hint_text: 'Account name', can_focus: true});
         const labelEntry = new St.Entry({hint_text: 'Label (optional)', can_focus: true});
@@ -95,20 +100,39 @@ class Indicator extends PanelMenu.Button {
                     status.text = name ? "Name must not contain '/'" : 'Name is required';
                     return;
                 }
-                status.text = 'Waiting for the browser login…';
-                node(this._dir, 'refresh.mjs', ['add', name, labelEntry.text.trim()], (_out, err) => {
-                    if (err) {
-                        status.text = `✗ ${err}`;
-                        return;
-                    }
-                    dialog.close();
-                    if (!this._destroyed)
-                        this._reload();
-                });
+                dialog.close();
+                this._runAdd(name, labelEntry.text.trim());
             },
         });
         dialog.open();
         nameEntry.grab_key_focus();
+    }
+
+    // refresh.mjs validates, runs `claudestatus add` (opens the browser login) and saves the label;
+    // failures come back as its last stderr line. A modal dialog grabs all input, so it is closed
+    // before the login starts (the browser must stay usable) and progress shows on the panel
+    // button. The menu item stays insensitive until the add and its usage snapshot finish, so two
+    // adds never overlap.
+    _runAdd(name, label) {
+        this._addItem.setSensitive(false);
+        this._label.text = '…';
+        const finish = refreshError => {
+            this._addItem.setSensitive(true);
+            if (refreshError)
+                Main.notify('claudestatus', refreshError);
+            this._reload(refreshError);
+        };
+        node(this._dir, 'refresh.mjs', ['add', name, label], (_out, err) => {
+            if (this._destroyed)
+                return;
+            if (err)
+                return finish(`Add account failed: ${err}`);
+            // The list of accounts comes from usage.json, so snapshot it for the new one to show.
+            node(this._dir, 'refresh.mjs', ['usage'], (_o, usageErr) => {
+                if (!this._destroyed)
+                    finish(usageErr ? `Refresh usage failed: ${usageErr}` : null);
+            });
+        });
     }
 
     // Click the label row -> entry; Enter saves, Esc cancels, empty clears (labels.mjs set).
@@ -130,7 +154,16 @@ class Indicator extends PanelMenu.Button {
                     return Clutter.EVENT_STOP;
                 }
                 if (key === Clutter.KEY_Return || key === Clutter.KEY_KP_Enter) {
-                    node(this._dir, 'labels.mjs', ['set', name, entry.text], () => !this._destroyed && this._reload());
+                    node(this._dir, 'labels.mjs', ['set', name, entry.text], (_out, err) => {
+                        if (this._destroyed)
+                            return;
+                        if (!err) {
+                            this._reload();
+                            return;
+                        }
+                        // Keep the edit on screen so the typed label is not lost.
+                        Main.notify('claudestatus', `Label not saved: ${err}`);
+                    });
                     return Clutter.EVENT_STOP;
                 }
                 return Clutter.EVENT_PROPAGATE;
@@ -142,6 +175,7 @@ class Indicator extends PanelMenu.Button {
     destroy() {
         // Pending node() callbacks outlive the indicator; they check this before touching it.
         this._destroyed = true;
+        this._dialog?.close();
         super.destroy();
     }
 
