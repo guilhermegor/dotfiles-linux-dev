@@ -8,6 +8,7 @@
 //   node model.mjs            -> JSON { bar, accounts: [{ name, text }] }
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import { cachePath, effectiveWeeklyReset, loadCache } from "../lib/claudestatus_billing.mjs";
@@ -20,6 +21,29 @@ const DAY = 24 * HOUR;
 
 export function usagePath() {
     return process.env.CLAUDESTATUS_USAGE_FILE || path.join(path.dirname(cachePath()), "usage.json");
+}
+
+export function claudeJsonPath() {
+    if (process.env.CLAUDE_JSON_FILE) return process.env.CLAUDE_JSON_FILE;
+    // Claude Code keeps .claude.json inside CLAUDE_CONFIG_DIR when set, else directly in $HOME.
+    // ponytail: gnome-shell sees one environment, so per-terminal config dirs are not detectable.
+    const dir = process.env.CLAUDE_CONFIG_DIR;
+    return dir ? path.join(dir, ".claude.json") : path.join(os.homedir(), ".claude.json");
+}
+
+// Name of the claudestatus account Claude Code is logged in as, or null. Read-only; matches only
+// on the stable org UUID (~/.claude.json oauthAccount.organizationUuid vs usage orgUuid) and
+// returns null on a missing/unreadable file, missing oauthAccount, no match or an ambiguous match.
+export function detectActive(accounts, file = claudeJsonPath()) {
+    let org;
+    try {
+        org = JSON.parse(fs.readFileSync(file, "utf8")).oauthAccount?.organizationUuid;
+    } catch {
+        return null;
+    }
+    if (!org) return null;
+    const hits = accounts.filter((a) => a.orgUuid === org);
+    return hits.length === 1 ? hits[0].name : null;
 }
 
 function loadUsage() {
@@ -105,9 +129,9 @@ export function recommend(accounts, now = new Date()) {
     return best?.a ?? null;
 }
 
-function accountText(account, entry, usageAt, now) {
+function accountText(account, entry, usageAt, now, active) {
     const plan = account.plan === "unknown" ? "?" : account.plan[0].toUpperCase() + account.plan.slice(1);
-    const badge = account.plan === "free" ? "  ⚠ unpaid" : "";
+    const badge = (account.plan === "free" ? "  ⚠ unpaid" : "") + (active ? "  ● active" : "");
     if (account.error) return `${account.name}  ${plan}${badge}\n✗ ${account.error.split(".")[0]}`;
     const weeklyReset = effectiveWeeklyReset(entry, account.usage?.seven_day?.resets_at, now);
     return [
@@ -118,17 +142,25 @@ function accountText(account, entry, usageAt, now) {
     ].join("\n");
 }
 
-export function buildModel(usage, cache, now = new Date()) {
+// The top bar shows the ACTIVE account ("name pct%") because it answers "what am I burning right
+// now"; when the active account is unknown it falls back to the recommended account's percent.
+export function buildModel(usage, cache, now = new Date(), activeName = null) {
     const accounts = usage.accounts ?? [];
     const best = recommend(accounts, now);
-    const pct = best?.usage?.five_hour?.utilization;
+    const act = accounts.find((a) => a.name === activeName);
+    // An active account without usage data (errored) falls back to the recommended percent.
+    const named = act?.usage?.five_hour ? act : null;
+    const pct = (named ?? best)?.usage?.five_hour?.utilization;
     return {
-        bar: pct === undefined ? "—" : `${pct}%`,
+        bar: pct === undefined ? "—" : named ? `${named.name} ${pct}%` : `${pct}%`,
         recommended: best?.name ?? null,
-        accounts: accounts.map((a) => ({ name: a.name, text: accountText(a, cache[a.name], usage.at, now) })),
+        active: act?.name ?? null,
+        activeLine: act ? `active: ${act.name}` : "active: unknown",
+        accounts: accounts.map((a) => ({ name: a.name, text: accountText(a, cache[a.name], usage.at, now, a === act) })),
     };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-    console.log(JSON.stringify(buildModel(loadUsage(), loadCache())));
+    const usage = loadUsage();
+    console.log(JSON.stringify(buildModel(usage, loadCache(), new Date(), detectActive(usage.accounts ?? []))));
 }

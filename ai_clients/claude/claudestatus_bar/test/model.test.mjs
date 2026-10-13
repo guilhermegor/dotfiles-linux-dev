@@ -43,7 +43,7 @@ test("errored account shows the error and no bars", () => {
 });
 
 test("no usage snapshot yet renders an empty, safe model", () => {
-    assert.deepEqual(buildModel({ at: null, accounts: [] }, {}, now), { bar: "—", recommended: null, accounts: [] });
+    assert.deepEqual(buildModel({ at: null, accounts: [] }, {}, now), { bar: "—", recommended: null, active: null, activeLine: "active: unknown", accounts: [] });
 });
 
 test("countdown clamps a past time to now", () => {
