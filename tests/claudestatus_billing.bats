@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
 #
-# claudestatus billing parser + date cache (dotfiles-linux-dev#733). The logic lives in
+# claudestatus subscription mapping + date cache (dotfiles-linux-dev#733). The logic lives in
 # ai_clients/claude/lib/claudestatus_billing.mjs; the assertions are in the node test beside it.
 
-@test "billing parser and cache pass the node self-check" {
+@test "billing mapping and cache pass the node self-check" {
     command -v node >/dev/null 2>&1 || skip "node not installed"
     run node "$BATS_TEST_DIRNAME/claudestatus_billing.test.mjs"
     [ "$status" -eq 0 ]
@@ -35,9 +35,8 @@ JS
     [ "$status" -eq 0 ]
     run grep -c '^import .*from "\./billing_cache\.js";' "$T/api.js"
     [ "$output" = "1" ]
-    grep -q '^import {[^}]*isCloudflareChallenge[^}]*} from "\./billing_cache\.js";' "$T/api.js"
-    grep -q '^import {[^}]*cookiesFromStorageState[^}]*isLoginPage[^}]*} from "\./billing_cache\.js";' "$T/api.js"
-    run grep -c 'just a moment' "$T/api.js"
+    grep -q '^import {[^}]*billingFromSubscription[^}]*needsFetch[^}]*} from "\./billing_cache\.js";' "$T/api.js"
+    run grep -c 'needsScrape\|readBillingPage' "$T/api.js"
     [ "$output" = "0" ]
     cp "$T/api.js" "$T/api.mjs"
     run node --check "$T/api.mjs"

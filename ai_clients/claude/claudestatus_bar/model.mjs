@@ -101,7 +101,7 @@ function limitLine(label, limit, resetsAt, now) {
 
 function renewalLine(entry, now) {
     const at = entry?.renewalAt ? Date.parse(entry.renewalAt.value) : NaN;
-    if (!(at > now.getTime())) return "Renewal unknown";
+    if (!(at > now.getTime())) return entry?.managedByAdmin?.value ? "Billing managed by team admin" : "Renewal unknown";
     const date = new Date(at).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
     return entry.autoRenew?.value === false ? `Ends ${date}` : `Renews ${date}`;
 }

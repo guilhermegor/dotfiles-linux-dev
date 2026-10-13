@@ -1,4 +1,4 @@
-// Runnable check for claudestatus billing parsing + cache (node tests/claudestatus_billing.test.mjs).
+// Runnable check for claudestatus billing mapping + cache (node tests/claudestatus_billing.test.mjs).
 // Run by tests/claudestatus_billing.bats.
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -13,39 +13,38 @@ const m = await import(path.join(here, "../ai_clients/claude/lib/claudestatus_bi
 
 const NOW = new Date("2026-10-12T12:00:00Z");
 
-// --- parsing: PT and EN, renew vs cancel, relative banner --------------------------------
-const cases = [
-    ["Plano Pro Mensal. Sua assinatura será renovada automaticamente em 5 de nov. de 2026.", "2026-11-05", true],
-    ["Próxima cobrança: 15 de dezembro de 2026\nR$ 100,00", "2026-12-15", true],
-    ["Sua assinatura será cancelada em 20 de out. de 2026", "2026-10-20", false],
-    ["Your subscription will auto-renew on November 5, 2026.", "2026-11-05", true],
-    ["Next billing date\nNov 5, 2026", "2026-11-05", true],
-    ["Your subscription cancels on Oct 30, 2026", "2026-10-30", false],
-    ["Your plan will not renew. Ends on 3 Nov 2026", "2026-11-03", false],
-];
-for (const [text, day, auto] of cases) {
-    const p = m.parseBillingText(text, NOW);
-    assert.equal(p.renewalAt?.slice(0, 10), day, text);
-    assert.equal(p.autoRenew, auto, text);
+// --- subscription_details mapping (fabricated shapes, no real account data) ---------------
+const renewing = m.billingFromSubscription(200, {
+    next_charge_at: "2026-11-06T09:30:00Z", plan_ending_at: null, status: "active", billing_interval: "month",
+});
+assert.deepEqual(renewing, {
+    period: "monthly", autoRenew: true, renewalAt: "2026-11-06T09:30:00.000Z", loggedOut: false, managedByAdmin: false,
+});
+const cancelled = m.billingFromSubscription(200, {
+    next_charge_at: "2026-10-20T09:30:00Z", plan_ending_at: "2026-10-20T09:30:00Z", status: "active", billing_interval: "year",
+});
+assert.equal(cancelled.autoRenew, false, "plan_ending_at set means the plan is cancelled");
+assert.equal(cancelled.renewalAt, "2026-10-20T09:30:00.000Z");
+assert.equal(cancelled.period, "annual");
+const admin = m.billingFromSubscription(403, { error: { type: "permission_error", message: "x" } });
+assert.equal(admin.managedByAdmin, true);
+assert.equal(admin.renewalAt, null);
+assert.equal(admin.loggedOut, false);
+assert.equal(m.billingFromSubscription(403, null).managedByAdmin, false, "a Cloudflare 403 is not the admin note");
+const out = m.billingFromSubscription(401, { error: { type: "authentication_error" } });
+assert.equal(out.loggedOut, true);
+assert.equal(out.managedByAdmin, false);
+for (const [status, body] of [[500, null], [200, {}], [200, { next_charge_at: "garbage" }]]) {
+    const r = m.billingFromSubscription(status, body);
+    assert.deepEqual([r.renewalAt, r.autoRenew, r.loggedOut, r.managedByAdmin], [null, null, false, false]);
 }
-// negation placed before the keyword; a past "paid on" date must not hide the next renewal
-for (const t of ["Your subscription will not renew on November 5, 2026",
-                 "Sua assinatura não será renovada em 5 de nov. de 2026"]) {
-    assert.equal(m.parseBillingText(t, NOW).autoRenew, false, t);
-}
-const hist = m.parseBillingText("Paid on Oct 5, 2026. Next billing date Nov 5, 2026", NOW);
-assert.equal(hist.renewalAt.slice(0, 10), "2026-11-05");
-assert.equal(hist.autoRenew, true);
+
 // a past API reset must not overwrite a future cached one
 const wc = {};
 m.recordWeeklyReset(wc, "a", "2026-10-15T09:00:00Z", NOW);
 m.recordWeeklyReset(wc, "a", "2026-10-01T09:00:00Z", NOW);
 assert.equal(wc.a.weeklyResetAt.value, "2026-10-15T09:00:00.000Z");
 assert.equal(m.effectiveWeeklyReset(wc.a, "2026-10-01T09:00:00Z", NOW), "2026-10-15T09:00:00.000Z");
-const rel = m.parseBillingText("Seu plano termina em 12 dias", NOW);
-assert.equal(rel.renewalAt, "2026-10-24T12:00:00.000Z");
-const none = m.parseBillingText("Settings Billing Plan Upgrade plan Fazer upgrade", NOW);
-assert.deepEqual([none.renewalAt, none.autoRenew], [null, null]);
 
 // --- cache: round-trip, no secrets, staleness ----------------------------------------------
 assert.deepEqual(m.loadCache(), {});
@@ -60,13 +59,28 @@ assert.equal(back.work.renewalAt.value, "2026-11-05T12:00:00.000Z");
 assert.equal(back.work.renewalAt.readAt, NOW.toISOString());
 assert.deepEqual(Object.keys(back.work).sort(), ["autoRenew", "renewalAt", "weeklyResetAt"]);
 
-assert.equal(m.needsScrape(back.work, NOW), false);
-assert.equal(m.needsScrape(undefined, NOW), true);
-assert.equal(m.needsScrape(back.work, new Date("2026-11-06T00:00:00Z")), true, "past renewal");
-assert.equal(m.needsScrape({ renewalAt: back.work.renewalAt }, NOW), true, "auto-renew never read");
+assert.equal(m.needsFetch(back.work, NOW), false);
+assert.equal(m.needsFetch(undefined, NOW), true);
+assert.equal(m.needsFetch(back.work, new Date("2026-11-06T00:00:00Z")), true, "past renewal");
+assert.equal(m.needsFetch({ renewalAt: back.work.renewalAt }, NOW), true, "auto-renew never read");
 const fromCache = m.billingFromCache(back.work, NOW);
 assert.equal(fromCache.daysLeft, 24);
 assert.equal(fromCache.autoRenew, true);
+
+// the team-admin flag is recorded, and dropped again once a real date is read
+const team = {};
+m.recordBilling(team, "w", { renewalAt: null, autoRenew: null, managedByAdmin: true }, NOW);
+assert.equal(team.w.managedByAdmin.value, true);
+assert.equal(m.needsFetch(team.w, NOW), true, "no date yet, so the next refresh asks again");
+m.recordBilling(team, "w", { renewalAt: "2026-11-05T12:00:00.000Z", autoRenew: true }, NOW);
+assert.equal(team.w.managedByAdmin, undefined);
+
+// ...or once the account is confirmed free; a failed read (paid unknown) keeps the flag
+m.recordBilling(team, "f", { renewalAt: null, autoRenew: null, managedByAdmin: true }, NOW);
+m.recordBilling(team, "f", { renewalAt: null, autoRenew: null, managedByAdmin: false, paid: null }, NOW);
+assert.equal(team.f.managedByAdmin.value, true, "a failed request keeps the flag");
+m.recordBilling(team, "f", { renewalAt: null, autoRenew: null, managedByAdmin: false, paid: false }, NOW);
+assert.equal(team.f.managedByAdmin, undefined, "a confirmed free account drops it");
 
 // --- weekly reset: API wins when future, else cache, else null ----------------------------------
 assert.equal(m.effectiveWeeklyReset(back.work, "2026-10-16T00:00:00Z", NOW), "2026-10-16T00:00:00Z");
@@ -80,66 +94,117 @@ console.error = () => {};
 assert.deepEqual(m.loadCache(), {});
 console.error = realError;
 
-// --- Cloudflare challenge: detected from markup, whatever the page language (#747) ---------
-const cfPtBr = '<html><head><title>Um momento…</title></head><body><p>Executando verificação de segurança</p>'
-    + '<script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script></body></html>';
-const cfEn = '<body><div id="cf-chl-widget">Just a moment...</div></body>';
-assert.equal(m.isCloudflareChallenge(cfPtBr), true, "pt-BR interstitial must count as blocked");
-assert.equal(m.isCloudflareChallenge(cfEn), true);
-assert.equal(m.isCloudflareChallenge("<body>Próxima cobrança: 15 de dezembro de 2026</body>"), false);
-assert.equal(m.isCloudflareChallenge(""), false);
-assert.equal(m.isCloudflareChallenge(undefined), false);
-
-// Persistent contexts ignore storageState, so the cookies must be lifted out of the file.
-const state = JSON.stringify({ cookies: [{ name: "sessionKey", value: "x", domain: ".claude.ai", path: "/" }], origins: [] });
-assert.deepEqual(m.cookiesFromStorageState(state).map((c) => c.name), ["sessionKey"]);
-assert.deepEqual(m.cookiesFromStorageState("{}"), []);
-assert.deepEqual(m.cookiesFromStorageState("not json"), []);
-assert.deepEqual(m.cookiesFromStorageState('{"cookies":"x"}'), []);
-
-assert.equal(m.isLoginPage("https://claude.ai/login?from=logout&reauth=1&returnTo=/settings/billing"), true);
-assert.equal(m.isLoginPage("https://claude.ai/settings/billing"), false);
-assert.equal(m.isLoginPage("https://claude.ai/settings/billing?next=/login"), false);
-assert.equal(m.isLoginPage("garbage"), false);
-
-// --- scrapeBilling against a fake browser --------------------------------------------------
-// The scraper is a fragment injected into claudestatus's api.js and leans on that file's
-// globals, so stub them, append an export, and load it as a module of its own.
-const calls = [];
-const fakeChromium = {
-    async launchPersistentContext(_dir, opts) {
-        calls.push(`launch:${opts.headless}`);
-        const page = {
-            async goto() { calls.push("goto"); },
-            url: () => "https://claude.ai/login?from=logout&reauth=1&returnTo=/settings/billing",
-        };
-        return {
-            async addCookies(c) { calls.push(`cookies:${c.length}`); },
-            pages: () => [page],
-            async close() {},
-        };
-    },
-};
-globalThis.__csStub = { chromium: fakeChromium, fs, CLAUDE_URL: "https://claude.ai" };
+// --- fetchBillingForAccount against a fake `request` context -------------------------------
+// The block is a fragment injected into claudestatus's api.js and leans on that file's globals,
+// so stub them, append an export, and load it as a module of its own. No browser is involved:
+// the fake has no chromium, so any attempt to launch one would throw.
 const libDir = path.join(here, "../ai_clients/claude/lib");
+const storagePath = path.join(tmp, "storage.json");
+fs.writeFileSync(storagePath, JSON.stringify({ cookies: [], origins: [] }));
+
+const routes = {};
+const seen = [];
+const reply = (status, body) => ({
+    ok: () => status >= 200 && status < 300,
+    status: () => status,
+    json: async () => {
+        if (body === undefined) throw new Error("not json");
+        return body;
+    },
+});
+globalThis.__csStub = {
+    request: {
+        async newContext() {
+            return {
+                async get(url) {
+                    seen.push(url);
+                    return routes[url] ??reply(404, {});
+                },
+                async dispose() {},
+            };
+        },
+    },
+    fs,
+    CLAUDE_URL: "https://claude.ai",
+    USER_AGENT: "test",
+    getStorageStatePath: () => storagePath,
+    classifyPlan: (caps) => (caps?.includes("claude_pro") ? "pro" : "unknown"),
+};
 const fragment = fs.readFileSync(path.join(libDir, "claudestatus_api_billing.js"), "utf8");
 const harness = path.join(tmp, "api_billing_harness.mjs");
 fs.writeFileSync(harness, [
-    `import { cookiesFromStorageState, isLoginPage, isCloudflareChallenge, parseBillingText } from ${JSON.stringify(path.join(libDir, "claudestatus_billing.mjs"))};`,
-    "const { chromium, fs, CLAUDE_URL } = globalThis.__csStub;",
+    `import { billingFromCache, billingFromSubscription, loadCache, needsFetch, recordBilling, saveCache } from ${JSON.stringify(path.join(libDir, "claudestatus_billing.mjs"))};`,
+    "const { request, fs, CLAUDE_URL, USER_AGENT, getStorageStatePath, classifyPlan } = globalThis.__csStub;",
     fragment,
-    "export { scrapeBilling };",
 ].join("\n"));
-const { scrapeBilling } = await import(harness);
-const storagePath = path.join(tmp, "storage.json");
-fs.writeFileSync(storagePath, state);
-const name = `test-${process.pid}`;
-const dump = `/tmp/claudestatus_billing_${name}.txt`;
-const res = await scrapeBilling(name, path.join(tmp, "profile"), storagePath);
-// Cookies land before navigation, a login redirect ends the run headless, and nothing is dumped.
-assert.deepEqual(calls, ["launch:true", "cookies:1", "goto"]);
-assert.equal(res.loggedOut, true);
-assert.equal(fs.existsSync(dump), false);
+const { fetchBillingForAccount, fetchAllBilling } = await import(harness);
+
+const orgs = reply(200, [{ uuid: "org-1", capabilities: ["chat", "claude_pro"] }]);
+const detail = reply(200, { billing_type: "stripe_subscription" });
+const sub = "/api/organizations/org-1/subscription_details";
+const setRoutes = (subscription, organizations = orgs) => {
+    for (const k of Object.keys(routes)) delete routes[k];
+    Object.assign(routes, {
+        "/api/organizations": organizations,
+        "/api/organizations/org-1": detail,
+        [sub]: subscription,
+    });
+    seen.length = 0;
+};
+const realLog = console.error;
+console.error = () => {};
+
+setRoutes(reply(200, { next_charge_at: "2099-11-06T09:30:00Z", plan_ending_at: null, billing_interval: "month" }));
+let r = await fetchBillingForAccount("a", undefined);
+assert.deepEqual([r.billingDate, r.autoRenew, r.period, r.loggedOut, r.managedByAdmin],
+    ["2099-11-06T09:30:00.000Z", true, "monthly", false, false]);
+
+setRoutes(reply(200, { next_charge_at: "2099-10-20T09:30:00Z", plan_ending_at: "2099-10-20T09:30:00Z" }));
+r = await fetchBillingForAccount("a", undefined);
+assert.equal(r.autoRenew, false);
+
+setRoutes(reply(403, { error: { type: "permission_error" } }));
+r = await fetchBillingForAccount("a", undefined);
+assert.deepEqual([r.billingDate, r.managedByAdmin, r.loggedOut], [null, true, false]);
+
+setRoutes(reply(401, {}));
+r = await fetchBillingForAccount("a", undefined);
+assert.deepEqual([r.billingDate, r.managedByAdmin, r.loggedOut], [null, false, true]);
+
+setRoutes(reply(200, {}), reply(401, {}));
+r = await fetchBillingForAccount("a", undefined);
+assert.equal(r.loggedOut, true, "expired session already shows on the organizations call");
+assert.equal(seen.includes(sub), false);
+
+// a cached future renewal date needs no subscription call at all
+setRoutes(reply(200, {}));
+const cached = {};
+m.recordBilling(cached, "a", { renewalAt: "2099-11-06T09:30:00.000Z", autoRenew: true });
+r = await fetchBillingForAccount("a", cached.a);
+assert.equal(r.fromCache, true);
+assert.equal(seen.includes(sub), false);
+
+// the team-admin verdict reaches the cache, which is what the popover reads
+setRoutes(reply(403, { error: { type: "permission_error" } }));
+fs.rmSync(process.env.CLAUDESTATUS_CACHE_FILE, { force: true });
+const realWrite = process.stdout.write.bind(process.stdout);
+process.stdout.write = () => true;
+const realConsoleLog = console.log;
+console.log = () => {};
+await fetchAllBilling(["a"]);
+process.stdout.write = realWrite;
+console.log = realConsoleLog;
+assert.equal(m.loadCache().a.managedByAdmin.value, true);
+
+// the account later turns out free (billing_type "none"): the stale admin message must go
+Object.assign(routes, { "/api/organizations/org-1": reply(200, { billing_type: "none" }) });
+process.stdout.write = () => true;
+console.log = () => {};
+await fetchAllBilling(["a"]);
+process.stdout.write = realWrite;
+console.log = realConsoleLog;
+assert.equal(m.loadCache().a.managedByAdmin, undefined);
+console.error = realLog;
 
 fs.rmSync(tmp, { recursive: true });
 console.log("ok");

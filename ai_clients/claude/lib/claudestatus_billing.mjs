@@ -1,4 +1,4 @@
-// Billing-page parsing and the per-account date cache for claudestatus.
+// Subscription-API mapping and the per-account date cache for claudestatus.
 //
 // patch_claudestatus.sh copies this file next to the installed claudestatus as
 // dist/billing_cache.js, and both the patched api.js and display.js import it. It has no
@@ -6,120 +6,33 @@
 //
 // The cache stores ABSOLUTE UTC timestamps and booleans only, each with the time it was read
 // (readAt) -- never cookies, tokens, emails or page text. The countdown is computed from the
-// stored timestamp, so a scrape is needed only when a value is missing or already past.
+// stored timestamp, so a fetch is needed only when a value is missing or already past.
 
 import fs from "fs";
 import os from "os";
 import path from "path";
 
 const DAY_MS = 86400000;
-const MONTHS = {
-    jan: 0, fev: 1, feb: 1, mar: 2, abr: 3, apr: 3, mai: 4, may: 4, jun: 5, jul: 6,
-    ago: 7, aug: 7, set: 8, sep: 8, out: 9, oct: 9, nov: 10, dez: 11, dec: 11,
-};
 
-// PT "5 de nov. de 2026" | EN "Nov 5, 2026" | EN-GB "5 Nov 2026". The group offsets differ per
-// alternative, so each is normalised by dateFromMatch().
-const DATE_RE = new RegExp(
-    "(\\d{1,2})\\s+de\\s+([A-Za-z\\u00C0-\\u00FF]{3,})\\.?,?\\s+de\\s+(\\d{4})" +
-    "|([A-Za-z]{3,9})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})" +
-    "|(\\d{1,2})\\s+([A-Za-z]{3,9})\\.?,?\\s+(\\d{4})",
-    "gi",
-);
-// A date belongs to the nearest keyword before it, so "cancels on <d>" and "renews on <d>" differ.
-const END_RE = /cancel|encerr|termina|expir|ends?\s+on|will\s+end|acaba/gi;
-const RENEW_RE = /renov|renew|pr[óo]xima\s+cobran|next\s+(?:billing|payment|charge)|billing\s+date|data\s+de\s+cobran/gi;
-const NEGATED_RENEW_RE = /(?:not|n[ãa]o)\s+(?:ser[áa]\s+|be\s+|vai\s+)?renov|(?:not|n[ãa]o)\s+(?:be\s+)?renew/i;
-const KEYWORD_WINDOW = 120;
-const NEGATION_LEAD = 20;
+// Maps one GET /api/organizations/<org>/subscription_details response (HTTP status + parsed
+// JSON body, or null) to { period, autoRenew, renewalAt, loggedOut, managedByAdmin }.
+// next_charge_at is the next renewal (or the end date of a cancelled plan); plan_ending_at is
+// null while the plan auto-renews. A team member who is not the billing admin gets a 403
+// permission_error: that is a fact about the account, not a failure, so it is flagged.
+const PERIODS = { month: "monthly", monthly: "monthly", year: "annual", yearly: "annual", annual: "annual" };
 
-function dateFromMatch(m) {
-    const [day, monthStr, year] = m[1] ? [m[1], m[2], m[3]] : m[4] ? [m[5], m[4], m[6]] : [m[7], m[8], m[9]];
-    const month = MONTHS[monthStr.slice(0, 3).toLowerCase()];
-    if (month === undefined) return null;
-    // Noon UTC: the page shows a calendar day with no zone, noon keeps it the same day in every
-    // zone from UTC-12 to UTC+11.
-    return new Date(Date.UTC(parseInt(year, 10), month, parseInt(day, 10), 12));
-}
-
-function lastKeywordBefore(text, index) {
-    const window = text.slice(Math.max(0, index - KEYWORD_WINDOW), index);
-    let best = null;
-    for (const [kind, re] of [["end", END_RE], ["renew", RENEW_RE]]) {
-        for (const k of window.matchAll(re)) {
-            if (!best || k.index > best.index) best = { kind, index: k.index, window };
-        }
-    }
-    return best;
-}
-
-// Returns { period, autoRenew, renewalAt, daysLeft }; renewalAt is an ISO UTC string or null.
-export function parseBillingText(rawText, now = new Date()) {
-    const text = rawText.replace(/\s+/g, " ");
-    let period = "unknown";
-    let autoRenew = null;
-    let renewalAt = null;
-    let daysLeft = null;
-
-    if (/mensal|monthly/i.test(text)) period = "monthly";
-    else if (/anual|annual|yearly/i.test(text)) period = "annual";
-
-    for (const m of text.matchAll(DATE_RE)) {
-        const date = dateFromMatch(m);
-        // A past date ("Paid on Oct 5") is history, not the next renewal.
-        if (!date || date.getTime() <= now.getTime()) continue;
-        const kw = lastKeywordBefore(text, m.index);
-        if (!kw) continue;
-        // Include the few words BEFORE the keyword so "will not renew" / "não será renovada" negate.
-        const clause = kw.window.slice(Math.max(0, kw.index - NEGATION_LEAD));
-        const ends = kw.kind === "end" || NEGATED_RENEW_RE.test(clause);
-        autoRenew = !ends;
-        renewalAt = date.toISOString();
-        break;
-    }
-
-    if (autoRenew === null) {
-        // "Fazer upgrade" is deliberately not a lapse signal: it is an upsell on live Pro pages.
-        if (/reassinar|resubscribe/i.test(text)) autoRenew = false;
-        else if (/auto-?renew|renova(?:[çc][ãa]o)?\s+autom|renova\s+automaticamente/i.test(text)) autoRenew = true;
-    }
-
-    // Relative banner ("termina em 12 dias" / "ends in 12 days") becomes an absolute time now.
-    const rel = text.match(/termina em (\d+)\s+dias?|ends?\s+in\s+(\d+)\s+days?/i);
-    if (rel) {
-        daysLeft = parseInt(rel[1] ?? rel[2], 10);
-        if (!renewalAt) renewalAt = new Date(now.getTime() + daysLeft * DAY_MS).toISOString();
-        if (autoRenew === null) autoRenew = false;
-    }
-    return { period, autoRenew, renewalAt, daysLeft };
-}
-
-// Cloudflare localises its interstitial to the browser's language ("Just a moment" in English,
-// "Executando verificação de segurança" in pt-BR), so detect it from markup that does not change
-// with the language: the challenge-platform script and the cf-chl/cf_chl ids and params.
-export function isCloudflareChallenge(html) {
-    return /challenge-platform|cf-chl|cf_chl/i.test(html || "");
-}
-
-// Playwright applies storageState to newContext() only, never to launchPersistentContext(), so
-// the saved session has to be added as cookies by hand. Takes the storage-state file's text and
-// returns [] for anything unreadable: the page then lands on /login, which isLoginPage reports.
-export function cookiesFromStorageState(json) {
-    try {
-        const cookies = JSON.parse(json)?.cookies;
-        return Array.isArray(cookies) ? cookies : [];
-    } catch {
-        return [];
-    }
-}
-
-// A logged-out billing visit is redirected to claude.ai/login?...; its text is not billing text.
-export function isLoginPage(url) {
-    try {
-        return new URL(url).pathname.startsWith("/login");
-    } catch {
-        return false;
-    }
+export function billingFromSubscription(status, body) {
+    const none = { period: "unknown", autoRenew: null, renewalAt: null, loggedOut: false, managedByAdmin: false };
+    if (status === 401) return { ...none, loggedOut: true };
+    if (status === 403 && body?.error?.type === "permission_error") return { ...none, managedByAdmin: true };
+    const charge = Date.parse(body?.next_charge_at);
+    if (status < 200 || status >= 300 || Number.isNaN(charge)) return none;
+    return {
+        ...none,
+        period: PERIODS[String(body.billing_interval).toLowerCase()] ?? "unknown",
+        autoRenew: body.plan_ending_at == null,
+        renewalAt: new Date(charge).toISOString(),
+    };
 }
 
 // ---- cache ---------------------------------------------------------------------------------
@@ -165,10 +78,14 @@ function stamp(value, now) {
     return { value, readAt: now.toISOString() };
 }
 
-// Records only values actually read; a null never overwrites a good cached value.
-export function recordBilling(cache, name, { renewalAt, autoRenew }, now = new Date()) {
+// Records only values actually read; a null never overwrites a good cached value. The admin
+// flag is dropped on a fresh date or once the account is confirmed free (paid === false); a
+// failed request carries neither, so it keeps the flag.
+export function recordBilling(cache, name, { renewalAt, autoRenew, managedByAdmin, paid }, now = new Date()) {
     const entry = cache[name] ?? {};
+    if (renewalAt || paid === false) delete entry.managedByAdmin;
     if (renewalAt) entry.renewalAt = stamp(renewalAt, now);
+    else if (managedByAdmin === true) entry.managedByAdmin = stamp(true, now);
     if (typeof autoRenew === "boolean") entry.autoRenew = stamp(autoRenew, now);
     cache[name] = entry;
 }
@@ -184,8 +101,8 @@ function futureTime(field, now) {
     return t > now.getTime() ? t : null;
 }
 
-// A scrape is needed only when the renewal date is missing or past, or auto-renew was never read.
-export function needsScrape(entry, now = new Date()) {
+// A fetch is needed only when the renewal date is missing or past, or auto-renew was never read.
+export function needsFetch(entry, now = new Date()) {
     if (!entry) return true;
     return futureTime(entry.renewalAt, now) === null || typeof entry.autoRenew?.value !== "boolean";
 }
