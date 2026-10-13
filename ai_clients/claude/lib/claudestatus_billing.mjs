@@ -101,6 +101,27 @@ export function isCloudflareChallenge(html) {
     return /challenge-platform|cf-chl|cf_chl/i.test(html || "");
 }
 
+// Playwright applies storageState to newContext() only, never to launchPersistentContext(), so
+// the saved session has to be added as cookies by hand. Takes the storage-state file's text and
+// returns [] for anything unreadable: the page then lands on /login, which isLoginPage reports.
+export function cookiesFromStorageState(json) {
+    try {
+        const cookies = JSON.parse(json)?.cookies;
+        return Array.isArray(cookies) ? cookies : [];
+    } catch {
+        return [];
+    }
+}
+
+// A logged-out billing visit is redirected to claude.ai/login?...; its text is not billing text.
+export function isLoginPage(url) {
+    try {
+        return new URL(url).pathname.startsWith("/login");
+    } catch {
+        return false;
+    }
+}
+
 // ---- cache ---------------------------------------------------------------------------------
 
 export function cachePath() {

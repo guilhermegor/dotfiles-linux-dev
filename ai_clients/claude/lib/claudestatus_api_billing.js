@@ -42,7 +42,8 @@ async function fetchBillingMetaViaApi(storagePath) {
     }
 }
 // Opens the billing page directly. Headless first (nothing on screen); the caller retries
-// headed-but-minimized only when Cloudflare blocks the headless run.
+// headed-but-minimized only when Cloudflare blocks the headless run. The off-screen window
+// position is a hint the window manager may ignore (Wayland does), so a window can flash.
 async function readBillingPage(profileDir, storagePath, headless) {
     const contextOpts = {
         headless,
@@ -56,12 +57,15 @@ async function readBillingPage(profileDir, storagePath, headless) {
         ignoreDefaultArgs: ["--enable-automation"],
         viewport: { width: 800, height: 600 },
     };
-    if (fs.existsSync(storagePath))
-        contextOpts.storageState = storagePath;
     const context = await chromium.launchPersistentContext(profileDir, contextOpts);
     try {
+        // storageState is ignored by persistent contexts, so add the saved session by hand.
+        if (fs.existsSync(storagePath))
+            await context.addCookies(cookiesFromStorageState(fs.readFileSync(storagePath, "utf8")));
         const page = context.pages()[0] || (await context.newPage());
         await page.goto(`${CLAUDE_URL}/settings/billing`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        if (isLoginPage(page.url()))
+            return { text: "", blocked: false, loggedOut: true };
         try {
             await page.getByRole("button", { name: /reject all|accept all/i }).first().click({ timeout: 3000 });
         }
@@ -94,6 +98,10 @@ async function scrapeBilling(name, profileDir, storagePath) {
     for (const headless of [true, false]) {
         try {
             const page = await readBillingPage(profileDir, storagePath, headless);
+            if (page.loggedOut) {
+                console.error(`claudestatus: session expired for ${name}; run \`claudestatus add ${name}\` again`);
+                return { ...parseBillingText(""), loggedOut: true };
+            }
             text = page.text;
             // A fully loaded, unblocked page is final even when no date parsed: a headed retry
             // would read the same text. Retry only when blocked or the browser failed.
@@ -141,6 +149,7 @@ export async function fetchBillingForAccount(name, cachedEntry) {
         daysLeft: parsed.renewalAt ? Math.ceil((Date.parse(parsed.renewalAt) - Date.now()) / 86400000) : null,
         paid,
         fromCache: false,
+        loggedOut: parsed.loggedOut === true,
     };
 }
 export async function fetchAllBilling(accountNames) {

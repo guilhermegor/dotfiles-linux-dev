@@ -56,8 +56,8 @@ original = src
 
 BEGIN = "// claudestatus-billing:begin (managed by patch_claudestatus.sh)\n"
 END = "// claudestatus-billing:end\n"
-IMPORT = ('import { billingFromCache, isCloudflareChallenge, loadCache, needsScrape, parseBillingText, '
-          'recordBilling, saveCache } '
+IMPORT = ('import { billingFromCache, cookiesFromStorageState, isCloudflareChallenge, '
+          'isLoginPage, loadCache, needsScrape, parseBillingText, recordBilling, saveCache } '
           'from "./billing_cache.js";\n')
 
 CLASSIFIER = r'''

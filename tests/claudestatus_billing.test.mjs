@@ -90,5 +90,56 @@ assert.equal(m.isCloudflareChallenge("<body>Próxima cobrança: 15 de dezembro d
 assert.equal(m.isCloudflareChallenge(""), false);
 assert.equal(m.isCloudflareChallenge(undefined), false);
 
+// Persistent contexts ignore storageState, so the cookies must be lifted out of the file.
+const state = JSON.stringify({ cookies: [{ name: "sessionKey", value: "x", domain: ".claude.ai", path: "/" }], origins: [] });
+assert.deepEqual(m.cookiesFromStorageState(state).map((c) => c.name), ["sessionKey"]);
+assert.deepEqual(m.cookiesFromStorageState("{}"), []);
+assert.deepEqual(m.cookiesFromStorageState("not json"), []);
+assert.deepEqual(m.cookiesFromStorageState('{"cookies":"x"}'), []);
+
+assert.equal(m.isLoginPage("https://claude.ai/login?from=logout&reauth=1&returnTo=/settings/billing"), true);
+assert.equal(m.isLoginPage("https://claude.ai/settings/billing"), false);
+assert.equal(m.isLoginPage("https://claude.ai/settings/billing?next=/login"), false);
+assert.equal(m.isLoginPage("garbage"), false);
+
+// --- scrapeBilling against a fake browser --------------------------------------------------
+// The scraper is a fragment injected into claudestatus's api.js and leans on that file's
+// globals, so stub them, append an export, and load it as a module of its own.
+const calls = [];
+const fakeChromium = {
+    async launchPersistentContext(_dir, opts) {
+        calls.push(`launch:${opts.headless}`);
+        const page = {
+            async goto() { calls.push("goto"); },
+            url: () => "https://claude.ai/login?from=logout&reauth=1&returnTo=/settings/billing",
+        };
+        return {
+            async addCookies(c) { calls.push(`cookies:${c.length}`); },
+            pages: () => [page],
+            async close() {},
+        };
+    },
+};
+globalThis.__csStub = { chromium: fakeChromium, fs, CLAUDE_URL: "https://claude.ai" };
+const libDir = path.join(here, "../ai_clients/claude/lib");
+const fragment = fs.readFileSync(path.join(libDir, "claudestatus_api_billing.js"), "utf8");
+const harness = path.join(tmp, "api_billing_harness.mjs");
+fs.writeFileSync(harness, [
+    `import { cookiesFromStorageState, isLoginPage, isCloudflareChallenge, parseBillingText } from ${JSON.stringify(path.join(libDir, "claudestatus_billing.mjs"))};`,
+    "const { chromium, fs, CLAUDE_URL } = globalThis.__csStub;",
+    fragment,
+    "export { scrapeBilling };",
+].join("\n"));
+const { scrapeBilling } = await import(harness);
+const storagePath = path.join(tmp, "storage.json");
+fs.writeFileSync(storagePath, state);
+const name = `test-${process.pid}`;
+const dump = `/tmp/claudestatus_billing_${name}.txt`;
+const res = await scrapeBilling(name, path.join(tmp, "profile"), storagePath);
+// Cookies land before navigation, a login redirect ends the run headless, and nothing is dumped.
+assert.deepEqual(calls, ["launch:true", "cookies:1", "goto"]);
+assert.equal(res.loggedOut, true);
+assert.equal(fs.existsSync(dump), false);
+
 fs.rmSync(tmp, { recursive: true });
 console.log("ok");
