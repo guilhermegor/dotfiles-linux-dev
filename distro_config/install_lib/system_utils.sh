@@ -1432,7 +1432,7 @@ install_claudestatus_bar() {
     # run_install calls this inside an `if`, where set -e is off: check every copy explicitly.
     run_or_echo mkdir -p "$data_dir/claudestatus_bar" "$data_dir/lib" "$(dirname "$ext_dir")" || return 1
     run_or_echo cp -f "$src/claudestatus_bar/model.mjs" "$src/claudestatus_bar/refresh.mjs" \
-        "$data_dir/claudestatus_bar/" || return 1
+        "$src/claudestatus_bar/labels.mjs" "$data_dir/claudestatus_bar/" || return 1
     run_or_echo cp -f "$src/lib/claudestatus_billing.mjs" "$data_dir/lib/" || return 1
     # rm -rf on a symlink removes the link only, so an old dev symlink is replaced, not followed.
     run_or_echo rm -rf "$ext_dir" || return 1
