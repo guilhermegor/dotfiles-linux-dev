@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img">
+  <title>token-budget: an hourglass of tokens</title>
+  <g fill="none" stroke="#17202A" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M19 8H45M19 56H45" stroke-width="3.5"/>
+    <path d="M22 10C22 22 30 27 32 32C34 27 42 22 42 10Z" stroke-width="3"/>
+    <path d="M22 54C22 42 30 37 32 32C34 37 42 42 42 54Z" stroke-width="3"/>
+  </g>
+  <g fill="#E8A33D">
+    <rect x="26.5" y="13.5" width="4.5" height="4.5" rx="1.2"/>
+    <rect x="33" y="13.5" width="4.5" height="4.5" rx="1.2"/>
+    <rect x="29.75" y="19.5" width="4.5" height="4.5" rx="1.2"/>
+    <rect x="30.5" y="28.5" width="3" height="3" rx="0.8"/>
+  </g>
+  <g fill="#17202A" opacity="0.35">
+    <rect x="24.5" y="47" width="4.5" height="4.5" rx="1.2"/>
+    <rect x="29.75" y="47" width="4.5" height="4.5" rx="1.2"/>
+    <rect x="35" y="47" width="4.5" height="4.5" rx="1.2"/>
+    <rect x="27" y="41.5" width="4.5" height="4.5" rx="1.2"/>
+    <rect x="32.5" y="41.5" width="4.5" height="4.5" rx="1.2"/>
+  </g>
+</svg>
