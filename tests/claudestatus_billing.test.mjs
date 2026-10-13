@@ -75,6 +75,13 @@ assert.equal(m.needsFetch(team.w, NOW), true, "no date yet, so the next refresh 
 m.recordBilling(team, "w", { renewalAt: "2026-11-05T12:00:00.000Z", autoRenew: true }, NOW);
 assert.equal(team.w.managedByAdmin, undefined);
 
+// ...or once the account is confirmed free; a failed read (paid unknown) keeps the flag
+m.recordBilling(team, "f", { renewalAt: null, autoRenew: null, managedByAdmin: true }, NOW);
+m.recordBilling(team, "f", { renewalAt: null, autoRenew: null, managedByAdmin: false, paid: null }, NOW);
+assert.equal(team.f.managedByAdmin.value, true, "a failed request keeps the flag");
+m.recordBilling(team, "f", { renewalAt: null, autoRenew: null, managedByAdmin: false, paid: false }, NOW);
+assert.equal(team.f.managedByAdmin, undefined, "a confirmed free account drops it");
+
 // --- weekly reset: API wins when future, else cache, else null ----------------------------------
 assert.equal(m.effectiveWeeklyReset(back.work, "2026-10-16T00:00:00Z", NOW), "2026-10-16T00:00:00Z");
 assert.equal(m.effectiveWeeklyReset(back.work, null, NOW), "2026-10-15T09:00:00.000Z");
@@ -188,6 +195,15 @@ await fetchAllBilling(["a"]);
 process.stdout.write = realWrite;
 console.log = realConsoleLog;
 assert.equal(m.loadCache().a.managedByAdmin.value, true);
+
+// the account later turns out free (billing_type "none"): the stale admin message must go
+Object.assign(routes, { "/api/organizations/org-1": reply(200, { billing_type: "none" }) });
+process.stdout.write = () => true;
+console.log = () => {};
+await fetchAllBilling(["a"]);
+process.stdout.write = realWrite;
+console.log = realConsoleLog;
+assert.equal(m.loadCache().a.managedByAdmin, undefined);
 console.error = realLog;
 
 fs.rmSync(tmp, { recursive: true });

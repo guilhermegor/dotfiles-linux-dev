@@ -100,7 +100,7 @@ export async function fetchAllBilling(accountNames) {
         process.stdout.write(`  Billing ${name}...`);
         const billing = await fetchBillingForAccount(name, cache[name]);
         if (!billing.fromCache)
-            recordBilling(cache, name, { renewalAt: billing.billingDate, autoRenew: billing.autoRenew, managedByAdmin: billing.managedByAdmin });
+            recordBilling(cache, name, { renewalAt: billing.billingDate, autoRenew: billing.autoRenew, managedByAdmin: billing.managedByAdmin, paid: billing.paid });
         console.log(billing.fromCache ? " cached" : " done");
         results.push({ name, ...billing });
     }

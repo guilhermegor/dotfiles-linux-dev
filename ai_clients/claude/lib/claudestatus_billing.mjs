@@ -78,13 +78,14 @@ function stamp(value, now) {
     return { value, readAt: now.toISOString() };
 }
 
-// Records only values actually read; a null never overwrites a good cached value.
-export function recordBilling(cache, name, { renewalAt, autoRenew, managedByAdmin }, now = new Date()) {
+// Records only values actually read; a null never overwrites a good cached value. The admin
+// flag is dropped on a fresh date or once the account is confirmed free (paid === false); a
+// failed request carries neither, so it keeps the flag.
+export function recordBilling(cache, name, { renewalAt, autoRenew, managedByAdmin, paid }, now = new Date()) {
     const entry = cache[name] ?? {};
-    if (renewalAt) {
-        entry.renewalAt = stamp(renewalAt, now);
-        delete entry.managedByAdmin;
-    } else if (managedByAdmin === true) entry.managedByAdmin = stamp(true, now);
+    if (renewalAt || paid === false) delete entry.managedByAdmin;
+    if (renewalAt) entry.renewalAt = stamp(renewalAt, now);
+    else if (managedByAdmin === true) entry.managedByAdmin = stamp(true, now);
     if (typeof autoRenew === "boolean") entry.autoRenew = stamp(autoRenew, now);
     cache[name] = entry;
 }
