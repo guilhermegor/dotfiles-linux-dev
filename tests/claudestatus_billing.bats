@@ -36,6 +36,7 @@ JS
     run grep -c '^import .*from "\./billing_cache\.js";' "$T/api.js"
     [ "$output" = "1" ]
     grep -q '^import {[^}]*isCloudflareChallenge[^}]*} from "\./billing_cache\.js";' "$T/api.js"
+    grep -q '^import {[^}]*cookiesFromStorageState[^}]*isLoginPage[^}]*} from "\./billing_cache\.js";' "$T/api.js"
     run grep -c 'just a moment' "$T/api.js"
     [ "$output" = "0" ]
     cp "$T/api.js" "$T/api.mjs"
