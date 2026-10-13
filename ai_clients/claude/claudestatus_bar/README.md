@@ -36,6 +36,16 @@ Logs: `journalctl -f -o cat /usr/bin/gnome-shell`.
 node --test ai_clients/claude/claudestatus_bar/test/model.test.mjs
 ```
 
+## Logo
+
+![token-budget hourglass](gnome-extension/icons/token-budget.svg)
+
+An hourglass of tokens: amber top bulb = remaining, muted bottom bulb = spent, one token
+falling. The panel uses the simplified monochrome `token-budget-symbolic.svg` (GNOME
+recolours it); `token-budget.svg` is the full-colour mark. Drawn for this project
+(#753) and intended to be reused under the MIT licence by the planned token-budget
+spin-off.
+
 ## Remove
 
 `uninstall_claudestatus_bar` disables the extension and deletes both directories. Optionally
