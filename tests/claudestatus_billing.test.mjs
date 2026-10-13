@@ -90,5 +90,17 @@ assert.equal(m.isCloudflareChallenge("<body>Próxima cobrança: 15 de dezembro d
 assert.equal(m.isCloudflareChallenge(""), false);
 assert.equal(m.isCloudflareChallenge(undefined), false);
 
+// Persistent contexts ignore storageState, so the cookies must be lifted out of the file.
+const state = JSON.stringify({ cookies: [{ name: "sessionKey", value: "x", domain: ".claude.ai", path: "/" }], origins: [] });
+assert.deepEqual(m.cookiesFromStorageState(state).map((c) => c.name), ["sessionKey"]);
+assert.deepEqual(m.cookiesFromStorageState("{}"), []);
+assert.deepEqual(m.cookiesFromStorageState("not json"), []);
+assert.deepEqual(m.cookiesFromStorageState('{"cookies":"x"}'), []);
+
+assert.equal(m.isLoginPage("https://claude.ai/login?from=logout&reauth=1&returnTo=/settings/billing"), true);
+assert.equal(m.isLoginPage("https://claude.ai/settings/billing"), false);
+assert.equal(m.isLoginPage("https://claude.ai/settings/billing?next=/login"), false);
+assert.equal(m.isLoginPage("garbage"), false);
+
 fs.rmSync(tmp, { recursive: true });
 console.log("ok");
