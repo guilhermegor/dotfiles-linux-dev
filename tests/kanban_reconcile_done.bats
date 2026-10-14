@@ -414,3 +414,16 @@ run_reconcile() {
     refute_gh "pulls/775"
     refute_gh "item-edit"
 }
+
+@test "a closed PR card in a column past Done is never moved backwards" {
+    jq '.fields[0].options += [{"name":"Archived","id":"OPT_ARCHIVED"}]' "$TEST_TMP/fields.json" \
+        > "$TEST_TMP/fields.new" && mv "$TEST_TMP/fields.new" "$TEST_TMP/fields.json"
+    write_issues
+    pr 775 closed
+    write_items "$(pr_item ITEM_PR Archived 775)"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" != *"moved PR"* ]]
+    refute_gh "item-edit"
+}
