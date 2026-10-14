@@ -162,7 +162,8 @@ install_extensions() {
     
     local installed_count=0
     local skipped_count=0
-    
+    local failed=()
+
     # Check which extensions are already installed
     local installed_extensions=""
     if command -v code &> /dev/null; then
@@ -173,7 +174,7 @@ install_extensions() {
         print_status "info" "Checking extension: $extension"
         
         # Check if extension is already installed
-        if echo "$installed_extensions" | grep -q "$extension"; then
+        if echo "$installed_extensions" | grep -qixF -- "$extension"; then
             print_status "warning" "Extension already installed: $extension"
             skipped_count=$((skipped_count + 1))
         else
@@ -182,11 +183,19 @@ install_extensions() {
                 installed_count=$((installed_count + 1))
             else
                 print_status "error" "Failed to install: $extension"
+                failed+=("$extension")
             fi
         fi
     done
-    
-    print_status "success" "Extensions installed: $installed_count, Skipped: $skipped_count"
+
+    # ⚠️ Failures must surface in the summary and the exit status (dotfiles-linux-dev#768):
+    # a green "installed: 0, Skipped: 48" used to hide three failed installs.
+    if [[ ${#failed[@]} -gt 0 ]]; then
+        print_status "error" "Extensions installed: $installed_count, Skipped: $skipped_count, Failed: ${#failed[@]}"
+        print_status "error" "Failed extensions: ${failed[*]}"
+        return 1
+    fi
+    print_status "success" "Extensions installed: $installed_count, Skipped: $skipped_count, Failed: 0"
 }
 
 configure_keybindings() {
