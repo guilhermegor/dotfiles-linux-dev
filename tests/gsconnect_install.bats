@@ -91,3 +91,11 @@ refute_call() {
     [[ "$output" == *"only automated on apt"* ]]
     [ ! -s "$CALLS" ]
 }
+
+@test "skips apt entirely when every package is already installed" {
+    printf '%s\n' gnome-shell-extension-gsconnect gnome-shell-extensions gnome-browser-connector > "$PRESENT"
+    EXT_LIST="gsconnect@andyholmes.github.io" run configure_gsconnect
+    [ "$status" -eq 0 ]
+    refute_call 'apt-get install'
+    grep -q 'gnome-extensions enable gsconnect@andyholmes.github.io' "$CALLS"
+}

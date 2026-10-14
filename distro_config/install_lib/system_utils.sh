@@ -610,9 +610,10 @@ configure_gsconnect() {
     fi
 
     print_status "info" "Installing GSConnect and GNOME Shell extension support..."
-    install_package gnome-shell-extension-gsconnect || return 1
-    install_package gnome-shell-extensions || return 1
-    install_package gnome-browser-connector || return 1
+    local pkg
+    for pkg in gnome-shell-extension-gsconnect gnome-shell-extensions gnome-browser-connector; do
+        package_landed "$pkg" || install_package "$pkg" || return 1
+    done
 
     if [ "${DRY_RUN:-0}" != "1" ] && ! gnome-extensions list | grep -q gsconnect; then
         print_status "warning" "GSConnect installed but not visible to GNOME Shell yet — log out and back in, then re-run"
