@@ -13,7 +13,8 @@ setup() {
     PACKAGE_MANAGER="apt"
     print_status() { echo "[$1] $2"; }
     run_or_echo() { "$@"; }
-    sudo() { "$@"; }
+    # never forward the lock-file rm to the host; the apt calls go to the stubs
+    sudo() { [ "$1" = rm ] && return 0; "$@"; }
     systemctl() { return 0; }
 
     local fn
