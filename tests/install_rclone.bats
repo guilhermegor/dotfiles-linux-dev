@@ -50,12 +50,14 @@ refute_rclone_log() {
     [ "$status" -ne 0 ]
 }
 
+# _write_rclone_stub [VERSION] — fake rclone reporting VERSION (default: new enough).
 _write_rclone_stub() {
+    local ver="${1:-1.75.2}"
     cat > "$TMP/bin/rclone" <<STUB
 #!/bin/bash
 echo "\$*" >> "$RCLONE_LOG"
 case "\$1" in
-    version) echo "rclone v1.60.1" ;;
+    version) echo "rclone v$ver" ;;
     *) exit 0 ;;
 esac
 STUB
@@ -66,6 +68,7 @@ STUB
 
 @test "install_rclone returns 1 when the package manager install fails" {
     _hide_rclone
+    PACKAGE_MANAGER="dnf"
     INSTALL_CMD="false"
     run install_rclone
     [ "$status" -eq 1 ]
@@ -73,6 +76,7 @@ STUB
 
 @test "install_rclone returns 1 when rclone is still not on PATH after a reported install" {
     _hide_rclone
+    PACKAGE_MANAGER="dnf"
     INSTALL_CMD="true"
     run install_rclone
     [ "$status" -eq 1 ]
@@ -102,6 +106,143 @@ STUB
     INSTALL_CMD="false"
     run install_rclone
     [ "$status" -eq 0 ]
+}
+
+# --- issue #769: vendor .deb upgrade, checksum fail-closed -------------------
+
+# _stub_vendor_env — fake dpkg/curl/sudo/apt-get; no network, no root. curl
+# serves version.txt, SHA256SUMS ($SUMS_MODE: good|bad|missing|absent) and a
+# fixed .deb body. sudo/apt-get only log their argv to $APT_LOG.
+_stub_vendor_env() {
+    export APT_LOG="$TMP/apt.log"
+    export SUMS_MODE="${1:-good}"
+    export DEB_BODY="fake-deb-body"
+    local good
+    good="$(printf '%s' "$DEB_BODY" | sha256sum | awk '{print $1}')"
+    export GOOD_SHA="$good"
+    printf '#!/bin/bash\necho amd64\n' > "$TMP/bin/dpkg"
+    cat > "$TMP/bin/sudo" <<'STUB'
+#!/bin/bash
+echo "sudo $*" >> "$APT_LOG"
+exec "$@"
+STUB
+    cat > "$TMP/bin/apt-get" <<'STUB'
+#!/bin/bash
+echo "apt-get $*" >> "$APT_LOG"
+[ -n "$APT_POST" ] && eval "$APT_POST"
+exit "${APT_RC:-0}"
+STUB
+    cat > "$TMP/bin/curl" <<'STUB'
+#!/bin/bash
+out=""; url=""
+while [ $# -gt 0 ]; do
+    case "$1" in -o) out="$2"; shift ;; -*) ;; *) url="$1" ;; esac
+    shift
+done
+emit() { if [ -n "$out" ]; then printf '%s\n' "$1" > "$out"; else printf '%s\n' "$1"; fi; }
+case "$url" in
+    */version.txt) emit "rclone v9.9.9" ;;
+    */SHA256SUMS)
+        case "$SUMS_MODE" in
+            good) emit "$GOOD_SHA  rclone-v9.9.9-linux-amd64.deb" ;;
+            bad) emit "0000000000000000000000000000000000000000000000000000000000000000  rclone-v9.9.9-linux-amd64.deb" ;;
+            missing) emit "$GOOD_SHA  rclone-v9.9.9-linux-arm64.deb" ;;
+            absent) exit 22 ;;
+        esac ;;
+    *.deb) printf '%s' "$DEB_BODY" > "$out" ;;
+    *) exit 22 ;;
+esac
+STUB
+    chmod +x "$TMP/bin/dpkg" "$TMP/bin/sudo" "$TMP/bin/apt-get" "$TMP/bin/curl"
+}
+
+# _arm_upgrade — after the stubbed apt-get "installs", swap in a new rclone.
+_arm_upgrade() {
+    _write_rclone_stub "1.75.2"
+    mv "$TMP/bin/rclone" "$TMP/rclone_new"
+    _write_rclone_stub "1.60.1"
+    export TMP APT_POST='cp "$TMP/rclone_new" "$TMP/bin/rclone"'
+}
+
+@test "install_rclone upgrades an old rclone from the vendor .deb and prints the reconnect hint" {
+    _stub_vendor_env good
+    _arm_upgrade
+    run install_rclone
+    [ "$status" -eq 0 ]
+    grep -q 'apt-get install -y .*rclone-v9.9.9-linux-amd64.deb' "$APT_LOG"
+    [[ "$output" == *"rclone config reconnect <remote>:"* ]]
+    if [ -f "$RCLONE_LOG" ]; then
+        refute_rclone_log '^config'
+    fi
+}
+
+@test "install_rclone fails when an older rclone still shadows the upgrade" {
+    _write_rclone_stub "1.60.1"
+    _stub_vendor_env good
+    run install_rclone
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"shadows"* ]]
+    [[ "$output" != *"rclone upgraded"* ]]
+}
+
+@test "install_rclone treats a non-zero apt-get as success when the new rclone landed" {
+    _stub_vendor_env good
+    _arm_upgrade
+    export APT_RC=100
+    run install_rclone
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"unrelated package"* ]]
+}
+
+@test "install_rclone installs curl first when it is missing" {
+    _write_rclone_stub "1.60.1"
+    _stub_vendor_env good
+    command_exists() { [ "$1" = curl ] && return 1; command -v "$1" &>/dev/null; }
+    install_package() { echo "install_package $1" >> "$APT_LOG"; }
+    run install_rclone
+    grep -q '^install_package curl' "$APT_LOG"
+}
+
+@test "install_rclone skips the upgrade when rclone is new enough" {
+    _write_rclone_stub "1.75.2"
+    _stub_vendor_env good
+    run install_rclone
+    [ "$status" -eq 0 ]
+    [ ! -f "$APT_LOG" ]
+}
+
+@test "install_rclone refuses on a checksum mismatch and never runs apt-get install" {
+    _write_rclone_stub "1.60.1"
+    _stub_vendor_env bad
+    run install_rclone
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Checksum mismatch"* ]]
+    [ ! -f "$APT_LOG" ]
+}
+
+@test "install_rclone refuses when the asset has no entry in SHA256SUMS" {
+    _write_rclone_stub "1.60.1"
+    _stub_vendor_env missing
+    run install_rclone
+    [ "$status" -ne 0 ]
+    [ ! -f "$APT_LOG" ]
+}
+
+@test "install_rclone refuses when SHA256SUMS cannot be fetched" {
+    _write_rclone_stub "1.60.1"
+    _stub_vendor_env absent
+    run install_rclone
+    [ "$status" -ne 0 ]
+    [ ! -f "$APT_LOG" ]
+}
+
+@test "install_rclone on a non-apt distro warns about an old rclone but keeps it" {
+    _write_rclone_stub "1.60.1"
+    PACKAGE_MANAGER="dnf"
+    INSTALL_CMD="false"
+    run install_rclone
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"older than $RCLONE_MIN_VERSION"* ]]
 }
 
 # --- registry entry shape (#357: CLI tool, empty gnome_folder/desktop_file) --

@@ -514,12 +514,86 @@ install_insync() {
 # ============================================================================
 # RCLONE (on-demand cloud mount — replaces Insync, see issue #360)
 # ============================================================================
-# Prefer the distro package over the rclone.org install script. Ubuntu noble
-# ships rclone 1.60.1+dfsg-3ubuntu0.24.04.6 (checked via `apt-cache policy
-# rclone`, 2026-09-13) — well past the 1.39/1.40 releases that introduced
-# --vfs-cache-max-size / --vfs-cache-max-age (rclone's own changelog puts VFS
-# caching in the 1.39 series), so no version-based fallback to the official
-# install script is needed here.
+# On apt, install the official vendor .deb from downloads.rclone.org (first in
+# the install-order rule, distro_config/CLAUDE.md), not the distro package:
+# Ubuntu noble ships rclone 1.60.1 (2022), which predates Microsoft's change to
+# OneDrive personal drive IDs and fails with "The provided drive id appears to
+# be malformed" (issue #769). The .deb is verified against the release's
+# published SHA256SUMS and the install fails CLOSED on a missing or mismatched
+# checksum. Other distros keep the package-manager path and only get a warning
+# when the version is below the minimum.
+#
+# ponytail: 1.69.0 is a conservative floor. rclone's changelog
+# (https://rclone.org/changelog/) has no entry naming the drive-ID fix; the
+# nearest OneDrive-personal entries are v1.69.0 "Fix time precision for OneDrive
+# personal" and v1.73.0 "Fix ... OneDrive Personal". The vendor path always
+# installs the latest release, so the floor only decides "upgrade or skip?".
+RCLONE_MIN_VERSION="1.69.0"
+RCLONE_DOWNLOAD_BASE="https://downloads.rclone.org"
+
+# _rclone_version_ok — 0 when the installed rclone is >= RCLONE_MIN_VERSION.
+_rclone_version_ok() {
+    local cur
+    cur=$(rclone version 2>/dev/null | sed -n '1s/^rclone v\([0-9.]*\).*/\1/p')
+    [ -n "$cur" ] || return 1
+    [ "$(printf '%s\n%s\n' "$RCLONE_MIN_VERSION" "$cur" | sort -V | head -n1)" = "$RCLONE_MIN_VERSION" ]
+}
+
+# _install_rclone_vendor_deb — download, sha256-verify, then install the latest
+# vendor .deb. Installs nothing (non-zero) on any failure.
+_install_rclone_vendor_deb() {
+    local arch deb_arch ver asset tmp expected actual rc=0
+    # check_internet accepts wget alone; every download below needs curl.
+    if ! command_exists curl && ! install_package "curl" "curl" "curl" "curl"; then
+        print_status "error" "curl is required to fetch the rclone .deb and could not be installed"
+        return 1
+    fi
+    arch=$(dpkg --print-architecture)
+    case "$arch" in
+        amd64) deb_arch="amd64" ;;
+        arm64) deb_arch="arm64" ;;
+        armhf) deb_arch="arm-v7" ;;
+        *) print_status "error" "No rclone vendor .deb for architecture: $arch"; return 1 ;;
+    esac
+
+    ver=$(curl -fsSL "$RCLONE_DOWNLOAD_BASE/version.txt" 2>>"$LOG_FILE" | sed -n '1s/^rclone \(v[0-9.]*\).*/\1/p')
+    if [ -z "$ver" ]; then
+        print_status "error" "Could not determine the latest rclone version"
+        return 1
+    fi
+    asset="rclone-$ver-linux-$deb_arch.deb"
+
+    tmp=$(mktemp -d) || return 1
+    if ! curl -fsSL -o "$tmp/SHA256SUMS" "$RCLONE_DOWNLOAD_BASE/$ver/SHA256SUMS" 2>>"$LOG_FILE"; then
+        print_status "error" "Could not fetch rclone SHA256SUMS — refusing to install an unverified .deb"
+        rm -rf "$tmp"; return 1
+    fi
+    expected=$(awk -v a="$asset" '$2 == a {print $1}' "$tmp/SHA256SUMS")
+    if [ -z "$expected" ]; then
+        print_status "error" "No checksum for $asset in SHA256SUMS — refusing to install"
+        rm -rf "$tmp"; return 1
+    fi
+    if ! curl -fsSL -o "$tmp/$asset" "$RCLONE_DOWNLOAD_BASE/$ver/$asset" 2>>"$LOG_FILE"; then
+        print_status "error" "Failed to download $asset"
+        rm -rf "$tmp"; return 1
+    fi
+    actual=$(sha256sum "$tmp/$asset" | awk '{print $1}')
+    if [ "$actual" != "$expected" ]; then
+        print_status "error" "Checksum mismatch for $asset — refusing to install"
+        rm -rf "$tmp"; return 1
+    fi
+
+    run_or_echo sudo apt-get install -y "$tmp/$asset" || rc=$?
+    rm -rf "$tmp"
+    # Success = the requested version landed, not apt's exit code: an unrelated
+    # broken package can make apt exit non-zero after installing ours.
+    if [ "$rc" -ne 0 ] && [ "${DRY_RUN:-0}" != "1" ] && _rclone_version_ok; then
+        print_status "warning" "apt-get exited $rc but rclone is installed — an unrelated package likely failed"
+        rc=0
+    fi
+    return "$rc"
+}
+
 #
 # rclone is a CLI, not a GUI app: its INSTALL_REGISTRY entry leaves
 # gnome_folder and desktop_file empty (#357 — a wrong desktop id places
@@ -532,13 +606,35 @@ install_insync() {
 install_rclone() {
     print_status "section" "RCLONE (ON-DEMAND CLOUD MOUNT)"
 
-    if command_exists rclone; then
+    local had_rclone=0
+    command_exists rclone && had_rclone=1
+
+    if [ "$had_rclone" -eq 1 ] && _rclone_version_ok; then
         print_status "info" "rclone already installed: $(rclone version 2>/dev/null | head -n1)"
-    else
-        print_status "info" "Installing rclone..."
-        if ! install_package "rclone" "rclone" "rclone" "rclone"; then
-            print_status "error" "Failed to install rclone via $PACKAGE_MANAGER"
+    elif [ "$PACKAGE_MANAGER" = "apt" ]; then
+        print_status "info" "Installing rclone >= $RCLONE_MIN_VERSION from the official .deb..."
+        if ! _install_rclone_vendor_deb; then
+            print_status "error" "Failed to install the rclone vendor .deb"
             return 1
+        fi
+        # A manually installed older rclone earlier on PATH would still win.
+        if [ "${DRY_RUN:-0}" != "1" ] && ! _rclone_version_ok; then
+            print_status "error" "rclone installed, but $(command -v rclone) is older than $RCLONE_MIN_VERSION and shadows it — remove that binary or reorder PATH"
+            return 1
+        fi
+        if [ "$had_rclone" -eq 1 ]; then
+            print_status "info" "rclone upgraded — refresh each remote's drive id: run 'rclone config reconnect <remote>:'"
+        fi
+    else
+        if [ "$had_rclone" -eq 0 ]; then
+            print_status "info" "Installing rclone..."
+            if ! install_package "rclone" "rclone" "rclone" "rclone"; then
+                print_status "error" "Failed to install rclone via $PACKAGE_MANAGER"
+                return 1
+            fi
+        fi
+        if command_exists rclone && ! _rclone_version_ok; then
+            print_status "warning" "rclone is older than $RCLONE_MIN_VERSION — OneDrive personal remotes may fail; install a newer build from rclone.org"
         fi
     fi
 
