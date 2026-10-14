@@ -62,11 +62,11 @@ refute_repo_grep() {
     [ -f "$REPO_ROOT/distro_config/dotfiles/openlogi/config.toml" ]
 }
 
-# --- download arch mapping (issue #430: vendor route is linux-x64, not linux-amd64) --
+# --- download arch mapping (release assets are named linux-amd64 / linux-arm64) --
 
-@test "_openlogi_download_arch maps amd64/x86_64 to the vendor's x64 route" {
-    [ "$(_openlogi_download_arch amd64)" = "x64" ]
-    [ "$(_openlogi_download_arch x86_64)" = "x64" ]
+@test "_openlogi_download_arch maps amd64/x86_64 to the release asset arch amd64" {
+    [ "$(_openlogi_download_arch amd64)" = "amd64" ]
+    [ "$(_openlogi_download_arch x86_64)" = "amd64" ]
 }
 
 @test "_openlogi_download_arch maps arm64/aarch64 to arm64" {
@@ -116,4 +116,90 @@ refute_repo_grep() {
 
 @test "ubuntu_workspace.sh no longer places a solaar .desktop entry" {
     refute_repo_grep "solaar" "$REPO_ROOT/distro_config/ubuntu_workspace.sh"
+}
+
+# --- install flow (issue #766: vendor route 404, SHA256SUMS lived nowhere) -------
+# curl, sudo, dpkg and systemctl are stubs: curl serves fixtures from $SERVE by
+# URL and logs every URL, sudo/systemctl only log. Nothing touches the network.
+
+_stub_install_flow() {
+    SERVE="$HOME/serve"; CALLS="$HOME/calls.log"; LOG_FILE="$HOME/log"
+    export SERVE CALLS LOG_FILE
+    mkdir -p "$SERVE" "$HOME/bin"
+    : > "$CALLS"
+    printf 'deb-bytes' > "$SERVE/deb"
+    DEB_SUM=$(sha256sum "$SERVE/deb" | awk '{print $1}')
+    printf '%s  openlogi-v9.9.9-linux-amd64.deb\n%s  openlogi-v9.9.9-linux-arm64.deb\n' \
+        "$DEB_SUM" "$(printf '%064d' 1)" > "$SERVE/SHA256SUMS"
+    cat > "$HOME/bin/curl" <<'STUB'
+#!/bin/bash
+out=""; url=""
+while [ $# -gt 0 ]; do
+    case "$1" in -o) out="$2"; shift ;; -*) ;; *) url="$1" ;; esac
+    shift
+done
+echo "curl $url" >> "$CALLS"
+case "$url" in
+    */latest/download/SHA256SUMS) [ -e "$SERVE/SHA256SUMS" ] || exit 22; cp "$SERVE/SHA256SUMS" "$out" ;;
+    */download/v9.9.9/openlogi-v9.9.9-linux-amd64.deb) cp "$SERVE/deb" "$out" ;;
+    *) exit 22 ;;
+esac
+STUB
+    printf '#!/bin/bash\necho "sudo $*" >> "%s"\nexit "${SUDO_RC:-0}"\n' "$CALLS" > "$HOME/bin/sudo"
+    printf '#!/bin/bash\necho "systemctl $*" >> "%s"\n' "$CALLS" > "$HOME/bin/systemctl"
+    printf '#!/bin/bash\necho amd64\n' > "$HOME/bin/dpkg"
+    chmod +x "$HOME/bin/"*
+    export PATH="$HOME/bin:$PATH"
+    # openlogi looks absent until the stubbed apt-get install has been called.
+    command_exists() { if [ "$1" = openlogi ]; then grep -q "apt-get install" "$CALLS"; else command -v "$1" > /dev/null 2>&1; fi; }
+}
+
+@test "install_openlogi fetches SHA256SUMS and the .deb from the GitHub release" {
+    _stub_install_flow
+    run install_openlogi
+    [ "$status" -eq 0 ]
+    grep -q 'curl https://github.com/AprilNEA/OpenLogi/releases/latest/download/SHA256SUMS' "$CALLS"
+    grep -q 'curl https://github.com/AprilNEA/OpenLogi/releases/download/v9.9.9/openlogi-v9.9.9-linux-amd64.deb' "$CALLS"
+    grep -q 'sudo apt-get install -y .*openlogi.deb' "$CALLS"
+    refute_repo_grep 'openlogi.org' "$CALLS"
+}
+
+@test "install_openlogi refuses a .deb whose checksum does not match" {
+    _stub_install_flow
+    printf '%064d  openlogi-v9.9.9-linux-amd64.deb\n' 7 > "$SERVE/SHA256SUMS"
+    run install_openlogi
+    [ "$status" -ne 0 ]
+    refute_repo_grep 'apt-get install' "$CALLS"
+    refute_repo_grep 'systemctl' "$CALLS"
+}
+
+@test "install_openlogi refuses when SHA256SUMS has no linux .deb entry" {
+    _stub_install_flow
+    printf '%s  OpenLogi-v9.9.9-macos-arm64.dmg\n' "$DEB_SUM" > "$SERVE/SHA256SUMS"
+    run install_openlogi
+    [ "$status" -ne 0 ]
+    refute_repo_grep 'apt-get install' "$CALLS"
+}
+
+@test "install_openlogi refuses when SHA256SUMS cannot be fetched" {
+    _stub_install_flow
+    rm "$SERVE/SHA256SUMS"
+    run install_openlogi
+    [ "$status" -ne 0 ]
+    refute_repo_grep 'apt-get install' "$CALLS"
+}
+
+@test "install_openlogi does not enable the agent service when the install failed" {
+    _stub_install_flow
+    SUDO_RC=1 run install_openlogi
+    [ "$status" -ne 0 ]
+    refute_repo_grep 'systemctl' "$CALLS"
+}
+
+@test "install_openlogi points manual installs at the GitHub releases page" {
+    _stub_install_flow
+    PACKAGE_MANAGER="dnf" run install_openlogi
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"https://github.com/AprilNEA/OpenLogi/releases"* ]]
+    [[ "$output" != *"openlogi.org"* ]]
 }

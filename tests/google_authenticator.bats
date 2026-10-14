@@ -39,6 +39,7 @@ STUB
 echo "sudo \$*" >> "$CALLS"
 if [ "\$1" = rm ]; then case "\$*" in *google-authenticator.conf*) rm -f "\$DROPIN_MARK" ;; esac; fi
 if [ "\$1" = install ]; then case "\$*" in *google-authenticator.conf*) : > "\$DROPIN_MARK" ;; esac; fi
+if [ "\$1" = apt-get ] && [ -n "\${APT_RC:-}" ]; then exit "\$APT_RC"; fi
 if [ "\$1" = sshd ]; then shift; exec "$TMP/bin/sshd" "\$@"; fi
 STUB
     chmod +x "$TMP/bin/sshd" "$TMP/bin/sudo"
@@ -50,6 +51,7 @@ STUB
     # shellcheck source=../distro_config/install_lib/_common.sh
     source "$REPO_ROOT/distro_config/install_lib/_common.sh"
     export PACKAGE_MANAGER="apt"
+    export INSTALL_CMD="run_or_echo sudo apt-get install -y"
     # shellcheck source=../distro_config/install_lib/system_utils.sh
     source "$REPO_ROOT/distro_config/install_lib/system_utils.sh"
 }
@@ -266,4 +268,28 @@ refute_dropin_installed() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not enable UsePAM"* ]]
     grep -q 'sudo rm -f /etc/ssh/sshd_config.d/10-google-authenticator.conf' "$CALLS"
+}
+
+# --- apt exits non-zero for an unrelated broken package (issue #766) -------------
+# install_package trusts dpkg-query over the exit code (#632); the dpkg-query
+# stub reports libpam-google-authenticator as installed only when asked to.
+
+_stub_dpkg_query() {
+    printf '#!/bin/bash\n[ "${GA_INSTALLED:-0}" = 1 ] && printf "install ok installed" || { printf "unknown ok not-installed"; exit 1; }\n' \
+        > "$TMP/bin/dpkg-query"
+    chmod +x "$TMP/bin/dpkg-query"
+}
+
+@test "install succeeds when apt exits 1 but the package is installed" {
+    _stub_dpkg_query
+    APT_RC=1 GA_INSTALLED=1 run install_google_authenticator
+    [ "$status" -eq 0 ]
+    grep -q 'pam-auth-update --enable google-authenticator' "$CALLS"
+}
+
+@test "install fails and stops when apt exits 1 and the package is missing" {
+    _stub_dpkg_query
+    APT_RC=1 GA_INSTALLED=0 run install_google_authenticator
+    [ "$status" -ne 0 ]
+    refute_call 'pam-auth-update'
 }
