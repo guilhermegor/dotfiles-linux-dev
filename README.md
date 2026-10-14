@@ -30,9 +30,10 @@
 - [Bluetooth Adapter](drivers/bluetooth_adapter.sh) - Bluetooth driver setup and configuration (`make setup_bluetooth`)
 - [Keyboard Configuration](drivers/setup_keyboard.sh) - Custom keyboard layout and settings (`make setup_keyboard`)
 - [Mouse Configuration](drivers/mouse.sh) - Mouse driver and sensitivity settings (`make setup_mouse`)
-- [WiFi Adapter](drivers/tplink_wifi_adapter.sh) - TP-Link WiFi adapter driver installation (`make setup_wifi`)
+- [Battery Charge Threshold](drivers/battery_threshold.sh) - Caps laptop charging at 80% (start 75%) via the kernel's `charge_control_*_threshold` files (IdeaPad: `conservation_mode`), re-applied on boot by a systemd unit; a no-op on desktops (`make setup_battery`)
+- [WiFi Adapter](drivers/tplink_wifi_adapter.sh) - TP-Link WiFi adapter driver installation (`make setup_wifi`) — machine-specific: skips when no TP-Link USB adapter is plugged in
 
-**Quick setup:** Run `make setup_all_drivers` to configure all hardware at once.
+**Quick setup:** Run `make setup_all_drivers` to configure every driver that is safe on any PC (Bluetooth, keyboard, mouse, battery). `make setup_wifi` is not part of it — run it only on the machine that has the adapter.
 
 ### 💾 Storage Management
 
@@ -112,7 +113,7 @@ The `make run` command will:
 
 After `make run` completes, you can optionally run:
 ```bash
-make setup_all_drivers    # Configure all hardware
+make setup_all_drivers    # Configure hardware safe on any PC (not setup_wifi)
 make storage_setup        # Setup storage management
 make vm_setup            # Configure virtual machines
 ```
@@ -302,6 +303,7 @@ dotfiles-linux-dev/
 │   └── ⭐ setup_starship_bash.sh  # Starship prompt + Bash integration
 │
 ├── 📁 drivers/                   # Hardware driver configurations
+│   ├── 🔋 battery_threshold.sh   # Laptop battery charge cap
 │   ├── 📡 bluetooth_adapter.sh   # Bluetooth setup
 │   ├── ⌨️ setup_keyboard.sh      # Keyboard configuration
 │   ├── 🖱️ mouse.sh               # Mouse settings
@@ -351,7 +353,8 @@ dotfiles-linux-dev/
 ```bash
    make setup_all_drivers
    # Or individually:
-   make setup_wifi
+   make setup_battery
+   make setup_wifi    # only on the PC with the TP-Link adapter
    make setup_bluetooth
    make setup_keyboard
    make setup_mouse
@@ -430,7 +433,8 @@ Run `make help` to see all available commands, or check these common recipes:
 - `make install_espanso_packages` - Install Espanso packages
 
 ### Hardware Drivers
-- `make setup_all_drivers` - Setup all hardware drivers at once
+- `make setup_all_drivers` - Setup every driver safe on any PC (excludes `setup_wifi`)
+- `make setup_battery` - Cap laptop battery charging at 80% (no-op on desktops)
 - `make setup_bluetooth` - Setup Bluetooth adapter
 - `make setup_keyboard` - Configure keyboard
 - `make setup_mouse` - Configure mouse

@@ -104,7 +104,7 @@ starship_undo_original:  ## Roll back Starship/Bash setup to the original config
 
 ##@ Hardware Drivers
 
-.PHONY: setup_bluetooth setup_keyboard setup_mouse setup_wifi setup_yubikey setup_all_drivers
+.PHONY: setup_bluetooth setup_keyboard setup_mouse setup_battery setup_wifi setup_yubikey setup_all_drivers
 
 setup_bluetooth:  ## Setup Bluetooth adapter
 	@echo "Setting up Bluetooth adapter..."
@@ -118,7 +118,12 @@ setup_mouse:  ## Configure mouse (MX Master + xbindkeys workspace buttons)
 	@echo "Configuring mouse..."
 	@bash drivers/mouse.sh
 
-setup_wifi:  ## Setup TP-Link USB WiFi adapter driver
+setup_battery:  ## Cap laptop battery charging at 80% (no-op on desktops / unsupported laptops)
+	@bash drivers/battery_threshold.sh
+
+# Not part of setup_all_drivers: it builds an out-of-tree kernel module for one
+# specific USB adapter, so it runs only when asked for on the machine that has it.
+setup_wifi:  ## Setup TP-Link USB WiFi adapter driver (only on the PC that has the adapter)
 	@echo "Setting up TP-Link WiFi adapter..."
 	@bash drivers/tplink_wifi_adapter.sh
 
@@ -126,7 +131,7 @@ setup_yubikey:  ## Install YubiKey software (ykman, pcscd, Authenticator, GPG/SS
 	@echo "Setting up YubiKey software..."
 	@bash drivers/yubikey.sh
 
-setup_all_drivers: setup_bluetooth setup_keyboard setup_mouse setup_wifi  ## Setup all hardware drivers
+setup_all_drivers: setup_bluetooth setup_keyboard setup_mouse setup_battery  ## Setup drivers safe on any PC (setup_wifi is separate)
 	@echo "All drivers configured successfully!"
 
 ##@ Storage Management
@@ -220,7 +225,7 @@ install_espanso_packages:  ## Copy espanso/*/ packages to ~/.config/espanso/pack
 	done; \
 	echo "Note: to use new terminal wrappers in this session, run: source ~/.profile"
 
-hardware_setup: setup_bluetooth setup_keyboard setup_mouse setup_wifi  ## Setup all hardware drivers (alias for setup_all_drivers)
+hardware_setup: setup_all_drivers  ## Setup all hardware drivers (alias for setup_all_drivers)
 	@echo ""
 	@echo "════════════════════════════════════════════"
 	@echo "  ✅ Hardware setup completed!"
