@@ -23,9 +23,12 @@ merge_input_sources() {
     local us_entry=""
     local has_br=0
     local -a rest=()
+    local -A seen=()
     local us_re="^\('xkb', 'us(\+[^']*)?'\)$"
 
     while IFS= read -r entry; do
+        [[ -n "${seen[$entry]:-}" ]] && continue
+        seen[$entry]=1
         if [[ -z "$us_entry" && "$entry" =~ $us_re ]]; then
             us_entry="$entry"
             continue

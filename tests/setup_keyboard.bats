@@ -84,3 +84,11 @@ keys() { cat "$GS_DIR/org.gnome.desktop.wm.keybindings.switch-input-source"; }
     [ "$status" -ne 0 ]
     [[ "$output" == *"read back"* ]]
 }
+
+@test "duplicate existing sources collapse to one" {
+    echo "[('xkb', 'br'), ('xkb', 'us+alt-intl'), ('xkb', 'br'), ('xkb', 'us+alt-intl')]" \
+        > "$GS_DIR/org.gnome.desktop.input-sources.sources"
+    run configure
+    [ "$status" -eq 0 ]
+    [ "$(sources)" = "[('xkb', 'us+alt-intl'), ('xkb', 'br')]" ]
+}
