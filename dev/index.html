@@ -1676,7 +1676,7 @@
 <h4 id="peripheral-configuration"><strong>Peripheral Configuration</strong><a class="headerlink" href="#peripheral-configuration" title="Permanent link">&para;</a></h4>
 <ul>
 <li><a href="drivers/bluetooth_adapter.sh">Bluetooth Adapter</a> - Bluetooth driver setup and configuration (<code>make setup_bluetooth</code>)</li>
-<li><a href="drivers/setup_keyboard.sh">Keyboard Configuration</a> - Custom keyboard layout and settings (<code>make setup_keyboard</code>)</li>
+<li><a href="drivers/setup_keyboard.sh">Keyboard Configuration</a> - English (US) + Portuguese (Brazil, ABNT2) layouts switchable with Super+Space, plus cedilla fix (<code>make setup_keyboard</code>)</li>
 <li><a href="drivers/mouse.sh">Mouse Configuration</a> - Mouse driver and sensitivity settings (<code>make setup_mouse</code>)</li>
 <li><a href="drivers/battery_threshold.sh">Battery Charge Threshold</a> - Caps laptop charging via the kernel's <code>charge_control_*_threshold</code> files (IdeaPad: <code>conservation_mode</code>), re-applied on boot by a systemd unit; a no-op on desktops (<code>make setup_battery</code>). Thresholds come from <code>.env</code> (<code>BATTERY_START_THRESHOLD</code>/<code>BATTERY_END_THRESHOLD</code>, default 75/80) — edit and re-run to change them; <code>make battery_full_charge</code> lifts the cap to 100%</li>
 <li><a href="drivers/tplink_wifi_adapter.sh">WiFi Adapter</a> - TP-Link WiFi adapter driver installation (<code>make setup_wifi</code>) — machine-specific: skips when no TP-Link USB adapter is plugged in</li>
