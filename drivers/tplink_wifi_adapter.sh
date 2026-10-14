@@ -6,7 +6,13 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
 # 2357 is TP-Link's USB vendor id. Everything below builds a kernel module and
 # reboots, so a PC without the adapter must stop here.
 TPLINK_USB_VENDOR="2357"
-if [ -z "$(lsusb -d "${TPLINK_USB_VENDOR}:" 2>/dev/null)" ]; then
+# Without lsusb the check below would read "no adapter" and skip a PC that
+# has one, so a missing tool is an error, not an absence.
+if ! command -v lsusb > /dev/null 2>&1; then
+    print_status "error" "lsusb not found — install it (sudo apt-get install -y usbutils) and re-run"
+    exit 1
+fi
+if [ -z "$(lsusb -d "${TPLINK_USB_VENDOR}:")" ]; then
     print_status "warning" "No TP-Link USB adapter (vendor ${TPLINK_USB_VENDOR}) plugged in — skipping driver build"
     exit 0
 fi
