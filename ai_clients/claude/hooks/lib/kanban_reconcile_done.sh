@@ -8,7 +8,8 @@
 # here duplicates that. What nothing does yet:
 #   1. A CLOSED issue's card never reaches Done. The two native board workflows that would set
 #      it ("Item closed", "Pull request merged") are disabled and the API cannot enable them —
-#      see issue #556's own body.
+#      see issue #556's own body. The same holds for a closed PR's own card (#776): it is moved
+#      to Done from one `repos/<o>/<r>/pulls/<N>` REST read per non-Done PR card.
 #   2. A card with NO STATUS AT ALL and no open closing PR sits in "No Status" forever, because
 #      the "Auto-add to project" workflow drops new issues there with nothing to advance them
 #      (dotfiles-linux-dev#556's scope extension — #567, #571, #577, #579 measured stuck there).
@@ -34,7 +35,7 @@
 #   reconcile_kanban_done OWNER REPO CWD
 #     Sets two globals (never partial):
 #       RECONCILE_DONE_STATUS = ok | unknown
-#       RECONCILE_DONE_REPORT = newline-separated "moved issue #N ..." lines, or empty when
+#       RECONCILE_DONE_REPORT = newline-separated "moved issue|PR #N ..." lines, or empty when
 #                               nothing needed to move. An empty report on STATUS=ok is a real,
 #                               ordinary answer, never treated as a failure.
 #     Returns 1 and sets RECONCILE_DONE_STATUS=unknown (REPORT holding one explanatory line)
@@ -88,6 +89,17 @@ _krd_confirm_issue() {
 # `issue-556`, `556-something`) — never a bare substring match, which would also fire on issue 5
 # matching a branch named `.../1556-...`. Reuses the same `git ls-remote` the sweep's own
 # orphan-branch check already runs — no extra API call of either kind.
+# _krd_pr_state OWNER REPO NUMBER
+# Prints "open" or "closed" for one pull request, from one REST read (dotfiles-linux-dev#776).
+# Merged and closed-unmerged both read "closed": either way the PR is no longer in review, so
+# Done is the only column that does not lie. Returns 1 on any read/parse failure — the card is
+# then reported UNKNOWN and left untouched, never moved on a guess.
+_krd_pr_state() {
+	local owner="$1" repo="$2" number="$3"
+	gh api "repos/$owner/$repo/pulls/$number" --jq '.state | select(. == "open" or . == "closed")' \
+		2>/dev/null | grep -xE 'open|closed'
+}
+
 _krd_branch_refs_issue() {
 	local cwd="$1" number="$2"
 	$_KRD_GIT -C "$cwd" ls-remote --heads origin 2>/dev/null |
@@ -189,16 +201,39 @@ reconcile_kanban_done() {
 		return 1
 	}
 
-	local report="" line id content_number content_repo status
+	local report="" line id content_number content_repo status content_type
 	while IFS= read -r line; do
 		[[ -n "$line" ]] || continue
 		id="$(printf '%s' "$line" | cut -f1)"
 		content_number="$(printf '%s' "$line" | cut -f2)"
 		content_repo="$(printf '%s' "$line" | cut -f3)"
 		status="$(printf '%s' "$line" | cut -f4)"
+		content_type="$(printf '%s' "$line" | cut -f5)"
 
 		# A card from another repo on this board is not this repo's to judge.
 		[[ "$content_repo" == "$owner/$repo" ]] || continue
+
+		# A PR card: the board's own "Pull request merged" workflow is off and the API cannot
+		# enable it (#776), so a closed PR moves to Done here. An open PR is never touched.
+		if [[ "$content_type" == "PullRequest" ]]; then
+			[[ "$status" != "Done" ]] || continue
+			local pr_state pr_rank
+			pr_state="$(_krd_pr_state "$owner" "$repo" "$content_number")" || {
+				report="$(printf '%s\nUNKNOWN PR #%s: could not confirm its state' "$report" "$content_number")"
+				continue
+			}
+			[[ "$pr_state" == "closed" ]] || continue
+			pr_rank="$(_krd_rank "$order_list" "$status")"
+			if [[ -n "$pr_rank" ]] && ((pr_rank >= target_rank)); then
+				continue
+			fi
+			if move_card "$project_node" "$id" "$status_field" "$done_option"; then
+				report="$(printf '%s\nmoved PR #%s to Done (was: %s)' "$report" "$content_number" "${status:-none}")"
+			else
+				report="$(printf '%s\nFAILED to move PR #%s to Done — verify by hand' "$report" "$content_number")"
+			fi
+			continue
+		fi
 
 		local fact state labels
 		fact="$(printf '%s\n' "$open_facts" | awk -F'\t' -v n="$content_number" '$1 == n')"
@@ -247,8 +282,9 @@ reconcile_kanban_done() {
 		else
 			report="$(printf '%s\nFAILED to move issue #%s to %s — verify by hand' "$report" "$content_number" "$target")"
 		fi
-	done < <(printf '%s' "$items_json" | jq -r '.items[] | select(.content.type=="Issue") |
-		"\(.id)\t\(.content.number)\t\(.content.repository)\t\(.status // "")"')
+	done < <(printf '%s' "$items_json" | jq -r '.items[] |
+		select(.content.type == "Issue" or .content.type == "PullRequest") |
+		"\(.id)\t\(.content.number)\t\(.content.repository)\t\(.status // "")\t\(.content.type)"')
 
 	# shellcheck disable=SC2034 # read by callers after this returns, not within this file
 	RECONCILE_DONE_STATUS="ok"
