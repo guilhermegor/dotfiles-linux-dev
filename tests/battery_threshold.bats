@@ -13,7 +13,12 @@ setup() {
     export IDEAPAD_DIR="$TMP/ideapad_acpi"
     export BATTERY_ENV_FILE="$TMP/.env"   # absent unless a test writes it — never the real .env
     unset BATTERY_START_THRESHOLD BATTERY_END_THRESHOLD
-    mkdir -p "$POWER_SUPPLY_DIR/AC" "$IDEAPAD_DIR"
+    mkdir -p "$POWER_SUPPLY_DIR/AC" "$IDEAPAD_DIR" "$TMP/bin"
+    # sudo is only reached for files the test user cannot write; it always
+    # fails here, standing in for a driver that rejects the value.
+    printf '#!/bin/bash\nexit 1\n' > "$TMP/bin/sudo"
+    chmod +x "$TMP/bin/sudo"
+    export PATH="$TMP/bin:$PATH"
     echo Mains > "$POWER_SUPPLY_DIR/AC/type"
 }
 
@@ -117,7 +122,32 @@ make_battery() {
 
     run bash "$SCRIPT" --apply
 
-    [ "$status" -eq 0 ]
+    # non-zero on purpose: the boot unit's Result must show a broken config
+    [ "$status" -ne 0 ]
     [[ "$output" == *"start < stop"* ]]
     [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold")" = 100 ]
+}
+
+@test "a rejected threshold write fails instead of reporting success" {
+    make_battery BAT0
+    echo 100 > "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+    chmod 444 "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+
+    run bash "$SCRIPT" --apply
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"stop threshold rejected"* ]]
+}
+
+@test "leading-zero thresholds are read as decimal, not octal" {
+    make_battery BAT0
+    echo 100 > "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+    echo 0 > "$POWER_SUPPLY_DIR/BAT0/charge_control_start_threshold"
+    echo 'BATTERY_END_THRESHOLD=080' > "$BATTERY_ENV_FILE"
+
+    run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold")" = 80 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_start_threshold")" = 75 ]
 }
