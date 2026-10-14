@@ -6,7 +6,6 @@ vscode:bierner.markdown-mermaid
 vscode:charliermarsh.ruff
 vscode:christian-kohler.path-intellisense
 vscode:clinyong.vscode-css-modules
-vscode:codeium.codeium
 vscode:darkriszty.markdown-table-prettify
 vscode:dbaeumer.vscode-eslint
 vscode:docker.docker
@@ -15,8 +14,6 @@ vscode:dzhavat.bracket-pair-toggler
 vscode:esbenp.prettier-vscode
 vscode:firsttris.vscode-jest-runner
 vscode:formulahendry.auto-rename-tag
-vscode:github.copilot
-vscode:github.copilot-chat
 vscode:github.vscode-github-actions
 vscode:humao.rest-client
 vscode:jetmartin.bats
