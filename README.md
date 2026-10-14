@@ -30,7 +30,7 @@
 - [Bluetooth Adapter](drivers/bluetooth_adapter.sh) - Bluetooth driver setup and configuration (`make setup_bluetooth`)
 - [Keyboard Configuration](drivers/setup_keyboard.sh) - Custom keyboard layout and settings (`make setup_keyboard`)
 - [Mouse Configuration](drivers/mouse.sh) - Mouse driver and sensitivity settings (`make setup_mouse`)
-- [Battery Charge Threshold](drivers/battery_threshold.sh) - Caps laptop charging at 80% (start 75%) via the kernel's `charge_control_*_threshold` files (IdeaPad: `conservation_mode`), re-applied on boot by a systemd unit; a no-op on desktops (`make setup_battery`)
+- [Battery Charge Threshold](drivers/battery_threshold.sh) - Caps laptop charging via the kernel's `charge_control_*_threshold` files (IdeaPad: `conservation_mode`), re-applied on boot by a systemd unit; a no-op on desktops (`make setup_battery`). Thresholds come from `.env` (`BATTERY_START_THRESHOLD`/`BATTERY_END_THRESHOLD`, default 75/80) — edit and re-run to change them; `make battery_full_charge` lifts the cap to 100%
 - [WiFi Adapter](drivers/tplink_wifi_adapter.sh) - TP-Link WiFi adapter driver installation (`make setup_wifi`) — machine-specific: skips when no TP-Link USB adapter is plugged in
 
 **Quick setup:** Run `make setup_all_drivers` to configure every driver that is safe on any PC (Bluetooth, keyboard, mouse, battery). `make setup_wifi` is not part of it — run it only on the machine that has the adapter.
@@ -434,7 +434,8 @@ Run `make help` to see all available commands, or check these common recipes:
 
 ### Hardware Drivers
 - `make setup_all_drivers` - Setup every driver safe on any PC (excludes `setup_wifi`)
-- `make setup_battery` - Cap laptop battery charging at 80% (no-op on desktops)
+- `make setup_battery` - Cap laptop battery charging at `.env`'s thresholds, default 75/80 (no-op on desktops)
+- `make battery_full_charge` - Lift the cap and charge to 100% until `setup_battery` runs again
 - `make setup_bluetooth` - Setup Bluetooth adapter
 - `make setup_keyboard` - Configure keyboard
 - `make setup_mouse` - Configure mouse

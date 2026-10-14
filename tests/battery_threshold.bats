@@ -11,6 +11,8 @@ setup() {
     TMP="$(mktemp -d)"
     export POWER_SUPPLY_DIR="$TMP/power_supply"
     export IDEAPAD_DIR="$TMP/ideapad_acpi"
+    export BATTERY_ENV_FILE="$TMP/.env"   # absent unless a test writes it — never the real .env
+    unset BATTERY_START_THRESHOLD BATTERY_END_THRESHOLD
     mkdir -p "$POWER_SUPPLY_DIR/AC" "$IDEAPAD_DIR"
     echo Mains > "$POWER_SUPPLY_DIR/AC/type"
 }
@@ -82,4 +84,40 @@ make_battery() {
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"exposes no charge limit"* ]]
+}
+
+@test ".env thresholds are used when the environment sets none" {
+    make_battery BAT0
+    echo 100 > "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+    echo 0 > "$POWER_SUPPLY_DIR/BAT0/charge_control_start_threshold"
+    printf 'BATTERY_START_THRESHOLD=85\nBATTERY_END_THRESHOLD="90"\n' > "$BATTERY_ENV_FILE"
+
+    run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold")" = 90 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_start_threshold")" = 85 ]
+}
+
+@test "environment overrides .env" {
+    make_battery BAT0
+    echo 100 > "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+    echo 'BATTERY_END_THRESHOLD=90' > "$BATTERY_ENV_FILE"
+
+    BATTERY_END_THRESHOLD=70 run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold")" = 70 ]
+}
+
+@test "invalid .env thresholds are rejected before touching sysfs" {
+    make_battery BAT0
+    echo 100 > "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+    printf 'BATTERY_START_THRESHOLD=90\nBATTERY_END_THRESHOLD=80\n' > "$BATTERY_ENV_FILE"
+
+    run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"start < stop"* ]]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold")" = 100 ]
 }

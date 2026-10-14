@@ -104,7 +104,7 @@ starship_undo_original:  ## Roll back Starship/Bash setup to the original config
 
 ##@ Hardware Drivers
 
-.PHONY: setup_bluetooth setup_keyboard setup_mouse setup_battery setup_wifi setup_yubikey setup_all_drivers
+.PHONY: setup_bluetooth setup_keyboard setup_mouse setup_battery battery_full_charge setup_wifi setup_yubikey setup_all_drivers
 
 setup_bluetooth:  ## Setup Bluetooth adapter
 	@echo "Setting up Bluetooth adapter..."
@@ -118,8 +118,11 @@ setup_mouse:  ## Configure mouse (MX Master + xbindkeys workspace buttons)
 	@echo "Configuring mouse..."
 	@bash drivers/mouse.sh
 
-setup_battery:  ## Cap laptop battery charging at 80% (no-op on desktops / unsupported laptops)
+setup_battery:  ## Cap laptop battery charging (.env BATTERY_*_THRESHOLD, default 75/80; no-op on desktops)
 	@bash drivers/battery_threshold.sh
+
+battery_full_charge:  ## Lift the battery cap: charge to 100% (until setup_battery runs again)
+	@bash drivers/battery_threshold.sh --full
 
 # Not part of setup_all_drivers: it builds an out-of-tree kernel module for one
 # specific USB adapter, so it runs only when asked for on the machine that has it.

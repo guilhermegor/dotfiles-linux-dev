@@ -17,25 +17,67 @@
 # removes) power-profiles-daemon, which backs the power-mode menu.
 #
 # Usage:
-#   bash drivers/battery_threshold.sh           # apply now + install boot unit
+#   bash drivers/battery_threshold.sh           # apply now + persist for boot
+#   bash drivers/battery_threshold.sh --full    # lift the cap (charge to 100%)
 #   battery-charge-threshold --apply            # what the boot unit runs
-# Overridable: BATTERY_START_THRESHOLD, BATTERY_END_THRESHOLD,
-#              POWER_SUPPLY_DIR, IDEAPAD_DIR (tests point these at a fake sysfs).
+#
+# Thresholds come from, first match wins: the environment, then the repo's
+# .env (BATTERY_START_THRESHOLD / BATTERY_END_THRESHOLD, see .env.example),
+# then 75/80. Re-running after editing .env re-persists them; the boot unit
+# reads /etc/default/battery-charge-threshold, never the repo, so a moved or
+# deleted checkout does not change what boot applies.
+# Overridable for tests: BATTERY_ENV_FILE, POWER_SUPPLY_DIR, IDEAPAD_DIR.
 
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=../lib/common.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh" 2>/dev/null \
+source "$REPO_ROOT/lib/common.sh" 2>/dev/null \
     || print_status() { printf '[%s] %s\n' "$1" "$2"; }  # installed copy runs outside the repo
 
-START_THRESHOLD="${BATTERY_START_THRESHOLD:-75}"
-END_THRESHOLD="${BATTERY_END_THRESHOLD:-80}"
+DEFAULT_END_THRESHOLD=80
+# With no start configured, charging resumes this many points below the stop,
+# so setting only BATTERY_END_THRESHOLD can never produce start >= stop.
+START_GAP=5
+ENV_FILE="${BATTERY_ENV_FILE:-$REPO_ROOT/.env}"
 POWER_SUPPLY_DIR="${POWER_SUPPLY_DIR:-/sys/class/power_supply}"
 IDEAPAD_DIR="${IDEAPAD_DIR:-/sys/bus/platform/drivers/ideapad_acpi}"
 
 INSTALLED_BIN="/usr/local/sbin/battery-charge-threshold"
+CONFIG_FILE="/etc/default/battery-charge-threshold"
 UNIT_NAME="battery-charge-threshold.service"
 UNIT_FILE="/etc/systemd/system/$UNIT_NAME"
+
+read_env_value() {
+    [ -f "$ENV_FILE" ] || return 0
+    grep -E "^$1=" "$ENV_FILE" | tail -n 1 | cut -d= -f2- | tr -d "\"' \r"
+}
+
+resolve_threshold() {
+    local key="$1" fallback="$2" value
+    value="${!key:-}"
+    [ -n "$value" ] || value="$(read_env_value "$key")"
+    echo "${value:-$fallback}"
+}
+
+END_THRESHOLD="$(resolve_threshold BATTERY_END_THRESHOLD "$DEFAULT_END_THRESHOLD")"
+START_THRESHOLD="$(resolve_threshold BATTERY_START_THRESHOLD "")"
+if [ -z "$START_THRESHOLD" ] && [[ "$END_THRESHOLD" =~ ^[0-9]+$ ]]; then
+    START_THRESHOLD=$(( END_THRESHOLD > START_GAP ? END_THRESHOLD - START_GAP : 0 ))
+fi
+
+# These values are written straight into the battery controller, so a typo in
+# .env must stop here rather than reach sysfs.
+validate_thresholds() {
+    if ! [[ "$START_THRESHOLD" =~ ^[0-9]+$ && "$END_THRESHOLD" =~ ^[0-9]+$ ]]; then
+        print_status "error" "Thresholds must be whole numbers (start='$START_THRESHOLD', stop='$END_THRESHOLD')"
+        return 1
+    fi
+    if [ "$END_THRESHOLD" -lt 1 ] || [ "$END_THRESHOLD" -gt 100 ] || [ "$START_THRESHOLD" -ge "$END_THRESHOLD" ]; then
+        print_status "error" "Need 0 <= start < stop <= 100 (got start=$START_THRESHOLD, stop=$END_THRESHOLD)"
+        return 1
+    fi
+}
 
 write_sysfs() {
     local value="$1" file="$2"
@@ -77,12 +119,14 @@ apply_thresholds() {
     print_status "success" "$(basename "$battery"): charging stops at ${END_THRESHOLD}%"
 }
 
+# conservation_mode is on/off only: any cap below 100% turns it on.
 apply_ideapad_conservation() {
-    local mode_file
+    local mode_file mode=1
+    [ "$END_THRESHOLD" -eq 100 ] && mode=0
     for mode_file in "$IDEAPAD_DIR"/*/conservation_mode; do
         [ -e "$mode_file" ] || continue
-        write_sysfs 1 "$mode_file"
-        print_status "success" "IdeaPad conservation mode on (cap is fixed by firmware, ~60-80%)"
+        write_sysfs "$mode" "$mode_file"
+        print_status "success" "IdeaPad conservation mode $([ "$mode" -eq 1 ] && echo "on (cap fixed by firmware, ~60-80%)" || echo off)"
         return 0
     done
     return 1
@@ -110,18 +154,20 @@ apply_all() {
     return 1
 }
 
-install_boot_unit() {
+persist_for_boot() {
     local self
     self="$(readlink -f "${BASH_SOURCE[0]}")"
     sudo install -m 0755 "$self" "$INSTALLED_BIN"
+    printf 'BATTERY_START_THRESHOLD=%s\nBATTERY_END_THRESHOLD=%s\n' "$START_THRESHOLD" "$END_THRESHOLD" \
+        | sudo tee "$CONFIG_FILE" > /dev/null
     sudo tee "$UNIT_FILE" > /dev/null <<EOF
 [Unit]
-Description=Cap battery charging at ${END_THRESHOLD}% (dotfiles-dev drivers/battery_threshold.sh)
+Description=Battery charge thresholds from ${CONFIG_FILE} (dotfiles-dev drivers/battery_threshold.sh)
 After=multi-user.target
 
 [Service]
 Type=oneshot
-Environment=BATTERY_START_THRESHOLD=${START_THRESHOLD} BATTERY_END_THRESHOLD=${END_THRESHOLD}
+EnvironmentFile=-${CONFIG_FILE}
 ExecStart=${INSTALLED_BIN} --apply
 
 [Install]
@@ -138,15 +184,22 @@ EOF
 }
 
 main() {
-    if [ "${1:-}" = "--apply" ]; then
-        apply_all || true
-        return 0
-    fi
+    case "${1:-}" in
+        --apply)
+            validate_thresholds || return 0
+            apply_all || true
+            return 0
+            ;;
+        --full) START_THRESHOLD=0 END_THRESHOLD=100 ;;
+        "") ;;
+        *) print_status "error" "Unknown option: $1 (expected --full or --apply)"; return 1 ;;
+    esac
 
+    validate_thresholds
     print_status "section" "BATTERY CHARGE THRESHOLD"
     print_status "config" "start ${START_THRESHOLD}% / stop ${END_THRESHOLD}%"
     apply_all || return 0
-    install_boot_unit
+    persist_for_boot
 }
 
 main "$@"
