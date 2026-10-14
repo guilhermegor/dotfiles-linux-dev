@@ -603,17 +603,25 @@ install_slack() {
 configure_gsconnect() {
     print_status "section" "GSCONNECT CONFIGURATION"
 
-    print_status "info" "Installing GNOME Shell extensions support..."
-    run_or_echo sudo apt install -y gnome-shell-extensions chrome-gnome-shell
-
-    if gnome-extensions list | grep -q gsconnect; then
-        print_status "info" "Enabling GSConnect..."
-        gnome-extensions enable gsconnect@andyholmes.github.io
-        print_status "success" "GSConnect enabled"
-    else
-        print_status "warning" "GSConnect extension not found. Install it from extensions.gnome.org"
+    if [ "$PACKAGE_MANAGER" != "apt" ]; then
+        print_status "warning" "GSConnect install is only automated on apt (gnome-shell-extension-gsconnect)"
+        print_status "info" "Install it from https://extensions.gnome.org/extension/1319/gsconnect/"
         return 1
     fi
+
+    print_status "info" "Installing GSConnect and GNOME Shell extension support..."
+    install_package gnome-shell-extension-gsconnect || return 1
+    install_package gnome-shell-extensions || return 1
+    install_package gnome-browser-connector || return 1
+
+    if [ "${DRY_RUN:-0}" != "1" ] && ! gnome-extensions list | grep -q gsconnect; then
+        print_status "warning" "GSConnect installed but not visible to GNOME Shell yet — log out and back in, then re-run"
+        return 1
+    fi
+
+    print_status "info" "Enabling GSConnect..."
+    run_or_echo gnome-extensions enable gsconnect@andyholmes.github.io || return 1
+    print_status "success" "GSConnect enabled"
 }
 
 # ============================================================================
@@ -885,67 +893,87 @@ install_veracrypt_appimage() {
 # ============================================================================
 # Local-first alternative to Logitech Options+. No apt/dnf/pacman repo exists
 # (see distro_config CLAUDE.md "App Installation Preference Order" #1 —
-# official .deb from vendor); the vendor's own download page 302-redirects
-# "linux-<arch>" to the current release asset, so it doubles as a poor man's
-# "latest" channel without a GitHub API call.
+# official .deb from vendor). The project's releases live on GitHub; every
+# release ships a SHA256SUMS next to its assets, and `releases/latest/download/`
+# always serves the newest one, so SHA256SUMS doubles as the "latest" channel:
+# its linux-<arch>.deb line names the asset, and the asset name carries the tag.
 #
 # Only one HID++ manager may hold a receiver at a time, so this repo never
 # installs openlogi alongside Solaar (Solaar is fully removed — see #237).
 
-# Verify the downloaded .deb against the release's own SHA256SUMS before it is handed to
-# `sudo apt-get install`. The vendor's "latest" URL deliberately hides both the version and
-# the asset name, so the redirect has to be resolved first — SHA256SUMS is published beside
-# the asset it covers, in the same release directory.
-#
-# Fails CLOSED: an unverifiable download is not installed. A .deb is unpacked as root, so
-# "could not check" and "checksum did not match" earn the same answer.
-_verify_openlogi_deb() {
-    local deb_file="$1" deb_url="$2"
-    local effective_url asset_name sums_url sums_file actual
+_OPENLOGI_RELEASES_URL="https://github.com/AprilNEA/OpenLogi/releases"
 
-    if [ "${DRY_RUN:-0}" = "1" ]; then
-        print_status "info" "[dry-run] would verify $deb_file against the release SHA256SUMS"
-        return 0
-    fi
+# Verify the downloaded .deb against the release's SHA256SUMS before it is handed to
+# `sudo apt-get install`. Fails CLOSED: a missing entry and a mismatching checksum
+# both refuse the install — a .deb is unpacked as root.
+_verify_openlogi_deb() {
+    local deb_file="$1" sums_file="$2" asset_name="$3"
+    local expected actual
 
     if ! command_exists sha256sum; then
         print_status "warning" "sha256sum unavailable — cannot verify the openlogi .deb"
         return 1
     fi
 
-    effective_url=$(curl -fLs -o /dev/null -w '%{url_effective}' "$deb_url" 2>>"$LOG_FILE") \
-        || effective_url=""
-    if [ -z "$effective_url" ] || [ "$effective_url" = "$deb_url" ]; then
-        print_status "warning" "Could not resolve the openlogi release asset URL for verification"
-        return 1
-    fi
-
-    asset_name="${effective_url##*/}"
-    sums_url="${effective_url%/*}/SHA256SUMS"
-    sums_file="$(dirname "$deb_file")/SHA256SUMS"
-
-    if ! curl -fLs -o "$sums_file" "$sums_url" 2>>"$LOG_FILE"; then
-        print_status "warning" "Could not download SHA256SUMS from $sums_url"
+    expected=$(awk -v a="$asset_name" '$2 == a || $2 == "*" a {print $1; exit}' "$sums_file")
+    if [ -z "$expected" ]; then
+        print_status "error" "No SHA256SUMS entry for $asset_name"
         return 1
     fi
 
     actual=$(sha256sum "$deb_file" | awk '{print $1}')
-    if grep -qiE "^${actual}[[:space:]]+\*?${asset_name}\$" "$sums_file"; then
+    if [ "${actual,,}" = "${expected,,}" ]; then
         print_status "success" "openlogi .deb verified against $asset_name"
         return 0
     fi
 
-    print_status "error" "Checksum mismatch — $asset_name not matched in SHA256SUMS"
+    print_status "error" "Checksum mismatch — $asset_name does not match SHA256SUMS"
     return 1
 }
 
 _openlogi_download_arch() {
     local arch="$1"
     case "$arch" in
-        amd64|x86_64)  echo "x64" ;;
+        amd64|x86_64)  echo "amd64" ;;
         arm64|aarch64) echo "arm64" ;;
         *)             return 1 ;;
     esac
+}
+
+# Download + verify + apt-install the latest release .deb for $1 (amd64|arm64).
+_openlogi_install_deb() {
+    local download_arch="$1"
+    local tmp_dir sums_file asset tag rc=1
+
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        print_status "info" "[dry-run] would download, verify and install the openlogi linux-${download_arch} .deb from $_OPENLOGI_RELEASES_URL"
+        return 0
+    fi
+
+    tmp_dir=$(mktemp -d)
+    sums_file="$tmp_dir/SHA256SUMS"
+
+    if ! curl -fL -o "$sums_file" "$_OPENLOGI_RELEASES_URL/latest/download/SHA256SUMS" 2>>"$LOG_FILE"; then
+        print_status "warning" "Failed to download openlogi SHA256SUMS from $_OPENLOGI_RELEASES_URL"
+    else
+        asset=$(awk -v s="-linux-${download_arch}.deb" \
+            '{n = $2; sub(/^\*/, "", n); if (substr(n, length(n) - length(s) + 1) == s) {print n; exit}}' "$sums_file")
+        tag=$(printf '%s' "$asset" | sed -n 's/^openlogi-\(v[^-]*\)-linux-.*/\1/p')
+        if [ -z "$asset" ] || [ -z "$tag" ]; then
+            print_status "warning" "No linux-${download_arch} .deb listed in the openlogi SHA256SUMS"
+        elif ! curl -fL -o "$tmp_dir/openlogi.deb" "$_OPENLOGI_RELEASES_URL/download/$tag/$asset" 2>>"$LOG_FILE"; then
+            print_status "warning" "Failed to download openlogi .deb ($asset)"
+        elif ! _verify_openlogi_deb "$tmp_dir/openlogi.deb" "$sums_file" "$asset"; then
+            print_status "error" "openlogi .deb failed checksum verification — NOT installing"
+        elif sudo apt-get install -y "$tmp_dir/openlogi.deb"; then
+            print_status "success" "openlogi installed from official .deb"
+            rc=0
+        else
+            print_status "warning" "openlogi .deb installation failed"
+        fi
+    fi
+    rm -rf "$tmp_dir"
+    return "$rc"
 }
 
 install_openlogi() {
@@ -960,39 +988,22 @@ install_openlogi() {
         arch=$(dpkg --print-architecture 2>/dev/null || uname -m)
         if ! download_arch=$(_openlogi_download_arch "$arch"); then
             print_status "warning" "openlogi has no prebuilt package for architecture: $arch"
-            print_status "info" "Install manually from: https://openlogi.org/download/linux"
+            print_status "info" "Install manually from: $_OPENLOGI_RELEASES_URL"
             return 1
         fi
 
         case "$PACKAGE_MANAGER" in
             apt)
-                local tmp_dir deb_url
-                tmp_dir=$(mktemp -d)
-                deb_url="https://openlogi.org/download/linux-${download_arch}"
-
-                if run_or_echo curl -fL -o "$tmp_dir/openlogi.deb" "$deb_url" 2>>"$LOG_FILE"; then
-                    if _verify_openlogi_deb "$tmp_dir/openlogi.deb" "$deb_url"; then
-                        if run_or_echo sudo apt-get install -y "$tmp_dir/openlogi.deb"; then
-                            print_status "success" "openlogi installed from official .deb"
-                        else
-                            print_status "warning" "openlogi .deb installation failed"
-                        fi
-                    else
-                        print_status "error" "openlogi .deb failed checksum verification — NOT installing"
-                    fi
-                else
-                    print_status "warning" "Failed to download openlogi .deb from $deb_url"
-                fi
-                rm -rf "$tmp_dir"
+                _openlogi_install_deb "$download_arch" || return 1
                 ;;
             dnf|yum|pacman|zypper)
                 print_status "warning" "openlogi has no $PACKAGE_MANAGER repository; only the .deb download is automated"
-                print_status "info" "Download the .rpm / .pkg.tar.zst manually from: https://openlogi.org/download/linux"
+                print_status "info" "Download the .rpm / .pkg.tar.zst manually from: $_OPENLOGI_RELEASES_URL"
                 return 1
                 ;;
             *)
                 print_status "warning" "openlogi installation is not automated for $PACKAGE_MANAGER"
-                print_status "info" "Install manually from: https://openlogi.org/download/linux"
+                print_status "info" "Install manually from: $_OPENLOGI_RELEASES_URL"
                 return 1
                 ;;
         esac
@@ -1050,7 +1061,7 @@ verify_openlogi() {
         print_status "info" "Bindings live in ~/.config/openlogi/config.toml (tracked in this repo)"
     else
         print_status "warning" "openlogi could not be verified"
-        print_status "info" "Install manually from: https://openlogi.org/download/linux"
+        print_status "info" "Install manually from: $_OPENLOGI_RELEASES_URL"
         return 1
     fi
 }
@@ -1334,7 +1345,7 @@ install_google_authenticator() {
         return 1
     fi
 
-    run_or_echo sudo apt-get install -y libpam-google-authenticator || return 1
+    install_package libpam-google-authenticator || return 1
     run_or_echo sudo install -m 0644 "$_GA_PAM_DIR/google-authenticator" \
         "$_GA_PAM_PROFILE" || return 1
     run_or_echo sudo pam-auth-update --enable google-authenticator || return 1
