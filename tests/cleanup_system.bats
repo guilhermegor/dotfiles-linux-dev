@@ -42,3 +42,18 @@ setup() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"System cleaned up"* ]]
 }
+
+# Each step must be checked on its own: an earlier failure would otherwise
+# hide a missing `|| failed=1` on a later step.
+_only_fails() {
+    APT_FAIL_ON="$1"
+    apt() { [ "$1" = "$APT_FAIL_ON" ] && return 100; return 0; }
+    dpkg() { :; }
+    run cleanup_system
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"System cleaned up"* ]]
+}
+
+@test "cleanup_system fails when only full-upgrade fails" { _only_fails full-upgrade; }
+@test "cleanup_system fails when only autoremove fails"   { _only_fails autoremove; }
+@test "cleanup_system fails when only clean fails"        { _only_fails clean; }
