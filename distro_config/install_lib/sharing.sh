@@ -543,6 +543,11 @@ _rclone_version_ok() {
 # vendor .deb. Installs nothing (non-zero) on any failure.
 _install_rclone_vendor_deb() {
     local arch deb_arch ver asset tmp expected actual rc=0
+    # check_internet accepts wget alone; every download below needs curl.
+    if ! command_exists curl && ! install_package "curl" "curl" "curl" "curl"; then
+        print_status "error" "curl is required to fetch the rclone .deb and could not be installed"
+        return 1
+    fi
     arch=$(dpkg --print-architecture)
     case "$arch" in
         amd64) deb_arch="amd64" ;;
@@ -580,6 +585,12 @@ _install_rclone_vendor_deb() {
 
     run_or_echo sudo apt-get install -y "$tmp/$asset" || rc=$?
     rm -rf "$tmp"
+    # Success = the requested version landed, not apt's exit code: an unrelated
+    # broken package can make apt exit non-zero after installing ours.
+    if [ "$rc" -ne 0 ] && [ "${DRY_RUN:-0}" != "1" ] && _rclone_version_ok; then
+        print_status "warning" "apt-get exited $rc but rclone is installed — an unrelated package likely failed"
+        rc=0
+    fi
     return "$rc"
 }
 
@@ -604,6 +615,11 @@ install_rclone() {
         print_status "info" "Installing rclone >= $RCLONE_MIN_VERSION from the official .deb..."
         if ! _install_rclone_vendor_deb; then
             print_status "error" "Failed to install the rclone vendor .deb"
+            return 1
+        fi
+        # A manually installed older rclone earlier on PATH would still win.
+        if [ "${DRY_RUN:-0}" != "1" ] && ! _rclone_version_ok; then
+            print_status "error" "rclone installed, but $(command -v rclone) is older than $RCLONE_MIN_VERSION and shadows it — remove that binary or reorder PATH"
             return 1
         fi
         if [ "$had_rclone" -eq 1 ]; then

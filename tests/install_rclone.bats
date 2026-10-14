@@ -124,10 +124,13 @@ _stub_vendor_env() {
     cat > "$TMP/bin/sudo" <<'STUB'
 #!/bin/bash
 echo "sudo $*" >> "$APT_LOG"
+exec "$@"
 STUB
     cat > "$TMP/bin/apt-get" <<'STUB'
 #!/bin/bash
 echo "apt-get $*" >> "$APT_LOG"
+[ -n "$APT_POST" ] && eval "$APT_POST"
+exit "${APT_RC:-0}"
 STUB
     cat > "$TMP/bin/curl" <<'STUB'
 #!/bin/bash
@@ -153,9 +156,17 @@ STUB
     chmod +x "$TMP/bin/dpkg" "$TMP/bin/sudo" "$TMP/bin/apt-get" "$TMP/bin/curl"
 }
 
-@test "install_rclone upgrades an old rclone from the vendor .deb and prints the reconnect hint" {
+# _arm_upgrade — after the stubbed apt-get "installs", swap in a new rclone.
+_arm_upgrade() {
+    _write_rclone_stub "1.75.2"
+    mv "$TMP/bin/rclone" "$TMP/rclone_new"
     _write_rclone_stub "1.60.1"
+    export TMP APT_POST='cp "$TMP/rclone_new" "$TMP/bin/rclone"'
+}
+
+@test "install_rclone upgrades an old rclone from the vendor .deb and prints the reconnect hint" {
     _stub_vendor_env good
+    _arm_upgrade
     run install_rclone
     [ "$status" -eq 0 ]
     grep -q 'apt-get install -y .*rclone-v9.9.9-linux-amd64.deb' "$APT_LOG"
@@ -163,6 +174,33 @@ STUB
     if [ -f "$RCLONE_LOG" ]; then
         refute_rclone_log '^config'
     fi
+}
+
+@test "install_rclone fails when an older rclone still shadows the upgrade" {
+    _write_rclone_stub "1.60.1"
+    _stub_vendor_env good
+    run install_rclone
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"shadows"* ]]
+    [[ "$output" != *"rclone upgraded"* ]]
+}
+
+@test "install_rclone treats a non-zero apt-get as success when the new rclone landed" {
+    _stub_vendor_env good
+    _arm_upgrade
+    export APT_RC=100
+    run install_rclone
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"unrelated package"* ]]
+}
+
+@test "install_rclone installs curl first when it is missing" {
+    _write_rclone_stub "1.60.1"
+    _stub_vendor_env good
+    command_exists() { [ "$1" = curl ] && return 1; command -v "$1" &>/dev/null; }
+    install_package() { echo "install_package $1" >> "$APT_LOG"; }
+    run install_rclone
+    grep -q '^install_package curl' "$APT_LOG"
 }
 
 @test "install_rclone skips the upgrade when rclone is new enough" {
