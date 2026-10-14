@@ -1678,9 +1678,10 @@
 <li><a href="drivers/bluetooth_adapter.sh">Bluetooth Adapter</a> - Bluetooth driver setup and configuration (<code>make setup_bluetooth</code>)</li>
 <li><a href="drivers/setup_keyboard.sh">Keyboard Configuration</a> - Custom keyboard layout and settings (<code>make setup_keyboard</code>)</li>
 <li><a href="drivers/mouse.sh">Mouse Configuration</a> - Mouse driver and sensitivity settings (<code>make setup_mouse</code>)</li>
-<li><a href="drivers/tplink_wifi_adapter.sh">WiFi Adapter</a> - TP-Link WiFi adapter driver installation (<code>make setup_wifi</code>)</li>
+<li><a href="drivers/battery_threshold.sh">Battery Charge Threshold</a> - Caps laptop charging via the kernel's <code>charge_control_*_threshold</code> files (IdeaPad: <code>conservation_mode</code>), re-applied on boot by a systemd unit; a no-op on desktops (<code>make setup_battery</code>). Thresholds come from <code>.env</code> (<code>BATTERY_START_THRESHOLD</code>/<code>BATTERY_END_THRESHOLD</code>, default 75/80) — edit and re-run to change them; <code>make battery_full_charge</code> lifts the cap to 100%</li>
+<li><a href="drivers/tplink_wifi_adapter.sh">WiFi Adapter</a> - TP-Link WiFi adapter driver installation (<code>make setup_wifi</code>) — machine-specific: skips when no TP-Link USB adapter is plugged in</li>
 </ul>
-<p><strong>Quick setup:</strong> Run <code>make setup_all_drivers</code> to configure all hardware at once.</p>
+<p><strong>Quick setup:</strong> Run <code>make setup_all_drivers</code> to configure every driver that is safe on any PC (Bluetooth, keyboard, mouse, battery). <code>make setup_wifi</code> is not part of it — run it only on the machine that has the adapter.</p>
 <h3 id="storage-management">💾 Storage Management<a class="headerlink" href="#storage-management" title="Permanent link">&para;</a></h3>
 <h4 id="drive-operations"><strong>Drive Operations</strong><a class="headerlink" href="#drive-operations" title="Permanent link">&para;</a></h4>
 <ul>
@@ -1747,7 +1748,7 @@
 - ✅ Configure custom shortcuts
 - ✅ Set up Ubuntu workspace</p>
 <p>After <code>make run</code> completes, you can optionally run:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>setup_all_drivers<span class="w">    </span><span class="c1"># Configure all hardware</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>setup_all_drivers<span class="w">    </span><span class="c1"># Configure hardware safe on any PC (not setup_wifi)</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>make<span class="w"> </span>storage_setup<span class="w">        </span><span class="c1"># Setup storage management</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>make<span class="w"> </span>vm_setup<span class="w">            </span><span class="c1"># Configure virtual machines</span>
 </code></pre></div></p>
@@ -1914,34 +1915,35 @@ run <code>make enable_pages</code> to serve Pages from that branch.</p>
 <a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>│   └── ⭐ setup_starship_bash.sh  # Starship prompt + Bash integration
 <a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>│
 <a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a>├── 📁 drivers/                   # Hardware driver configurations
-<a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a>│   ├── 📡 bluetooth_adapter.sh   # Bluetooth setup
-<a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a>│   ├── ⌨️ setup_keyboard.sh      # Keyboard configuration
-<a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a>│   ├── 🖱️ mouse.sh               # Mouse settings
-<a id="__codelineno-12-23" name="__codelineno-12-23" href="#__codelineno-12-23"></a>│   └── 📶 tplink_wifi_adapter.sh # WiFi adapter setup
-<a id="__codelineno-12-24" name="__codelineno-12-24" href="#__codelineno-12-24"></a>│
-<a id="__codelineno-12-25" name="__codelineno-12-25" href="#__codelineno-12-25"></a>├── 📁 espanso/                   # Espanso packages
-<a id="__codelineno-12-26" name="__codelineno-12-26" href="#__codelineno-12-26"></a>│   ├── 📦 datetime/              # Date/time shortcuts
-<a id="__codelineno-12-27" name="__codelineno-12-27" href="#__codelineno-12-27"></a>│   ├── 📦 git_reset/             # Git reset shortcut
-<a id="__codelineno-12-28" name="__codelineno-12-28" href="#__codelineno-12-28"></a>│   ├── 📦 hostname_catcher/      # Hostname shortcuts
-<a id="__codelineno-12-29" name="__codelineno-12-29" href="#__codelineno-12-29"></a>│   ├── 📦 ipv4_catcher/          # IPv4 shortcuts
-<a id="__codelineno-12-30" name="__codelineno-12-30" href="#__codelineno-12-30"></a>│   ├── 📦 shortcuts/             # List shortcuts
-<a id="__codelineno-12-31" name="__codelineno-12-31" href="#__codelineno-12-31"></a>│   └── 📦 ssh_generate/          # SSH key generator
-<a id="__codelineno-12-32" name="__codelineno-12-32" href="#__codelineno-12-32"></a>│
-<a id="__codelineno-12-33" name="__codelineno-12-33" href="#__codelineno-12-33"></a>├── 📁 os/                        # OS management tools
-<a id="__codelineno-12-34" name="__codelineno-12-34" href="#__codelineno-12-34"></a>│   ├── 💿 isos_os_manager.sh     # ISO file management
-<a id="__codelineno-12-35" name="__codelineno-12-35" href="#__codelineno-12-35"></a>│   ├── 🖥️ vm_creator.sh          # VM creation utility
-<a id="__codelineno-12-36" name="__codelineno-12-36" href="#__codelineno-12-36"></a>│   └── 🚀 vm_launcher.sh         # VM management
-<a id="__codelineno-12-37" name="__codelineno-12-37" href="#__codelineno-12-37"></a>│
-<a id="__codelineno-12-38" name="__codelineno-12-38" href="#__codelineno-12-38"></a>├── 📁 storage/                   # Storage management &amp; analytics
-<a id="__codelineno-12-39" name="__codelineno-12-39" href="#__codelineno-12-39"></a>│   ├── 🔍 check_legitimity.sh    # Drive legitimacy verification
-<a id="__codelineno-12-40" name="__codelineno-12-40" href="#__codelineno-12-40"></a>│   ├── 💾 data_recovery.sh       # Data recovery tools
-<a id="__codelineno-12-41" name="__codelineno-12-41" href="#__codelineno-12-41"></a>│   ├── 🗑️ format_hard.sh         # Complete formatting
-<a id="__codelineno-12-42" name="__codelineno-12-42" href="#__codelineno-12-42"></a>│   ├── 🧹 format_neat.sh         # Quick formatting
-<a id="__codelineno-12-43" name="__codelineno-12-43" href="#__codelineno-12-43"></a>│   ├── 💿 mount_disks.sh         # Auto-mount partitions
-<a id="__codelineno-12-44" name="__codelineno-12-44" href="#__codelineno-12-44"></a>│   ├── 🔒 vault.sh               # Secure vault management
-<a id="__codelineno-12-45" name="__codelineno-12-45" href="#__codelineno-12-45"></a>│   └── 📊 storage_hiato.sh       # Storage capacity analysis
-<a id="__codelineno-12-46" name="__codelineno-12-46" href="#__codelineno-12-46"></a>│
-<a id="__codelineno-12-47" name="__codelineno-12-47" href="#__codelineno-12-47"></a>└── 📖 README.md                  # Project documentation
+<a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a>│   ├── 🔋 battery_threshold.sh   # Laptop battery charge cap
+<a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a>│   ├── 📡 bluetooth_adapter.sh   # Bluetooth setup
+<a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a>│   ├── ⌨️ setup_keyboard.sh      # Keyboard configuration
+<a id="__codelineno-12-23" name="__codelineno-12-23" href="#__codelineno-12-23"></a>│   ├── 🖱️ mouse.sh               # Mouse settings
+<a id="__codelineno-12-24" name="__codelineno-12-24" href="#__codelineno-12-24"></a>│   └── 📶 tplink_wifi_adapter.sh # WiFi adapter setup
+<a id="__codelineno-12-25" name="__codelineno-12-25" href="#__codelineno-12-25"></a>│
+<a id="__codelineno-12-26" name="__codelineno-12-26" href="#__codelineno-12-26"></a>├── 📁 espanso/                   # Espanso packages
+<a id="__codelineno-12-27" name="__codelineno-12-27" href="#__codelineno-12-27"></a>│   ├── 📦 datetime/              # Date/time shortcuts
+<a id="__codelineno-12-28" name="__codelineno-12-28" href="#__codelineno-12-28"></a>│   ├── 📦 git_reset/             # Git reset shortcut
+<a id="__codelineno-12-29" name="__codelineno-12-29" href="#__codelineno-12-29"></a>│   ├── 📦 hostname_catcher/      # Hostname shortcuts
+<a id="__codelineno-12-30" name="__codelineno-12-30" href="#__codelineno-12-30"></a>│   ├── 📦 ipv4_catcher/          # IPv4 shortcuts
+<a id="__codelineno-12-31" name="__codelineno-12-31" href="#__codelineno-12-31"></a>│   ├── 📦 shortcuts/             # List shortcuts
+<a id="__codelineno-12-32" name="__codelineno-12-32" href="#__codelineno-12-32"></a>│   └── 📦 ssh_generate/          # SSH key generator
+<a id="__codelineno-12-33" name="__codelineno-12-33" href="#__codelineno-12-33"></a>│
+<a id="__codelineno-12-34" name="__codelineno-12-34" href="#__codelineno-12-34"></a>├── 📁 os/                        # OS management tools
+<a id="__codelineno-12-35" name="__codelineno-12-35" href="#__codelineno-12-35"></a>│   ├── 💿 isos_os_manager.sh     # ISO file management
+<a id="__codelineno-12-36" name="__codelineno-12-36" href="#__codelineno-12-36"></a>│   ├── 🖥️ vm_creator.sh          # VM creation utility
+<a id="__codelineno-12-37" name="__codelineno-12-37" href="#__codelineno-12-37"></a>│   └── 🚀 vm_launcher.sh         # VM management
+<a id="__codelineno-12-38" name="__codelineno-12-38" href="#__codelineno-12-38"></a>│
+<a id="__codelineno-12-39" name="__codelineno-12-39" href="#__codelineno-12-39"></a>├── 📁 storage/                   # Storage management &amp; analytics
+<a id="__codelineno-12-40" name="__codelineno-12-40" href="#__codelineno-12-40"></a>│   ├── 🔍 check_legitimity.sh    # Drive legitimacy verification
+<a id="__codelineno-12-41" name="__codelineno-12-41" href="#__codelineno-12-41"></a>│   ├── 💾 data_recovery.sh       # Data recovery tools
+<a id="__codelineno-12-42" name="__codelineno-12-42" href="#__codelineno-12-42"></a>│   ├── 🗑️ format_hard.sh         # Complete formatting
+<a id="__codelineno-12-43" name="__codelineno-12-43" href="#__codelineno-12-43"></a>│   ├── 🧹 format_neat.sh         # Quick formatting
+<a id="__codelineno-12-44" name="__codelineno-12-44" href="#__codelineno-12-44"></a>│   ├── 💿 mount_disks.sh         # Auto-mount partitions
+<a id="__codelineno-12-45" name="__codelineno-12-45" href="#__codelineno-12-45"></a>│   ├── 🔒 vault.sh               # Secure vault management
+<a id="__codelineno-12-46" name="__codelineno-12-46" href="#__codelineno-12-46"></a>│   └── 📊 storage_hiato.sh       # Storage capacity analysis
+<a id="__codelineno-12-47" name="__codelineno-12-47" href="#__codelineno-12-47"></a>│
+<a id="__codelineno-12-48" name="__codelineno-12-48" href="#__codelineno-12-48"></a>└── 📖 README.md                  # Project documentation
 </code></pre></div>
 <h2 id="configuration-workflow">⚙️ Configuration Workflow<a class="headerlink" href="#configuration-workflow" title="Permanent link">&para;</a></h2>
 <h3 id="recommended-workflow-using-make-run">Recommended Workflow (Using <code>make run</code>)<a class="headerlink" href="#recommended-workflow-using-make-run" title="Permanent link">&para;</a></h3>
@@ -1961,10 +1963,11 @@ run <code>make enable_pages</code> to serve Pages from that branch.</p>
 <p><strong>Hardware Configuration</strong>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="w">   </span>make<span class="w"> </span>setup_all_drivers
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">   </span><span class="c1"># Or individually:</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">   </span>make<span class="w"> </span>setup_wifi
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">   </span>make<span class="w"> </span>setup_bluetooth
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">   </span>make<span class="w"> </span>setup_keyboard
-<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">   </span>make<span class="w"> </span>setup_mouse
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">   </span>make<span class="w"> </span>setup_battery
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">   </span>make<span class="w"> </span>setup_wifi<span class="w">    </span><span class="c1"># only on the PC with the TP-Link adapter</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">   </span>make<span class="w"> </span>setup_bluetooth
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">   </span>make<span class="w"> </span>setup_keyboard
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">   </span>make<span class="w"> </span>setup_mouse
 </code></pre></div></p>
 <p><strong>Storage Setup</strong>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="w">   </span>make<span class="w"> </span>storage_setup
@@ -2030,7 +2033,9 @@ run <code>make enable_pages</code> to serve Pages from that branch.</p>
 </ul>
 <h3 id="hardware-drivers_1">Hardware Drivers<a class="headerlink" href="#hardware-drivers_1" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>make setup_all_drivers</code> - Setup all hardware drivers at once</li>
+<li><code>make setup_all_drivers</code> - Setup every driver safe on any PC (excludes <code>setup_wifi</code>)</li>
+<li><code>make setup_battery</code> - Cap laptop battery charging at <code>.env</code>'s thresholds, default 75/80 (no-op on desktops)</li>
+<li><code>make battery_full_charge</code> - Lift the cap and charge to 100% until <code>setup_battery</code> runs again</li>
 <li><code>make setup_bluetooth</code> - Setup Bluetooth adapter</li>
 <li><code>make setup_keyboard</code> - Configure keyboard</li>
 <li><code>make setup_mouse</code> - Configure mouse</li>
