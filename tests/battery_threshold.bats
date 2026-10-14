@@ -1,0 +1,153 @@
+#!/usr/bin/env bats
+#
+# Unit tests for drivers/battery_threshold.sh --apply: which charge control it
+# picks per hardware shape, against a fake sysfs (no root, no real battery).
+#
+# Run locally: bats tests/
+
+setup() {
+    REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
+    SCRIPT="$REPO_ROOT/drivers/battery_threshold.sh"
+    TMP="$(mktemp -d)"
+    export POWER_SUPPLY_DIR="$TMP/power_supply"
+    export IDEAPAD_DIR="$TMP/ideapad_acpi"
+    export BATTERY_ENV_FILE="$TMP/.env"   # absent unless a test writes it — never the real .env
+    unset BATTERY_START_THRESHOLD BATTERY_END_THRESHOLD
+    mkdir -p "$POWER_SUPPLY_DIR/AC" "$IDEAPAD_DIR" "$TMP/bin"
+    # sudo is only reached for files the test user cannot write; it always
+    # fails here, standing in for a driver that rejects the value.
+    printf '#!/bin/bash\nexit 1\n' > "$TMP/bin/sudo"
+    chmod +x "$TMP/bin/sudo"
+    export PATH="$TMP/bin:$PATH"
+    echo Mains > "$POWER_SUPPLY_DIR/AC/type"
+}
+
+teardown() {
+    rm -rf "$TMP"
+}
+
+make_battery() {
+    mkdir -p "$POWER_SUPPLY_DIR/$1"
+    echo Battery > "$POWER_SUPPLY_DIR/$1/type"
+}
+
+@test "thinkpad-style battery gets start and stop thresholds" {
+    make_battery BAT0
+    echo 100 > "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+    echo 0 > "$POWER_SUPPLY_DIR/BAT0/charge_control_start_threshold"
+
+    run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold")" = 80 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_start_threshold")" = 75 ]
+}
+
+@test "end-only battery (asus-style) gets the stop threshold" {
+    make_battery BATT
+    echo 100 > "$POWER_SUPPLY_DIR/BATT/charge_control_end_threshold"
+
+    BATTERY_END_THRESHOLD=60 run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BATT/charge_control_end_threshold")" = 60 ]
+    [ ! -e "$POWER_SUPPLY_DIR/BATT/charge_control_start_threshold" ]
+}
+
+@test "desktop with no battery is a no-op" {
+    run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No battery found"* ]]
+}
+
+@test "desktop with only a wireless mouse battery is a no-op" {
+    make_battery hidpp_battery_0
+    echo Device > "$POWER_SUPPLY_DIR/hidpp_battery_0/scope"
+
+    run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No battery found"* ]]
+}
+
+@test "ideapad without thresholds falls back to conservation_mode" {
+    make_battery BAT0
+    mkdir -p "$IDEAPAD_DIR/VPC2004:00"
+    echo 0 > "$IDEAPAD_DIR/VPC2004:00/conservation_mode"
+
+    run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [ "$(cat "$IDEAPAD_DIR/VPC2004:00/conservation_mode")" = 1 ]
+}
+
+@test "battery with no charge control warns instead of failing" {
+    make_battery BAT0
+
+    run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"exposes no charge limit"* ]]
+}
+
+@test ".env thresholds are used when the environment sets none" {
+    make_battery BAT0
+    echo 100 > "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+    echo 0 > "$POWER_SUPPLY_DIR/BAT0/charge_control_start_threshold"
+    printf 'BATTERY_START_THRESHOLD=85\nBATTERY_END_THRESHOLD="90"\n' > "$BATTERY_ENV_FILE"
+
+    run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold")" = 90 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_start_threshold")" = 85 ]
+}
+
+@test "environment overrides .env" {
+    make_battery BAT0
+    echo 100 > "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+    echo 'BATTERY_END_THRESHOLD=90' > "$BATTERY_ENV_FILE"
+
+    BATTERY_END_THRESHOLD=70 run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold")" = 70 ]
+}
+
+@test "invalid .env thresholds are rejected before touching sysfs" {
+    make_battery BAT0
+    echo 100 > "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+    printf 'BATTERY_START_THRESHOLD=90\nBATTERY_END_THRESHOLD=80\n' > "$BATTERY_ENV_FILE"
+
+    run bash "$SCRIPT" --apply
+
+    # non-zero on purpose: the boot unit's Result must show a broken config
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"start < stop"* ]]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold")" = 100 ]
+}
+
+@test "a rejected threshold write fails instead of reporting success" {
+    make_battery BAT0
+    echo 100 > "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+    chmod 444 "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+
+    run bash "$SCRIPT" --apply
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"stop threshold rejected"* ]]
+}
+
+@test "leading-zero thresholds are read as decimal, not octal" {
+    make_battery BAT0
+    echo 100 > "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold"
+    echo 0 > "$POWER_SUPPLY_DIR/BAT0/charge_control_start_threshold"
+    echo 'BATTERY_END_THRESHOLD=080' > "$BATTERY_ENV_FILE"
+
+    run bash "$SCRIPT" --apply
+
+    [ "$status" -eq 0 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_end_threshold")" = 80 ]
+    [ "$(cat "$POWER_SUPPLY_DIR/BAT0/charge_control_start_threshold")" = 75 ]
+}
