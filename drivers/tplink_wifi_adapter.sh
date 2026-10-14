@@ -1,4 +1,16 @@
 #!/bin/bash
+
+# shellcheck source=../lib/common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
+
+# 2357 is TP-Link's USB vendor id. Everything below builds a kernel module and
+# reboots, so a PC without the adapter must stop here.
+TPLINK_USB_VENDOR="2357"
+if [ -z "$(lsusb -d "${TPLINK_USB_VENDOR}:" 2>/dev/null)" ]; then
+    print_status "warning" "No TP-Link USB adapter (vendor ${TPLINK_USB_VENDOR}) plugged in — skipping driver build"
+    exit 0
+fi
+
 sudo apt update && sudo apt upgrade
 sudo apt install linux-headers-"$(uname -r)" build-essential git
 sudo openssl genrsa -out /var/lib/dkms/mok.key 2048
