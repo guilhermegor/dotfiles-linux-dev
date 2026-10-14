@@ -739,7 +739,6 @@ organize_app_folders() {
         'startup-disk-creator.desktop'
         'simple-scan.desktop' 'org.gnome.SimpleScan.desktop' 'gnome-simple-san.desktop'
         'xsane.desktop' 'skanlite.desktop'
-        'geomview.desktop' 'org.geomview.Geomview.desktop'
         'bleachbit.desktop'
     )
     
@@ -770,7 +769,6 @@ organize_app_folders() {
                         /usr/share/applications/*scan*.desktop \
                         /usr/share/applications/*usb-creator*.desktop \
                         /usr/share/applications/*startup-disk*.desktop \
-                        /usr/share/applications/*geomview*.desktop \
                         /usr/share/applications/*flameshot*.desktop \
                         /var/lib/snapd/desktop/applications/snap-store*.desktop \
                         /var/lib/snapd/desktop/applications/*software*.desktop \
@@ -779,7 +777,6 @@ organize_app_folders() {
                         /var/lib/flatpak/exports/share/applications/*flameshot*.desktop \
                         "$HOME/.local/share/applications"/*evolution*.desktop \
                         "$HOME/.local/share/applications"/*scan*.desktop \
-                        "$HOME/.local/share/applications"/*geomview*.desktop \
                         "$HOME/.local/share/applications"/*Raider*.desktop \
                         "$HOME/.local/share/applications"/*flameshot*.desktop; do
         if [ -f "$desktop_file" ]; then

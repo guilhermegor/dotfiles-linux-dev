@@ -116,6 +116,7 @@ setup_firewall() {
 
 cleanup_system() {
     print_status "section" "SYSTEM CLEANUP"
+    local failed=0
 
     if [ -f /var/lib/apt/lists/lock ]; then
         print_status "warning" "Apt lock detected, trying to release..."
@@ -135,21 +136,44 @@ cleanup_system() {
 
     print_status "info" "Running full upgrade..."
     case "$PACKAGE_MANAGER" in
-        apt)        run_or_echo sudo apt full-upgrade -y ;;
-        dnf|yum)    run_or_echo sudo $PACKAGE_MANAGER upgrade -y ;;
-        pacman)     run_or_echo sudo pacman -Syu --noconfirm ;;
-        zypper)     run_or_echo sudo zypper update -y ;;
+        apt)        run_or_echo sudo apt full-upgrade -y || failed=1 ;;
+        dnf|yum)    run_or_echo sudo $PACKAGE_MANAGER upgrade -y || failed=1 ;;
+        pacman)     run_or_echo sudo pacman -Syu --noconfirm || failed=1 ;;
+        zypper)     run_or_echo sudo zypper update -y || failed=1 ;;
     esac
 
     print_status "info" "Removing unnecessary packages..."
     case "$PACKAGE_MANAGER" in
-        apt)        run_or_echo sudo apt autoremove -y && run_or_echo sudo apt clean ;;
-        dnf|yum)    run_or_echo sudo $PACKAGE_MANAGER autoremove -y && run_or_echo sudo $PACKAGE_MANAGER clean all ;;
-        pacman)     run_or_echo sudo pacman -Sc --noconfirm ;;
-        zypper)     run_or_echo sudo zypper clean -a ;;
+        apt)        { run_or_echo sudo apt autoremove -y && run_or_echo sudo apt clean; } || failed=1 ;;
+        dnf|yum)    { run_or_echo sudo $PACKAGE_MANAGER autoremove -y && run_or_echo sudo $PACKAGE_MANAGER clean all; } || failed=1 ;;
+        pacman)     run_or_echo sudo pacman -Sc --noconfirm || failed=1 ;;
+        zypper)     run_or_echo sudo zypper clean -a || failed=1 ;;
     esac
 
+    if [ "$failed" -ne 0 ]; then
+        print_status "error" "System cleanup failed (package manager exited non-zero)"
+        [ "$PACKAGE_MANAGER" = "apt" ] && _hint_unconfigured_kernel_modules
+        return 1
+    fi
+
     print_status "success" "System cleaned up"
+}
+
+# Names half-configured dpkg packages after an apt failure; for a
+# linux-modules-*-<kver> whose linux-headers-<kver> is missing, prints the fix.
+_hint_unconfigured_kernel_modules() {
+    local state pkg rest kver
+    while read -r state pkg rest; do
+        case "$state" in ii|rc|un|"") continue ;; esac
+        print_status "warning" "Package not fully configured: $pkg ($state)"
+        if [[ "$pkg" =~ ^linux-modules-.*-([0-9]+\.[0-9]+\.[0-9]+-[0-9]+-[a-z0-9]+)$ ]]; then
+            kver="${BASH_REMATCH[1]}"
+            if ! dpkg-query -W -f='${Status}' "linux-headers-$kver" 2>/dev/null | grep -q "install ok installed"; then
+                print_status "info" "Fix: sudo apt install linux-headers-$kver && sudo dpkg --configure -a"
+            fi
+        fi
+    done < <(dpkg -l 2>/dev/null | awk '/^[a-z][a-zA-Z]/ {print $1, $2}')
+    return 0
 }
 
 # ----------------------------------------------------------------------------

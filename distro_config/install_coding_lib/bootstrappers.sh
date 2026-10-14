@@ -21,9 +21,6 @@ install_core_dependencies() {
         zypper)     $INSTALL_CMD curl wget libcurl-devel libopenssl-devel ;;
     esac
 
-    print_status "info" "Installing geomview..."
-    install_package "geomview" "geomview" "geomview" "geomview" || print_status "warning" "geomview not available for this distro"
-
     print_status "info" "Installing media codecs..."
     case "$PACKAGE_MANAGER" in
         apt)
