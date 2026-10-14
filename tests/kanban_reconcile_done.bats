@@ -68,6 +68,17 @@ issue() {
         '{number: $number, state: $state, labels: ($labels | map({name: .}))}'
 }
 
+# pr_item ID STATUS NUMBER
+pr_item() {
+    jq -nc --arg id "$1" --arg status "$2" --argjson number "$3" \
+        '{id: $id, status: $status, content: {type: "PullRequest", number: $number, repository: "owner/repo"}}'
+}
+
+# pr NUMBER STATE — what the fake `gh api repos/o/r/pulls/N --jq .state` prints.
+pr() {
+    printf '%s\n' "$2" > "$TEST_TMP/pr-$1"
+}
+
 write_issues() {
     printf '%s\n' "$@" | jq -sc '.' > "$TEST_TMP/issues.json"
 }
@@ -111,6 +122,12 @@ case "\$1 \$2" in
                         # A missing issue is a 404 — non-zero exit, like the real endpoint.
                         jq -ce --argjson n "\$n" 'map(select(.number == \$n)) | first // empty' \\
                             "$TEST_TMP/issues.json" | grep . || exit 1
+                        ;;
+                    repos/*/pulls/[0-9]*)
+                        [ -f "$TEST_TMP/fail-pulls" ] && exit 1
+                        n="\${2##*/}"
+                        state="\$(cat "$TEST_TMP/pr-\$n" 2>/dev/null)" || exit 1
+                        echo "\$state"
                         ;;
                     *) exit 1 ;;
                 esac
@@ -350,4 +367,50 @@ run_reconcile() {
     [[ "$output" == *"STATUS=ok"* ]]
     [[ "$output" != *"moved issue"* ]]
     refute_gh 'item-edit'
+}
+
+# --- PR cards -> Done (dotfiles-linux-dev#776) ----------------------------------------------
+
+@test "a merged PR card in In review is moved to Done" {
+    write_issues
+    pr 775 closed
+    write_items "$(pr_item ITEM_PR "In review" 775)"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" == *"moved PR #775 to Done (was: In review)"* ]]
+    grep -q 'item-edit.*--id ITEM_PR.*OPT_DONE' "$GH_LOG"
+}
+
+@test "an open PR card is never moved" {
+    write_issues
+    pr 775 open
+    write_items "$(pr_item ITEM_PR "In review" 775)"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" != *"moved PR"* ]]
+    refute_gh "item-edit"
+}
+
+@test "an unreadable PR leaves its card untouched and is reported UNKNOWN" {
+    write_issues
+    write_items "$(pr_item ITEM_PR "In review" 775)"
+    write_fake_gh
+    touch "$TEST_TMP/fail-pulls"
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" == *"UNKNOWN PR #775: could not confirm its state"* ]]
+    refute_gh "item-edit"
+}
+
+@test "a PR card already in Done costs no PR read" {
+    write_issues
+    pr 775 closed
+    write_items "$(pr_item ITEM_PR Done 775)"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    refute_gh "pulls/775"
+    refute_gh "item-edit"
 }
