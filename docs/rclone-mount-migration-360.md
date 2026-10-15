@@ -2,6 +2,9 @@
 
 ## Why
 
+> **Status:** Insync is no longer installed by this repo (`install_insync` was removed, #680).
+> `make rclone_mount` replaces it; `uninstall_insync` remains as the one-off migration path.
+
 Insync mirrors every remote file to disk, forever, whether or not it is ever opened. Measured on
 this machine, 2026-09-13:
 
@@ -48,8 +51,8 @@ cache ceiling replaces a 1.3 T mirror.
   #365) — so `install_rclone_mount_unit` with no arguments reproduces the `mkdir -p ~/OneDrive`
   + `install_rclone_mount_unit onedrive ~/OneDrive` sequence that was previously done by hand.
 - `uninstall_insync <remote> [account-dir]` (same file) — the 5-step ordered removal below, as a
-  single function. Not registered in `INSTALL_REGISTRY` (a registry entry runs during Full
-  Installation too, which would fight `install_insync` — see #342), so it is invoked directly:
+  single function. Not registered in `INSTALL_REGISTRY` (a registry entry would run during Full
+  Installation, and it is a one-off migration — see #342), so it is invoked directly:
 
   ```bash
   bash -c 'source distro_config/install_lib/sharing.sh; uninstall_insync <remote> <account-dir>'
