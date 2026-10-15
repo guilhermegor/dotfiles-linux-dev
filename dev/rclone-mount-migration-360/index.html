@@ -923,6 +923,10 @@
 
 <h1 id="replacing-insync-with-an-on-demand-rclone-mount-issues-360-365">Replacing Insync with an on-demand rclone mount (issues #360, #365)<a class="headerlink" href="#replacing-insync-with-an-on-demand-rclone-mount-issues-360-365" title="Permanent link">&para;</a></h1>
 <h2 id="why">Why<a class="headerlink" href="#why" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>Status:</strong> Insync is no longer installed by this repo (<code>install_insync</code> was removed, #680).
+<code>make rclone_mount</code> replaces it; <code>uninstall_insync</code> remains as the one-off migration path.</p>
+</blockquote>
 <p>Insync mirrors every remote file to disk, forever, whether or not it is ever opened. Measured on
 this machine, 2026-09-13:</p>
 <table>
@@ -982,8 +986,8 @@ cache ceiling replaces a 1.3 T mirror.</p>
   #365) — so <code>install_rclone_mount_unit</code> with no arguments reproduces the <code>mkdir -p ~/OneDrive</code></li>
 <li><code>install_rclone_mount_unit onedrive ~/OneDrive</code> sequence that was previously done by hand.</li>
 <li><code>uninstall_insync &lt;remote&gt; [account-dir]</code> (same file) — the 5-step ordered removal below, as a
-  single function. Not registered in <code>INSTALL_REGISTRY</code> (a registry entry runs during Full
-  Installation too, which would fight <code>install_insync</code> — see #342), so it is invoked directly:</li>
+  single function. Not registered in <code>INSTALL_REGISTRY</code> (a registry entry would run during Full
+  Installation, and it is a one-off migration — see #342), so it is invoked directly:</li>
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'source distro_config/install_lib/sharing.sh; uninstall_insync &lt;remote&gt; &lt;account-dir&gt;'</span>
 </code></pre></div>
