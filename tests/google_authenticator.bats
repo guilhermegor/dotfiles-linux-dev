@@ -314,17 +314,19 @@ _stub_dpkg_query() {
     _ga_stdin_is_tty() { return 0; }
     run install_google_authenticator <<< "n"
     [ "$status" -eq 0 ]
+    local out="$output"
     refute_call 'google-authenticator -t'
-    [[ "$output" == *"NOT enforced"* ]]
-    [[ "$output" == *"docs/totp-2fa.md"* ]]
+    [[ "$out" == *"NOT enforced"* ]]
+    [[ "$out" == *"docs/totp-2fa.md"* ]]
 }
 
 @test "no TTY never prompts and warns TOTP is not enforced" {
     _ga_stdin_is_tty() { return 1; }
     run install_google_authenticator <<< "y"
     [ "$status" -eq 0 ]
+    local out="$output"
     refute_call 'google-authenticator -t'
-    [[ "$output" == *"NOT enforced"* ]]
+    [[ "$out" == *"NOT enforced"* ]]
 }
 
 @test "DRY_RUN=1 on a TTY never prompts and warns TOTP is not enforced" {
@@ -340,7 +342,8 @@ _stub_dpkg_query() {
     _ga_stdin_is_tty() { return 0; }
     run install_google_authenticator <<< "y"
     [ "$status" -eq 0 ]
+    local out="$output"
     refute_call 'google-authenticator -t'
     [ "$(cat "$HOME/.google_authenticator")" = original ]
-    [[ "$output" != *"NOT enforced"* ]]
+    [[ "$out" != *"NOT enforced"* ]]
 }
