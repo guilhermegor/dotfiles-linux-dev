@@ -950,8 +950,7 @@ organize_app_folders() {
                'kdeconnect-settings.desktop' 'kdeconnect.desktop' 'kdeconnect-indicator.desktop' \
                'kdeconnect-sms.desktop' 'org.kde.kdeconnect_open.desktop' \
                'org.localsend.localsend_app.desktop' 'localsend.desktop' 'localsend_app.desktop' \
-               'transmission-gtk.desktop' 'transmission.desktop' 'org.transmissionbt.Transmission.desktop' \
-               'insync.desktop' 'com.insynchq.insync.desktop' 'insync-app.desktop'; do
+               'transmission-gtk.desktop' 'transmission.desktop' 'org.transmissionbt.Transmission.desktop'; do
         if result=$(find_app_desktop_file "$app"); then
             sharing_apps+=("'$result'")
         fi
@@ -960,9 +959,7 @@ organize_app_folders() {
     shopt -s nullglob
     for desktop_file in /usr/share/applications/*kdeconnect*.desktop "$HOME/.local/share/applications"/*kdeconnect*.desktop \
                         /usr/share/applications/*localsend*.desktop "$HOME/.local/share/applications"/*localsend*.desktop \
-                        /usr/share/applications/*transmission*.desktop "$HOME/.local/share/applications"/*transmission*.desktop \
-                        /usr/share/applications/*insync*.desktop "$HOME/.local/share/applications"/*insync*.desktop \
-                        /var/lib/flatpak/exports/share/applications/*insync*.desktop; do
+                        /usr/share/applications/*transmission*.desktop "$HOME/.local/share/applications"/*transmission*.desktop; do
         if [ -f "$desktop_file" ]; then
             local basename
             basename=$(basename "$desktop_file")

@@ -151,7 +151,7 @@ publishes a hash. Its folder would be `Infra`.
 | Video/audio/CD/DVD tool | `install_lib/media.sh` |
 | Calendar / tasks / email / news / collaboration | `install_lib/productivity.sh` |
 | Screenshot, launcher, GNOME extension, snap/flatpak rollup | `install_lib/system_utils.sh` |
-| File sharing, remote desktop, sync, antivirus | `install_lib/sharing.sh` |
+| File sharing, remote desktop, cloud mount, antivirus (Insync no longer installed; `uninstall_insync` kept for migration) | `install_lib/sharing.sh` |
 | VM, USB imaging, virtualisation | `install_lib/vm.sh` |
 | Container runtime | `install_coding_lib/containers.sh` |
 | Editor or terminal emulator | `install_coding_lib/editors.sh` |

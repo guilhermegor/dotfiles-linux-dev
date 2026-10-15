@@ -394,125 +394,7 @@ install_rustdesk() {
 }
 
 # ============================================================================
-# INSYNC (cloud-drive sync client)
-# ============================================================================
-
-install_insync() {
-    print_status "section" "INSYNC DOWNLOAD AND INSTALLATION"
-
-    if command_exists insync || dpkg -l 2>/dev/null | grep -q insync; then
-        print_status "info" "Insync already installed"
-        return 0
-    fi
-
-    if [[ "$DISTRO" != "ubuntu" && "$DISTRO" != "debian" ]]; then
-        print_status "warning" "Insync installation currently only supported on Ubuntu/Debian"
-        print_status "info" "Please install Insync manually for your distribution"
-        return 1
-    fi
-
-    cd "$DOWNLOADS_DIR" || return 1
-
-    local insync_codename=""
-    case "$UBUNTU_CODENAME" in
-        noble)      insync_codename="noble" ;;
-        jammy)      insync_codename="jammy" ;;
-        focal)      insync_codename="focal" ;;
-        bionic)     insync_codename="bionic" ;;
-        *)
-            print_status "warning" "Unknown Ubuntu codename: $UBUNTU_CODENAME, using noble as fallback"
-            insync_codename="noble"
-            ;;
-    esac
-
-    local insync_version="3.9.6.60027"
-    local insync_deb_url="https://cdn.insynchq.com/builds/linux/${insync_version}/insync_${insync_version}-${insync_codename}_amd64.deb"
-    local insync_deb_file="insync_${insync_version}-${insync_codename}_amd64.deb"
-
-    print_status "info" "Detected Ubuntu $UBUNTU_VERSION ($UBUNTU_CODENAME)"
-    print_status "info" "Downloading Insync for $insync_codename..."
-    print_status "config" "Download URL: $insync_deb_url"
-
-    if wget -O "$insync_deb_file" "$insync_deb_url" 2>&1 | tee -a "$LOG_FILE"; then
-        if [ -f "$insync_deb_file" ] && [ -s "$insync_deb_file" ]; then
-            print_status "success" "Insync downloaded successfully"
-
-            if file "$insync_deb_file" | grep -q "Debian"; then
-                print_status "info" "Installing Insync..."
-
-                if run_or_echo sudo dpkg -i "$insync_deb_file"; then
-                    print_status "success" "Insync installed successfully"
-                    run_or_echo sudo apt-get install -f -y
-
-                    if command_exists insync || dpkg -l | grep -q insync; then
-                        print_status "success" "Insync installation verified"
-                        print_status "info" "Insync version: $insync_version"
-                        print_status "info" "Starting Insync..."
-                        insync start &>> "$LOG_FILE" &
-                        print_status "success" "Insync started"
-                    else
-                        print_status "warning" "Insync installed but command not found"
-                        return 1
-                    fi
-                else
-                    print_status "error" "Failed to install Insync package"
-                    print_status "info" "Attempting to fix dependencies..."
-                    run_or_echo sudo apt-get install -f -y
-
-                    if run_or_echo sudo dpkg -i "$insync_deb_file"; then
-                        print_status "success" "Insync installed after fixing dependencies"
-                    else
-                        print_status "error" "Failed to install Insync even after fixing dependencies"
-                        return 1
-                    fi
-                fi
-            else
-                print_status "error" "Downloaded file is not a valid .deb package"
-                rm -f "$insync_deb_file"
-                return 1
-            fi
-        else
-            print_status "error" "Downloaded file is empty or missing"
-            return 1
-        fi
-    else
-        print_status "error" "Failed to download Insync"
-        print_status "info" "Please check your internet connection and try again"
-        print_status "info" "Or download manually from: https://www.insynchq.com/downloads"
-        return 1
-    fi
-
-    if [ ! -f "$insync_deb_file" ] || [ ! -s "$insync_deb_file" ]; then
-        print_status "warning" "Primary download method failed, trying alternative..."
-
-        local alt_url="https://cdn.insynchq.com/builds/linux/3.9.6.60027/insync_3.9.6.60027-noble_amd64.deb"
-        print_status "info" "Trying alternative URL: $alt_url"
-
-        if curl -L -o "insync_alternative.deb" "$alt_url" 2>&1 | tee -a "$LOG_FILE"; then
-            if [ -f "insync_alternative.deb" ] && [ -s "insync_alternative.deb" ]; then
-                print_status "info" "Installing Insync from alternative download..."
-                run_or_echo sudo dpkg -i "insync_alternative.deb"
-                run_or_echo sudo apt-get install -f -y
-                print_status "success" "Insync installed from alternative download"
-            else
-                print_status "error" "Alternative download also failed"
-                return 1
-            fi
-        else
-            print_status "error" "All download methods failed"
-            return 1
-        fi
-    fi
-
-    print_status "info" "Insync: cloud-drive sync client for Linux"
-    print_status "config" "Launch with: insync start"
-    print_status "config" "Configure with: insync show"
-
-    cd - > /dev/null || return 1
-}
-
-# ============================================================================
-# RCLONE (on-demand cloud mount — replaces Insync, see issue #360)
+# RCLONE (on-demand cloud mount — replaced Insync, see issue #360)
 # ============================================================================
 # On apt, install the official vendor .deb from downloads.rclone.org (first in
 # the install-order rule, distro_config/CLAUDE.md), not the distro package:
@@ -884,7 +766,7 @@ enable_rclone_mount_unit() {
 # one way this could destroy remote data. These 5 steps are mandatory and
 # ordered; each refuses to continue when its precondition fails rather than
 # pressing on. Never registered in INSTALL_REGISTRY (#342 — a registry entry
-# runs during Full Installation too, which would fight install_insync). Call
+# would run during Full Installation, and this is a one-off migration). Call
 # manually:
 #   bash -c 'source distro_config/install_lib/sharing.sh; uninstall_insync <remote> [account-dir]'
 #
@@ -1117,7 +999,6 @@ INSTALL_REGISTRY+=(
     # folder that fits (#391). install_rustdesk stays defined here; only the
     # placement changes.
     "install_rustdesk:RustDesk Remote Desktop:Infra:rustdesk.desktop"
-    "install_insync:Insync (Google Drive):Sharing:insync.desktop"
     "install_free_download_manager:Free Download Manager:Sharing:freedownloadmanager.desktop"
     "install_rclone:rclone (on-demand cloud mount)::"
     "install_clamav:ClamAV Antivirus:Seguranca:clamtk.desktop"

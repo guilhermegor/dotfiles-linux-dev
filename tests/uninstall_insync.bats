@@ -163,7 +163,7 @@ teardown() {
     rm -rf "$TMP"
 }
 
-# --- never registered: a registry entry would fight install_insync (#342) --
+# --- never registered: a registry entry would run it on every Full Installation (#342) --
 
 @test "uninstall_insync is not in INSTALL_REGISTRY" {
     local entry
