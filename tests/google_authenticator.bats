@@ -43,6 +43,12 @@ if [ "\$1" = apt-get ] && [ -n "\${APT_RC:-}" ]; then exit "\$APT_RC"; fi
 if [ "\$1" = sshd ]; then shift; exec "$TMP/bin/sshd" "\$@"; fi
 STUB
     chmod +x "$TMP/bin/sshd" "$TMP/bin/sudo"
+    # google-authenticator stub: logs argv and writes the secret file like the real tool.
+    printf '#!/bin/bash\necho "google-authenticator $*" >> "%s"\necho secret > "$HOME/.google_authenticator"\n' "$CALLS" \
+        > "$TMP/bin/google-authenticator"
+    chmod +x "$TMP/bin/google-authenticator"
+    export HOME="$TMP/home"
+    mkdir -p "$HOME"
     export PATH="$TMP/bin:$PATH"
     # pam-auth-update is a stub, so a fake common-auth stands in for its output.
     export _GA_COMMON_AUTH="$TMP/common-auth"
@@ -292,4 +298,49 @@ _stub_dpkg_query() {
     APT_RC=1 GA_INSTALLED=0 run install_google_authenticator
     [ "$status" -ne 0 ]
     refute_call 'pam-auth-update'
+}
+
+# --- enrollment prompt (issue #782) -----------------------------------------------
+
+@test "no secret file + TTY + yes enrolls with the hardened flags" {
+    _ga_stdin_is_tty() { return 0; }
+    run install_google_authenticator <<< "y"
+    [ "$status" -eq 0 ]
+    grep -q 'google-authenticator -t -d -f -r 3 -R 30 -w 3' "$CALLS"
+    [ -f "$HOME/.google_authenticator" ]
+}
+
+@test "no secret file + TTY + no skips enrollment and warns TOTP is not enforced" {
+    _ga_stdin_is_tty() { return 0; }
+    run install_google_authenticator <<< "n"
+    [ "$status" -eq 0 ]
+    refute_call 'google-authenticator -t'
+    [[ "$output" == *"NOT enforced"* ]]
+    [[ "$output" == *"docs/totp-2fa.md"* ]]
+}
+
+@test "no TTY never prompts and warns TOTP is not enforced" {
+    _ga_stdin_is_tty() { return 1; }
+    run install_google_authenticator <<< "y"
+    [ "$status" -eq 0 ]
+    refute_call 'google-authenticator -t'
+    [[ "$output" == *"NOT enforced"* ]]
+}
+
+@test "DRY_RUN=1 on a TTY never prompts and warns TOTP is not enforced" {
+    _ga_stdin_is_tty() { return 0; }
+    DRY_RUN=1 run install_google_authenticator <<< "y"
+    [ "$status" -eq 0 ]
+    [ ! -s "$CALLS" ]
+    [[ "$output" == *"NOT enforced"* ]]
+}
+
+@test "existing secret file means no prompt, no warning, and is never overwritten" {
+    echo original > "$HOME/.google_authenticator"
+    _ga_stdin_is_tty() { return 0; }
+    run install_google_authenticator <<< "y"
+    [ "$status" -eq 0 ]
+    refute_call 'google-authenticator -t'
+    [ "$(cat "$HOME/.google_authenticator")" = original ]
+    [[ "$output" != *"NOT enforced"* ]]
 }
