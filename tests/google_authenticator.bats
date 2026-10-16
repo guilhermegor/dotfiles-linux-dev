@@ -300,50 +300,64 @@ _stub_dpkg_query() {
     refute_call 'pam-auth-update'
 }
 
-# --- enrollment prompt (issue #782) -----------------------------------------------
+# --- enrollment warning (issue #782) ----------------------------------------------
 
-@test "no secret file + TTY + yes enrolls with the hardened flags" {
-    _ga_stdin_is_tty() { return 0; }
-    run install_google_authenticator <<< "y"
-    [ "$status" -eq 0 ]
-    grep -q 'google-authenticator -t -d -f -r 3 -R 30 -w 3' "$CALLS"
-    [ -f "$HOME/.google_authenticator" ]
-}
-
-@test "no secret file + TTY + no skips enrollment and warns TOTP is not enforced" {
-    _ga_stdin_is_tty() { return 0; }
-    run install_google_authenticator <<< "n"
-    [ "$status" -eq 0 ]
-    local out="$output"
-    refute_call 'google-authenticator -t'
-    [[ "$out" == *"NOT enforced"* ]]
-    [[ "$out" == *"docs/totp-2fa.md"* ]]
-}
-
-@test "no TTY never prompts and warns TOTP is not enforced" {
-    _ga_stdin_is_tty() { return 1; }
+@test "no secret file warns TOTP is NOT enforced, points to make totp_enroll, never prompts" {
     run install_google_authenticator <<< "y"
     [ "$status" -eq 0 ]
     local out="$output"
     refute_call 'google-authenticator -t'
     [[ "$out" == *"NOT enforced"* ]]
+    [[ "$out" == *"make totp_enroll"* ]]
+    [ ! -e "$HOME/.google_authenticator" ]
 }
 
-@test "DRY_RUN=1 on a TTY never prompts and warns TOTP is not enforced" {
-    _ga_stdin_is_tty() { return 0; }
-    DRY_RUN=1 run install_google_authenticator <<< "y"
-    [ "$status" -eq 0 ]
-    [ ! -s "$CALLS" ]
-    [[ "$output" == *"NOT enforced"* ]]
-}
-
-@test "existing secret file means no prompt, no warning, and is never overwritten" {
+@test "existing secret file means no warning and is never overwritten" {
     echo original > "$HOME/.google_authenticator"
-    _ga_stdin_is_tty() { return 0; }
-    run install_google_authenticator <<< "y"
+    run install_google_authenticator
     [ "$status" -eq 0 ]
     local out="$output"
     refute_call 'google-authenticator -t'
     [ "$(cat "$HOME/.google_authenticator")" = original ]
     [[ "$out" != *"NOT enforced"* ]]
+}
+
+@test "run summary nudges when PAM module is on and not enrolled" {
+    source "$REPO_ROOT/lib/run_chain.sh"
+    TOTP_PAM_FILE="$_GA_COMMON_AUTH" run report_totp_status
+    [[ "$output" == *"make totp_enroll"* ]]
+}
+
+@test "run summary is silent when enrolled or module off" {
+    source "$REPO_ROOT/lib/run_chain.sh"
+    : > "$HOME/.google_authenticator"
+    TOTP_PAM_FILE="$_GA_COMMON_AUTH" run report_totp_status
+    [ -z "$output" ]
+    rm "$HOME/.google_authenticator"
+    : > "$TMP/empty"
+    TOTP_PAM_FILE="$TMP/empty" run report_totp_status
+    [ -z "$output" ]
+}
+
+@test "make totp_enroll enrolls with the hardened flags when not enrolled" {
+    run make -C "$REPO_ROOT" totp_enroll
+    [ "$status" -eq 0 ]
+    grep -q 'google-authenticator -t -d -f -r 3 -R 30 -w 3' "$CALLS"
+    [ -f "$HOME/.google_authenticator" ]
+}
+
+@test "make totp_enroll refuses when already enrolled" {
+    echo x > "$HOME/.google_authenticator"
+    run make -C "$REPO_ROOT" totp_enroll
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refusing"* ]]
+    refute_call 'google-authenticator -t'
+}
+
+@test "make totp_enroll fails loudly and leaves no secret file when google-authenticator fails" {
+    printf '#!/bin/bash\nexit 3\n' > "$TMP/bin/google-authenticator"
+    run make -C "$REPO_ROOT" totp_enroll
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"enrollment failed"* ]]
+    [ ! -e "$HOME/.google_authenticator" ]
 }

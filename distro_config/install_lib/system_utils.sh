@@ -1338,24 +1338,6 @@ _ga_ssh_dropin_effective() {
 # user who has not run `google-authenticator` still logs in with the password
 # alone). Never edits /etc/pam.d/* — pam-auth-update regenerates common-auth.
 # Enrollment stays manual: see docs/totp-2fa.md.
-# Seam: bats overrides this, since stdin is never a TTY under `run`.
-_ga_stdin_is_tty() { [ -t 0 ]; }
-
-# Offer enrollment for the current user; nullok means an unenrolled account is
-# not asked for a code, so say so loudly when enrollment does not happen (#782).
-_ga_offer_enrollment() {
-    [ -e "$HOME/.google_authenticator" ] && return 0
-    if [ "${DRY_RUN:-0}" != "1" ] && _ga_stdin_is_tty; then
-        local answer
-        read -r -p "Enroll $USER in TOTP now? [y/N] " answer
-        if [[ "$answer" =~ ^[Yy]$ ]]; then
-            google-authenticator -t -d -f -r 3 -R 30 -w 3 && return 0
-            print_status "error" "google-authenticator failed"
-        fi
-    fi
-    print_status "warning" "TOTP is NOT enforced until you run: google-authenticator (see docs/totp-2fa.md)"
-}
-
 install_google_authenticator() {
     print_status "section" "GOOGLE AUTHENTICATOR (TOTP 2FA)"
 
@@ -1412,7 +1394,10 @@ install_google_authenticator() {
 
     print_status "success" "TOTP profile enabled"
     print_status "info" "Keep a root shell open while testing the first login, sudo and ssh"
-    _ga_offer_enrollment
+    # nullok: an unenrolled account is never asked for a code. No prompt here (#339).
+    if [ ! -e "$HOME/.google_authenticator" ]; then
+        print_status "warning" "TOTP is NOT enforced until you enroll: make totp_enroll (see docs/totp-2fa.md)"
+    fi
 }
 
 uninstall_google_authenticator() {
