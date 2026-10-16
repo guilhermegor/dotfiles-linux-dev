@@ -828,7 +828,8 @@
 lands there as an <code>Additional</code> module that runs after <code>pam_unix</code>.</p>
 <p>The module uses <code>nullok</code>, so a user who has not enrolled still logs in with
 the password alone. Enabling the profile before enrolling cannot lock anyone
-out. Enrollment is never automated.</p>
+out. Until you enroll, TOTP is <strong>not enforced</strong>: the installer and the end of
+<code>make run</code> say so, and enrollment is the explicit <code>make totp_enroll</code>.</p>
 <h2 id="what-gets-a-code">What gets a code<a class="headerlink" href="#what-gets-a-code" title="Permanent link">&para;</a></h2>
 <p>Everything that includes <code>common-auth</code>: <code>sudo</code>, GDM login and lock screen,
 TTY <code>login</code>, <code>su</code>, polkit prompts, and <code>sshd</code>. The last three are side
@@ -873,7 +874,16 @@ decision, and enroll first):</p>
 <code>sudo -n</code>) stops working for that account: the code prompt cannot be answered.
 Run unattended jobs as root or from a user that is not enrolled.</p>
 <h2 id="enroll">Enroll<a class="headerlink" href="#enroll" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>google-authenticator
+<p>The installer never prompts (install libs run unattended). If
+<code>~/.google_authenticator</code> is missing it prints a warning, and <code>make run</code> ends
+with <code>TOTP not enrolled — run: make totp_enroll</code> while the PAM module is
+enabled. Run it yourself:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>totp_enroll
+</code></pre></div>
+<p>It runs <code>google-authenticator -t -d -f -r 3 -R 30 -w 3</code> (time-based, no code
+reuse, rate-limited), printing the QR code and scratch codes, and refuses to
+run if <code>~/.google_authenticator</code> already exists. The plain command also works:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>google-authenticator
 </code></pre></div>
 <ul>
 <li>Put the scratch codes in your password manager.</li>
@@ -885,8 +895,8 @@ Run unattended jobs as root or from a user that is not enrolled.</p>
 login, sudo and ssh.</p>
 <p>If locked out: boot recovery mode (the root shell there does not use PAM, so
 no code is asked), remount the filesystem writable, then disable the profile:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>mount<span class="w"> </span>-o<span class="w"> </span>remount,rw<span class="w"> </span>/
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>pam-auth-update<span class="w"> </span>--disable<span class="w"> </span>google-authenticator
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>mount<span class="w"> </span>-o<span class="w"> </span>remount,rw<span class="w"> </span>/
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>pam-auth-update<span class="w"> </span>--disable<span class="w"> </span>google-authenticator
 </code></pre></div>
 <p>Never <code>apt remove libpam-google-authenticator</code> while the profile is enabled:
 <code>common-auth</code> would then name a missing module and every <code>sudo</code>/login fails.
@@ -894,7 +904,7 @@ Run <code>uninstall_google_authenticator</code> first.</p>
 <h2 id="disable">Disable<a class="headerlink" href="#disable" title="Permanent link">&para;</a></h2>
 <p><code>uninstall_google_authenticator</code> runs the same <code>pam-auth-update --disable</code>
 and removes the ssh drop-in and the profile file:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'source distro_config/install_lib/_common.sh; source distro_config/install_lib/system_utils.sh; uninstall_google_authenticator'</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>bash<span class="w"> </span>-c<span class="w"> </span><span class="s1">'source distro_config/install_lib/_common.sh; source distro_config/install_lib/system_utils.sh; uninstall_google_authenticator'</span>
 </code></pre></div>
 <p>Preview either function with <code>DRY_RUN=1</code>.</p>
 
