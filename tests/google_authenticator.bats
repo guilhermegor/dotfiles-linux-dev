@@ -43,6 +43,12 @@ if [ "\$1" = apt-get ] && [ -n "\${APT_RC:-}" ]; then exit "\$APT_RC"; fi
 if [ "\$1" = sshd ]; then shift; exec "$TMP/bin/sshd" "\$@"; fi
 STUB
     chmod +x "$TMP/bin/sshd" "$TMP/bin/sudo"
+    # google-authenticator stub: logs argv and writes the secret file like the real tool.
+    printf '#!/bin/bash\necho "google-authenticator $*" >> "%s"\necho secret > "$HOME/.google_authenticator"\n' "$CALLS" \
+        > "$TMP/bin/google-authenticator"
+    chmod +x "$TMP/bin/google-authenticator"
+    export HOME="$TMP/home"
+    mkdir -p "$HOME"
     export PATH="$TMP/bin:$PATH"
     # pam-auth-update is a stub, so a fake common-auth stands in for its output.
     export _GA_COMMON_AUTH="$TMP/common-auth"
@@ -292,4 +298,66 @@ _stub_dpkg_query() {
     APT_RC=1 GA_INSTALLED=0 run install_google_authenticator
     [ "$status" -ne 0 ]
     refute_call 'pam-auth-update'
+}
+
+# --- enrollment warning (issue #782) ----------------------------------------------
+
+@test "no secret file warns TOTP is NOT enforced, points to make totp_enroll, never prompts" {
+    run install_google_authenticator <<< "y"
+    [ "$status" -eq 0 ]
+    local out="$output"
+    refute_call 'google-authenticator -t'
+    [[ "$out" == *"NOT enforced"* ]]
+    [[ "$out" == *"make totp_enroll"* ]]
+    [ ! -e "$HOME/.google_authenticator" ]
+}
+
+@test "existing secret file means no warning and is never overwritten" {
+    echo original > "$HOME/.google_authenticator"
+    run install_google_authenticator
+    [ "$status" -eq 0 ]
+    local out="$output"
+    refute_call 'google-authenticator -t'
+    [ "$(cat "$HOME/.google_authenticator")" = original ]
+    [[ "$out" != *"NOT enforced"* ]]
+}
+
+@test "run summary nudges when PAM module is on and not enrolled" {
+    source "$REPO_ROOT/lib/run_chain.sh"
+    TOTP_PAM_FILE="$_GA_COMMON_AUTH" run report_totp_status
+    [[ "$output" == *"make totp_enroll"* ]]
+}
+
+@test "run summary is silent when enrolled or module off" {
+    source "$REPO_ROOT/lib/run_chain.sh"
+    : > "$HOME/.google_authenticator"
+    TOTP_PAM_FILE="$_GA_COMMON_AUTH" run report_totp_status
+    [ -z "$output" ]
+    rm "$HOME/.google_authenticator"
+    : > "$TMP/empty"
+    TOTP_PAM_FILE="$TMP/empty" run report_totp_status
+    [ -z "$output" ]
+}
+
+@test "make totp_enroll enrolls with the hardened flags when not enrolled" {
+    run make -C "$REPO_ROOT" totp_enroll
+    [ "$status" -eq 0 ]
+    grep -q 'google-authenticator -t -d -f -r 3 -R 30 -w 3' "$CALLS"
+    [ -f "$HOME/.google_authenticator" ]
+}
+
+@test "make totp_enroll refuses when already enrolled" {
+    echo x > "$HOME/.google_authenticator"
+    run make -C "$REPO_ROOT" totp_enroll
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"refusing"* ]]
+    refute_call 'google-authenticator -t'
+}
+
+@test "make totp_enroll fails loudly and leaves no secret file when google-authenticator fails" {
+    printf '#!/bin/bash\nexit 3\n' > "$TMP/bin/google-authenticator"
+    run make -C "$REPO_ROOT" totp_enroll
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"enrollment failed"* ]]
+    [ ! -e "$HOME/.google_authenticator" ]
 }

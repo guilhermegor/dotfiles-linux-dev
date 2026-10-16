@@ -1392,8 +1392,12 @@ install_google_authenticator() {
         fi
     fi
 
-    print_status "success" "TOTP profile enabled (not enrolled yet)"
-    print_status "info" "Keep a root shell open, then run: google-authenticator"
+    print_status "success" "TOTP profile enabled"
+    print_status "info" "Keep a root shell open while testing the first login, sudo and ssh"
+    # nullok: an unenrolled account is never asked for a code. No prompt here (#339).
+    if [ ! -e "$HOME/.google_authenticator" ]; then
+        print_status "warning" "TOTP is NOT enforced until you enroll: make totp_enroll (see docs/totp-2fa.md)"
+    fi
 }
 
 uninstall_google_authenticator() {

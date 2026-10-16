@@ -97,6 +97,13 @@ report_run_failures() {
     done
 }
 
+# One-line nudge when the PAM module is on but the user never enrolled (#782).
+report_totp_status() {
+    grep -q pam_google_authenticator "${TOTP_PAM_FILE:-/etc/pam.d/common-auth}" 2>/dev/null || return 0
+    [ -e "$HOME/.google_authenticator" ] && return 0
+    print_status "warning" "TOTP not enrolled — run: make totp_enroll"
+}
+
 main() {
     local target
     for target in "${RUN_CHAIN_TARGETS[@]}"; do
@@ -104,6 +111,7 @@ main() {
     done
 
     report_run_failures
+    report_totp_status
 
     [ ${#RUN_FAILURES[@]} -eq 0 ]
 }
