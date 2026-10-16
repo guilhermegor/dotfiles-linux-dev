@@ -49,3 +49,6 @@ __pycache__/
 site/
 .cache/
 CHANGELOG.md
+
+# OpenLogi runtime lock beside the symlinked config (#790)
+distro_config/dotfiles/openlogi/*.lock
