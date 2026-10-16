@@ -285,7 +285,13 @@ editors_setup: vscode_setup ai_clients  ## Setup all code editors + AI clients
 
 ##@ Utilities
 
-.PHONY: banner check_status list_scripts clean patch_claudestatus git_hooks test lessons_mirror
+.PHONY: banner check_status list_scripts clean patch_claudestatus git_hooks test lessons_mirror totp_enroll
+
+totp_enroll:  ## Enroll the current user in TOTP 2FA (refuses if already enrolled)
+	@if [ -e "$$HOME/.google_authenticator" ]; then \
+		echo "$$HOME/.google_authenticator already exists; refusing to overwrite" >&2; exit 1; \
+	fi
+	@google-authenticator -t -d -f -r 3 -R 30 -w 3 || { echo "TOTP enrollment failed; nothing enrolled" >&2; exit 1; }
 
 test:  ## Run the bats unit test suite (tests/) — local parity with CI
 	@command -v bats >/dev/null 2>&1 || { echo "bats not found — run 'make install_coding' (bats step) or 'brew install bats-core'"; exit 1; }

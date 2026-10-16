@@ -9,7 +9,8 @@ lands there as an `Additional` module that runs after `pam_unix`.
 
 The module uses `nullok`, so a user who has not enrolled still logs in with
 the password alone. Enabling the profile before enrolling cannot lock anyone
-out. Enrollment is never automated.
+out. Until you enroll, TOTP is **not enforced**: the installer and the end of
+`make run` say so, and enrollment is the explicit `make totp_enroll`.
 
 ## What gets a code
 
@@ -61,6 +62,19 @@ After you enroll, anything that calls `sudo` without a terminal (cron, CI,
 Run unattended jobs as root or from a user that is not enrolled.
 
 ## Enroll
+
+The installer never prompts (install libs run unattended). If
+`~/.google_authenticator` is missing it prints a warning, and `make run` ends
+with `TOTP not enrolled — run: make totp_enroll` while the PAM module is
+enabled. Run it yourself:
+
+```bash
+make totp_enroll
+```
+
+It runs `google-authenticator -t -d -f -r 3 -R 30 -w 3` (time-based, no code
+reuse, rate-limited), printing the QR code and scratch codes, and refuses to
+run if `~/.google_authenticator` already exists. The plain command also works:
 
 ```bash
 google-authenticator
