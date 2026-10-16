@@ -64,6 +64,7 @@ _fake_install_that_fails() {
 # --- regression: the two functions this issue actually fixed -----------------
 
 @test "verify_openlogi returns non-zero when openlogi is not installed" {
+    command_exists() { return 1; }  # hermetic: ignore a real /usr/bin/openlogi
     run verify_openlogi
     [ "$status" -ne 0 ]
 }
@@ -71,6 +72,7 @@ _fake_install_that_fails() {
 @test "run_install records install_openlogi as failed when verification fails" {
     # install_openlogi's last statement is verify_openlogi, so a verification
     # failure must propagate as the function's own exit status (#343).
+    command_exists() { return 1; }  # hermetic: ignore a real /usr/bin/openlogi
     run_install verify_openlogi "openlogi (Logitech HID++ manager)"
     [ "${#INSTALL_FAILURES[@]}" -eq 1 ]
     [ "${INSTALL_FAILURES[0]}" = "openlogi (Logitech HID++ manager)" ]
