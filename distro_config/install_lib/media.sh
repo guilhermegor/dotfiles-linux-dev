@@ -206,9 +206,14 @@ install_openwhispr() {
     fi
 
     print_status "info" "Fetching latest OpenWhispr release..."
-    local deb_url
-    deb_url=$(curl -fsSL --max-time 15 \
-        "https://api.github.com/repos/HeroTools/open-whispr/releases/latest" 2>>"${LOG_FILE:-/dev/null}" \
+    local release_json curl_rc=0 deb_url
+    release_json=$(curl -fsSL --max-time 15 \
+        "https://api.github.com/repos/HeroTools/open-whispr/releases/latest" 2>>"${LOG_FILE:-/dev/null}") || curl_rc=$?
+    if [ "$curl_rc" -ne 0 ]; then
+        print_status "error" "Could not query the OpenWhispr release API (curl exit $curl_rc: rate limit, DNS or timeout)"
+        return 1
+    fi
+    deb_url=$(printf '%s' "$release_json" \
         | grep -oE '"browser_download_url": *"[^"]*linux-amd64\.deb"' | head -1 | cut -d '"' -f 4)
 
     if [ -z "$deb_url" ]; then
@@ -219,11 +224,28 @@ install_openwhispr() {
 
     local tmp_dir
     tmp_dir=$(mktemp -d)
+    # RETURN fires on every return path of this function; it deletes itself so it
+    # does not linger in the sourcing shell. A Ctrl-C kills the shell outright and
+    # skips it, so an interrupted download can still leave a file in /tmp.
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp_dir'; trap - RETURN" RETURN
     print_status "info" "Downloading OpenWhispr (~450 MB)..."
-    if ! run_or_echo curl -fL --retry 3 -o "$tmp_dir/open-whispr.deb" "$deb_url" 2>>"${LOG_FILE:-/dev/null}"; then
-        rm -rf "$tmp_dir"
+    if ! run_or_echo curl -fL --retry 3 --max-time 1800 -o "$tmp_dir/open-whispr.deb" "$deb_url" 2>>"${LOG_FILE:-/dev/null}"; then
         print_status "error" "Failed to download OpenWhispr from: $deb_url"
         return 1
+    fi
+
+    # electron-builder publishes latest-linux.yml next to the assets with a base64
+    # sha512 per file, the .deb included.
+    if [ "${DRY_RUN:-0}" != "1" ]; then
+        local want got
+        want=$(curl -fsSL --max-time 30 "${deb_url%/*}/latest-linux.yml" 2>>"${LOG_FILE:-/dev/null}" \
+            | awk -v f="${deb_url##*/}" '$1=="-"&&$2=="url:"{hit=($3==f)} hit&&$1=="sha512:"{print $2; exit}')
+        got=$(openssl dgst -sha512 -binary "$tmp_dir/open-whispr.deb" | base64 -w0)
+        if [ -z "$want" ] || [ "$want" != "$got" ]; then
+            print_status "error" "OpenWhispr .deb checksum missing or mismatched against latest-linux.yml; not installing"
+            return 1
+        fi
     fi
 
     # The .deb Depends on ydotool (auto-paste on Wayland); apt pulls it in from the archive.
@@ -233,13 +255,11 @@ install_openwhispr() {
     run_or_echo sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$tmp_dir/open-whispr.deb" || rc=$?
     if [ "$rc" -ne 0 ]; then
         if ! package_landed open-whispr; then
-            rm -rf "$tmp_dir"
             print_status "error" "OpenWhispr installation failed"
             return 1
         fi
         print_status "warning" "apt-get exited $rc but open-whispr is installed; check 'dpkg --audit'"
     fi
-    rm -rf "$tmp_dir"
 
     [ "${DRY_RUN:-0}" = "1" ] && return 0
 

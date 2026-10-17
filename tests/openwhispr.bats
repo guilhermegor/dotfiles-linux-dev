@@ -46,6 +46,13 @@ setup() {
 JSON
     export RELEASE_JSON="$TMP/release.json"
 
+    # latest-linux.yml: electron-builder's per-asset base64 sha512. The stub curl
+    # writes "deb\n" as the .deb, so that is what the checksum must cover.
+    export YML="$TMP/latest-linux.yml"
+    printf -- '- url: OpenWhispr-1.10.3-linux-amd64.deb\n  sha512: %s\n' \
+        "$(printf 'deb\n' | openssl dgst -sha512 -binary | base64 -w0)" > "$YML.body"
+    { echo "version: 1.10.3"; echo "files:"; sed 's/^/  /' "$YML.body"; } > "$YML"
+
     # curl: API URL -> fixture; anything with -o -> write a fake file there.
     cat > "$TMP/bin/curl" <<'STUB'
 #!/bin/bash
@@ -59,6 +66,7 @@ done
 if [ -n "$out" ]; then echo deb > "$out"; exit 0; fi
 case "$*" in
     *api.github.com*) cat "$RELEASE_JSON" ;;
+    *latest-linux.yml*) cat "$YML" ;;
 esac
 STUB
 
@@ -170,6 +178,7 @@ refute_call() {
 #!/bin/bash
 case "$*" in
     *api.github.com*) cat "$RELEASE_JSON" ;;
+    *latest-linux.yml*) cat "$YML" ;;
     *) exit 22 ;;
 esac
 STUB
@@ -239,4 +248,27 @@ STUB
         [[ "$entry" == install_openwhispr:* ]] && found="$entry"
     done
     [ "$found" = "install_openwhispr:OpenWhispr (Voice Dictation):Media:open-whispr.desktop" ]
+}
+
+@test "install_openwhispr reports the real error when the release API call fails" {
+    printf '#!/bin/bash\nexit 22\n' > "$TMP/bin/curl"
+    run install_openwhispr
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Could not query the OpenWhispr release API (curl exit 22"* ]]
+    [[ "$output" != *"No linux-amd64 .deb asset found"* ]]
+}
+
+@test "install_openwhispr refuses a .deb whose sha512 differs from latest-linux.yml" {
+    sed -i 's/sha512: .*/sha512: AAAA/' "$YML"
+    run install_openwhispr
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"checksum missing or mismatched"* ]]
+    refute_call 'apt-get'
+}
+
+@test "install_openwhispr removes its temp dir on a failed install" {
+    mkdir "$TMP/t"
+    TMPDIR="$TMP/t" APT_RC=100 APT_NOLAND=1 run install_openwhispr
+    [ "$status" -eq 1 ]
+    [ -z "$(ls -A "$TMP/t")" ]
 }
