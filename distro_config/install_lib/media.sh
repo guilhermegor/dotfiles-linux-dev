@@ -181,7 +181,7 @@ install_obs() {
 }
 
 _openwhispr_installed() {
-    dpkg -l open-whispr 2>/dev/null | grep -q '^ii'
+    package_landed open-whispr
 }
 
 install_openwhispr() {
@@ -196,6 +196,12 @@ install_openwhispr() {
     if [ "$PACKAGE_MANAGER" != "apt" ] || [ "$(dpkg --print-architecture 2>/dev/null)" != "amd64" ]; then
         print_status "warning" "OpenWhispr: the .deb needs apt on amd64; install manually"
         print_status "config" "  Download from: https://github.com/HeroTools/open-whispr/releases/latest"
+        return 1
+    fi
+
+    command_exists curl || install_package curl curl curl curl
+    if ! command_exists curl; then
+        print_status "error" "curl is required to look up the latest OpenWhispr release"
         return 1
     fi
 
@@ -221,10 +227,17 @@ install_openwhispr() {
     fi
 
     # The .deb Depends on ydotool (auto-paste on Wayland); apt pulls it in from the archive.
-    if ! run_or_echo sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$tmp_dir/open-whispr.deb"; then
-        rm -rf "$tmp_dir"
-        print_status "error" "OpenWhispr installation failed"
-        return 1
+    # Trust the package database over apt's exit code (#632): an unrelated broken package
+    # makes apt exit non-zero even when open-whispr configured fine.
+    local rc=0
+    run_or_echo sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$tmp_dir/open-whispr.deb" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        if ! package_landed open-whispr; then
+            rm -rf "$tmp_dir"
+            print_status "error" "OpenWhispr installation failed"
+            return 1
+        fi
+        print_status "warning" "apt-get exited $rc but open-whispr is installed; check 'dpkg --audit'"
     fi
     rm -rf "$tmp_dir"
 

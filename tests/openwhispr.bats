@@ -73,19 +73,26 @@ STUB
 #!/bin/bash
 echo "apt-get $*" >> "$CALLS"
 case "$1" in
-    install) touch "$INSTALLED_FLAG" ;;
+    install) [ "${APT_NOLAND:-0}" = 1 ] || touch "$INSTALLED_FLAG" ;;
     remove)  rm -f "$INSTALLED_FLAG" ;;
 esac
+exit "${APT_RC:-0}"
 STUB
 
     cat > "$TMP/bin/dpkg" <<'STUB'
 #!/bin/bash
 case "$1" in
     --print-architecture) echo "$ARCH" ;;
-    -l) [ -e "$INSTALLED_FLAG" ] && echo "ii  open-whispr  1.10.3  amd64  dictation"; exit 0 ;;
 esac
 STUB
-    chmod +x "$TMP/bin/curl" "$TMP/bin/sudo" "$TMP/bin/apt-get" "$TMP/bin/dpkg"
+
+    # package_landed (the shared #632 check) reads dpkg-query, not dpkg -l.
+    cat > "$TMP/bin/dpkg-query" <<'STUB'
+#!/bin/bash
+[ -e "$INSTALLED_FLAG" ] && printf 'install ok installed'
+exit 0
+STUB
+    chmod +x "$TMP/bin/curl" "$TMP/bin/sudo" "$TMP/bin/apt-get" "$TMP/bin/dpkg" "$TMP/bin/dpkg-query"
 
     # shellcheck source=../distro_config/install_lib/_common.sh
     source "$REPO_ROOT/distro_config/install_lib/_common.sh"
@@ -168,6 +175,39 @@ esac
 STUB
     run install_openwhispr
     [ "$status" -eq 1 ]
+    refute_call 'apt-get'
+}
+
+@test "install_openwhispr succeeds with a warning when apt exits non-zero but the package landed" {
+    APT_RC=100 run install_openwhispr
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"apt-get exited 100 but open-whispr is installed"* ]]
+}
+
+@test "install_openwhispr fails when apt exits non-zero and the package is absent" {
+    APT_RC=100 APT_NOLAND=1 run install_openwhispr
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"installation failed"* ]]
+}
+
+@test "install_openwhispr installs curl first when it is missing" {
+    : > "$TMP/curl_missing"
+    command_exists() {
+        [ "$1" = curl ] && [ -e "$TMP/curl_missing" ] && return 1
+        command -v "$1" &>/dev/null
+    }
+    install_package() { echo "install_package $*" >> "$CALLS"; rm -f "$TMP/curl_missing"; }
+    run install_openwhispr
+    [ "$status" -eq 0 ]
+    grep -q '^install_package curl' "$CALLS"
+}
+
+@test "install_openwhispr fails clearly when curl cannot be installed" {
+    command_exists() { [ "$1" = curl ] && return 1; command -v "$1" &>/dev/null; }
+    install_package() { echo "install_package $*" >> "$CALLS"; }
+    run install_openwhispr
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"curl is required"* ]]
     refute_call 'apt-get'
 }
 
