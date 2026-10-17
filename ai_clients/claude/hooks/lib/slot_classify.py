@@ -322,12 +322,15 @@ def greptile_refused(dict_payload: dict) -> str:
 	Returns
 	-------
 	str
-		``REFUSED`` or ``OK``. An unreadable phrase file reads ``OK`` (nothing to match).
+		``REFUSED``, ``OK``, or ``UNKNOWN`` when the phrase file is unreadable or empty
+		(fail closed: the caller skips the rung on anything but ``OK``).
 	"""
 	try:
 		list_phrases = [p for p in REFUSAL_PHRASES_FILE.read_text().lower().splitlines() if p]
 	except OSError:
-		return "OK"
+		return "UNKNOWN"
+	if not list_phrases:
+		return "UNKNOWN"
 	list_items = [
 		(r.get("submitted_at") or r.get("created_at") or "", (r.get("body") or "").lower())
 		for r in (dict_payload.get("reviews") or []) + (dict_payload.get("comments") or [])

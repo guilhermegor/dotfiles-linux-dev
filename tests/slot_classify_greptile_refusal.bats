@@ -77,6 +77,27 @@ put_review() {
     [[ "$output" != *"trial credits exhausted"* ]]
 }
 
+@test "classifier: an unreadable phrase file fails closed to UNKNOWN, never OK" {
+    run python3 -I -c "
+import importlib.util, pathlib
+s = importlib.util.spec_from_file_location('sc', '$CLASSIFY')
+m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+m.REFUSAL_PHRASES_FILE = pathlib.Path('/nonexistent/phrases.txt')
+print(m.greptile_refused({'reviews': [], 'comments': []}))"
+    [ "$output" = "UNKNOWN" ]
+}
+
+@test "ladder: a classifier that prints nothing skips the rung (fails closed)" {
+    put_review 'greptile-apps[bot]' 2026-10-17T10:00:00Z '<!-- greptile_summary -->'
+    LIB_DIR="$BATS_TEST_TMPDIR/emptylib"
+    mkdir -p "$LIB_DIR"
+    printf 'print()\n' >"$LIB_DIR/slot_classify.py"
+    run run_hosted_rungs o r 7
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"refusal check unreadable"* ]]
+    [ ! -s "$ASK_LOG" ]
+}
+
 @test "ladder: LADDER_SKIP_RUNGS=greptile skips the rung without any forge read or ask" {
     LADDER_SKIP_RUNGS="qwen greptile" run run_hosted_rungs o r 7
     [ "$status" -eq 1 ]

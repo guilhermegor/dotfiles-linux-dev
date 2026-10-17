@@ -926,6 +926,9 @@ run_hosted_rungs() {
 	if [ "$refused" = "REFUSED" ]; then
 		print_status "info" "rung greptile skipped: trial credits exhausted"
 		return 1
+	elif [ "$refused" != "OK" ]; then
+		print_status "info" "rung greptile skipped: refusal check unreadable (${refused:-no output})"
+		return 1
 	fi
 
 	# The marker is plain text anyone can type: it is credited only from the account the

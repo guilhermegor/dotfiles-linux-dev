@@ -55,7 +55,10 @@ _gate_ladder_marker_re='^Fallback review — runtime: (qwen|codex|kimi|coderabbi
 # measured on #801: green on a refusal alone), so it is not a review of the head. The phrases live
 # in ONE file -- greptile_refusal_phrases.txt -- that slot_classify.py (the ladder) reads too.
 _gate_greptile_refusal_phrases() {
-	cat "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/greptile_refusal_phrases.txt"
+	local f
+	f="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/greptile_refusal_phrases.txt"
+	[ -s "$f" ] || return 1
+	cat "$f"
 }
 
 # jq def: a node (GraphQL `author.login` is bare, REST's carries `[bot]`) that is the EXACT
@@ -554,9 +557,17 @@ gate_pr_thread_state() {
 	# Has ANY roster reviewer reported at all (dotfiles-linux-dev#505)? A PR nobody has looked at yet has
 	# no threads and no comment-channel findings either, so it reaches here indistinguishable from
 	# "reviewed, nothing to answer" unless this is checked as its own signal.
+	# An unreadable phrase list must not become an empty one: that matches nothing, so a refusal
+	# would count as a review (the #804 defect). Fail closed as unreadable.
+	local refusal_phrases
+	refusal_phrases="$(_gate_greptile_refusal_phrases)" || {
+		echo "greptile_refusal_phrases.txt missing or empty" >"$jq_err"
+		_gate_filter_aborted "$jq_err" "refusal-phrases"
+		return 0
+	}
 	reported="$(_gate_run_jq "$threads" "$(_gate_reported_filter)" "$jq_err" \
 		--arg roster "$roster" --arg marker "$_gate_ladder_marker_re" \
-		--arg refusal "$(_gate_greptile_refusal_phrases)")" || {
+		--arg refusal "$refusal_phrases")" || {
 		_gate_filter_aborted "$jq_err" "reviewer-reported"
 		return 0
 	}
