@@ -36,8 +36,13 @@ CURRENT HEAD, never about a count. Measured on this repo 2026-09-26:
 The predicate is therefore **coverage of the current head across BOTH channels**, because
 the two rungs publish to different places and neither channel alone sees the other:
 
-1. a submitted review whose ``commit.oid`` equals ``headRefOid`` — the primary rung's
-   channel, exact, no timestamp reasoning needed;
+1. a submitted review whose ``commit.oid`` equals ``headRefOid`` AND whose author is on the
+   reviewer roster (``.review-bots.yaml``, the file the review-thread gate reads) and is not
+   the PR author — the primary rung's channel, exact, no timestamp reasoning needed. The
+   author clause matters: GitHub records every thread REPLY as a ``COMMENTED`` review on the
+   head, so the author answering threads after a fix push is not a reviewer reading it
+   (#800, measured on #795). An unreadable roster counts nothing: "needs a review", never
+   "covered";
 2. **or** a comment carrying the ladder's attribution line whose second line
    (``Reviewed head: <sha>``) names ``headRefOid`` AND whose ``createdAt`` is strictly after
    the head commit's ``committedDate`` — the fallback rung's channel, which produces no
@@ -105,6 +110,7 @@ into a guess just because the read moved to a different endpoint.
 from __future__ import annotations
 
 import datetime
+import functools
 import json
 import os
 import re
@@ -131,8 +137,8 @@ OPEN_PR_LIST_CAP = 200
 # `totalCount` is requested so a window that dropped older entries is known, not assumed whole
 # (see `truncated_window`).
 PR_SELECTION = (
-	"number headRefOid baseRefName mergeStateStatus isDraft "
-	"reviews(last:100){totalCount nodes{commit{oid}}} "
+	"number headRefOid baseRefName mergeStateStatus isDraft author{login} "
+	"reviews(last:100){totalCount nodes{commit{oid} author{login}}} "
 	"comments(last:100){totalCount nodes{body createdAt author{login}}} "
 	"commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{"
 	"__typename ... on CheckRun{name status conclusion} "
@@ -170,6 +176,11 @@ RUNG_TIMEOUT = int(os.environ.get("REVIEW_FANOUT_RUNG_TIMEOUT", "45"))
 # FREE for a week on a 50-PR backlog because "the slot is free" and "PRs are getting reviewed"
 # are different facts. A default, not a measurement -- move it when there is one.
 LADDER_BACKLOG_HOURS = float(os.environ.get("REVIEW_FANOUT_BACKLOG_HOURS", "6"))
+
+# Channel 1 reads the same reviewer roster the review-thread gate does (review_thread_gate.sh,
+# `_gate_roster_logins`): same file, same `- login:` line shape -- not a second hard-coded list.
+REVIEW_ROSTER_FILE = ".review-bots.yaml"
+ROSTER_LOGIN_RE = re.compile(r"^[ \t]*-[ \t]*login:[ \t]*(\S+)", re.MULTILINE)
 
 # The reviewer's own refusal to review a bot-authored PR -- structural like the file cap
 # (#420): waiting never clears it and re-asking never will, so the ladder is the only path in.
@@ -251,6 +262,7 @@ def _flatten(node: dict) -> dict:
 			k: node[k]
 			for k in ("number", "headRefOid", "baseRefName", "mergeStateStatus", "isDraft")
 		},
+		"author": node.get("author"),
 		"reviews": node["reviews"]["nodes"],
 		"comments": node["comments"]["nodes"],
 		"truncated": [
@@ -292,6 +304,14 @@ def _rest_window(nodes: list) -> dict:
 	return {"totalCount": len(nodes) + extra, "nodes": nodes}
 
 
+def _rest_review(review: dict) -> dict:
+	"""Adapt one REST review into the GraphQL review shape (commit and author)."""
+	return {
+		"commit": {"oid": review.get("commit_id")},
+		"author": {"login": (review.get("user") or {}).get("login")},
+	}
+
+
 def _rest_node(pr: dict) -> dict:
 	"""Adapt one REST open PR into the GraphQL node shape ``_flatten`` reads (issue #689)."""
 	number, head = pr["number"], pr["head"]["sha"]
@@ -315,7 +335,8 @@ def _rest_node(pr: dict) -> dict:
 		"baseRefName": pr["base"]["ref"],
 		"mergeStateStatus": (detail.get("mergeable_state") or "").upper(),
 		"isDraft": bool(pr.get("draft")),
-		"reviews": _rest_window([{"commit": {"oid": r.get("commit_id")}} for r in reviews]),
+		"author": {"login": (pr.get("user") or {}).get("login")},
+		"reviews": _rest_window([_rest_review(r) for r in reviews]),
 		"comments": _rest_window(
 			[
 				{
@@ -363,7 +384,7 @@ def _complete_window(pr: dict) -> dict:
 	except _READ_ERRORS:
 		return pr
 	if reviews is not None:
-		pr["reviews"] = [{"commit": {"oid": r.get("commit_id")}} for r in reviews]
+		pr["reviews"] = [_rest_review(r) for r in reviews]
 		pr["truncated"].remove("reviews")
 	if comments is not None:
 		pr["comments"] = [
@@ -567,14 +588,54 @@ def head_commit_time(pr: dict) -> datetime.datetime | None:
 	return result
 
 
+def _login_key(login: str | None) -> str:
+	"""Normalise a login for comparison: GraphQL says ``coderabbitai``, REST ``coderabbitai[bot]``."""
+	return (login or "").removesuffix("[bot]").lower()
+
+
+@functools.cache
+def reviewer_roster() -> frozenset[str]:
+	"""Return the normalised logins of the repo's reviewer roster, empty when unreadable.
+
+	The roster is ``.review-bots.yaml`` in the working directory -- the file (and the
+	``- login:`` line shape) ``review_thread_gate.sh`` reads, so the two cannot disagree about
+	who a reviewer is (#800). Missing or unreadable is the EMPTY set: no review then counts as
+	coverage and every PR reads "needs a review" -- fail closed, never a guessed "covered".
+	"""
+	try:
+		text = Path(REVIEW_ROSTER_FILE).read_text()
+	except OSError:
+		return frozenset()
+	return frozenset(
+		key for key in map(_login_key, ROSTER_LOGIN_RE.findall(text)) if key
+	)
+
+
+def roster_reviews(pr: dict) -> list[dict]:
+	"""Return the PR's submitted reviews written by a roster reviewer other than the PR author.
+
+	GitHub records every inline thread REPLY as a ``COMMENTED`` review on the current head, so the
+	author answering threads after a fix push looked like a reviewer having read that head
+	(#800, measured on #795). A review with no author (a deleted account) is not a roster
+	review either.
+	"""
+	roster = reviewer_roster()
+	author = _login_key((pr.get("author") or {}).get("login"))
+	return [
+		review
+		for review in pr.get("reviews") or []
+		if _login_key((review.get("author") or {}).get("login")) in roster
+		and _login_key((review.get("author") or {}).get("login")) != author
+	]
+
+
 def reviewed_at_head(pr: dict) -> bool:
-	"""True when a submitted review names the current head commit — coverage channel 1."""
+	"""True when a roster reviewer's submitted review names the current head — channel 1."""
 	head = pr.get("headRefOid") or ""
 	if not head:
 		return False
 	return any(
-		((review.get("commit") or {}).get("oid") or "") == head
-		for review in pr.get("reviews") or []
+		((review.get("commit") or {}).get("oid") or "") == head for review in roster_reviews(pr)
 	)
 
 
@@ -684,7 +745,7 @@ def reviewed_heads(pr: dict) -> list[str]:
 	candidate.
 	"""
 	head = pr.get("headRefOid") or ""
-	found = [((r.get("commit") or {}).get("oid") or "") for r in pr.get("reviews") or []]
+	found = [((r.get("commit") or {}).get("oid") or "") for r in roster_reviews(pr)]
 	for comment in pr.get("comments") or []:
 		body = comment.get("body") or ""
 		lines = body.split("\n")
