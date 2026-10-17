@@ -631,6 +631,24 @@ STUB
     [[ "$output" == *"- feat/793-squashed: empty (no changes left to merge into main), no work to rescue"* ]]
 }
 
+@test "a branch that conflicts with the base keeps the plain orphan line" {
+    stub_gh_orphan
+    git checkout -q -b feat/793-conflicts
+    echo branch-side > clash.txt
+    git add clash.txt
+    git commit -q -m "branch side"
+    git push -q origin HEAD:refs/heads/feat/793-conflicts
+
+    git checkout -q main
+    echo base-side > clash.txt
+    git add clash.txt
+    git commit -q -m "base side"
+    git push -q origin HEAD:refs/heads/main
+
+    run sweep_orphan_branches "$REPO" "o/r" "o" "main"
+    grep -qxF "    - feat/793-conflicts" <<<"$output"
+}
+
 @test "a multi-commit squash-merged branch is labelled empty" {
     stub_gh_orphan
     git checkout -q -b feat/793-squash2
