@@ -588,6 +588,58 @@ STUB
     [[ "$output" != *"no open or merged PR touches these files"* ]]
 }
 
+# --- sweep_orphan_branches: a 0-ahead branch is labelled empty, not orphaned work ----------------
+# dotfiles-linux-dev#793: a branch filed up front (e.g. by /issue) has no commits yet, yet it
+# printed the same bare line as a branch holding unreviewed work, so the line cried wolf.
+
+@test "a pushed branch with 0 commits ahead of the base is labelled empty" {
+    stub_gh_orphan
+    git push -q origin HEAD:refs/heads/feat/793-filed-up-front
+
+    run sweep_orphan_branches "$REPO" "o/r" "o" "main"
+    [[ "$output" == *"- feat/793-filed-up-front: empty (0 commits ahead of main), no work to rescue"* ]]
+}
+
+@test "a branch with commits ahead keeps the plain orphan line" {
+    stub_gh_orphan
+    git checkout -q -b feat/793-has-work
+    echo work > realfile.txt
+    git add realfile.txt
+    git commit -q -m "real work"
+    git push -q origin HEAD:refs/heads/feat/793-has-work
+
+    run sweep_orphan_branches "$REPO" "o/r" "o" "main"
+    grep -qxF "    - feat/793-has-work" <<<"$output"
+}
+
+@test "a squash-merged branch (patch already on the base) is labelled empty" {
+    stub_gh_orphan
+    git checkout -q -b feat/793-squashed
+    echo work > realfile.txt
+    git add realfile.txt
+    git commit -q -m "work later squash-merged"
+    git push -q origin HEAD:refs/heads/feat/793-squashed
+
+    # main gets the same patch under a different commit, as a squash merge does
+    git checkout -q main
+    echo work > realfile.txt
+    git add realfile.txt
+    git commit -q -m "squash: work (#1)"
+    git push -q origin HEAD:refs/heads/main
+
+    run sweep_orphan_branches "$REPO" "o/r" "o" "main"
+    [[ "$output" == *"- feat/793-squashed: empty (0 commits ahead of main), no work to rescue"* ]]
+}
+
+@test "a branch whose ahead count cannot be read stays a plain orphan line" {
+    stub_gh_orphan
+    git push -q origin HEAD:refs/heads/feat/793-unreadable
+    git update-ref -d refs/remotes/origin/feat/793-unreadable
+
+    run sweep_orphan_branches "$REPO" "o/r" "o" "main"
+    grep -qxF "    - feat/793-unreadable" <<<"$output"
+}
+
 # --- agent-type gate: sweep fires only for dev/implementation subagents (dotfiles-linux-dev#508) -------
 # A reviewer, Explore, Plan, or a "fork" running a read-only skill (the ditto#681 case measured in
 # the issue: 45 sweep injections into one forked code-review subagent) must get NO
