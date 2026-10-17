@@ -78,7 +78,7 @@ run_step() {
                     *check-runs*)       cat > "$CHECK_RUN_OUT" ;;
                     *"/pulls/"*)        echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" ;;
                     *"--json files"*)    echo "ai_clients/claude/hooks/lib/foo.sh" ;;
-                    *"--json reviews"*)  printf "%s\n" "$REVIEW_COUNT" ;;
+                    *"--json reviews"*)  jq -nc --argjson n "$REVIEW_COUNT" "{reviews: [range(\$n) | {author: {login: \"coderabbitai\"}, body: \"x\"}]}" ;;
                     *check-suites*)      [ -n "${NO_CHECK_SUITES:-}" ] || printf "2026-01-01T00:00:00Z\n" ;;
                     *issues/*/comments*) printf "%s" "${HISTORY_COMMENTS:-[]}" ;;
                     *"--json commits"*)  printf "2026-01-01T00:00:00Z\n" ;;
