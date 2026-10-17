@@ -374,7 +374,12 @@ said so in words ("no reviewer has reported on this new head yet"). So coverage 
 per-head, across **both** publication channels, because the two rungs write to
 different places and neither sees the other:
 
-1. a submitted review whose `commit.oid` equals `headRefOid` (the primary rung);
+1. a submitted review whose `commit.oid` equals `headRefOid` (the primary rung) AND whose
+   author is a reviewer, never the PR author (#800): GitHub records every thread reply as a
+   `COMMENTED` review on the head, so the author answering threads after a fix push is not a
+   reviewer having read it. "Reviewer" is the thread gate's own rule: only the logins in
+   `.review-bots.yaml` when that file exists (`[bot]` stripped), any Bot-typed author when it is
+   absent, and nothing at all when it exists but cannot be read (needs a review, never covered);
 2. a comment carrying `ladder_attribution_line`'s text whose second line
    (`Reviewed head: <sha>`) names `headRefOid`, posted strictly after the head
    commit's `committedDate` (the fallback rung, which creates no review object).
