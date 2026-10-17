@@ -1523,6 +1523,21 @@ _ug_revoke_allowed_user() {
         "$_UG_DIR/usbguard-daemon.conf"
 }
 
+# IPCAllowedGroups grants every privilege to its members, bypassing the scoped
+# ACL below; warn when USER already sits in one rather than editing a shared list.
+_ug_warn_group_grant() {
+    local grp allowed
+    [ "${DRY_RUN:-0}" = "1" ] && return 0
+    allowed="$(sudo sed -n 's/^IPCAllowedGroups=//p' "$_UG_DIR/usbguard-daemon.conf" 2>/dev/null)"
+    for grp in $(id -nG "$1" 2>/dev/null); do
+        case " $allowed " in
+            *" $grp "*)
+                print_status "warning" "$1 is in group '$grp' listed in IPCAllowedGroups: that grants FULL usbguard rights, so the scoped ACL does not limit $1. Remove '$grp' from IPCAllowedGroups in usbguard-daemon.conf to enforce it."
+                ;;
+        esac
+    done
+}
+
 # Scoped IPC ACL for USER (#789), the file equivalent of
 # `usbguard add-user USER --devices=modify,list,listen --policy=list
 # --exceptions=listen`. Written directly (root, 0600) so it is deterministic and
@@ -1533,6 +1548,7 @@ _ug_revoke_allowed_user() {
 _ug_grant_ipc() {
     local user="$1" acl_dir="$_UG_DIR/IPCAccessControl.d" tmp rc
     _ug_revoke_allowed_user "$user" || return 1
+    _ug_warn_group_grant "$user"
     _ug_set_key IPCAccessControlFiles "$acl_dir/" || return 1
     run_or_echo sudo install -d -m 0700 "$acl_dir" || return 1
     if [ "${DRY_RUN:-0}" = "1" ]; then
@@ -1556,7 +1572,9 @@ _ug_grant_ipc() {
 install_usbguard() {
     print_status "section" "USBGUARD (block unknown USB devices)"
 
-    install_package usbguard || return 1
+    if ! command_exists usbguard; then
+        install_package usbguard || return 1
+    fi
 
     if [ "${DRY_RUN:-0}" != "1" ] && _ug_has_rules; then
         print_status "info" "$_UG_DIR/rules.conf already has rules; keeping it"
@@ -1564,6 +1582,9 @@ install_usbguard() {
         _ug_generate_policy || return 1
     fi
 
+    # Pin the policy file the gates below inspect: a RuleFile pointing at some
+    # other (empty) file would pass the check yet block everything on restart.
+    _ug_set_key RuleFile "$_UG_DIR/rules.conf" || return 1
     _ug_set_key ImplicitPolicyTarget block || return 1
     local user="${SUDO_USER:-$(id -un)}"
     if [ "$user" != "root" ]; then

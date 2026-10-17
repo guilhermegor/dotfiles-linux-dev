@@ -178,6 +178,28 @@ call_line() {
     [ "$output" = "0" ]
 }
 
+@test "RuleFile is pinned to the rules.conf that the empty-policy gate checks" {
+    printf 'RuleFile=/etc/usbguard/other.conf\nIPCAllowedUsers=root\n' > "$_UG_DIR/usbguard-daemon.conf"
+    run install_usbguard
+    [ "$status" -eq 0 ]
+    grep -q "^RuleFile=$_UG_DIR/rules.conf\$" "$_UG_DIR/usbguard-daemon.conf"
+}
+
+@test "an already-installed usbguard is not reinstalled but config is still applied" {
+    run install_usbguard
+    [ "$status" -eq 0 ]
+    refute_call 'apt-get install'
+    grep -q 'systemctl restart usbguard' "$CALLS"
+}
+
+@test "warns when the user is in a group listed in IPCAllowedGroups" {
+    printf '#!/bin/bash\necho "alice plugdev"\n' > "$TMP/bin/id"
+    chmod +x "$TMP/bin/id"
+    run install_usbguard
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"IPCAllowedGroups"* ]]
+}
+
 @test "post-install message shows how to allow a device and how to back out" {
     run install_usbguard
     [ "$status" -eq 0 ]
