@@ -63,9 +63,9 @@ NONAME='block id 1:2 serial "" name "" with-interface { 08:06:50 }'
     [ "$output" = combo ]
 }
 
-@test "classify: other classes (hub, audio) are plain, not hid" {
+@test "classify: other classes (hub, audio) are other, not hid or plain" {
     run usbguard_classify 'block id 1:2 name "x" with-interface { 09:00:00 01:01:00 }'
-    [ "$output" = plain ]
+    [ "$output" = other ]
 }
 
 @test "device name is read from the rule, with a fallback" {
@@ -161,6 +161,36 @@ NONAME='block id 1:2 serial "" name "" with-interface { 08:06:50 }'
     [[ "$output" == *'<b>x</b> %s %b ne[2J'* ]]
     [[ "$output" != *$'\e'* ]]
     [ "$(grep -c '' <<<"$output")" -eq 7 ]
+}
+
+@test "classify: plain is an allowlist, any non-storage interface is other" {
+    run usbguard_classify 'block id 1:2 name "x" with-interface { 02:06:00 }'
+    [ "$output" = other ]
+    run usbguard_classify 'block id 1:2 name "x" with-interface { ff:ff:ff }'
+    [ "$output" = other ]
+    run usbguard_classify 'block id 1:2 name "x" with-interface { e0:01:01 }'
+    [ "$output" = other ]
+    run usbguard_classify 'block id 1:2 name "x" with-interface { 08:06:50 }'
+    [ "$output" = plain ]
+    run usbguard_classify 'block id 1:2 name "x" with-interface { 08:06:50 ff:ff:ff }'
+    [ "$output" = other ]
+    run usbguard_classify 'block id 1:2 name "x" with-interface { 03:01:01 ff:ff:ff }'
+    [ "$output" = hid ]
+}
+
+@test "text: other shows a warning naming the risk" {
+    run usbguard_prompt_text other Dev
+    [[ "$output" == WARNING* ]]
+    [[ "$output" == *"redirect your traffic"* ]]
+}
+
+@test "dialog: every class passes --default-cancel so Enter means Block" {
+    local rule
+    for rule in "$STORAGE" "$HID" "$COMBO" "$NOINFO" 'block name "x" with-interface { ff:ff:ff }'; do
+        : > "$CALLS"
+        ZEN_RC=1 usbguard_prompt_dialog 9 "$rule"
+        grep -q '^zenity .*--default-cancel' "$CALLS"
+    done
 }
 
 @test "dialog: zenity is called with --no-markup" {

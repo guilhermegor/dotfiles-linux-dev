@@ -23,7 +23,7 @@ _usbguard_strip_quoted() {
 # unknown (no interface info). Ambiguity fails toward the strongest warning:
 # more than one with-interface block, or an empty one, is combo, never plain.
 usbguard_classify() {
-    local rule ifaces hid=0 storage=0 i
+    local rule ifaces hid=0 storage=0 other=0 i
     rule="$(_usbguard_strip_quoted "$1")"
     local count
     count="$(printf '%s' "$rule" | grep -o 'with-interface' | wc -l)"
@@ -41,12 +41,16 @@ usbguard_classify() {
         case "$i" in
             03:*) hid=1 ;;
             08:*) storage=1 ;;
+            *) other=1 ;;
         esac
     done
+    # plain is an allowlist: only when EVERY interface is mass storage.
     if [ "$hid" = 1 ] && [ "$storage" = 1 ]; then
         echo combo
     elif [ "$hid" = 1 ]; then
         echo hid
+    elif [ "$other" = 1 ]; then
+        echo other
     else
         echo plain
     fi
@@ -76,6 +80,7 @@ usbguard_prompt_text() {
     case "$class" in
         combo) msg=$'!! STRONG WARNING !!\nThis device claims to be BOTH storage and a keyboard/HID, or its interfaces could not be read safely. That is the classic Rubber Ducky disguise.' ;;
         hid) msg=$'WARNING\nThis device claims to be a keyboard/HID. A keyboard can type commands into your session.' ;;
+        other) msg=$'WARNING\nThis device is not plain storage: it claims a network, wireless, vendor-specific or other interface. Such a device can redirect your traffic or run firmware tricks.' ;;
         unknown) msg=$'WARNING\nThis device reports no interface information, so it cannot be classified. Treat it as a possible keyboard.' ;;
         *) msg=$'It looks like plain storage, but the device decides what it claims to be.' ;;
     esac
@@ -107,7 +112,8 @@ usbguard_prompt_apply() {
 usbguard_prompt_dialog() {
     local id="$1" rule="$2" class out rc=0
     class="$(usbguard_classify "$rule")"
-    out="$(zenity --question --no-markup --timeout 120 \
+    # --default-cancel: Enter/Space on a focus-stealing dialog means Block.
+    out="$(zenity --question --no-markup --default-cancel --timeout 120 \
         --title "USB device blocked ($class)" \
         --text "$(usbguard_prompt_text "$class" "$(usbguard_device_name "$rule")")" \
         --ok-label Allow --cancel-label Block --extra-button "Always allow")" || rc=$?
