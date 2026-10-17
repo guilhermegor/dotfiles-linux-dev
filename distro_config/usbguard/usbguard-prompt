@@ -7,19 +7,36 @@
 # ACL (devices=modify,list,listen), so allow-device / block-device need no root;
 # a PERMANENT allow rewrites the policy and goes through pkexec.
 #
+# The device name and serial in the rule are chosen by the device, so a
+# Rubber Ducky controls them. They are never trusted: classification ignores
+# every quoted string, and the name is sanitized before it reaches the dialog.
+#
 # Sourced by tests/usbguard_prompt.bats: main only runs when executed.
+
+# The rule with every double-quoted string (and its \" escapes) emptied.
+_usbguard_strip_quoted() {
+    printf '%s' "$1" | sed -E 's/"([^"\\]|\\.)*"/""/g'
+}
 
 # Prints the class of a device from the `with-interface { ... }` part of its
 # USBGuard rule: plain (no HID), hid (03:*), combo (08:* plus 03:*) or
-# unknown (no interface info in the rule).
+# unknown (no interface info). Ambiguity fails toward the strongest warning:
+# more than one with-interface block, or an empty one, is combo, never plain.
 usbguard_classify() {
-    local rule="$1" ifaces hid=0 storage=0 i
-    if [[ "$rule" =~ with-interface[[:space:]]+(all-of|one-of|none-of|equals|equals-ordered)?[[:space:]]*\{([^}]*)\} ]]; then
-        ifaces="${BASH_REMATCH[2]}"
-    else
+    local rule ifaces hid=0 storage=0 i
+    rule="$(_usbguard_strip_quoted "$1")"
+    local count
+    count="$(printf '%s' "$rule" | grep -o 'with-interface' | wc -l)"
+    if [ "$count" = 0 ]; then
         echo unknown
         return 0
     fi
+    if [ "$count" != 1 ] || ! [[ "$rule" =~ with-interface[[:space:]]+(all-of|one-of|none-of|equals|equals-ordered)?[[:space:]]*\{([^}]*)\} ]]; then
+        echo combo
+        return 0
+    fi
+    ifaces="${BASH_REMATCH[2]}"
+    [ -n "${ifaces//[[:space:]]/}" ] || { echo combo; return 0; }
     for i in $ifaces; do
         case "$i" in
             03:*) hid=1 ;;
@@ -35,30 +52,34 @@ usbguard_classify() {
     fi
 }
 
-# Device name from the rule text, or "unnamed device".
+# Sanitized device name from the rule, or "unnamed device": control characters
+# and backslashes dropped, capped at 64 characters.
 usbguard_device_name() {
-    if [[ "$1" =~ name[[:space:]]+\"([^\"]*)\" ]] && [ -n "${BASH_REMATCH[1]}" ]; then
-        echo "${BASH_REMATCH[1]}"
+    local name=""
+    if [[ "$1" =~ name[[:space:]]+\"(([^\"\\]|\\.)*)\" ]]; then
+        # shellcheck disable=SC1003 # the trailing \\ is a tr escape for a backslash
+        name="$(printf '%s' "${BASH_REMATCH[1]}" | tr -d '\000-\037\177\\')"
+        name="${name:0:64}"
+    fi
+    if [ -n "$name" ]; then
+        printf '%s' "$name"
     else
-        echo "unnamed device"
+        printf 'unnamed device'
     fi
 }
 
-# Dialog body for CLASS (usbguard_classify output), NAME and the rule's interfaces.
+# Dialog body for CLASS (usbguard_classify output) and an already-sanitized
+# NAME. Static text only goes through $'..'; the name goes through %s.
 usbguard_prompt_text() {
-    local class="$1" name="$2" head tail
-    head="USBGuard blocked a new USB device:\n  $name\n\n"
-    tail="No check can prove a device is not a Rubber Ducky (a USB stick that types as a keyboard). Allow it only if you plugged it in on purpose."
+    local class="$1" name="$2" nocheck msg
+    nocheck=$'No check can prove a device is not a Rubber Ducky (a USB stick that types as a keyboard). Allow it only if you plugged it in on purpose.'
     case "$class" in
-        combo) printf '%b' "!! STRONG WARNING !!\n$head" \
-            "This device claims to be BOTH storage and a keyboard/HID. That is the classic Rubber Ducky disguise.\n\n$tail" ;;
-        hid) printf '%b' "WARNING\n$head" \
-            "This device claims to be a keyboard/HID. A keyboard can type commands into your session.\n\n$tail" ;;
-        unknown) printf '%b' "$head" \
-            "It reports no interface information, so it cannot be classified.\n\n$tail" ;;
-        *) printf '%b' "$head" \
-            "It looks like plain storage, but the device decides what it claims to be.\n\n$tail" ;;
+        combo) msg=$'!! STRONG WARNING !!\nThis device claims to be BOTH storage and a keyboard/HID, or its interfaces could not be read safely. That is the classic Rubber Ducky disguise.' ;;
+        hid) msg=$'WARNING\nThis device claims to be a keyboard/HID. A keyboard can type commands into your session.' ;;
+        unknown) msg=$'WARNING\nThis device reports no interface information, so it cannot be classified. Treat it as a possible keyboard.' ;;
+        *) msg=$'It looks like plain storage, but the device decides what it claims to be.' ;;
     esac
+    printf '%s\n\nUSBGuard blocked a new USB device:\n  %s\n\n%s' "$msg" "$name" "$nocheck"
 }
 
 # Maps zenity's exit code and stdout to allow|always|block. Anything other than
