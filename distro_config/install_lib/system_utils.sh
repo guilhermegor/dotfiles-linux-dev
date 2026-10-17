@@ -1630,6 +1630,27 @@ install_usbguard() {
     print_status "info" "The ACL cannot change daemon parameters or append arbitrary rules. See docs/usbguard.md"
 }
 
+# Allow/Block desktop dialog for blocked devices (#789): a user systemd unit
+# runs `usbguard watch` and calls the installed handler per event. Needs the
+# scoped IPC ACL from install_usbguard (devices=modify,list,listen).
+install_usbguard_prompt() {
+    print_status "section" "USBGUARD PROMPT (Allow/Block dialog)"
+
+    local src bin_dir="$HOME/.local/bin"
+    local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../usbguard" && pwd)" || return 1
+
+    command_exists usbguard || print_status "warning" "usbguard not installed; run install_usbguard first"
+    install_package zenity || return 1
+    run_or_echo install -D -m 0755 "$src/usbguard-prompt" "$bin_dir/usbguard-prompt" || return 1
+    run_or_echo install -D -m 0644 "$src/usbguard-prompt.service" "$unit_dir/usbguard-prompt.service" || return 1
+    run_or_echo systemctl --user daemon-reload || return 1
+    run_or_echo systemctl --user enable --now usbguard-prompt.service || return 1
+
+    print_status "success" "USBGuard prompt running in your session; plug in an unknown USB device to see it"
+    print_status "info" "Always allow asks for your password through polkit (pkexec). See docs/usbguard.md"
+}
+
 # Stops enforcement and removes the package. /etc/usbguard stays (a plain
 # remove keeps config), so a reinstall reuses the policy. Devices blocked while
 # it ran stay blocked until replugged or rebooted.
@@ -1677,6 +1698,7 @@ INSTALL_REGISTRY+=(
     "install_google_authenticator:Google Authenticator (TOTP 2FA)::"
     # Daemon, no launcher: no app-folder placement.
     "install_usbguard:USBGuard (block unknown USB devices)::"
+    "install_usbguard_prompt:USBGuard Allow/Block prompt::"
     "install_dim_calendar_events:Calendar Events Enhancement::"
     "configure_gsconnect:GSConnect::"
     # Shell extension, no launcher: no app-folder placement.

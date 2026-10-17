@@ -13,10 +13,8 @@ setup() {
     export CALLS="$TMP/calls.log"
     : > "$CALLS"
     mkdir -p "$TMP/bin"
-    local c
-    for c in usbguard pkexec; do
-        printf '#!/bin/bash\necho "%s $*" >> "%s"\n' "$c" "$CALLS" > "$TMP/bin/$c"
-    done
+    printf '#!/bin/bash\necho "pkexec $*" >> "%s"\n' "$CALLS" > "$TMP/bin/pkexec"
+    printf '#!/bin/bash\necho "usbguard $*" >> "%s"\n' "$CALLS" > "$TMP/bin/usbguard"
     # zenity: prints $ZEN_OUT, exits $ZEN_RC (default 0), logs the text it was given.
     cat > "$TMP/bin/zenity" <<STUB
 #!/bin/bash
@@ -114,9 +112,60 @@ NONAME='block id 1:2 serial "" name "" with-interface { 08:06:50 }'
     grep -qx 'usbguard block-device 7' "$CALLS"
 }
 
-@test "apply: always -> pkexec usbguard allow-device -p" {
+@test "apply: always -> pkexec usbguard allow-device -p, never the plain call" {
     usbguard_prompt_apply always 7
     grep -qx 'pkexec usbguard allow-device -p 7' "$CALLS"
+    run grep -x 'usbguard allow-device -p 7' "$CALLS"
+    [ "$status" -ne 0 ]
+}
+
+@test "classify: a fake with-interface inside the name cannot hide HID" {
+    run usbguard_classify 'block id 1:2 serial "" name "pen with-interface { 08:06:50 }" hash "h" with-interface { 03:01:01 }'
+    [ "$output" = hid ]
+    run usbguard_classify 'block id 1:2 serial "" name "pen with-interface { 08:06:50 }" hash "h" with-interface { 08:06:50 03:01:01 }'
+    [ "$output" = combo ]
+}
+
+@test "classify: name with } and escaped quotes does not mis-parse" {
+    run usbguard_classify 'block id 1:2 serial "" name "a\" } with-interface { 08:06:50 } \"" hash "h" with-interface { 03:01:01 }'
+    [ "$output" = hid ]
+    run usbguard_classify 'block id 1:2 name "x } y \\" with-interface { 08:06:50 }'
+    [ "$output" = plain ]
+}
+
+@test "classify: two real with-interface blocks or an empty one is combo" {
+    run usbguard_classify 'block id 1:2 name "x" with-interface { 08:06:50 } with-interface { 08:06:50 }'
+    [ "$output" = combo ]
+    run usbguard_classify 'block id 1:2 name "x" with-interface { }'
+    [ "$output" = combo ]
+}
+
+@test "text: unknown shows a warning, never the plain prompt" {
+    run usbguard_prompt_text unknown Dev
+    [[ "$output" == WARNING* ]]
+}
+
+@test "name: control characters, escapes and backslashes are dropped, length capped" {
+    run usbguard_device_name 'block name "ab\ncd'$'\e''[31mX\\y" with-interface { 03:01:01 }'
+    [ "$output" = "abncd[31mXy" ]
+    local long
+    long="$(printf 'a%.0s' {1..100})"
+    run usbguard_device_name "block name \"$long\""
+    [ "${#output}" -eq 64 ]
+}
+
+@test "text: a hostile name is shown literally, never interpreted" {
+    local name
+    name="$(usbguard_device_name 'block name "<b>x</b> %s %b \n\e[2J" with-interface { 03:01:01 }')"
+    run usbguard_prompt_text hid "$name"
+    [[ "$output" == *'<b>x</b> %s %b ne[2J'* ]]
+    [[ "$output" != *$'\e'* ]]
+    [ "$(grep -c '' <<<"$output")" -eq 7 ]
+}
+
+@test "dialog: zenity is called with --no-markup" {
+    usbguard_prompt_dialog 9 "$HID"
+    grep -q '^zenity .*--no-markup' "$CALLS"
 }
 
 @test "dialog: Allow button runs allow-device" {
@@ -124,7 +173,7 @@ NONAME='block id 1:2 serial "" name "" with-interface { 08:06:50 }'
     grep -qx 'usbguard allow-device 9' "$CALLS"
 }
 
-@test "dialog: Always allow button goes through pkexec" {
+@test "dialog: Always allow button runs the permanent allow" {
     ZEN_RC=1 ZEN_OUT="Always allow" usbguard_prompt_dialog 9 "$HID"
     grep -qx 'pkexec usbguard allow-device -p 9' "$CALLS"
 }
@@ -158,6 +207,26 @@ NONAME='block id 1:2 serial "" name "" with-interface { 08:06:50 }'
     wait
     grep -q '^zenity ' "$CALLS"
     grep -qx 'usbguard allow-device 3' "$CALLS"
+}
+
+@test "installer: DRY_RUN installs handler and user unit, enables it, touches nothing" {
+    export HOME="$TMP/home" LOG_FILE="$TMP/log" DRY_RUN=1 PACKAGE_MANAGER=apt
+    mkdir -p "$HOME"
+    export INSTALL_CMD="run_or_echo sudo apt-get install -y"
+    # shellcheck source=../distro_config/install_lib/_common.sh
+    source "$REPO_ROOT/distro_config/install_lib/_common.sh"
+    # shellcheck source=../distro_config/install_lib/system_utils.sh
+    source "$REPO_ROOT/distro_config/install_lib/system_utils.sh"
+    run install_usbguard_prompt
+    [ "$status" -eq 0 ]
+    [[ "$output" == *".local/bin/usbguard-prompt"* ]]
+    [[ "$output" == *"systemctl --user enable --now usbguard-prompt.service"* ]]
+    [ ! -e "$HOME/.local/bin/usbguard-prompt" ]
+    local entry found=
+    for entry in "${INSTALL_REGISTRY[@]}"; do
+        [[ "$entry" == "install_usbguard_prompt:USBGuard Allow/Block prompt::" ]] && found=1
+    done
+    [ -n "$found" ]
 }
 
 @test "unit file runs usbguard watch with the installed handler, never udev" {
