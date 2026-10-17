@@ -1,0 +1,106 @@
+#!/bin/bash
+#
+# usbguard-prompt: Allow/Block desktop dialog for devices USBGuard blocked (#789).
+#
+# Runs in the user's graphical session as the handler of `usbguard watch -e`
+# (see usbguard-prompt.service). The daemon is reached through the scoped IPC
+# ACL (devices=modify,list,listen), so allow-device / block-device need no root;
+# a PERMANENT allow rewrites the policy and goes through pkexec.
+#
+# Sourced by tests/usbguard_prompt.bats: main only runs when executed.
+
+# Prints the class of a device from the `with-interface { ... }` part of its
+# USBGuard rule: plain (no HID), hid (03:*), combo (08:* plus 03:*) or
+# unknown (no interface info in the rule).
+usbguard_classify() {
+    local rule="$1" ifaces hid=0 storage=0 i
+    if [[ "$rule" =~ with-interface[[:space:]]+(all-of|one-of|none-of|equals|equals-ordered)?[[:space:]]*\{([^}]*)\} ]]; then
+        ifaces="${BASH_REMATCH[2]}"
+    else
+        echo unknown
+        return 0
+    fi
+    for i in $ifaces; do
+        case "$i" in
+            03:*) hid=1 ;;
+            08:*) storage=1 ;;
+        esac
+    done
+    if [ "$hid" = 1 ] && [ "$storage" = 1 ]; then
+        echo combo
+    elif [ "$hid" = 1 ]; then
+        echo hid
+    else
+        echo plain
+    fi
+}
+
+# Device name from the rule text, or "unnamed device".
+usbguard_device_name() {
+    if [[ "$1" =~ name[[:space:]]+\"([^\"]*)\" ]] && [ -n "${BASH_REMATCH[1]}" ]; then
+        echo "${BASH_REMATCH[1]}"
+    else
+        echo "unnamed device"
+    fi
+}
+
+# Dialog body for CLASS (usbguard_classify output), NAME and the rule's interfaces.
+usbguard_prompt_text() {
+    local class="$1" name="$2" head tail
+    head="USBGuard blocked a new USB device:\n  $name\n\n"
+    tail="No check can prove a device is not a Rubber Ducky (a USB stick that types as a keyboard). Allow it only if you plugged it in on purpose."
+    case "$class" in
+        combo) printf '%b' "!! STRONG WARNING !!\n$head" \
+            "This device claims to be BOTH storage and a keyboard/HID. That is the classic Rubber Ducky disguise.\n\n$tail" ;;
+        hid) printf '%b' "WARNING\n$head" \
+            "This device claims to be a keyboard/HID. A keyboard can type commands into your session.\n\n$tail" ;;
+        unknown) printf '%b' "$head" \
+            "It reports no interface information, so it cannot be classified.\n\n$tail" ;;
+        *) printf '%b' "$head" \
+            "It looks like plain storage, but the device decides what it claims to be.\n\n$tail" ;;
+    esac
+}
+
+# Maps zenity's exit code and stdout to allow|always|block. Anything other than
+# an explicit choice (close, timeout, error) keeps the device blocked.
+usbguard_prompt_action() {
+    local rc="$1" out="$2"
+    if [ "$rc" = 0 ]; then
+        echo allow
+    elif [ "$out" = "Always allow" ]; then
+        echo always
+    else
+        echo block
+    fi
+}
+
+# Runs the usbguard command for ACTION on device ID.
+usbguard_prompt_apply() {
+    case "$1" in
+        allow)  usbguard allow-device "$2" ;;
+        always) pkexec usbguard allow-device -p "$2" ;;
+        *)      usbguard block-device "$2" ;;
+    esac
+}
+
+usbguard_prompt_dialog() {
+    local id="$1" rule="$2" class out rc=0
+    class="$(usbguard_classify "$rule")"
+    out="$(zenity --question --no-markup --timeout 120 \
+        --title "USB device blocked ($class)" \
+        --text "$(usbguard_prompt_text "$class" "$(usbguard_device_name "$rule")")" \
+        --ok-label Allow --cancel-label Block --extra-button "Always allow")" || rc=$?
+    usbguard_prompt_apply "$(usbguard_prompt_action "$rc" "$out")" "$id"
+}
+
+# Handler for `usbguard watch -e`: one call per IPC event, data in USBGUARD_*.
+usbguard_prompt_main() {
+    [ "${USBGUARD_DEVICE_EVENT:-}" = Insert ] || return 0
+    [ "${USBGUARD_DEVICE_TARGET:-}" = block ] || return 0
+    # Detached: the dialog must not hold up the next event.
+    usbguard_prompt_dialog "$USBGUARD_DEVICE_ID" "${USBGUARD_DEVICE_RULE:-}" &
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    usbguard_prompt_main "$@"
+fi
