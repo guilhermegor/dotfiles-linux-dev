@@ -320,6 +320,16 @@ stash_snapshot_pr_overlap() {
 	fi
 }
 
+# Succeeds (status 0) only when `origin/$b` provably has no commits left to land on
+# `origin/$db`. `git cherry` compares patches, so a squash-merged branch counts as
+# empty too. An unreadable ref or a git error is NOT empty: that fails toward
+# visibility, the same as everywhere else uncertainty is possible (#793).
+branch_is_empty() {
+	local cwd="$1" db="$2" b="$3" cherry
+	cherry="$($GIT -C "$cwd" cherry "origin/$db" "origin/$b" 2>/dev/null)" || return 1
+	[ "$(printf '%s\n' "$cherry" | grep -c '^+')" = "0" ]
+}
+
 sweep_orphan_branches() {
 	local cwd="$1" repo="$2" owner="$3" db="$4" b heads any=0 title
 	# ONE call for every PR head, never one per branch: the per-branch form
@@ -343,6 +353,8 @@ sweep_orphan_branches() {
 				echo "    - $b: STASH SNAPSHOT (\"$title\"), not a branch missing a PR"
 				stash_snapshot_diff_context "$cwd" "$db" "$b"
 				stash_snapshot_pr_overlap "$cwd" "$repo" "$db" "$b"
+			elif branch_is_empty "$cwd" "$db" "$b"; then
+				echo "    - $b: empty (0 commits ahead of $db), no work to rescue"
 			else
 				echo "    - $b"
 			fi
