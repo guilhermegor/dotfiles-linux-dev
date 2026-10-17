@@ -1470,6 +1470,178 @@ uninstall_claudestatus_bar() {
     print_status "success" "claudestatus top-bar removed (restart GNOME Shell to drop the icon)."
 }
 
+# ============================================================================
+# USBGUARD (block unknown USB devices, #788)
+# ============================================================================
+
+_UG_DIR="${_UG_DIR:-/etc/usbguard}"
+
+# True when rules.conf holds at least one rule (a comment-only file is empty).
+# sudo: the file is 0600 root. A missing file reads as "no rules".
+_ug_has_rules() {
+    sudo grep -qvE '^[[:space:]]*(#|$)' "$_UG_DIR/rules.conf" 2>/dev/null
+}
+
+# Writes rules.conf from the devices plugged in right now. Refuses an empty
+# policy: with ImplicitPolicyTarget=block that would block every device,
+# including the keyboard.
+_ug_generate_policy() {
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        run_or_echo sudo usbguard generate-policy
+        run_or_echo sudo install -m 0600 "<generated policy>" "$_UG_DIR/rules.conf"
+        return 0
+    fi
+    local tmp rc
+    tmp="$(mktemp)" || return 1
+    # $tmp is a user-owned mktemp file; the user shell opening the redirect is intended.
+    # shellcheck disable=SC2024
+    if ! sudo usbguard generate-policy > "$tmp" || ! grep -q '^allow' "$tmp"; then
+        rm -f "$tmp"
+        print_status "error" "usbguard generate-policy produced no allow rules; refusing to enforce"
+        return 1
+    fi
+    sudo install -m 0600 "$tmp" "$_UG_DIR/rules.conf"
+    rc=$?
+    rm -f "$tmp"
+    return "$rc"
+}
+
+# Sets KEY=VALUE in usbguard-daemon.conf, replacing the line or appending one.
+_ug_set_key() {
+    local conf="$_UG_DIR/usbguard-daemon.conf"
+    if [ "${DRY_RUN:-0}" = "1" ] || sudo grep -q "^$1=" "$conf"; then
+        run_or_echo sudo sed -i -E "s|^$1=.*|$1=$2|" "$conf"
+    else
+        run_or_echo sudo sed -i "\$a $1=$2" "$conf"
+    fi
+}
+
+# Drops USER from IPCAllowedUsers, keeping root and other entries. An earlier
+# version of this installer put the user there, which grants every privilege.
+_ug_revoke_allowed_user() {
+    run_or_echo sudo sed -i -E "/^IPCAllowedUsers=/{s/ $1( |\$)/\\1/g;s/=$1( |\$)/=\\1/;s/= +/=/}" \
+        "$_UG_DIR/usbguard-daemon.conf"
+}
+
+# IPCAllowedGroups grants every privilege to its members, bypassing the scoped
+# ACL below. Refuses (return 1) when USER sits in a listed group; under DRY_RUN
+# it only reports what it would refuse. Read-only, so it can run before any change.
+_ug_refuse_group_grant() {
+    local grp allowed hit=0 conf="$_UG_DIR/usbguard-daemon.conf"
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        allowed="$(sed -n 's/^IPCAllowedGroups=//p' "$conf" 2>/dev/null)"
+    else
+        allowed="$(sudo sed -n 's/^IPCAllowedGroups=//p' "$conf" 2>/dev/null)"
+    fi
+    for grp in $(id -nG "$1" 2>/dev/null); do
+        case " $allowed " in
+            *" $grp "*)
+                hit=1
+                print_status "error" "$1 is in group '$grp' listed in IPCAllowedGroups: that grants FULL usbguard rights (incl. Parameters=modify), so the scoped ACL would not limit $1. Fix: remove '$grp' from IPCAllowedGroups in $conf, or remove $1 from the group."
+                ;;
+        esac
+    done
+    if [ "$hit" = "1" ] && [ "${DRY_RUN:-0}" = "1" ]; then
+        print_status "info" "DRY_RUN: install_usbguard would refuse here and leave enforcement unchanged"
+        return 0
+    fi
+    [ "$hit" = "0" ]
+}
+
+# Scoped IPC ACL for USER (#789), the file equivalent of
+# `usbguard add-user USER --devices=modify,list,listen --policy=list
+# --exceptions=listen`. Written directly (root, 0600) so it is deterministic and
+# testable. Deliberately NOT IPCAllowedUsers: a user listed there with no ACL
+# file gets every privilege, including Parameters=modify, so any process running
+# as that user could set ImplicitPolicyTarget=allow. This grants no Parameters
+# section and Policy=list only (no rule edits).
+_ug_grant_ipc() {
+    local user="$1" acl_dir="$_UG_DIR/IPCAccessControl.d" tmp rc
+    _ug_revoke_allowed_user "$user" || return 1
+    _ug_set_key IPCAccessControlFiles "$acl_dir/" || return 1
+    run_or_echo sudo install -d -m 0700 "$acl_dir" || return 1
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        run_or_echo sudo install -m 0600 "<Devices=modify,list,listen Policy=list Exceptions=listen>" "$acl_dir/$user"
+        return 0
+    fi
+    tmp="$(mktemp)" || return 1
+    printf 'Devices=modify,list,listen\nPolicy=list\nExceptions=listen\n' > "$tmp"
+    sudo install -m 0600 "$tmp" "$acl_dir/$user"
+    rc=$?
+    rm -f "$tmp"
+    return "$rc"
+}
+
+# Order is the safety property: the policy lands on disk BEFORE the daemon is
+# (re)started, because with ImplicitPolicyTarget=block a daemon that starts on
+# an empty rules.conf blocks the keyboard and mouse too. The Debian package's
+# postinst already seeds rules.conf on first install; the generate step here
+# covers other distros and a failed postinst, and never touches an existing
+# non-empty file.
+install_usbguard() {
+    print_status "section" "USBGUARD (block unknown USB devices)"
+
+    if ! command_exists usbguard; then
+        install_package usbguard || return 1
+    fi
+
+    local user="${SUDO_USER:-$(id -un)}"
+    # Refuse before ANY config change or daemon start if a group grant would
+    # bypass the scoped ACL.
+    if [ "$user" != "root" ]; then
+        _ug_refuse_group_grant "$user" || return 1
+    fi
+
+    if [ "${DRY_RUN:-0}" != "1" ] && _ug_has_rules; then
+        print_status "info" "$_UG_DIR/rules.conf already has rules; keeping it"
+    else
+        _ug_generate_policy || return 1
+    fi
+
+    # Pin the policy file the gates below inspect: a RuleFile pointing at some
+    # other (empty) file would pass the check yet block everything on restart.
+    _ug_set_key RuleFile "$_UG_DIR/rules.conf" || return 1
+    _ug_set_key ImplicitPolicyTarget block || return 1
+    if [ "$user" != "root" ]; then
+        _ug_grant_ipc "$user" || return 1
+    fi
+
+    # Last gate before enforcement: never start a daemon that would block everything.
+    if [ "${DRY_RUN:-0}" != "1" ] && ! _ug_has_rules; then
+        print_status "error" "$_UG_DIR/rules.conf is empty; not starting usbguard"
+        return 1
+    fi
+    run_or_echo sudo systemctl enable usbguard || return 1
+    # restart, not --now: a re-run must reload the config it just changed.
+    run_or_echo sudo systemctl restart usbguard || return 1
+
+    print_status "success" "USBGuard enforcing: devices plugged in now are allowed, new ones are blocked"
+    print_status "info" "List devices:   usbguard list-devices"
+    print_status "info" "Allow a device: usbguard allow-device -p <id>   (-p makes it permanent; $user has a scoped IPC ACL, no sudo)"
+    print_status "info" "Back out:       sudo systemctl disable --now usbguard"
+    print_status "info" "The ACL cannot change daemon parameters or append arbitrary rules. See docs/usbguard.md"
+}
+
+# Stops enforcement and removes the package. /etc/usbguard stays (a plain
+# remove keeps config), so a reinstall reuses the policy. Devices blocked while
+# it ran stay blocked until replugged or rebooted.
+uninstall_usbguard() {
+    print_status "section" "UNINSTALL USBGUARD"
+
+    run_or_echo sudo systemctl disable --now usbguard || true
+    local user="${SUDO_USER:-$(id -un)}"
+    run_or_echo sudo rm -f "$_UG_DIR/IPCAccessControl.d/$user"
+    _ug_revoke_allowed_user "$user" || true
+    case "$PACKAGE_MANAGER" in
+        apt)        run_or_echo sudo apt-get remove -y usbguard || return 1 ;;
+        dnf|yum)    run_or_echo sudo "$PACKAGE_MANAGER" remove -y usbguard || return 1 ;;
+        pacman)     run_or_echo sudo pacman -R --noconfirm usbguard || return 1 ;;
+        zypper)     run_or_echo sudo zypper remove -y usbguard || return 1 ;;
+        *)          print_status "error" "Unsupported package manager: $PACKAGE_MANAGER"; return 1 ;;
+    esac
+    print_status "success" "USBGuard stopped and removed; $_UG_DIR kept. Replug any device that is still blocked."
+}
+
 INSTALL_REGISTRY+=(
     "install_utilities:System Utilities::"
     "install_openlogi:openlogi (Logitech HID++ manager):Sistema:"
@@ -1491,6 +1663,8 @@ INSTALL_REGISTRY+=(
     "install_gsmartcontrol:GSmartControl (disk SMART health):Monitoring:gsmartcontrol.desktop"
     "install_nvtop:nvtop (GPU process monitor):Monitoring:nvtop.desktop"
     "install_google_authenticator:Google Authenticator (TOTP 2FA)::"
+    # Daemon, no launcher: no app-folder placement.
+    "install_usbguard:USBGuard (block unknown USB devices)::"
     "install_dim_calendar_events:Calendar Events Enhancement::"
     "configure_gsconnect:GSConnect::"
     # Shell extension, no launcher: no app-folder placement.
