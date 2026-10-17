@@ -31,6 +31,7 @@ for 3 minutes before it was caught (dotfiles-linux-dev#433).
 
 import datetime
 import json
+import pathlib
 import re
 import sys
 
@@ -303,6 +304,41 @@ def classify_greptile(list_comments: list) -> str:
 	return "BUSY|unrecognised-greptile-notice"
 
 
+REFUSAL_PHRASES_FILE = pathlib.Path(__file__).with_name("greptile_refusal_phrases.txt")
+
+
+def greptile_refused(dict_payload: dict) -> str:
+	"""Report whether the NEWEST Greptile review or comment is a credit/plan refusal.
+
+	The phrases come from ``greptile_refusal_phrases.txt``, the file the review-thread gate
+	reads too (dotfiles-linux-dev#804). A later real review proves the quota is back, so only
+	the newest Greptile item decides; the exact login is required, bare or ``[bot]``.
+
+	Parameters
+	----------
+	dict_payload : dict
+		``{"reviews": [...], "comments": [...]}`` as the forge's REST listings return them.
+
+	Returns
+	-------
+	str
+		``REFUSED`` or ``OK``. An unreadable phrase file reads ``OK`` (nothing to match).
+	"""
+	try:
+		list_phrases = [p for p in REFUSAL_PHRASES_FILE.read_text().lower().splitlines() if p]
+	except OSError:
+		return "OK"
+	list_items = [
+		(r.get("submitted_at") or r.get("created_at") or "", (r.get("body") or "").lower())
+		for r in (dict_payload.get("reviews") or []) + (dict_payload.get("comments") or [])
+		if ((r.get("user") or {}).get("login") or "").removesuffix("[bot]") == "greptile-apps"
+	]
+	if not list_items:
+		return "OK"
+	str_body = max(list_items)[1]
+	return "REFUSED" if any(p in str_body for p in list_phrases) else "OK"
+
+
 def greptile_unsolicited(dict_payload: dict) -> str:
 	"""Report Greptile reviews on heads the ladder never asked about.
 
@@ -356,8 +392,9 @@ def main() -> int:
 	except (json.JSONDecodeError, ValueError):
 		print("UNKNOWN")
 		return 0
-	if str_mode == "greptile-unsolicited":
-		print(greptile_unsolicited(list_comments) if isinstance(list_comments, dict) else "UNKNOWN")
+	dict_modes = {"greptile-unsolicited": greptile_unsolicited, "greptile-refused": greptile_refused}
+	if str_mode in dict_modes:
+		print(dict_modes[str_mode](list_comments) if isinstance(list_comments, dict) else "UNKNOWN")
 		return 0
 	# A forge error body (403 quota, 404) parses as JSON but is an object, not a page
 	# of comments. Everything that is not a list of records is UNKNOWN, never free.
