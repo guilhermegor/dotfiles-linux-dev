@@ -13,7 +13,6 @@ Per-device hardware driver and configuration scripts.
 | `bluetooth_adapter.sh` | Bluetooth adapter setup |
 | `tplink_wifi_adapter.sh` | TP-Link USB Wi-Fi adapter driver install (skips without the adapter; not in `setup_all_drivers`) |
 | `battery_threshold.sh` | Laptop charge cap (`.env` `BATTERY_*_THRESHOLD`, default 75/80) via `charge_control_*_threshold` / IdeaPad `conservation_mode` + boot unit; `--full` lifts it; no-op on desktops |
-| `nvidia_settings_folder.sh` | After the NVIDIA driver install: re-runs `ubuntu_workspace.sh --folders-only` so `nvidia-settings.desktop` lands in the System folder (#796); no-op without the .desktop |
 | `yubikey.sh` | YubiKey — ykman, pcscd, Yubico Authenticator, GPG/SSH, PAM (install-only) |
 
 `setup_all_drivers` may only bundle scripts that are safe on **any** PC (they detect their

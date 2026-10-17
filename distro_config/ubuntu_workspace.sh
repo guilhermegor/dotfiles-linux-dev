@@ -479,6 +479,45 @@ configure_power_settings() {
     print_status "success" "Screen will turn off after $BATTERY_TIMEOUT seconds (30 min) on battery"
 }
 
+# --additive mode (#796): used ONLY by the systemd user path unit that re-places
+# apps installed after the owner-run workspace setup. The owner-run path above
+# replaces each folder's `apps` list wholesale and so wipes hand placements;
+# unattended, that would undo drag-and-drop on every package change. This
+# wrapper stands in for run_or_echo while organize_app_folders runs:
+#   - folder `name` writes and `reset-recursively` are dropped (never renames,
+#     never resets, so a hand-made or hand-renamed folder is untouched);
+#   - `apps` and `folder-children` writes become union(live, computed), via
+#     _merge_dock_favorites, so nothing already placed is ever removed.
+_additive_gsettings_set() {
+    local schema_path="$1" key="$2" computed="$3" live
+    local -a merged=()
+    live=$(gsettings get "$schema_path" "$key" 2>/dev/null) || live=""
+    mapfile -t merged < <(grep -oE "'[^']+'" <<< "$computed")
+    _merge_dock_favorites merged "$live"
+    _uw_run_or_echo_orig gsettings set "$schema_path" "$key" "[$(IFS=,; echo "${merged[*]}")]"
+}
+
+_additive_run_or_echo() {
+    # $1 $2 = gsettings set; $3 = schema(:path); $4 = key; $5 = value
+    if [ "${1:-}" = "gsettings" ] && [ "${2:-}" = "reset-recursively" ]; then
+        return 0
+    fi
+    if [ "${1:-}" = "gsettings" ] && [ "${2:-}" = "set" ]; then
+        case "$4" in
+            name) return 0 ;;
+            apps|folder-children) _additive_gsettings_set "$3" "$4" "$5"; return 0 ;;
+        esac
+    fi
+    _uw_run_or_echo_orig "$@"
+}
+
+# Swap run_or_echo for the additive wrapper (process-wide; the --additive
+# entrypoint exits right after organize_app_folders).
+enable_additive_folders() {
+    eval "$(declare -f run_or_echo | sed '1s/^run_or_echo/_uw_run_or_echo_orig/')"
+    run_or_echo() { _additive_run_or_echo "$@"; }
+}
+
 organize_app_folders() {
     print_status "info" "Organizing applications into folders..."
     
@@ -1739,6 +1778,26 @@ configure_dim_calendar_events() {
     print_status "info" "Click the clock in the top bar to see your schedule"
 }
 
+# Install + enable the systemd user path unit that re-runs
+# `--folders-only --additive` when any application dir changes, so apps
+# installed after this run (driver installers, apt, snap, flatpak) are placed
+# without a manual re-run (#796). Units live in distro_config/systemd/.
+install_app_folder_watcher() {
+    local script_dir unit_src unit_dir="$HOME/.config/systemd/user"
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    unit_src="$script_dir/systemd"
+    local tmp unit
+    tmp=$(mktemp -d)
+    for unit in app-folders.path app-folders.service; do
+        sed "s|@WORKSPACE_SCRIPT@|$script_dir/ubuntu_workspace.sh|g" "$unit_src/$unit" > "$tmp/$unit"
+        run_or_echo install -Dm644 "$tmp/$unit" "$unit_dir/$unit"
+    done
+    rm -rf "$tmp"
+    run_or_echo systemctl --user daemon-reload
+    run_or_echo systemctl --user enable --now app-folders.path
+    print_status "success" "App-folder watcher enabled (app-folders.path)"
+}
+
 main() {
     if [ "$EUID" -eq 0 ]; then
         print_status "error" "This script should NOT be run with sudo!"
@@ -1759,6 +1818,7 @@ main() {
     configure_inactivity_time_lock
     configure_power_settings
     organize_app_folders
+    install_app_folder_watcher
     configure_vitals
     configure_dim_calendar_events
 
@@ -1773,7 +1833,9 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     # --folders-only: re-place app-grid folders after a later install (e.g. the
     # NVIDIA driver, #796) without the full dock/theme/power reconfigure.
+    # --additive (path unit only): union with live placements, never removes.
     if [ "${1:-}" = "--folders-only" ]; then
+        [ "${2:-}" = "--additive" ] && enable_additive_folders
         organize_app_folders
     else
         main
