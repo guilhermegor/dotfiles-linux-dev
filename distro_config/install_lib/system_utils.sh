@@ -1516,6 +1516,13 @@ _ug_set_key() {
     fi
 }
 
+# Drops USER from IPCAllowedUsers, keeping root and other entries. An earlier
+# version of this installer put the user there, which grants every privilege.
+_ug_revoke_allowed_user() {
+    run_or_echo sudo sed -i -E "/^IPCAllowedUsers=/{s/ $1( |\$)/\\1/g;s/=$1( |\$)/=\\1/;s/= +/=/}" \
+        "$_UG_DIR/usbguard-daemon.conf"
+}
+
 # Scoped IPC ACL for USER (#789), the file equivalent of
 # `usbguard add-user USER --devices=modify,list,listen --policy=list
 # --exceptions=listen`. Written directly (root, 0600) so it is deterministic and
@@ -1525,6 +1532,7 @@ _ug_set_key() {
 # section and Policy=list only (no rule edits).
 _ug_grant_ipc() {
     local user="$1" acl_dir="$_UG_DIR/IPCAccessControl.d" tmp rc
+    _ug_revoke_allowed_user "$user" || return 1
     _ug_set_key IPCAccessControlFiles "$acl_dir/" || return 1
     run_or_echo sudo install -d -m 0700 "$acl_dir" || return 1
     if [ "${DRY_RUN:-0}" = "1" ]; then
@@ -1573,10 +1581,9 @@ install_usbguard() {
 
     print_status "success" "USBGuard enforcing: devices plugged in now are allowed, new ones are blocked"
     print_status "info" "List devices:   usbguard list-devices"
-    print_status "info" "Allow (this boot): usbguard allow-device <id>   ($user has a scoped IPC ACL, no sudo)"
-    print_status "info" "Allow (permanent): sudo usbguard allow-device -p <id>"
-    print_status "info" "Back out:          sudo systemctl disable --now usbguard"
-    print_status "info" "The ACL cannot change daemon parameters or edit rules. See docs/usbguard.md"
+    print_status "info" "Allow a device: usbguard allow-device -p <id>   (-p makes it permanent; $user has a scoped IPC ACL, no sudo)"
+    print_status "info" "Back out:       sudo systemctl disable --now usbguard"
+    print_status "info" "The ACL cannot change daemon parameters or append arbitrary rules. See docs/usbguard.md"
 }
 
 # Stops enforcement and removes the package. /etc/usbguard stays (a plain
@@ -1586,7 +1593,9 @@ uninstall_usbguard() {
     print_status "section" "UNINSTALL USBGUARD"
 
     run_or_echo sudo systemctl disable --now usbguard || true
-    run_or_echo sudo rm -f "$_UG_DIR/IPCAccessControl.d/${SUDO_USER:-$(id -un)}"
+    local user="${SUDO_USER:-$(id -un)}"
+    run_or_echo sudo rm -f "$_UG_DIR/IPCAccessControl.d/$user"
+    _ug_revoke_allowed_user "$user" || true
     case "$PACKAGE_MANAGER" in
         apt)        run_or_echo sudo apt-get remove -y usbguard || return 1 ;;
         dnf|yum)    run_or_echo sudo "$PACKAGE_MANAGER" remove -y usbguard || return 1 ;;

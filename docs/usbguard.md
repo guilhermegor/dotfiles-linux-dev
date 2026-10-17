@@ -34,14 +34,23 @@ There are no prompts, and `DRY_RUN=1` prints every step without running it.
 
 ```bash
 usbguard list-devices                 # blocked devices show as "block"
-usbguard allow-device <id>            # this boot only, no sudo
-sudo usbguard allow-device -p <id>    # -p makes the rule permanent
+usbguard allow-device <id>            # this boot only
+usbguard allow-device -p <id>         # -p makes the rule permanent
 ```
 
-Your scoped ACL lets you list devices and change a device's state for the
-current boot. It grants no `Parameters` section and only `Policy=list`, so you
-cannot change daemon parameters or edit rules; make a permanent allow with
-`sudo` (a pkexec helper is planned in #789).
+Neither needs sudo. In usbguard 1.1.2 `allow-device` (permanent or not) is the
+`applyDevicePolicy` IPC call, gated only by `Devices=modify`
+(`src/Library/IPCServerPrivate.cpp`, `registerHandler<IPC::applyDevicePolicy>`
+with `Section::DEVICES`, `Privilege::MODIFY`; the `permanent` flag is not
+checked separately). So your user can allow or block (including permanently)
+devices that exist, but cannot change `Parameters` (such as
+`ImplicitPolicyTarget`) or append or remove arbitrary policy rules
+(`appendRule`/`removeRule` need `Policy=modify`, which is not granted).
+Treat that as the trust boundary: a process running as you can permanently
+allow a device that is plugged in.
+
+An earlier version of this installer listed the user in `IPCAllowedUsers`;
+re-running the installer removes that entry (root and other entries stay).
 
 ## Back out
 

@@ -182,7 +182,7 @@ call_line() {
     run install_usbguard
     [ "$status" -eq 0 ]
     [[ "$output" == *"usbguard list-devices"* ]]
-    [[ "$output" == *"sudo usbguard allow-device -p <id>"* ]]
+    [[ "$output" == *"usbguard allow-device -p <id>"* ]]
     [[ "$output" == *"sudo systemctl disable --now usbguard"* ]]
 }
 
@@ -206,6 +206,26 @@ call_line() {
     remove="$(call_line 'apt-get remove -y usbguard')"
     [ -n "$stop" ] && [ -n "$remove" ]
     [ "$stop" -lt "$remove" ]
+}
+
+@test "a stale IPCAllowedUsers grant from the earlier version is removed, root and others kept" {
+    sed -i 's/^IPCAllowedUsers=.*/IPCAllowedUsers=root alice bob/' "$_UG_DIR/usbguard-daemon.conf"
+    run install_usbguard
+    [ "$status" -eq 0 ]
+    run grep '^IPCAllowedUsers=' "$_UG_DIR/usbguard-daemon.conf"
+    [ "$output" = "IPCAllowedUsers=root bob" ]
+    sed -i 's/^IPCAllowedUsers=.*/IPCAllowedUsers=root alice/' "$_UG_DIR/usbguard-daemon.conf"
+    run install_usbguard
+    run grep '^IPCAllowedUsers=' "$_UG_DIR/usbguard-daemon.conf"
+    [ "$output" = "IPCAllowedUsers=root" ]
+}
+
+@test "uninstall also drops a stale IPCAllowedUsers entry" {
+    sed -i 's/^IPCAllowedUsers=.*/IPCAllowedUsers=root alice/' "$_UG_DIR/usbguard-daemon.conf"
+    run uninstall_usbguard
+    [ "$status" -eq 0 ]
+    run grep '^IPCAllowedUsers=' "$_UG_DIR/usbguard-daemon.conf"
+    [ "$output" = "IPCAllowedUsers=root" ]
 }
 
 @test "uninstall removes the user's ACL file" {
