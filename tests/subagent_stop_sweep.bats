@@ -631,13 +631,54 @@ STUB
     [[ "$output" == *"- feat/793-squashed: empty (0 commits ahead of main), no work to rescue"* ]]
 }
 
-@test "a branch whose ahead count cannot be read stays a plain orphan line" {
+@test "a multi-commit squash-merged branch is labelled empty" {
     stub_gh_orphan
-    git push -q origin HEAD:refs/heads/feat/793-unreadable
-    git update-ref -d refs/remotes/origin/feat/793-unreadable
+    git checkout -q -b feat/793-squash2
+    echo a > a.txt; git add a.txt; git commit -q -m "one"
+    echo b > b.txt; git add b.txt; git commit -q -m "two"
+    git push -q origin HEAD:refs/heads/feat/793-squash2
+
+    git checkout -q main
+    echo a > a.txt; echo b > b.txt; git add a.txt b.txt
+    git commit -q -m "squash: one+two (#2)"
+    git push -q origin HEAD:refs/heads/main
 
     run sweep_orphan_branches "$REPO" "o/r" "o" "main"
-    grep -qxF "    - feat/793-unreadable" <<<"$output"
+    [[ "$output" == *"- feat/793-squash2: empty"* ]]
+}
+
+@test "a branch whose patch was reverted on the base keeps the plain orphan line" {
+    stub_gh_orphan
+    git checkout -q -b feat/793-reverted
+    echo work > realfile.txt; git add realfile.txt; git commit -q -m "work"
+    git push -q origin HEAD:refs/heads/feat/793-reverted
+
+    git checkout -q main
+    echo work > realfile.txt; git add realfile.txt; git commit -q -m "land work"
+    git rm -q realfile.txt; git commit -q -m "revert work"
+    git push -q origin HEAD:refs/heads/main
+
+    run sweep_orphan_branches "$REPO" "o/r" "o" "main"
+    grep -qxF "    - feat/793-reverted" <<<"$output"
+}
+
+@test "a stale local ref does not hide a fresh push" {
+    stub_gh_orphan
+    git push -q origin HEAD:refs/heads/feat/793-stale
+    git clone -q -b feat/793-stale "$REPO/origin.git" "$REPO/other"
+    echo fresh > "$REPO/other/fresh.txt"
+    git -C "$REPO/other" add fresh.txt
+    git -C "$REPO/other" -c user.email=t@t -c user.name=t commit -q -m "fresh work"
+    git -C "$REPO/other" push -q origin HEAD:refs/heads/feat/793-stale
+
+    run sweep_orphan_branches "$REPO" "o/r" "o" "main"
+    grep -qxF "    - feat/793-stale" <<<"$output"
+}
+
+@test "a branch whose refs cannot be fetched is not empty" {
+    git push -q origin HEAD:refs/heads/feat/793-unreadable
+    run branch_is_empty "$REPO" "main" "feat/793-no-such-branch"
+    [ "$status" -eq 1 ]
 }
 
 # --- agent-type gate: sweep fires only for dev/implementation subagents (dotfiles-linux-dev#508) -------

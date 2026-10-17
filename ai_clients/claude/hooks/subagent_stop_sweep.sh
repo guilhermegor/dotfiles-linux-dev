@@ -320,14 +320,17 @@ stash_snapshot_pr_overlap() {
 	fi
 }
 
-# Succeeds (status 0) only when `origin/$b` provably has no commits left to land on
-# `origin/$db`. `git cherry` compares patches, so a squash-merged branch counts as
-# empty too. An unreadable ref or a git error is NOT empty: that fails toward
-# visibility, the same as everywhere else uncertainty is possible (#793).
+# Succeeds (status 0) only when merging `origin/$b` into `origin/$db` would change nothing,
+# i.e. the base tree already holds everything the branch has. Comparing trees (not patches via
+# `git cherry`) covers squash merges of any length, merge commits with conflict resolutions,
+# and a patch later reverted on the base. The two refs are refreshed first so a stale local
+# copy cannot hide fresh pushes. A failed fetch, a conflicting merge, or an unreadable ref is
+# NOT empty: that fails toward visibility, as everywhere else uncertainty is possible (#793).
 branch_is_empty() {
-	local cwd="$1" db="$2" b="$3" cherry
-	cherry="$($GIT -C "$cwd" cherry "origin/$db" "origin/$b" 2>/dev/null)" || return 1
-	[ "$(printf '%s\n' "$cherry" | grep -c '^+')" = "0" ]
+	local cwd="$1" db="$2" b="$3" merged
+	$GIT -C "$cwd" fetch --quiet origin "$db" "$b" 2>/dev/null || return 1
+	merged="$($GIT -C "$cwd" merge-tree --write-tree "origin/$db" "origin/$b" 2>/dev/null | head -n1)" || return 1
+	[ -n "$merged" ] && [ "$merged" = "$($GIT -C "$cwd" rev-parse "origin/$db^{tree}" 2>/dev/null)" ]
 }
 
 sweep_orphan_branches() {
