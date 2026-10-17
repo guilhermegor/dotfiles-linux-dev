@@ -217,8 +217,11 @@ jobs:
           # (dotfiles-linux-dev#431), so `review_count` alone can no longer tell
           # "reviewed, found nothing" apart from "never reviewed" — the
           # verified issue_comment marker above is what makes that call now.
-          review_count=$(gh pr view "$PR_NUMBER" --repo "$OWNER/$REPO" \
-            --json reviews --jq '.reviews | length')
+          # ⚠️ dotfiles-linux-dev#804: a Greptile trial-credit refusal is a submitted COMMENTED
+          # review, but not a review of anything -- the count excludes it (measured: #801 green on
+          # a refusal alone).
+          review_count=$(gh pr view "$PR_NUMBER" --repo "$OWNER/$REPO" --json reviews |
+            jq -r --arg refusal "$(_gate_greptile_refusal_phrases)" "$(_gate_real_review_count_filter)")
           [ "$review_count" -gt 0 ] && reviewer_reported=1
 
           # ⚠️ Resolve the completion marker from the PR's HISTORY, not only

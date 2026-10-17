@@ -77,7 +77,7 @@ run_comment_filter() {
 # run_reported_filter <fixture-json> <roster>
 run_reported_filter() {
     run bash -c "source '$GATE'; printf '%s' '$1' \
-        | jq -r --arg roster '$2' --arg marker '$MARKER' \"\$(_gate_reported_filter)\""
+        | jq -r --arg roster '$2' --arg marker '$MARKER' --arg refusal \"\$(_gate_greptile_refusal_phrases)\" \"\$(_gate_reported_filter)\""
 }
 
 # reviewed_fixture <reviews-json-array> <comments-json-array>

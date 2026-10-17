@@ -904,13 +904,27 @@ _post_issue_comment() {
 # pending, or already reviewed), 1 when the ladder should fall through to
 # run_fallback_review. Fails closed: any unreadable input is a fall-through.
 run_hosted_rungs() {
-	local owner="$1" repo="$2" pr_number="$3" head_sha comments reviews verdict unsolicited ask_body ask_author
+	local owner="$1" repo="$2" pr_number="$3" head_sha comments reviews verdict unsolicited ask_body ask_author refused
+
+	if [[ " ${LADDER_SKIP_RUNGS:-} " == *" greptile "* ]]; then
+		print_status "info" "rung greptile excluded earlier this run"
+		return 1
+	fi
 
 	head_sha="$(_pr_head_sha "$owner" "$repo" "$pr_number")"
 	comments="$(_pr_issue_comments_json "$owner" "$repo" "$pr_number")" || comments=""
 	reviews="$(_pr_reviews_json_strict "$owner" "$repo" "$pr_number")" || reviews=""
 	if [ -z "$head_sha" ] || [ -z "$comments" ] || [ -z "$reviews" ]; then
 		print_status "info" "rung greptile skipped: head, comments or reviews unreadable"
+		return 1
+	fi
+
+	# dotfiles-linux-dev#804: the newest Greptile item being a credit/plan refusal means the
+	# rung cannot review anything -- no ask, no "unsolicited" warning, fall through.
+	refused="$(jq -cn --argjson r "$reviews" --argjson c "$comments" '{reviews: $r, comments: $c}' |
+		python3 "$LIB_DIR/slot_classify.py" greptile-refused)"
+	if [ "$refused" = "REFUSED" ]; then
+		print_status "info" "rung greptile skipped: trial credits exhausted"
 		return 1
 	fi
 
