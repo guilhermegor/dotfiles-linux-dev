@@ -1771,5 +1771,11 @@ main() {
 # Execute main only when the script is run directly. Sourcing this file (e.g.
 # from a test or to access INSTALL_REGISTRY) must not trigger gsettings calls.
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-    main
+    # --folders-only: re-place app-grid folders after a later install (e.g. the
+    # NVIDIA driver, #796) without the full dock/theme/power reconfigure.
+    if [ "${1:-}" = "--folders-only" ]; then
+        organize_app_folders
+    else
+        main
+    fi
 fi
