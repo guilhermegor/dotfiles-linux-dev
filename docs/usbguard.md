@@ -76,10 +76,14 @@ The text depends on the interface classes in the rule's
 
 | Device claims | Dialog |
 |---------------|--------|
-| storage only (no `03:*`) | plain prompt |
+| every interface is storage (`08:*`) | plain prompt |
+| any other non-HID interface (network `02`, wireless `e0`, vendor `ff`, ...) | WARNING: can redirect traffic or run firmware tricks |
 | HID (`03:*`) | WARNING: claims to be a keyboard |
 | storage (`08:*`) and HID | STRONG WARNING: the classic Rubber Ducky disguise |
 | no interface info | WARNING: cannot be classified, treat as a possible keyboard |
+
+The dialog's default button is Block (`--default-cancel`), so a stray Enter
+or Space never allows a device.
 
 The device chooses its own name and serial, so the classifier ignores every
 double-quoted string in the rule before looking for `with-interface`; more
