@@ -41,7 +41,8 @@ the two rungs publish to different places and neither channel alone sees the oth
    the PR author — the primary rung's channel, exact, no timestamp reasoning needed. The
    author clause matters: GitHub records every thread REPLY as a ``COMMENTED`` review on the
    head, so the author answering threads after a fix push is not a reviewer reading it
-   (#800, measured on #795). An unreadable roster counts nothing: "needs a review", never
+   (#800, measured on #795). No roster FILE falls back to any Bot-typed author, as the gate
+   does; a roster that exists but cannot be read counts nothing: "needs a review", never
    "covered";
 2. **or** a comment carrying the ladder's attribution line whose second line
    (``Reviewed head: <sha>``) names ``headRefOid`` AND whose ``createdAt`` is strictly after
@@ -138,7 +139,7 @@ OPEN_PR_LIST_CAP = 200
 # (see `truncated_window`).
 PR_SELECTION = (
 	"number headRefOid baseRefName mergeStateStatus isDraft author{login} "
-	"reviews(last:100){totalCount nodes{commit{oid} author{login}}} "
+	"reviews(last:100){totalCount nodes{commit{oid} author{login __typename}}} "
 	"comments(last:100){totalCount nodes{body createdAt author{login}}} "
 	"commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{"
 	"__typename ... on CheckRun{name status conclusion} "
@@ -308,7 +309,10 @@ def _rest_review(review: dict) -> dict:
 	"""Adapt one REST review into the GraphQL review shape (commit and author)."""
 	return {
 		"commit": {"oid": review.get("commit_id")},
-		"author": {"login": (review.get("user") or {}).get("login")},
+		"author": {
+			"login": (review.get("user") or {}).get("login"),
+			"__typename": (review.get("user") or {}).get("type"),
+		},
 	}
 
 
@@ -594,14 +598,18 @@ def _login_key(login: str | None) -> str:
 
 
 @functools.cache
-def reviewer_roster() -> frozenset[str]:
-	"""Return the normalised logins of the repo's reviewer roster, empty when unreadable.
+def reviewer_roster() -> frozenset[str] | None:
+	"""Return the normalised roster logins, None when the repo has no roster file.
 
 	The roster is ``.review-bots.yaml`` in the working directory -- the file (and the
 	``- login:`` line shape) ``review_thread_gate.sh`` reads, so the two cannot disagree about
-	who a reviewer is (#800). Missing or unreadable is the EMPTY set: no review then counts as
-	coverage and every PR reads "needs a review" -- fail closed, never a guessed "covered".
+	who a reviewer is (#800). An ABSENT file is None, and ``roster_reviews`` then falls back to
+	"any Bot account" exactly as the gate does (most repos ship no roster; counting nothing there
+	would demand a review on every PR forever). A file that EXISTS but cannot be read is the EMPTY
+	set: nothing counts, "needs a review" -- fail closed, never a guessed "covered".
 	"""
+	if not Path(REVIEW_ROSTER_FILE).is_file():
+		return None
 	try:
 		text = Path(REVIEW_ROSTER_FILE).read_text()
 	except OSError:
@@ -621,12 +629,15 @@ def roster_reviews(pr: dict) -> list[dict]:
 	"""
 	roster = reviewer_roster()
 	author = _login_key((pr.get("author") or {}).get("login"))
-	return [
-		review
-		for review in pr.get("reviews") or []
-		if _login_key((review.get("author") or {}).get("login")) in roster
-		and _login_key((review.get("author") or {}).get("login")) != author
-	]
+
+	def counts(who: dict) -> bool:
+		login = _login_key(who.get("login"))
+		if not login or login == author:
+			return False
+		# No roster file: the gate's fallback, a Bot-typed account (never a login substring).
+		return who.get("__typename") == "Bot" if roster is None else login in roster
+
+	return [review for review in pr.get("reviews") or [] if counts(review.get("author") or {})]
 
 
 def reviewed_at_head(pr: dict) -> bool:

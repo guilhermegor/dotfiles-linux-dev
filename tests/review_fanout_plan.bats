@@ -115,7 +115,7 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
             nodes: [$page[] | {number, headRefOid, baseRefName: (.baseRefName // "master"), mergeStateStatus, isDraft,
                 author: (.author // {login: "guilhermegor"}),
                 reviews: {totalCount: (.reviewsTotal // ((.reviews // []) | length)),
-                          nodes: [(.reviews // [])[-100:][] | . + {author: (.author // {login: "coderabbitai"})}]},
+                          nodes: [(.reviews // [])[-100:][] | . + {author: (.author // {login: "coderabbitai", __typename: "Bot"})}]},
                 comments: {totalCount: (.commentsTotal // ((.comments // []) | length)),
                            nodes: ((.comments // [])[-100:])},
                 commits: {nodes: [{commit: {statusCheckRollup:
@@ -140,7 +140,8 @@ elif [ "$1" = "api" ] && [[ "$2" == */pulls/*/reviews* ]]; then
     [ -n "${GH_PAGING_FAIL:-}" ] && { echo "gh: HTTP 502" >&2; exit 1; }
     p=1; [[ "$2" == *\&page=* ]] && p="${2##*\&page=}"
     jq --argjson n "$n" --argjson p "$p" '[.[] | select(.number == $n) | (.reviews // [])[]
-        | {commit_id: .commit.oid, user: {login: (.author.login // "coderabbitai")}}]
+        | {commit_id: .commit.oid, user: {login: (.author.login // "coderabbitai"),
+                    type: (.author.__typename // (if .author then "User" else "Bot" end))}}]
         | .[($p - 1) * 100:$p * 100]' "$FIXTURE"
 elif [ "$1" = "api" ] && [[ "$2" == */issues/*/comments* ]]; then
     n="${2#*/issues/}"; n="${n%%/*}"
@@ -341,11 +342,12 @@ EOF
     [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "804" ]
 }
 
-@test "an unreadable roster fails closed: a roster-bot review no longer counts (#800)" {
-    rm "$TEST_TMP/.review-bots.yaml"
+@test "an existing but unreadable roster fails closed: a roster-bot review no longer counts (#800)" {
+    chmod 000 "$TEST_TMP/.review-bots.yaml"
+    [ ! -r "$TEST_TMP/.review-bots.yaml" ] || skip "running as a user that ignores file modes"
     stub_gh_prs <<EOF
 [{"number":805,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
-  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":"coderabbitai"}}],
+  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":"coderabbitai","__typename":"Bot"}}],
   "comments":[],
   "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
   "statusCheckRollup":[]}]
@@ -353,6 +355,53 @@ EOF
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "805" ]
+}
+
+@test "no roster file: a Bot-typed review on the head is coverage, like the thread gate (#800)" {
+    rm "$TEST_TMP/.review-bots.yaml"
+    stub_gh_prs <<EOF
+[{"number":808,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":"some-reviewer","__typename":"Bot"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 808)" == *"already reviewed at the current head"* ]]
+}
+
+@test "no roster file: an author-only reply on the head still needs a review (#795 shape)" {
+    rm "$TEST_TMP/.review-bots.yaml"
+    stub_gh_prs <<EOF
+[{"number":809,"headRefOid":"9dfbeacc","mergeStateStatus":"BLOCKED","isDraft":false,
+  "author":{"login":"guilhermegor"},
+  "reviews":[{"commit":{"oid":"a0f7e5aa"},"author":{"login":"coderabbitai","__typename":"Bot"}},
+             {"commit":{"oid":"9dfbeacc"},"author":{"login":"guilhermegor","__typename":"User"}}],
+  "comments":[],
+  "commits":[{"oid":"9dfbeacc","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "809" ]
+}
+
+@test "no roster file, REST fallback: a bot-typed user review is coverage (#800)" {
+    rm "$TEST_TMP/.review-bots.yaml"
+    GH_GRAPHQL_FAIL=1
+    export GH_GRAPHQL_FAIL
+    stub_gh_prs <<EOF
+[{"number":810,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa1111"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [[ "$(reason_for 810)" == *"already reviewed at the current head"* ]]
 }
 
 @test "REST fallback: author-only review is not coverage, [bot]-suffixed roster review is (#800)" {
