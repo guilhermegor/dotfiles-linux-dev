@@ -286,3 +286,10 @@ STUB
     [ "$status" -eq 0 ]
     [[ "$output" == *"log out and in once"* ]]
 }
+
+@test "install_openwhispr checks SUDO_USER, not root, for input-group membership" {
+    printf '#!/bin/bash\necho "input:x:104:desk"\n' > "$TMP/bin/getent"; chmod +x "$TMP/bin/getent"
+    SUDO_USER=desk USER=root run install_openwhispr
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"log out and in once"* ]]
+}

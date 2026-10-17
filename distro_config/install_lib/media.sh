@@ -270,10 +270,12 @@ install_openwhispr() {
     print_status "success" "OpenWhispr installed"
     # The .deb's postinst adds $SUDO_USER (else logname) to 'input'; skipped when neither
     # resolves, e.g. a bare root shell. Say which case this is instead of assuming.
-    if getent group input | cut -d: -f4 | tr ',' '\n' | grep -qx "${USER:-}"; then
+    local target_user="${SUDO_USER:-}"
+    { [ -z "$target_user" ] || [ "$target_user" = root ]; } && target_user=$(logname 2>/dev/null || echo "${USER:-}")
+    if getent group input | cut -d: -f4 | tr ',' '\n' | grep -qx "$target_user"; then
         print_status "config" "Auto-paste on Wayland uses ydotool: log out and in once so the 'input' group applies"
     else
-        print_status "warning" "Auto-paste on Wayland needs the 'input' group: run 'sudo usermod -aG input \$USER', then log out and in"
+        print_status "warning" "Auto-paste on Wayland needs the 'input' group: run 'sudo usermod -aG input \$USER' (as your login user), then log out and in"
     fi
 }
 
