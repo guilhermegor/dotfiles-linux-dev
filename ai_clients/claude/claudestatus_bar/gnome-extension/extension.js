@@ -73,7 +73,7 @@ class Indicator extends PanelMenu.Button {
         this.menu.addMenuItem(item);
     }
 
-    // Name (required) + optional label. The dialog only collects them; _runAdd does the login.
+    // Name (required). The dialog only collects it; _runAdd does the login.
     _addAccountDialog() {
         this.menu.close();
         const dialog = new ModalDialog.ModalDialog({styleClass: 'prompt-dialog'});
@@ -85,9 +85,8 @@ class Indicator extends PanelMenu.Button {
         });
         const box = new St.BoxLayout({vertical: true, style: 'spacing: 8px;'});
         const nameEntry = new St.Entry({hint_text: 'Account name', can_focus: true});
-        const labelEntry = new St.Entry({hint_text: 'Label (optional)', can_focus: true});
         const status = new St.Label({text: ''});
-        [new St.Label({text: 'Add Claude account'}), nameEntry, labelEntry, status]
+        [new St.Label({text: 'Add Claude account'}), nameEntry, status]
             .forEach(w => box.add_child(w));
         dialog.contentLayout.add_child(box);
         dialog.addButton({label: 'Cancel', key: Clutter.KEY_Escape, action: () => dialog.close()});
@@ -101,19 +100,19 @@ class Indicator extends PanelMenu.Button {
                     return;
                 }
                 dialog.close();
-                this._runAdd(name, labelEntry.text.trim());
+                this._runAdd(name);
             },
         });
         dialog.open();
         nameEntry.grab_key_focus();
     }
 
-    // refresh.mjs validates, runs `claudestatus add` (opens the browser login) and saves the label;
+    // refresh.mjs validates, runs `claudestatus add` (opens the browser login);
     // failures come back as its last stderr line. A modal dialog grabs all input, so it is closed
     // before the login starts (the browser must stay usable) and progress shows on the panel
     // button. The menu item stays insensitive until the add and its usage snapshot finish, so two
     // adds never overlap.
-    _runAdd(name, label) {
+    _runAdd(name) {
         this._addItem.setSensitive(false);
         this._label.text = '…';
         const finish = refreshError => {
@@ -122,7 +121,7 @@ class Indicator extends PanelMenu.Button {
                 Main.notify('claudestatus', refreshError);
             this._reload(refreshError);
         };
-        node(this._dir, 'refresh.mjs', ['add', name, label], (_out, err) => {
+        node(this._dir, 'refresh.mjs', ['add', name], (_out, err) => {
             if (this._destroyed)
                 return;
             if (err)
@@ -135,43 +134,6 @@ class Indicator extends PanelMenu.Button {
         });
     }
 
-    // Click the label row -> entry; Enter saves, Esc cancels, empty clears (labels.mjs set).
-    _labelRow(name, label) {
-        const item = new PopupMenu.PopupMenuItem(label ? `🏷 ${label}` : '🏷 add label…');
-        // Overriding activate (as PopupSwitchMenuItem does) keeps the menu open for the entry.
-        item.activate = () => {
-            if (item._editing)
-                return;
-            item._editing = true;
-            const entry = new St.Entry({text: label ?? '', hint_text: 'Label', can_focus: true, x_expand: true});
-            item.label.hide();
-            item.add_child(entry);
-            entry.grab_key_focus();
-            entry.clutter_text.connect('key-press-event', (_t, ev) => {
-                const key = ev.get_key_symbol();
-                if (key === Clutter.KEY_Escape) {
-                    this._reload();
-                    return Clutter.EVENT_STOP;
-                }
-                if (key === Clutter.KEY_Return || key === Clutter.KEY_KP_Enter) {
-                    node(this._dir, 'labels.mjs', ['set', name, entry.text], (_out, err) => {
-                        if (this._destroyed)
-                            return;
-                        if (!err) {
-                            this._reload();
-                            return;
-                        }
-                        // Keep the edit on screen so the typed label is not lost.
-                        Main.notify('claudestatus', `Label not saved: ${err}`);
-                    });
-                    return Clutter.EVENT_STOP;
-                }
-                return Clutter.EVENT_PROPAGATE;
-            });
-        };
-        return item;
-    }
-
     destroy() {
         // Pending node() callbacks outlive the indicator; they check this before touching it.
         this._destroyed = true;
@@ -180,15 +142,6 @@ class Indicator extends PanelMenu.Button {
     }
 
     _reload(refreshError = null) {
-        // labels.mjs get: a hand edit of labels.json shows on the next open; failure = no labels.
-        node(this._dir, 'labels.mjs', ['get'], lout => this._render(refreshError, lout));
-    }
-
-    _render(refreshError, lout) {
-        let labels = {};
-        try {
-            labels = lout ? JSON.parse(lout) : {};
-        } catch (_e) { /* malformed output: show no labels */ }
         node(this._dir, 'model.mjs', [], out => {
             if (this._destroyed)
                 return;
@@ -210,7 +163,6 @@ class Indicator extends PanelMenu.Button {
                 const item = new PopupMenu.PopupMenuItem(a.text, {reactive: false});
                 item.label.style = 'font-family: monospace;';
                 this._blocks.addMenuItem(item);
-                this._blocks.addMenuItem(this._labelRow(a.name, labels[a.name]));
             }
         });
     }

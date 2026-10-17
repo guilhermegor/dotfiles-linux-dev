@@ -30,6 +30,19 @@ setup() {
     [ "$output" = "0" ]
 }
 
+@test "symbolic icon sits on the pixel grid (#803)" {
+    run python3 - "$ICONS/token-budget-symbolic.svg" <<'PY'
+import re, sys
+text = open(sys.argv[1]).read()
+bad = [w for w in re.findall(r'stroke-width="([^"]+)"', text) if w != "1"]
+text = re.sub(r"#[0-9a-fA-F]{3,6}\b|<\?.*?\?>|(?:opacity|version)=\"[^\"]*\"", "", text)
+bad += [n for n in re.findall(r"-?\d*\.\d+", text) if not re.fullmatch(r"-?\d*\.5", n)]
+if bad:
+    sys.exit("off-grid values: " + " ".join(bad))
+PY
+    [ "$status" -eq 0 ]
+}
+
 @test "extension.js hands the icon path to the St.Icon gicon" {
     run grep -E 'new St\.Icon\(\{gicon: Gio\.icon_new_for_string\(iconPath\)' "$EXT"
     [ "$status" -eq 0 ]
