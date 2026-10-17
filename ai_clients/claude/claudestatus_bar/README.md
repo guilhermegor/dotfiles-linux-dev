@@ -12,13 +12,9 @@ countdowns, renewal, data age) and two buttons. `model.mjs` shapes the data.
   `fetchAllUsage` (API, no browser) and saves the snapshot.
 - **Refresh billing** runs `refresh.mjs billing`, which calls the installed, patched
   `fetchAllBilling` (re-scrapes only what the cache lacks).
-- **+ Add account** (#751) opens a dialog (name, optional label). `refresh.mjs add <name> [label]`
+- **+ Add account** (#751) opens a dialog (name). `refresh.mjs add <name>`
   rejects an empty name, a `/` or an existing account, then runs `claudestatus add <name>` (the
-  browser login opens) and saves the label.
-- **Labels**: under each account block a label row; click it to edit inline (Enter saves, Esc
-  cancels, empty clears). Labels live in `${XDG_CONFIG_HOME:-~/.config}/claudestatus-bar/labels.json`
-  as `{"<account>": "<label>"}`; edit it by hand and the next menu open shows the change. The
-  claudestatus accounts directory is never written.
+  browser login opens).
 - Prerequisites: `claudestatus` installed and patched (`ai_clients/claude/lib/patch_claudestatus.sh`),
   `node` on PATH, GNOME Shell 46-48. Press **Refresh usage** once, because there is no snapshot
   before that.
