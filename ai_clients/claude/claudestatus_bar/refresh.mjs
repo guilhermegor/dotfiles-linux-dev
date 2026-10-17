@@ -2,7 +2,7 @@
 //
 //   node refresh.mjs usage    -> fetchAllUsage (API, no browser); snapshot saved to usage.json
 //   node refresh.mjs billing  -> fetchAllBilling (re-scrapes only what the #733 cache lacks)
-//   node refresh.mjs add <name> [label] -> validate, save the label, run `claudestatus add`
+//   node refresh.mjs add <name>          -> validate, run `claudestatus add`
 //                                          (#751; the browser login it opens is expected)
 //
 // The CLI prints a chalk table, so the usage snapshot is taken by importing the same api.js the
@@ -13,12 +13,12 @@ import path from "path";
 import { execFileSync, spawnSync } from "child_process";
 import { pathToFileURL } from "url";
 import { usagePath } from "./model.mjs";
-import { addCommand, setLabel, validateName } from "./labels.mjs";
+import { addCommand, validateName } from "./labels.mjs";
 import { loadCache, recordWeeklyReset, saveCache } from "../lib/claudestatus_billing.mjs";
 
 const kind = process.argv[2];
 if (!["usage", "billing", "add"].includes(kind)) {
-    console.error("usage: refresh.mjs usage|billing|add <name> [label]");
+    console.error("usage: refresh.mjs usage|billing|add <name>");
     process.exit(2);
 }
 
@@ -39,7 +39,7 @@ const api = await load("api.js");
 const names = listAccounts().map((a) => a.name);
 
 if (kind === "add") {
-    const [name, label] = process.argv.slice(3);
+    const [name] = process.argv.slice(3);
     const problem = validateName(name, names);
     if (problem) {
         console.error(problem);
@@ -49,12 +49,6 @@ if (kind === "add") {
     const r = spawnSync(cmd, args, { stdio: "inherit" });
     if (r.status !== 0) {
         console.error(`claudestatus add failed (exit ${r.status ?? r.error?.message})`);
-        process.exit(1);
-    }
-    try {
-        if (label) setLabel(name.trim(), label);
-    } catch (e) {
-        console.error(`Account added, but the label was not saved: ${e.message}`);
         process.exit(1);
     }
 } else if (kind === "usage") {
