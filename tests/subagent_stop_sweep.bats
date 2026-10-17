@@ -597,7 +597,7 @@ STUB
     git push -q origin HEAD:refs/heads/feat/793-filed-up-front
 
     run sweep_orphan_branches "$REPO" "o/r" "o" "main"
-    [[ "$output" == *"- feat/793-filed-up-front: empty (0 commits ahead of main), no work to rescue"* ]]
+    [[ "$output" == *"- feat/793-filed-up-front: empty (no changes left to merge into main), no work to rescue"* ]]
 }
 
 @test "a branch with commits ahead keeps the plain orphan line" {
@@ -628,7 +628,7 @@ STUB
     git push -q origin HEAD:refs/heads/main
 
     run sweep_orphan_branches "$REPO" "o/r" "o" "main"
-    [[ "$output" == *"- feat/793-squashed: empty (0 commits ahead of main), no work to rescue"* ]]
+    [[ "$output" == *"- feat/793-squashed: empty (no changes left to merge into main), no work to rescue"* ]]
 }
 
 @test "a multi-commit squash-merged branch is labelled empty" {

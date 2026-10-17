@@ -329,7 +329,8 @@ stash_snapshot_pr_overlap() {
 branch_is_empty() {
 	local cwd="$1" db="$2" b="$3" merged
 	$GIT -C "$cwd" fetch --quiet origin "$db" "$b" 2>/dev/null || return 1
-	merged="$($GIT -C "$cwd" merge-tree --write-tree "origin/$db" "origin/$b" 2>/dev/null | head -n1)" || return 1
+	merged="$($GIT -C "$cwd" merge-tree --write-tree "origin/$db" "origin/$b" 2>/dev/null)" || return 1
+	merged="${merged%%$'\n'*}"
 	[ -n "$merged" ] && [ "$merged" = "$($GIT -C "$cwd" rev-parse "origin/$db^{tree}" 2>/dev/null)" ]
 }
 
@@ -357,7 +358,7 @@ sweep_orphan_branches() {
 				stash_snapshot_diff_context "$cwd" "$db" "$b"
 				stash_snapshot_pr_overlap "$cwd" "$repo" "$db" "$b"
 			elif branch_is_empty "$cwd" "$db" "$b"; then
-				echo "    - $b: empty (0 commits ahead of $db), no work to rescue"
+				echo "    - $b: empty (no changes left to merge into $db), no work to rescue"
 			else
 				echo "    - $b"
 			fi
