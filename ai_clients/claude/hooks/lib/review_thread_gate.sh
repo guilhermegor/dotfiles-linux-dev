@@ -178,7 +178,7 @@ _gate_roster_logins() {
 	local roster_file="$1"
 	if [ -n "$roster_file" ] && [ -f "$roster_file" ]; then
 		sed -n 's/^[[:space:]]*-[[:space:]]*login:[[:space:]]*//p' "$roster_file" \
-			| sed 's/\[bot\]$//' | sed '/^$/d'
+			| sed 's/[[:space:]]*#.*$//; s/[[:space:]]*$//' | sed 's/\[bot\]$//' | sed '/^$/d'
 		return 0
 	fi
 	# No roster: fall back to treating any bot account as a reviewer, resolved per comment in the

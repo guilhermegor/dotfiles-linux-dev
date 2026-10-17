@@ -286,6 +286,20 @@ EOF
     [[ "$(reason_for 801)" == *"already reviewed at the current head"* ]]
 }
 
+@test "a roster login with an inline YAML comment still counts, as in the thread gate (#802)" {
+    printf 'reviewers:\n  - login: coderabbitai[bot]  # reviewer\n' >"$TEST_TMP/.review-bots.yaml"
+    stub_gh_prs <<EOF
+[{"number":801,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":"coderabbitai"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [[ "$(reason_for 801)" == *"already reviewed at the current head"* ]]
+}
+
 @test "a roster review on an older head plus an author reply on this head needs a review (#795)" {
     stub_gh_prs <<EOF
 [{"number":795,"headRefOid":"9dfbeacc","mergeStateStatus":"BLOCKED","isDraft":false,

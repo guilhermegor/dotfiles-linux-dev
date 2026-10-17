@@ -136,6 +136,13 @@ reviewed_fixture() {
     [[ "$output" == *"needs a REPLY"* ]]
 }
 
+@test "a roster login with an inline YAML comment parses to the bare login (#802)" {
+    printf 'reviewers:\n  - login: coderabbitai[bot]   # reviewer\n  - login: other[bot]\n' >"$BATS_TEST_TMPDIR/r.yaml"
+    run _gate_roster_logins "$BATS_TEST_TMPDIR/r.yaml"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'coderabbitai\nother')" ]
+}
+
 @test "a roster member's own comment never counts as the answer" {
     # Only the bot speaks, at length. Resolved or not, that is not somebody answering it.
     fixture="$(jq -nc --arg bot "$LONG_BODY" '{
