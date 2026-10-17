@@ -9,4 +9,4 @@ StartLimitBurst=5
 Type=oneshot
 # Debounce: let the package manager finish writing .desktop files.
 ExecStartPre=/bin/sleep 5
-ExecStart=/bin/bash @WORKSPACE_SCRIPT@ --folders-only --additive
+ExecStart=/bin/bash "@WORKSPACE_SCRIPT@" --folders-only --additive

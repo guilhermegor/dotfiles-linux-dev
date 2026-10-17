@@ -1789,7 +1789,11 @@ install_app_folder_watcher() {
     local tmp unit
     tmp=$(mktemp -d)
     for unit in app-folders.path app-folders.service; do
-        sed "s|@WORKSPACE_SCRIPT@|$script_dir/ubuntu_workspace.sh|g" "$unit_src/$unit" > "$tmp/$unit"
+        # Escape sed-replacement metachars (\ & |) in the path
+        local esc="${script_dir//\\/\\\\}"
+        esc="${esc//&/\\&}"
+        esc="${esc//|/\\|}"
+        sed "s|@WORKSPACE_SCRIPT@|$esc/ubuntu_workspace.sh|g" "$unit_src/$unit" > "$tmp/$unit"
         run_or_echo install -Dm644 "$tmp/$unit" "$unit_dir/$unit"
     done
     rm -rf "$tmp"
