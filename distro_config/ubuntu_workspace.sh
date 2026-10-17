@@ -1794,11 +1794,11 @@ install_app_folder_watcher() {
         esc="${esc//&/\\&}"
         esc="${esc//|/\\|}"
         sed "s|@WORKSPACE_SCRIPT@|$esc/ubuntu_workspace.sh|g" "$unit_src/$unit" > "$tmp/$unit"
-        run_or_echo install -Dm644 "$tmp/$unit" "$unit_dir/$unit"
+        run_or_echo install -Dm644 "$tmp/$unit" "$unit_dir/$unit" || { rm -rf "$tmp"; print_status "warning" "App-folder watcher not installed"; return 1; }
     done
     rm -rf "$tmp"
-    run_or_echo systemctl --user daemon-reload
-    run_or_echo systemctl --user enable --now app-folders.path
+    run_or_echo systemctl --user daemon-reload || { rm -rf "$tmp"; print_status "warning" "App-folder watcher not installed"; return 1; }
+    run_or_echo systemctl --user enable --now app-folders.path || { rm -rf "$tmp"; print_status "warning" "App-folder watcher not installed"; return 1; }
     print_status "success" "App-folder watcher enabled (app-folders.path)"
 }
 
@@ -1822,7 +1822,7 @@ main() {
     configure_inactivity_time_lock
     configure_power_settings
     organize_app_folders
-    install_app_folder_watcher
+    install_app_folder_watcher || print_status "warning" "App-folder watcher skipped; continuing"
     configure_vitals
     configure_dim_calendar_events
 
