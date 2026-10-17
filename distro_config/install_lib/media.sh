@@ -268,7 +268,13 @@ install_openwhispr() {
         return 1
     fi
     print_status "success" "OpenWhispr installed"
-    print_status "config" "Auto-paste on Wayland uses ydotool: log out and in once so the 'input' group applies"
+    # The .deb's postinst adds $SUDO_USER (else logname) to 'input'; skipped when neither
+    # resolves, e.g. a bare root shell. Say which case this is instead of assuming.
+    if getent group input | cut -d: -f4 | tr ',' '\n' | grep -qx "${USER:-}"; then
+        print_status "config" "Auto-paste on Wayland uses ydotool: log out and in once so the 'input' group applies"
+    else
+        print_status "warning" "Auto-paste on Wayland needs the 'input' group: run 'sudo usermod -aG input \$USER', then log out and in"
+    fi
 }
 
 uninstall_openwhispr() {

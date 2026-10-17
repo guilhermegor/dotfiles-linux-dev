@@ -272,3 +272,17 @@ STUB
     [ "$status" -eq 1 ]
     [ -z "$(ls -A "$TMP/t")" ]
 }
+
+@test "install_openwhispr tells the user the exact usermod step when not in the input group" {
+    printf '#!/bin/bash\necho "input:x:104:someoneelse"\n' > "$TMP/bin/getent"; chmod +x "$TMP/bin/getent"
+    USER=tester run install_openwhispr
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'sudo usermod -aG input $USER'* ]]
+}
+
+@test "install_openwhispr says to re-login when the user is already in the input group" {
+    printf '#!/bin/bash\necho "input:x:104:tester"\n' > "$TMP/bin/getent"; chmod +x "$TMP/bin/getent"
+    USER=tester run install_openwhispr
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"log out and in once"* ]]
+}
