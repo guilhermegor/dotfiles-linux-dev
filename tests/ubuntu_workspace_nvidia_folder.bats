@@ -66,12 +66,21 @@ S
     [[ "$output" == *"folder-children"*"'HandMade'"* ]]
 }
 
-@test "additive never writes a folder name or resets a folder" {
+@test "additive names only unnamed folders, never renames, never resets" {
+    additive_stubs
+    # Sistema already has a (hand-renamed) name; the others are unnamed.
+    sed -i 's|^    case "\$2 \$3" in|    case "$2 $3" in\n        *Sistema/*" name") echo "'"'"'Mine'"'"'" ;;|' "$STUBS/gsettings"
+    run bash "$REPO_ROOT/distro_config/ubuntu_workspace.sh" --folders-only --additive
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Sistema/ name"* ]]
+    [[ "$output" != *"reset-recursively"* ]]
+}
+
+@test "additive sets the name of a newly created (unnamed) folder" {
     additive_stubs
     run bash "$REPO_ROOT/distro_config/ubuntu_workspace.sh" --folders-only --additive
     [ "$status" -eq 0 ]
-    [[ "$output" != *"dry-run] gsettings set "*" name "* ]]
-    [[ "$output" != *"reset-recursively"* ]]
+    [[ "$output" == *"Sistema/ name"* ]]
 }
 
 @test "path/service units run --folders-only --additive" {

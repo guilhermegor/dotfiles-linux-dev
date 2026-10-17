@@ -484,7 +484,8 @@ configure_power_settings() {
 # replaces each folder's `apps` list wholesale and so wipes hand placements;
 # unattended, that would undo drag-and-drop on every package change. This
 # wrapper stands in for run_or_echo while organize_app_folders runs:
-#   - folder `name` writes and `reset-recursively` are dropped (never renames,
+#   - `reset-recursively` is dropped and `name` is written only to a folder
+#     with no name yet (never renames,
 #     never resets, so a hand-made or hand-renamed folder is untouched);
 #   - `apps` and `folder-children` writes become union(live, computed), via
 #     _merge_dock_favorites, so nothing already placed is ever removed.
@@ -504,7 +505,14 @@ _additive_run_or_echo() {
     fi
     if [ "${1:-}" = "gsettings" ] && [ "${2:-}" = "set" ]; then
         case "$4" in
-            name) return 0 ;;
+            name)
+                # Name only a not-yet-named folder; never rename an existing one.
+                local live_name
+                live_name=$(gsettings get "$3" name 2>/dev/null) || live_name="''"
+                if [ -z "$live_name" ] || [ "$live_name" = "''" ]; then
+                    _uw_run_or_echo_orig "$@"
+                fi
+                return 0 ;;
             apps|folder-children) _additive_gsettings_set "$3" "$4" "$5"; return 0 ;;
         esac
     fi
