@@ -25,7 +25,13 @@ time is blocked until you allow it.
    before the daemon runs). `IPCAllowedUsers` is deliberately left alone: a user
    listed there with no ACL file gets every privilege, including
    `Parameters=modify`, so any process running as you could set
-   `ImplicitPolicyTarget=allow`.
+   `ImplicitPolicyTarget=allow`. For the same reason the installer **refuses**
+   (exit 1, before any config change or daemon start) when your user belongs to
+   a group listed in `IPCAllowedGroups` (Debian ships `root`; a group such as
+   `plugdev` there would grant you full rights). The error names the group; fix
+   it by removing the group from `IPCAllowedGroups` in `usbguard-daemon.conf`
+   or removing yourself from the group. Under `DRY_RUN` it reports what it
+   would refuse.
 4. Runs `systemctl enable usbguard` and `systemctl restart usbguard`.
 
 There are no prompts, and `DRY_RUN=1` prints every step without running it.

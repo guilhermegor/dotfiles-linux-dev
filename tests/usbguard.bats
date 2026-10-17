@@ -192,12 +192,26 @@ call_line() {
     grep -q 'systemctl restart usbguard' "$CALLS"
 }
 
-@test "warns when the user is in a group listed in IPCAllowedGroups" {
+@test "refuses when the user is in a group listed in IPCAllowedGroups, daemon untouched" {
     printf '#!/bin/bash\necho "alice plugdev"\n' > "$TMP/bin/id"
     chmod +x "$TMP/bin/id"
+    cp "$_UG_DIR/usbguard-daemon.conf" "$TMP/conf.before"
     run install_usbguard
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"plugdev"* ]]
+    [[ "$output" == *"remove 'plugdev' from IPCAllowedGroups"* ]]
+    refute_call 'systemctl'
+    [ ! -e "$_UG_DIR/IPCAccessControl.d/alice" ]
+    run diff "$_UG_DIR/usbguard-daemon.conf" "$TMP/conf.before"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"IPCAllowedGroups"* ]]
+}
+
+@test "DRY_RUN reports the IPCAllowedGroups refusal without changing anything" {
+    printf '#!/bin/bash\necho "alice plugdev"\n' > "$TMP/bin/id"
+    chmod +x "$TMP/bin/id"
+    DRY_RUN=1 run install_usbguard
+    [[ "$output" == *"would refuse"* ]]
+    refute_call 'systemctl'
 }
 
 @test "post-install message shows how to allow a device and how to back out" {

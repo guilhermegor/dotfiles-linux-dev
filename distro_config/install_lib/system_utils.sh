@@ -1524,18 +1524,28 @@ _ug_revoke_allowed_user() {
 }
 
 # IPCAllowedGroups grants every privilege to its members, bypassing the scoped
-# ACL below; warn when USER already sits in one rather than editing a shared list.
-_ug_warn_group_grant() {
-    local grp allowed
-    [ "${DRY_RUN:-0}" = "1" ] && return 0
-    allowed="$(sudo sed -n 's/^IPCAllowedGroups=//p' "$_UG_DIR/usbguard-daemon.conf" 2>/dev/null)"
+# ACL below. Refuses (return 1) when USER sits in a listed group; under DRY_RUN
+# it only reports what it would refuse. Read-only, so it can run before any change.
+_ug_refuse_group_grant() {
+    local grp allowed hit=0 conf="$_UG_DIR/usbguard-daemon.conf"
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        allowed="$(sed -n 's/^IPCAllowedGroups=//p' "$conf" 2>/dev/null)"
+    else
+        allowed="$(sudo sed -n 's/^IPCAllowedGroups=//p' "$conf" 2>/dev/null)"
+    fi
     for grp in $(id -nG "$1" 2>/dev/null); do
         case " $allowed " in
             *" $grp "*)
-                print_status "warning" "$1 is in group '$grp' listed in IPCAllowedGroups: that grants FULL usbguard rights, so the scoped ACL does not limit $1. Remove '$grp' from IPCAllowedGroups in usbguard-daemon.conf to enforce it."
+                hit=1
+                print_status "error" "$1 is in group '$grp' listed in IPCAllowedGroups: that grants FULL usbguard rights (incl. Parameters=modify), so the scoped ACL would not limit $1. Fix: remove '$grp' from IPCAllowedGroups in $conf, or remove $1 from the group."
                 ;;
         esac
     done
+    if [ "$hit" = "1" ] && [ "${DRY_RUN:-0}" = "1" ]; then
+        print_status "info" "DRY_RUN: install_usbguard would refuse here and leave enforcement unchanged"
+        return 0
+    fi
+    [ "$hit" = "0" ]
 }
 
 # Scoped IPC ACL for USER (#789), the file equivalent of
@@ -1548,7 +1558,6 @@ _ug_warn_group_grant() {
 _ug_grant_ipc() {
     local user="$1" acl_dir="$_UG_DIR/IPCAccessControl.d" tmp rc
     _ug_revoke_allowed_user "$user" || return 1
-    _ug_warn_group_grant "$user"
     _ug_set_key IPCAccessControlFiles "$acl_dir/" || return 1
     run_or_echo sudo install -d -m 0700 "$acl_dir" || return 1
     if [ "${DRY_RUN:-0}" = "1" ]; then
@@ -1576,6 +1585,13 @@ install_usbguard() {
         install_package usbguard || return 1
     fi
 
+    local user="${SUDO_USER:-$(id -un)}"
+    # Refuse before ANY config change or daemon start if a group grant would
+    # bypass the scoped ACL.
+    if [ "$user" != "root" ]; then
+        _ug_refuse_group_grant "$user" || return 1
+    fi
+
     if [ "${DRY_RUN:-0}" != "1" ] && _ug_has_rules; then
         print_status "info" "$_UG_DIR/rules.conf already has rules; keeping it"
     else
@@ -1586,7 +1602,6 @@ install_usbguard() {
     # other (empty) file would pass the check yet block everything on restart.
     _ug_set_key RuleFile "$_UG_DIR/rules.conf" || return 1
     _ug_set_key ImplicitPolicyTarget block || return 1
-    local user="${SUDO_USER:-$(id -un)}"
     if [ "$user" != "root" ]; then
         _ug_grant_ipc "$user" || return 1
     fi
