@@ -16,9 +16,16 @@ time is blocked until you allow it.
    (the Debian/Ubuntu package already seeds it on first install, so on those
    systems the file the package wrote is kept). An empty generated policy
    aborts the install before the daemon is touched.
-3. Forces `ImplicitPolicyTarget=block` in `usbguard-daemon.conf` and adds your
-   user to `IPCAllowedUsers` (existing entries are kept), so you can list and
-   allow devices without root.
+3. Forces `ImplicitPolicyTarget=block` in `usbguard-daemon.conf`, points
+   `IPCAccessControlFiles` at `/etc/usbguard/IPCAccessControl.d/` and writes a
+   root-owned 0600 ACL file named after your user there. It is the file form of
+   `usbguard add-user <user> --devices=modify,list,listen --policy=list
+   --exceptions=listen` (written directly, not through the CLI, so it is
+   deterministic and testable; the Debian postinst uses the same command
+   before the daemon runs). `IPCAllowedUsers` is deliberately left alone: a user
+   listed there with no ACL file gets every privilege, including
+   `Parameters=modify`, so any process running as you could set
+   `ImplicitPolicyTarget=allow`.
 4. Runs `systemctl enable usbguard` and `systemctl restart usbguard`.
 
 There are no prompts, and `DRY_RUN=1` prints every step without running it.
@@ -27,8 +34,14 @@ There are no prompts, and `DRY_RUN=1` prints every step without running it.
 
 ```bash
 usbguard list-devices                 # blocked devices show as "block"
-usbguard allow-device -p <id>         # -p makes the rule permanent
+usbguard allow-device <id>            # this boot only, no sudo
+sudo usbguard allow-device -p <id>    # -p makes the rule permanent
 ```
+
+Your scoped ACL lets you list devices and change a device's state for the
+current boot. It grants no `Parameters` section and only `Policy=list`, so you
+cannot change daemon parameters or edit rules; make a permanent allow with
+`sudo` (a pkexec helper is planned in #789).
 
 ## Back out
 
@@ -38,7 +51,7 @@ sudo systemctl disable --now usbguard
 
 Devices blocked while the daemon ran stay blocked until you replug them or
 reboot. `uninstall_usbguard` does the same and also removes the package; it
-keeps `/etc/usbguard`, so a reinstall reuses your policy.
+deletes your ACL file and keeps the rest of `/etc/usbguard`, so a reinstall reuses your policy.
 
 ## Operator check (real hardware)
 

@@ -149,27 +149,40 @@ call_line() {
     [ "$output" = "1" ]
 }
 
-@test "the desktop user is added to IPCAllowedUsers once, keeping existing entries" {
+@test "the desktop user gets a scoped ACL file: devices, policy list, exceptions listen, nothing else" {
+    run install_usbguard
+    [ "$status" -eq 0 ]
+    local acl="$_UG_DIR/IPCAccessControl.d/alice"
+    [ "$(stat -c %a "$acl")" = "600" ]
+    [ "$(cat "$acl")" = "$(printf 'Devices=modify,list,listen\nPolicy=list\nExceptions=listen')" ]
+    run grep -c 'Parameters' "$acl"
+    [ "$output" = "0" ]
+    run grep -c 'Policy=.*modify' "$acl"
+    [ "$output" = "0" ]
+}
+
+@test "the daemon is pointed at the ACL folder" {
+    run install_usbguard
+    [ "$status" -eq 0 ]
+    grep -q "^IPCAccessControlFiles=$_UG_DIR/IPCAccessControl.d/\$" "$_UG_DIR/usbguard-daemon.conf"
+}
+
+@test "IPCAllowedUsers is never modified (it would grant full rights, incl. Parameters)" {
     run install_usbguard
     [ "$status" -eq 0 ]
     run install_usbguard
     [ "$status" -eq 0 ]
     run grep '^IPCAllowedUsers=' "$_UG_DIR/usbguard-daemon.conf"
-    [ "$output" = "IPCAllowedUsers=root alice" ]
-}
-
-@test "a missing IPCAllowedUsers line is appended" {
-    sed -i '/^IPCAllowedUsers=/d' "$_UG_DIR/usbguard-daemon.conf"
-    run install_usbguard
-    [ "$status" -eq 0 ]
-    grep -q '^IPCAllowedUsers=root alice$' "$_UG_DIR/usbguard-daemon.conf"
+    [ "$output" = "IPCAllowedUsers=root" ]
+    run grep -c alice "$_UG_DIR/usbguard-daemon.conf"
+    [ "$output" = "0" ]
 }
 
 @test "post-install message shows how to allow a device and how to back out" {
     run install_usbguard
     [ "$status" -eq 0 ]
     [[ "$output" == *"usbguard list-devices"* ]]
-    [[ "$output" == *"usbguard allow-device -p <id>"* ]]
+    [[ "$output" == *"sudo usbguard allow-device -p <id>"* ]]
     [[ "$output" == *"sudo systemctl disable --now usbguard"* ]]
 }
 
@@ -193,6 +206,14 @@ call_line() {
     remove="$(call_line 'apt-get remove -y usbguard')"
     [ -n "$stop" ] && [ -n "$remove" ]
     [ "$stop" -lt "$remove" ]
+}
+
+@test "uninstall removes the user's ACL file" {
+    install_usbguard > /dev/null
+    [ -f "$_UG_DIR/IPCAccessControl.d/alice" ]
+    run uninstall_usbguard
+    [ "$status" -eq 0 ]
+    [ ! -e "$_UG_DIR/IPCAccessControl.d/alice" ]
 }
 
 @test "uninstall under DRY_RUN changes nothing" {

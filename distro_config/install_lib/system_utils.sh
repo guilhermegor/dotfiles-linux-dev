@@ -1516,18 +1516,27 @@ _ug_set_key() {
     fi
 }
 
-# Adds USER to IPCAllowedUsers (kept as a list, existing entries untouched) so
-# the desktop user can list/allow/block devices without root (#789).
+# Scoped IPC ACL for USER (#789), the file equivalent of
+# `usbguard add-user USER --devices=modify,list,listen --policy=list
+# --exceptions=listen`. Written directly (root, 0600) so it is deterministic and
+# testable. Deliberately NOT IPCAllowedUsers: a user listed there with no ACL
+# file gets every privilege, including Parameters=modify, so any process running
+# as that user could set ImplicitPolicyTarget=allow. This grants no Parameters
+# section and Policy=list only (no rule edits).
 _ug_grant_ipc() {
-    local conf="$_UG_DIR/usbguard-daemon.conf" user="$1"
-    if [ "${DRY_RUN:-0}" != "1" ]; then
-        sudo grep -Eq "^IPCAllowedUsers=(.*[[:space:]])?$user([[:space:]].*)?$" "$conf" && return 0
-        if ! sudo grep -q '^IPCAllowedUsers=' "$conf"; then
-            run_or_echo sudo sed -i "\$a IPCAllowedUsers=root $user" "$conf"
-            return
-        fi
+    local user="$1" acl_dir="$_UG_DIR/IPCAccessControl.d" tmp rc
+    _ug_set_key IPCAccessControlFiles "$acl_dir/" || return 1
+    run_or_echo sudo install -d -m 0700 "$acl_dir" || return 1
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        run_or_echo sudo install -m 0600 "<Devices=modify,list,listen Policy=list Exceptions=listen>" "$acl_dir/$user"
+        return 0
     fi
-    run_or_echo sudo sed -i -E "s|^(IPCAllowedUsers=.*)$|\\1 $user|" "$conf"
+    tmp="$(mktemp)" || return 1
+    printf 'Devices=modify,list,listen\nPolicy=list\nExceptions=listen\n' > "$tmp"
+    sudo install -m 0600 "$tmp" "$acl_dir/$user"
+    rc=$?
+    rm -f "$tmp"
+    return "$rc"
 }
 
 # Order is the safety property: the policy lands on disk BEFORE the daemon is
@@ -1564,9 +1573,10 @@ install_usbguard() {
 
     print_status "success" "USBGuard enforcing: devices plugged in now are allowed, new ones are blocked"
     print_status "info" "List devices:   usbguard list-devices"
-    print_status "info" "Allow a device: usbguard allow-device -p <id>   (-p makes it permanent)"
-    print_status "info" "Back out:       sudo systemctl disable --now usbguard"
-    print_status "info" "No sudo needed for the first two once the daemon runs ($user is in IPCAllowedUsers). See docs/usbguard.md"
+    print_status "info" "Allow (this boot): usbguard allow-device <id>   ($user has a scoped IPC ACL, no sudo)"
+    print_status "info" "Allow (permanent): sudo usbguard allow-device -p <id>"
+    print_status "info" "Back out:          sudo systemctl disable --now usbguard"
+    print_status "info" "The ACL cannot change daemon parameters or edit rules. See docs/usbguard.md"
 }
 
 # Stops enforcement and removes the package. /etc/usbguard stays (a plain
@@ -1576,6 +1586,7 @@ uninstall_usbguard() {
     print_status "section" "UNINSTALL USBGUARD"
 
     run_or_echo sudo systemctl disable --now usbguard || true
+    run_or_echo sudo rm -f "$_UG_DIR/IPCAccessControl.d/${SUDO_USER:-$(id -un)}"
     case "$PACKAGE_MANAGER" in
         apt)        run_or_echo sudo apt-get remove -y usbguard || return 1 ;;
         dnf|yum)    run_or_echo sudo "$PACKAGE_MANAGER" remove -y usbguard || return 1 ;;
