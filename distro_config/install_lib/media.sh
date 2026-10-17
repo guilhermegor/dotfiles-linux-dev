@@ -180,6 +180,81 @@ install_obs() {
     fi
 }
 
+_openwhispr_installed() {
+    dpkg -l open-whispr 2>/dev/null | grep -q '^ii'
+}
+
+install_openwhispr() {
+    print_status "section" "OPENWHISPR (voice dictation)"
+
+    if _openwhispr_installed; then
+        print_status "info" "OpenWhispr already installed"
+        return 0
+    fi
+
+    # Upstream ships a .deb for amd64 only (plus rpm/AppImage/tar.gz); the .deb is preferred.
+    if [ "$PACKAGE_MANAGER" != "apt" ] || [ "$(dpkg --print-architecture 2>/dev/null)" != "amd64" ]; then
+        print_status "warning" "OpenWhispr: the .deb needs apt on amd64; install manually"
+        print_status "config" "  Download from: https://github.com/HeroTools/open-whispr/releases/latest"
+        return 1
+    fi
+
+    print_status "info" "Fetching latest OpenWhispr release..."
+    local deb_url
+    deb_url=$(curl -fsSL --max-time 15 \
+        "https://api.github.com/repos/HeroTools/open-whispr/releases/latest" 2>>"${LOG_FILE:-/dev/null}" \
+        | grep -oE '"browser_download_url": *"[^"]*linux-amd64\.deb"' | head -1 | cut -d '"' -f 4)
+
+    if [ -z "$deb_url" ]; then
+        print_status "error" "No linux-amd64 .deb asset found in the latest OpenWhispr release"
+        return 1
+    fi
+    print_status "config" "URL: $deb_url"
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    print_status "info" "Downloading OpenWhispr (~450 MB)..."
+    if ! run_or_echo curl -fL --retry 3 -o "$tmp_dir/open-whispr.deb" "$deb_url" 2>>"${LOG_FILE:-/dev/null}"; then
+        rm -rf "$tmp_dir"
+        print_status "error" "Failed to download OpenWhispr from: $deb_url"
+        return 1
+    fi
+
+    # The .deb Depends on ydotool (auto-paste on Wayland); apt pulls it in from the archive.
+    if ! run_or_echo sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$tmp_dir/open-whispr.deb"; then
+        rm -rf "$tmp_dir"
+        print_status "error" "OpenWhispr installation failed"
+        return 1
+    fi
+    rm -rf "$tmp_dir"
+
+    [ "${DRY_RUN:-0}" = "1" ] && return 0
+
+    if ! _openwhispr_installed; then
+        print_status "warning" "OpenWhispr installed but could not be verified"
+        return 1
+    fi
+    print_status "success" "OpenWhispr installed"
+    print_status "config" "Auto-paste on Wayland uses ydotool: log out and in once so the 'input' group applies"
+}
+
+uninstall_openwhispr() {
+    print_status "section" "UNINSTALL OPENWHISPR"
+
+    if ! _openwhispr_installed; then
+        print_status "info" "OpenWhispr not installed"
+        return 0
+    fi
+
+    # remove, not purge: the package's postrm already drops the cached models;
+    # ydotool (a dependency) and ~/.config/OpenWhispr are left in place.
+    run_or_echo sudo env DEBIAN_FRONTEND=noninteractive apt-get remove -y open-whispr || {
+        print_status "error" "OpenWhispr removal failed"
+        return 1
+    }
+    print_status "success" "OpenWhispr removed"
+}
+
 # ============================================================================
 # REGISTRY
 # ============================================================================
@@ -189,5 +264,6 @@ INSTALL_REGISTRY+=(
     "install_asunder:Asunder CD Ripper:Media:asunder.desktop"
     "install_handbrake:HandBrake DVD Ripper:Media:fr.handbrake.ghb.desktop"
     "install_obs:OBS Studio:Media:com.obsproject.Studio.desktop"
+    "install_openwhispr:OpenWhispr (Voice Dictation):Media:open-whispr.desktop"
     "install_soundcloud:SoundCloud:Media:soundcloud.desktop"
 )
