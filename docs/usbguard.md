@@ -27,8 +27,10 @@ time is blocked until you allow it.
    `Parameters=modify`, so any process running as you could set
    `ImplicitPolicyTarget=allow`. For the same reason the installer **refuses**
    (exit 1, before any config change or daemon start) when your user belongs to
-   a group listed in `IPCAllowedGroups` (Debian ships `root`; a group such as
-   `plugdev` there would grant you full rights). The error names the group; fix
+   a group listed in `IPCAllowedGroups`, since every member gets full rights.
+   Debian/Ubuntu (`usbguard` 1.1.2+ds-6build2) ships `IPCAllowedGroups=root
+   plugdev`, and a desktop user is normally in `plugdev`, so expect this
+   refusal on a stock Ubuntu install. The error names the group; fix
    it by removing the group from `IPCAllowedGroups` in `usbguard-daemon.conf`
    or removing yourself from the group. Under `DRY_RUN` it reports what it
    would refuse.
