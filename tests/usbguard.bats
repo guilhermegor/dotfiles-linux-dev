@@ -264,6 +264,17 @@ call_line() {
     [ "$output" = "IPCAllowedUsers=root" ]
 }
 
+@test "uninstall run directly as root keeps root in IPCAllowedUsers" {
+    # The daemon has no built-in root bypass: IPCAllowedUsers=root is
+    # root's only IPC grant, and install never re-adds it.
+    unset SUDO_USER
+    id() { [ "$1" = "-un" ] && echo root || command id "$@"; }
+    run uninstall_usbguard
+    [ "$status" -eq 0 ]
+    run grep '^IPCAllowedUsers=' "$_UG_DIR/usbguard-daemon.conf"
+    [ "$output" = "IPCAllowedUsers=root" ]
+}
+
 @test "uninstall removes the user's ACL file" {
     install_usbguard > /dev/null
     [ -f "$_UG_DIR/IPCAccessControl.d/alice" ]

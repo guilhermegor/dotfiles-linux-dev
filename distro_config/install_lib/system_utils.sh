@@ -1630,8 +1630,12 @@ uninstall_usbguard() {
 
     run_or_echo sudo systemctl disable --now usbguard || true
     local user="${SUDO_USER:-$(id -un)}"
-    run_or_echo sudo rm -f "$_UG_DIR/IPCAccessControl.d/$user"
-    _ug_revoke_allowed_user "$user" || true
+    # Mirrors install: root gets no ACL, and IPCAllowedUsers=root is its only
+    # IPC grant (the daemon has no built-in root bypass).
+    if [ "$user" != "root" ]; then
+        run_or_echo sudo rm -f "$_UG_DIR/IPCAccessControl.d/$user"
+        _ug_revoke_allowed_user "$user" || true
+    fi
     case "$PACKAGE_MANAGER" in
         apt)        run_or_echo sudo apt-get remove -y usbguard || return 1 ;;
         dnf|yum)    run_or_echo sudo "$PACKAGE_MANAGER" remove -y usbguard || return 1 ;;
