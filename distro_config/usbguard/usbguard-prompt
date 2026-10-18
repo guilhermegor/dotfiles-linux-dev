@@ -88,13 +88,15 @@ usbguard_prompt_text() {
 }
 
 # Maps zenity's exit code and stdout to allow|always|block. Anything other than
-# an explicit choice (close, timeout, error) keeps the device blocked.
+# an explicit choice (close, timeout, error) keeps the device blocked. The
+# extra-button label is checked first, so it wins whatever exit code zenity
+# pairs with it (4.0.1 uses 1).
 usbguard_prompt_action() {
     local rc="$1" out="$2"
-    if [ "$rc" = 0 ]; then
-        echo allow
-    elif [ "$out" = "Always allow" ]; then
+    if [ "$out" = "Always allow" ]; then
         echo always
+    elif [ "$rc" = 0 ]; then
+        echo allow
     else
         echo block
     fi

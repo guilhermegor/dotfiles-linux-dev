@@ -208,6 +208,13 @@ NONAME='block id 1:2 serial "" name "" with-interface { 08:06:50 }'
     grep -qx 'pkexec usbguard allow-device -p 9' "$CALLS"
 }
 
+@test "dialog: Always allow is permanent even if zenity exits 0 for it" {
+    # zenity 4.0.1 exits 1 here (measured); the label decides, not the code.
+    ZEN_RC=0 ZEN_OUT="Always allow" usbguard_prompt_dialog 9 "$HID"
+    grep -qx 'pkexec usbguard allow-device -p 9' "$CALLS"
+    ! grep -qx 'usbguard allow-device 9' "$CALLS"
+}
+
 @test "dialog: Block, close and timeout all block" {
     ZEN_RC=1 usbguard_prompt_dialog 9 "$COMBO"
     ZEN_RC=5 usbguard_prompt_dialog 9 "$COMBO"
