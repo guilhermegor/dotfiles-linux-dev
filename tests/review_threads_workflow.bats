@@ -63,12 +63,14 @@ PY
     [ "$output" -eq 1 ]
 }
 
-@test "all five outcomes publish: two success, three failure" {
+@test "all six outcomes publish: two success, four failure" {
     run grep -c 'report success' "$RUN_SCRIPT"
     [ "$output" -eq 2 ]
-    # three failures: no reviewer, gate status, and (#620) an unanswered finding on an out-of-scope PR
+    # four failures: no reviewer, gate status, (#620) an unanswered finding on an out-of-scope
+    # PR, and (#804) an unreadable Greptile refusal phrase list (fail closed, never count a
+    # refusal as a review)
     run grep -c 'report failure' "$RUN_SCRIPT"
-    [ "$output" -eq 3 ]
+    [ "$output" -eq 4 ]
 }
 
 @test "issue_comment is still a trigger — #431's fix is not undone by this one" {
@@ -119,6 +121,8 @@ run_ladder_step() {
     mkdir -p "$BATS_TEST_TMPDIR/ai_clients/claude/hooks/lib"
     cat > "$BATS_TEST_TMPDIR/ai_clients/claude/hooks/lib/review_thread_gate.sh" <<'GATE'
 gate_pr_thread_state() { GATE_STATUS=clean; GATE_DETAIL="stub-clean"; }
+_gate_greptile_refusal_phrases() { echo "upgrade your plan"; }
+_gate_real_review_count_filter() { echo '.reviews | length'; }
 GATE
 
     CHECK_RUN_OUT="$BATS_TEST_TMPDIR/check-run.json"
@@ -136,7 +140,7 @@ GATE
                 case "$*" in
                     *"/pulls/"*)        echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" ;;
                     *"--json files"*)   printf "%s\n" "ai_clients/claude/hooks/lib/foo.sh" ;;
-                    *"--json reviews"*) echo "0" ;;
+                    *"--json reviews"*) echo "{\"reviews\":[]}" ;;
                     *check-suites*)     echo "$HEAD_SEEN" ;;
                     *"/comments"*)      printf "%s\n" "$COMMENTS_JSON" ;;
                     *check-runs*)       cat > "$CHECK_RUN_OUT" ;;
