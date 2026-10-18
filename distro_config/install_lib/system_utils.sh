@@ -1529,7 +1529,15 @@ _ug_revoke_allowed_user() {
 _ug_refuse_group_grant() {
     local grp allowed hit=0 conf="$_UG_DIR/usbguard-daemon.conf"
     if [ "${DRY_RUN:-0}" = "1" ]; then
-        allowed="$(sed -n 's/^IPCAllowedGroups=//p' "$conf" 2>/dev/null)"
+        # The daemon config is usually root-only (0600). A dry run never prompts
+        # for a password, so use cached sudo (-n) at most, and say so if the file
+        # still cannot be read instead of reporting "no refusal" on a blind read.
+        if [ -r "$conf" ]; then
+            allowed="$(sed -n 's/^IPCAllowedGroups=//p' "$conf" 2>/dev/null)"
+        elif ! allowed="$(sudo -n sed -n 's/^IPCAllowedGroups=//p' "$conf" 2>/dev/null)"; then
+            print_status "warning" "DRY_RUN: cannot read $conf without a sudo password, so the IPCAllowedGroups check was skipped; the real install still runs it"
+            return 0
+        fi
     else
         allowed="$(sudo sed -n 's/^IPCAllowedGroups=//p' "$conf" 2>/dev/null)"
     fi

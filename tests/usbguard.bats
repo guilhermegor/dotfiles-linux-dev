@@ -214,6 +214,34 @@ call_line() {
     refute_call 'systemctl'
 }
 
+@test "DRY_RUN says the group check was skipped when the root-only config is unreadable" {
+    [ "$(id -u)" -ne 0 ] || skip "root can read a 0000 file"
+    printf '#!/bin/bash\necho "alice plugdev"\n' > "$TMP/bin/id"
+    chmod +x "$TMP/bin/id"
+    # sudo -n fails, as it does with no cached credentials.
+    printf '#!/bin/bash\necho "sudo $*" >> "%s"\n[ "$1" = -n ] && exit 1\nexec "$@"\n' "$CALLS" > "$TMP/bin/sudo"
+    chmod 000 "$_UG_DIR/usbguard-daemon.conf"
+    DRY_RUN=1 run install_usbguard
+    chmod 600 "$_UG_DIR/usbguard-daemon.conf"
+    [[ "$output" == *"IPCAllowedGroups check was skipped"* ]]
+    [[ "$output" != *"would refuse"* ]]
+    refute_call 'systemctl'
+}
+
+@test "DRY_RUN reads a root-only config through cached sudo and reports the refusal" {
+    [ "$(id -u)" -ne 0 ] || skip "root can read a 0000 file"
+    printf '#!/bin/bash\necho "alice plugdev"\n' > "$TMP/bin/id"
+    chmod +x "$TMP/bin/id"
+    # Cached sudo: -n succeeds and reads the file as if it were root.
+    printf '#!/bin/bash\necho "sudo $*" >> "%s"\n[ "$1" = -n ] && shift\nchmod 600 "%s"\n"$@"; rc=$?\nchmod 000 "%s"\nexit $rc\n' \
+        "$CALLS" "$_UG_DIR/usbguard-daemon.conf" "$_UG_DIR/usbguard-daemon.conf" > "$TMP/bin/sudo"
+    chmod 000 "$_UG_DIR/usbguard-daemon.conf"
+    DRY_RUN=1 run install_usbguard
+    chmod 600 "$_UG_DIR/usbguard-daemon.conf"
+    [[ "$output" == *"would refuse"* ]]
+    refute_call 'systemctl'
+}
+
 @test "post-install message shows how to allow a device and how to back out" {
     run install_usbguard
     [ "$status" -eq 0 ]
