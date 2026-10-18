@@ -1658,6 +1658,15 @@ uninstall_usbguard() {
     print_status "section" "UNINSTALL USBGUARD"
 
     run_or_echo sudo systemctl disable --now usbguard || true
+    # install_usbguard_prompt's user unit execs /usr/bin/usbguard; left enabled
+    # after the package goes, Restart=on-failure retries it forever.
+    # ponytail: same $HOME/--user scope as the installer, not SUDO_USER's session.
+    local unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/usbguard-prompt.service"
+    if [ -e "$unit" ]; then
+        run_or_echo systemctl --user disable --now usbguard-prompt.service || true
+        run_or_echo rm -f "$unit" "$HOME/.local/bin/usbguard-prompt"
+        run_or_echo systemctl --user daemon-reload || true
+    fi
     local user="${SUDO_USER:-$(id -un)}"
     # Mirrors install: root gets no ACL, and IPCAllowedUsers=root is its only
     # IPC grant (the daemon has no built-in root bypass).

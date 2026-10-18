@@ -117,6 +117,7 @@ sudo systemctl disable --now usbguard
 Devices blocked while the daemon ran stay blocked until you replug them or
 reboot. `uninstall_usbguard` does the same and also removes the package; it
 deletes your ACL file and keeps the rest of `/etc/usbguard`, so a reinstall reuses your policy.
+It also stops and removes the Allow/Block prompt's user unit and handler, if installed.
 
 ## Operator check (real hardware)
 

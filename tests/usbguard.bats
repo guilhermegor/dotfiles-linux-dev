@@ -272,6 +272,23 @@ call_line() {
     [ "$stop" -lt "$remove" ]
 }
 
+@test "uninstall stops and removes the prompt watcher before removing the package" {
+    unset XDG_CONFIG_HOME
+    local unit="$HOME/.config/systemd/user/usbguard-prompt.service"
+    mkdir -p "${unit%/*}" "$HOME/.local/bin"
+    : > "$unit"
+    : > "$HOME/.local/bin/usbguard-prompt"
+    run uninstall_usbguard
+    [ "$status" -eq 0 ]
+    local stop remove
+    stop="$(call_line 'systemctl --user disable --now usbguard-prompt.service')"
+    remove="$(call_line 'apt-get remove -y usbguard')"
+    [ -n "$stop" ] && [ -n "$remove" ]
+    [ "$stop" -lt "$remove" ]
+    [ ! -e "$unit" ]
+    [ ! -e "$HOME/.local/bin/usbguard-prompt" ]
+}
+
 @test "a stale IPCAllowedUsers grant from the earlier version is removed, root and others kept" {
     sed -i 's/^IPCAllowedUsers=.*/IPCAllowedUsers=root alice bob/' "$_UG_DIR/usbguard-daemon.conf"
     run install_usbguard
