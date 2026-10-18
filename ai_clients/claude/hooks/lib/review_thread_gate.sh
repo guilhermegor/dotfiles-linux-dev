@@ -102,7 +102,7 @@ query($owner:String!, $repo:String!, $number:Int!) {
       reviews(first:100) {
         totalCount
         pageInfo { hasNextPage endCursor }
-        nodes { author { login __typename } state commit { oid } }
+        nodes { author { login __typename } state body commit { oid } }
       }
       commits(last:1) {
         nodes {
@@ -159,7 +159,7 @@ _gate_page_query() {
 		;;
 	reviews)
 		sel='reviews(first:100, after:$cursor) { totalCount pageInfo { hasNextPage endCursor }
-			nodes { author { login __typename } state commit { oid } } }'
+			nodes { author { login __typename } state body commit { oid } } }'
 		;;
 	esac
 	printf 'query($owner:String!, $repo:String!, $number:Int!, $cursor:String!) { repository(owner:$owner, name:$repo) { pullRequest(number:$number) { %s } } }' "$sel"

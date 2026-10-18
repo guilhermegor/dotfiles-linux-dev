@@ -448,6 +448,18 @@ JSON
     [[ "$output" == *"unanswered ladder finding (comment channel)"* ]]
 }
 
+# --- dotfiles-linux-dev#804: the refusal filter needs the review BODY from GraphQL -------------------
+#
+# The fixtures above hand the filters a `body` on every review, so they passed while the real
+# queries never requested one: in production greptile_refusal saw "" and a credit-limit refusal
+# still counted as a review (codex review of #806, head 3e6e400b). Pin the query shape itself.
+@test "#804: both review queries request the review body the refusal filter reads" {
+    run bash -c "source '$GATE'; _gate_query | grep -A3 'reviews(first:100)' | grep -c 'state body commit'"
+    [ "$output" = "1" ]
+    run bash -c "source '$GATE'; _gate_page_query reviews"
+    [[ "$output" == *"state body commit { oid }"* ]]
+}
+
 # --- dotfiles-linux-dev#505: a fourth state for "nobody has reviewed this at all" ----------------------
 #
 # Measured 2026-09-25 across the live open-PR board: #513, #514 and #517 carried zero threads and
