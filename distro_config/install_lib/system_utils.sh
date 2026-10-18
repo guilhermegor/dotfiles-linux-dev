@@ -1640,7 +1640,16 @@ install_usbguard_prompt() {
     local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
     src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../usbguard" && pwd)" || return 1
 
-    command_exists usbguard || print_status "warning" "usbguard not installed; run install_usbguard first"
+    # The unit execs /usr/bin/usbguard: enabling it without one is a unit that
+    # fails and restarts forever. DRY_RUN only plans, so it just warns there.
+    if ! command_exists usbguard; then
+        if [ "${DRY_RUN:-0}" = "1" ]; then
+            print_status "warning" "usbguard not installed; run install_usbguard first"
+        else
+            print_status "error" "usbguard not installed; run install_usbguard first"
+            return 1
+        fi
+    fi
     install_package zenity || return 1
     run_or_echo install -D -m 0755 "$src/usbguard-prompt" "$bin_dir/usbguard-prompt" || return 1
     run_or_echo install -D -m 0644 "$src/usbguard-prompt.service" "$unit_dir/usbguard-prompt.service" || return 1

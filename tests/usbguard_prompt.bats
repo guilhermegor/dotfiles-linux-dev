@@ -266,6 +266,29 @@ NONAME='block id 1:2 serial "" name "" with-interface { 08:06:50 }'
     [ -n "$found" ]
 }
 
+@test "installer: refuses without usbguard, enabling nothing" {
+    export HOME="$TMP/home" LOG_FILE="$TMP/log" DRY_RUN=0 PACKAGE_MANAGER=apt
+    mkdir -p "$HOME"
+    export INSTALL_CMD="run_or_echo sudo apt-get install -y"
+    # shellcheck source=../distro_config/install_lib/_common.sh
+    source "$REPO_ROOT/distro_config/install_lib/_common.sh"
+    # shellcheck source=../distro_config/install_lib/system_utils.sh
+    source "$REPO_ROOT/distro_config/install_lib/system_utils.sh"
+    command_exists() { [ "$1" != usbguard ] && command -v "$1" > /dev/null; }
+    # Real run: stub what a regression would reach so it never hits the host.
+    local c
+    for c in sudo systemctl apt-get; do
+        printf '#!/bin/bash\necho "%s $*" >> "%s"\n' "$c" "$CALLS" > "$TMP/bin/$c"
+        chmod +x "$TMP/bin/$c"
+    done
+    run install_usbguard_prompt
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"run install_usbguard first"* ]]
+    ! grep -qE '^(sudo|systemctl|apt-get) ' "$CALLS"
+    [ ! -e "$HOME/.local/bin/usbguard-prompt" ]
+    [ ! -e "$HOME/.config/systemd/user/usbguard-prompt.service" ]
+}
+
 @test "unit file runs usbguard watch with the installed handler, never udev" {
     run grep -E '^ExecStart=/usr/bin/usbguard watch --wait --exec %h/.local/bin/usbguard-prompt$' \
         "$REPO_ROOT/distro_config/usbguard/usbguard-prompt.service"
