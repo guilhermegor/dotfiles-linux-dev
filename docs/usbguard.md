@@ -107,7 +107,6 @@ package ships only a user service and binary; the binary registers
 libnotify `Allow`/`Reject` actions, but it does not classify interfaces,
 cannot warn about HID, and has no "Always allow" through polkit. Whether the
 GNOME banner buttons actually work was not tested on hardware.
->>>>>>> a174bf64 (feat(usbguard): harden prompt, add installer step (#789))
 
 ## Back out
 
