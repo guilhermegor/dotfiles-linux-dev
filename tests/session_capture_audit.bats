@@ -37,6 +37,14 @@ setup() {
 # Only implements `gh issue list … --jq '.[].number'` → one number per line.
 # Records its own argv so a test can prove the caller bounded the page explicitly.
 printf '%s\n' "$*" >>"$GH_ARGV_LOG"
+# `gh api …/pulls?…` → $GH_PULLS (default: no PR); GH_PULLS_FAIL makes it fail like offline gh.
+case "$1 $2" in
+"api repos/"*"/pulls?"*)
+	[ -n "${GH_PULLS_FAIL:-}" ] && exit 1
+	printf '%s\n' "${GH_PULLS:-[]}"
+	exit 0
+	;;
+esac
 printf '%s\n' $GH_ISSUES
 STUB
 	chmod +x "$TEST_TMP/bin/gh"
@@ -415,10 +423,13 @@ STUB
 
 # --- multi-machine visibility (dotfiles-linux-dev#715) -----------------------------------------
 
+# The bare forge sits under a `github.com/o/r.git` path so repo_slug resolves "o/r" and the
+# PR-state lookup (dotfiles-linux-dev#807) reaches the gh stub instead of failing closed.
 forge_repo() {
-	git init -q --bare "$TEST_TMP/o.git"
+	FORGE="$TEST_TMP/github.com/o/r.git"
+	git init -q --bare "$FORGE"
 	REPO="$TEST_TMP/proj"
-	git clone -q "$TEST_TMP/o.git" "$REPO" 2>/dev/null
+	git clone -q "$FORGE" "$REPO" 2>/dev/null
 	git -C "$REPO" config user.email t@t
 	git -C "$REPO" config user.name t
 	git -C "$REPO" commit -q --allow-empty -m init
@@ -432,7 +443,65 @@ branch_wt() {
 }
 
 pushed() {
-	git -C "$TEST_TMP/o.git" rev-parse --verify -q "refs/heads/$1" >/dev/null
+	git -C "$FORGE" rev-parse --verify -q "refs/heads/$1" >/dev/null
+}
+
+# Push the branch, then delete it on the forge the way GitHub's delete_branch_on_merge does —
+# the remote-tracking ref goes too, so `@{upstream}` no longer resolves.
+merged_and_deleted() {
+	git -C "$TEST_TMP/wt-$2" push -q -u origin "$1"
+	git -C "$TEST_TMP/wt-$2" push -q origin --delete "$1"
+}
+
+@test "closeout does not resurrect a branch whose PR is merged" {
+	forge_repo
+	branch_wt fix/done-807 a
+	merged_and_deleted fix/done-807 a
+	export GH_PULLS='[{"number":42,"state":"closed","merged_at":"2026-10-18T15:27:02Z"}]'
+	run_report ""
+	[[ "$output" == *"[git] 'fix/done-807' — PR #42 merged, worktree removable"* ]]
+	run pushed fix/done-807
+	[ "$status" -ne 0 ]
+}
+
+@test "closeout pushes a deleted-upstream branch with no PR, after asking the forge" {
+	forge_repo
+	branch_wt fix/lost-807 a
+	merged_and_deleted fix/lost-807 a
+	run_report ""
+	pushed fix/lost-807
+	[[ "$output" == *"pushed loop branch 'fix/lost-807' (was not on the forge)"* ]]
+	grep -qF 'repos/o/r/pulls?state=all&head=o:fix/lost-807' "$TEST_TMP/gh_argv"
+}
+
+@test "closeout does not push when the PR state is unreadable, and reports it" {
+	forge_repo
+	branch_wt fix/blind-807 a
+	export GH_PULLS_FAIL=1
+	run_report ""
+	[[ "$output" == *"loop branch 'fix/blind-807' not pushed — its PR state is unreadable"* ]]
+	run pushed fix/blind-807
+	[ "$status" -ne 0 ]
+}
+
+@test "closeout treats a malformed PR response as unreadable" {
+	forge_repo
+	branch_wt fix/junk-807 a
+	export GH_PULLS='{"message":"API rate limit exceeded"}'
+	run_report ""
+	[[ "$output" == *"its PR state is unreadable"* ]]
+	run pushed fix/junk-807
+	[ "$status" -ne 0 ]
+}
+
+@test "closeout does not push a branch the forge already has in full" {
+	forge_repo
+	branch_wt fix/synced-807 a
+	git -C "$TEST_TMP/wt-a" push -q -u origin fix/synced-807
+	run_report ""
+	[[ "$output" != *"fix/synced-807"* ]]
+	run grep -q pulls "$TEST_TMP/gh_argv"
+	[ "$status" -ne 0 ]
 }
 
 @test "closeout pushes an unpushed loop-owned worktree branch instead of only reporting it" {

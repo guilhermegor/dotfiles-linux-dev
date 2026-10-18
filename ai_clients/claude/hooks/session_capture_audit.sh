@@ -22,7 +22,8 @@
 # the findings ARE this script's stdout payload, so they are printed with `printf`
 # to stdout — NOT via `print_status` (status/diagnostics go to stderr). Kept
 # dependency-free (no lib/common.sh) so it runs early and never fails a session.
-# Fails OPEN everywhere: any uncertainty is skipped, never a hard error.
+# Fails OPEN everywhere: any uncertainty is skipped, never a hard error. The one write,
+# push_loop_branches(), fails CLOSED: uncertainty there means no push.
 #
 # Concurrent README appends (dotfiles-linux-dev#356): the stores are global and written by
 # multiple sessions at once (measured — three sessions inside one 40-minute window,
@@ -111,14 +112,52 @@ loop_worktrees() {
 	done < <(git -C "$1" worktree list --porcelain 2>/dev/null)
 }
 
+# newest_pr CWD BRANCH: "<number>\t<state>" of the branch's newest PR (state is open, merged
+# or closed), empty when it has none. Non-zero when the forge cannot be read — the caller must
+# treat that as unknown, never as "no PR".
+newest_pr() {
+	local slug json
+	command -v gh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 1
+	slug="$(repo_slug "$1")" || return 1
+	json="$(gh api "repos/$slug/pulls?state=all&head=${slug%%/*}:$2" 2>/dev/null)" || return 1
+	printf '%s' "$json" | jq -er 'if type == "array" then (.[0] // empty |
+		"\(.number)\t\(if .merged_at then "merged" else .state end)") else error end' 2>/dev/null ||
+		printf '%s' "$json" | jq -e 'type == "array" and length == 0' >/dev/null 2>&1
+}
+
+# Pushes each loop worktree branch the forge lacks, so another machine can see it
+# (dotfiles-linux-dev#715) — but never a branch whose PR is already merged or closed: GitHub
+# auto-deletes those on merge, and pushing them back resurrects them (dotfiles-linux-dev#807).
+# Fails CLOSED: any state the script cannot read means no push.
 push_loop_branches() {
-	local cwd="$1" path branch
+	local cwd="$1" path branch remote rc reason pr
 	git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
 	while IFS=$'\t' read -r path branch; do
-		# Explicit refs, not HEAD: the worktree may sit detached mid-rebase.
-		[ "$(git -C "$path" rev-list --count "refs/heads/$branch@{upstream}..refs/heads/$branch" 2>/dev/null || echo 1)" -gt 0 ] || continue
+		remote="$(git -C "$path" ls-remote --exit-code origin "refs/heads/$branch" 2>/dev/null)"
+		rc=$?
+		if [ "$rc" -eq 2 ]; then
+			reason="was not on the forge"
+		elif [ "$rc" -eq 0 ]; then
+			# A count that fails (forge tip not fetched) reads as "not ahead": skip, never push.
+			reason="$(git -C "$path" rev-list --count "${remote%%[[:space:]]*}..refs/heads/$branch" 2>/dev/null)"
+			[ "${reason:-0}" -gt 0 ] || continue
+			reason="$reason commit(s) ahead of the forge"
+		else
+			add_gap "[git] could not push loop branch '$branch' — forge unreachable, retry later"
+			continue
+		fi
+		if ! pr="$(newest_pr "$cwd" "$branch")"; then
+			add_gap "[git] loop branch '$branch' not pushed — its PR state is unreadable (gh/network)"
+			continue
+		fi
+		case "${pr#*$'\t'}" in
+		merged | closed)
+			PUSHED+=("[git] '$branch' — PR #${pr%%$'\t'*} ${pr#*$'\t'}, worktree removable")
+			continue
+			;;
+		esac
 		if git -C "$path" push -q -u origin "$branch" >/dev/null 2>&1; then
-			PUSHED+=("[git] pushed loop branch '$branch' (was not on the forge)")
+			PUSHED+=("[git] pushed loop branch '$branch' ($reason)")
 		else
 			add_gap "[git] could not push loop branch '$branch' — retry once the forge is reachable"
 		fi
