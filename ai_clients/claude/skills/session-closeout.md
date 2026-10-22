@@ -34,6 +34,12 @@ must). Work every line of all three.
   every loop-owned worktree branch (`<type>/<slug>-<issue>`) so the other machine can see it
   (dotfiles-linux-dev#715); that is the one push the "never push" rule above does not cover. A
   `could not push` line means the forge was unreachable: retry later, nothing is lost.
+- **`[git] '…' — PR #N merged, worktree removable`** — the branch's PR is already merged (or
+  closed), so the audit does not push it back (dotfiles-linux-dev#807: GitHub auto-deletes it on
+  merge). Offer to remove the worktree; never push the branch by hand.
+- **`[git] loop branch '…' not pushed — its PR state is unreadable`** — gh was missing, offline
+  or rate-limited, so the audit could not rule out a merged PR and did not push. Re-run the
+  closeout once `gh` works.
 - **`[specs] <worktree>/… tasks.md is not committed`** — commit and push the tracker (in the worktree the
   line names) so it is shared.
 - **`[ai-state] the last state sync did not complete`** — read the handoff file the line names and follow
