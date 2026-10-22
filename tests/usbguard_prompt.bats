@@ -212,7 +212,8 @@ NONAME='block id 1:2 serial "" name "" with-interface { 08:06:50 }'
     # zenity 4.0.1 exits 1 here (measured); the label decides, not the code.
     ZEN_RC=0 ZEN_OUT="Always allow" usbguard_prompt_dialog 9 "$HID"
     grep -qx 'pkexec usbguard allow-device -p 9' "$CALLS"
-    ! grep -qx 'usbguard allow-device 9' "$CALLS"
+    run grep -qx 'usbguard allow-device 9' "$CALLS"
+    [ "$status" -ne 0 ]
 }
 
 @test "dialog: Block, close and timeout all block" {
@@ -284,7 +285,8 @@ NONAME='block id 1:2 serial "" name "" with-interface { 08:06:50 }'
     run install_usbguard_prompt
     [ "$status" -eq 1 ]
     [[ "$output" == *"run install_usbguard first"* ]]
-    ! grep -qE '^(sudo|systemctl|apt-get) ' "$CALLS"
+    run grep -qE '^(sudo|systemctl|apt-get) ' "$CALLS"
+    [ "$status" -ne 0 ]
     [ ! -e "$HOME/.local/bin/usbguard-prompt" ]
     [ ! -e "$HOME/.config/systemd/user/usbguard-prompt.service" ]
 }
