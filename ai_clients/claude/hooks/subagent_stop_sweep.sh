@@ -320,6 +320,20 @@ stash_snapshot_pr_overlap() {
 	fi
 }
 
+# Succeeds (status 0) only when merging `origin/$b` into `origin/$db` would change nothing,
+# i.e. the base tree already holds everything the branch has. Comparing trees (not patches via
+# `git cherry`) covers squash merges of any length, merge commits with conflict resolutions,
+# and a patch later reverted on the base. The two refs are refreshed first so a stale local
+# copy cannot hide fresh pushes. A failed fetch, a conflicting merge, or an unreadable ref is
+# NOT empty: that fails toward visibility, as everywhere else uncertainty is possible (#793).
+branch_is_empty() {
+	local cwd="$1" db="$2" b="$3" merged
+	$GIT -C "$cwd" fetch --quiet origin "$db" "$b" 2>/dev/null || return 1
+	merged="$($GIT -C "$cwd" merge-tree --write-tree "origin/$db" "origin/$b" 2>/dev/null)" || return 1
+	merged="${merged%%$'\n'*}"
+	[ -n "$merged" ] && [ "$merged" = "$($GIT -C "$cwd" rev-parse "origin/$db^{tree}" 2>/dev/null)" ]
+}
+
 sweep_orphan_branches() {
 	local cwd="$1" repo="$2" owner="$3" db="$4" b heads any=0 title
 	# ONE call for every PR head, never one per branch: the per-branch form
@@ -343,6 +357,8 @@ sweep_orphan_branches() {
 				echo "    - $b: STASH SNAPSHOT (\"$title\"), not a branch missing a PR"
 				stash_snapshot_diff_context "$cwd" "$db" "$b"
 				stash_snapshot_pr_overlap "$cwd" "$repo" "$db" "$b"
+			elif branch_is_empty "$cwd" "$db" "$b"; then
+				echo "    - $b: empty (no changes left to merge into $db), no work to rescue"
 			else
 				echo "    - $b"
 			fi
