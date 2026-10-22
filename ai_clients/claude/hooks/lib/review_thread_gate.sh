@@ -51,6 +51,35 @@ _gate_min_reply_chars=100
 # comment they wrote themselves. It is only ever trusted paired with authorAssociation below.
 _gate_ladder_marker_re='^Fallback review — runtime: (qwen|codex|kimi|coderabbit|copilot|claude), model: .+ \(selected by: .+\)$'
 
+# Greptile's trial-credit refusal arrives as a SUBMITTED COMMENTED review (dotfiles-linux-dev#804,
+# measured on #801: green on a refusal alone), so it is not a review of the head. The phrases live
+# in ONE file -- greptile_refusal_phrases.txt -- that slot_classify.py (the ladder) reads too.
+_gate_greptile_refusal_phrases() {
+	local f
+	f="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/greptile_refusal_phrases.txt"
+	[ -s "$f" ] || return 1
+	cat "$f"
+}
+
+# jq def: a node (GraphQL `author.login` is bare, REST's carries `[bot]`) that is the EXACT
+# Greptile login AND whose body carries a refusal phrase. Login AND phrase, never either alone.
+# Reads $refusal (--arg); an empty $refusal matches nothing, so the node counts as a review.
+_gate_refusal_jq_def() {
+	cat <<'JQ'
+def greptile_refusal:
+  (((.author.login // "") | sub("\\[bot\\]$"; "") | ascii_downcase) == "greptile-apps")
+  and ((.body // "") | ascii_downcase) as $b
+  | ($refusal | split("\n") | map(select(length > 0)) | any(. as $p | $b | contains($p)));
+JQ
+}
+
+# The workflow's "has anyone reviewed" count over `gh pr view --json reviews`: every review except
+# a Greptile refusal. Run with --arg refusal "$(_gate_greptile_refusal_phrases)".
+_gate_real_review_count_filter() {
+	_gate_refusal_jq_def
+	echo '[.reviews[] | select(greptile_refusal | not)] | length'
+}
+
 _gate_query() {
 	cat <<'GRAPHQL'
 query($owner:String!, $repo:String!, $number:Int!) {
@@ -73,7 +102,7 @@ query($owner:String!, $repo:String!, $number:Int!) {
       reviews(first:100) {
         totalCount
         pageInfo { hasNextPage endCursor }
-        nodes { author { login __typename } state commit { oid } }
+        nodes { author { login __typename } state body commit { oid } }
       }
       commits(last:1) {
         nodes {
@@ -130,7 +159,7 @@ _gate_page_query() {
 		;;
 	reviews)
 		sel='reviews(first:100, after:$cursor) { totalCount pageInfo { hasNextPage endCursor }
-			nodes { author { login __typename } state commit { oid } } }'
+			nodes { author { login __typename } state body commit { oid } } }'
 		;;
 	esac
 	printf 'query($owner:String!, $repo:String!, $number:Int!, $cursor:String!) { repository(owner:$owner, name:$repo) { pullRequest(number:$number) { %s } } }' "$sel"
@@ -178,7 +207,7 @@ _gate_roster_logins() {
 	local roster_file="$1"
 	if [ -n "$roster_file" ] && [ -f "$roster_file" ]; then
 		sed -n 's/^[[:space:]]*-[[:space:]]*login:[[:space:]]*//p' "$roster_file" \
-			| sed 's/[[:space:]]*#.*$//; s/[[:space:]]*$//' | sed 's/\[bot\]$//' | sed '/^$/d'
+			| sed 's/\[bot\]$//' | sed '/^$/d'
 		return 0
 	fi
 	# No roster: fall back to treating any bot account as a reviewer, resolved per comment in the
@@ -368,6 +397,7 @@ JQ
 # the same as an empty $head_oid -- one extra review is the acceptable cost, never a permanent skip
 # under a new name.
 _gate_reported_filter() {
+	_gate_refusal_jq_def
 	cat <<'JQ'
 ($roster | split("\n") | map(select(length > 0)) | map(ascii_downcase)) as $bots
 | ($bots | index("__no_roster__")) as $no_roster
@@ -385,6 +415,7 @@ _gate_reported_filter() {
    # not a report at all. Fail closed: an unknown oid/date never satisfies the gate.
    ($revs | any(is_roster
                 and ((.state // "") != "PENDING")
+                and (greptile_refusal | not)
                 and (($head_oid != "") and ((.commit.oid // "") == $head_oid))))
    or ($cs | any(is_roster
                  and (((.body // "") | ascii_downcase) | test("full review finished"))
@@ -526,8 +557,17 @@ gate_pr_thread_state() {
 	# Has ANY roster reviewer reported at all (dotfiles-linux-dev#505)? A PR nobody has looked at yet has
 	# no threads and no comment-channel findings either, so it reaches here indistinguishable from
 	# "reviewed, nothing to answer" unless this is checked as its own signal.
+	# An unreadable phrase list must not become an empty one: that matches nothing, so a refusal
+	# would count as a review (the #804 defect). Fail closed as unreadable.
+	local refusal_phrases
+	refusal_phrases="$(_gate_greptile_refusal_phrases)" || {
+		echo "greptile_refusal_phrases.txt missing or empty" >"$jq_err"
+		_gate_filter_aborted "$jq_err" "refusal-phrases"
+		return 0
+	}
 	reported="$(_gate_run_jq "$threads" "$(_gate_reported_filter)" "$jq_err" \
-		--arg roster "$roster" --arg marker "$_gate_ladder_marker_re")" || {
+		--arg roster "$roster" --arg marker "$_gate_ladder_marker_re" \
+		--arg refusal "$refusal_phrases")" || {
 		_gate_filter_aborted "$jq_err" "reviewer-reported"
 		return 0
 	}
