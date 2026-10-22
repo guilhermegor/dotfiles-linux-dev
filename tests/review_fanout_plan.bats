@@ -39,6 +39,13 @@ setup() {
     TEST_TMP="$(mktemp -d)"
     cd "$TEST_TMP" || return 1
 
+    # The reviewer roster the review-thread gate reads (.review-bots.yaml, repo root = cwd).
+    cat >"$TEST_TMP/.review-bots.yaml" <<'ROSTER'
+reviewers:
+  - login: coderabbitai[bot]
+  - login: guilhermegor-review-ladder[bot]
+ROSTER
+
     BIN="$TEST_TMP/bin"
     mkdir -p "$BIN"
     PATH="$BIN:$PATH"
@@ -106,8 +113,9 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
             pageInfo: {hasNextPage: (($after + $first) < ($all | length)),
                        endCursor: (($after + $first) | tostring)},
             nodes: [$page[] | {number, headRefOid, baseRefName: (.baseRefName // "master"), mergeStateStatus, isDraft,
+                author: (.author // {login: "guilhermegor"}),
                 reviews: {totalCount: (.reviewsTotal // ((.reviews // []) | length)),
-                          nodes: ((.reviews // [])[-100:])},
+                          nodes: [(.reviews // [])[-100:][] | . + {author: (.author // {login: "coderabbitai", __typename: "Bot"})}]},
                 comments: {totalCount: (.commentsTotal // ((.comments // []) | length)),
                            nodes: ((.comments // [])[-100:])},
                 commits: {nodes: [{commit: {statusCheckRollup:
@@ -124,13 +132,16 @@ elif [ "$1" = "api" ] && [[ "$2" == repos/* ]] && [ -n "${GH_REST_FAIL:-}" ]; th
 elif [ "$1" = "api" ] && [[ "$2" == */pulls\?state=open* ]]; then
     # the REST fallback (#689): same flat fixture, re-shaped into REST's own field names
     [[ "$2" == *page=1 ]] && filter='[.[] | {number, head: {sha: .headRefOid},
-        base: {ref: (.baseRefName // "master")}, draft: .isDraft}]' || filter='[]'
+        base: {ref: (.baseRefName // "master")}, draft: .isDraft,
+        user: {login: (.author.login // "guilhermegor")}}]' || filter='[]'
     jq "$filter" "$FIXTURE"
 elif [ "$1" = "api" ] && [[ "$2" == */pulls/*/reviews* ]]; then
     n="${2#*/pulls/}"; n="${n%%/*}"
     [ -n "${GH_PAGING_FAIL:-}" ] && { echo "gh: HTTP 502" >&2; exit 1; }
     p=1; [[ "$2" == *\&page=* ]] && p="${2##*\&page=}"
-    jq --argjson n "$n" --argjson p "$p" '[.[] | select(.number == $n) | (.reviews // [])[] | {commit_id: .commit.oid}]
+    jq --argjson n "$n" --argjson p "$p" '[.[] | select(.number == $n) | (.reviews // [])[]
+        | {commit_id: .commit.oid, user: {login: (.author.login // "coderabbitai"),
+                    type: (.author.__typename // (if .author then "User" else "Bot" end))}}]
         | .[($p - 1) * 100:$p * 100]' "$FIXTURE"
 elif [ "$1" = "api" ] && [[ "$2" == */issues/*/comments* ]]; then
     n="${2#*/issues/}"; n="${n%%/*}"
@@ -240,6 +251,194 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
     [[ "$(reason_for 601)" == *"already covered at the current head by a fallback review"* ]]
+}
+
+# --- channel 1 counts a ROSTER reviewer, never the PR author (#800) -----------------
+# GitHub records every inline thread REPLY as a COMMENTED review on the current head, so the
+# author answering threads after a fix push read as "reviewed at head" (measured on #795).
+
+@test "an author-only COMMENTED review on the head is not coverage (#800)" {
+    stub_gh_prs <<EOF
+[{"number":800,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "author":{"login":"guilhermegor"},
+  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":"guilhermegor"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "800" ]
+    [ "$(jq -r '.excluded | length' <<<"$output")" -eq 0 ]
+}
+
+@test "a roster bot review on the head is coverage, GraphQL login without [bot] (#800)" {
+    stub_gh_prs <<EOF
+[{"number":801,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":"coderabbitai"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 801)" == *"already reviewed at the current head"* ]]
+}
+
+@test "a roster login with an inline YAML comment still counts, as in the thread gate (#802)" {
+    printf 'reviewers:\n  - login: coderabbitai[bot]  # reviewer\n' >"$TEST_TMP/.review-bots.yaml"
+    stub_gh_prs <<EOF
+[{"number":801,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":"coderabbitai"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [[ "$(reason_for 801)" == *"already reviewed at the current head"* ]]
+}
+
+@test "a roster review on an older head plus an author reply on this head needs a review (#795)" {
+    stub_gh_prs <<EOF
+[{"number":795,"headRefOid":"9dfbeacc","mergeStateStatus":"BLOCKED","isDraft":false,
+  "author":{"login":"guilhermegor"},
+  "reviews":[{"commit":{"oid":"a0f7e5aa"},"author":{"login":"coderabbitai"}},
+             {"commit":{"oid":"9dfbeacc"},"author":{"login":"guilhermegor"}},
+             {"commit":{"oid":"9dfbeacc"},"author":{"login":"guilhermegor"}}],
+  "comments":[],
+  "commits":[{"oid":"9dfbeacc","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "795" ]
+}
+
+@test "a non-roster reviewer on the head is not coverage (#800)" {
+    stub_gh_prs <<EOF
+[{"number":802,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":"coderabbit-fan"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "802" ]
+}
+
+@test "a roster login that is also the PR author is not coverage (#800)" {
+    stub_gh_prs <<EOF
+[{"number":803,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "author":{"login":"guilhermegor-review-ladder"},
+  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":"guilhermegor-review-ladder"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "803" ]
+}
+
+@test "a review with no author (deleted account) is not coverage (#800)" {
+    stub_gh_prs <<EOF
+[{"number":804,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":null}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "804" ]
+}
+
+@test "an existing but unreadable roster fails closed: a roster-bot review no longer counts (#800)" {
+    chmod 000 "$TEST_TMP/.review-bots.yaml"
+    [ ! -r "$TEST_TMP/.review-bots.yaml" ] || skip "running as a user that ignores file modes"
+    stub_gh_prs <<EOF
+[{"number":805,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":"coderabbitai","__typename":"Bot"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "805" ]
+}
+
+@test "no roster file: a Bot-typed review on the head is coverage, like the thread gate (#800)" {
+    rm "$TEST_TMP/.review-bots.yaml"
+    stub_gh_prs <<EOF
+[{"number":808,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":"some-reviewer","__typename":"Bot"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 808)" == *"already reviewed at the current head"* ]]
+}
+
+@test "no roster file: an author-only reply on the head still needs a review (#795 shape)" {
+    rm "$TEST_TMP/.review-bots.yaml"
+    stub_gh_prs <<EOF
+[{"number":809,"headRefOid":"9dfbeacc","mergeStateStatus":"BLOCKED","isDraft":false,
+  "author":{"login":"guilhermegor"},
+  "reviews":[{"commit":{"oid":"a0f7e5aa"},"author":{"login":"coderabbitai","__typename":"Bot"}},
+             {"commit":{"oid":"9dfbeacc"},"author":{"login":"guilhermegor","__typename":"User"}}],
+  "comments":[],
+  "commits":[{"oid":"9dfbeacc","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "809" ]
+}
+
+@test "no roster file, REST fallback: a bot-typed user review is coverage (#800)" {
+    rm "$TEST_TMP/.review-bots.yaml"
+    GH_GRAPHQL_FAIL=1
+    export GH_GRAPHQL_FAIL
+    stub_gh_prs <<EOF
+[{"number":810,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa1111"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [[ "$(reason_for 810)" == *"already reviewed at the current head"* ]]
+}
+
+@test "REST fallback: author-only review is not coverage, [bot]-suffixed roster review is (#800)" {
+    GH_GRAPHQL_FAIL=1
+    export GH_GRAPHQL_FAIL
+    stub_gh_prs <<EOF
+[{"number":806,"headRefOid":"aaaa1111","mergeStateStatus":"BLOCKED","isDraft":false,
+  "author":{"login":"guilhermegor"},
+  "reviews":[{"commit":{"oid":"aaaa1111"},"author":{"login":"guilhermegor"}}],
+  "comments":[],
+  "commits":[{"oid":"aaaa1111","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]},
+ {"number":807,"headRefOid":"bbbb2222","mergeStateStatus":"BLOCKED","isDraft":false,
+  "author":{"login":"guilhermegor"},
+  "reviews":[{"commit":{"oid":"bbbb2222"},"author":{"login":"coderabbitai[bot]"}}],
+  "comments":[],
+  "commits":[{"oid":"bbbb2222","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '[.dispatchable[].pr] | join(",")' <<<"$output")" = "806" ]
+    [[ "$(reason_for 807)" == *"already reviewed at the current head"* ]]
 }
 
 # --- the predicate: channel 2, a ladder comment, head-scoped -----------------------
