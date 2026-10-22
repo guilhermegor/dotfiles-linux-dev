@@ -60,6 +60,54 @@ allow a device that is plugged in.
 An earlier version of this installer listed the user in `IPCAllowedUsers`;
 re-running the installer removes that entry (root and other entries stay).
 
+## Allow/Block prompt (`install_usbguard_prompt`)
+
+A user-session watcher shows a dialog whenever USBGuard blocks a new device,
+so you do not have to open a terminal. Run `install_usbguard_prompt` after
+`install_usbguard`; it installs `zenity`, copies `usbguard-prompt` to
+`~/.local/bin/` and enables the `usbguard-prompt.service` **user** unit
+(`usbguard watch --wait --exec ...`, started with your graphical session;
+never udev, which runs as root with no display).
+
+The buttons map to commands. "Always allow" goes through `pkexec` by choice,
+so a permanent allow needs a password even though the plain command works for
+your user:
+
+| Button | Command | Root needed |
+|--------|---------|-------------|
+| Allow | `usbguard allow-device <id>` (this boot only) | no, scoped ACL |
+| Always allow | `pkexec usbguard allow-device -p <id>` | asks for your password (polkit) |
+| Block (or close, or 2 min timeout) | `usbguard block-device <id>` | no |
+
+The text depends on the interface classes in the rule's
+`with-interface { ... }`:
+
+| Device claims | Dialog |
+|---------------|--------|
+| every interface is storage (`08:*`) | plain prompt |
+| any other non-HID interface (network `02`, wireless `e0`, vendor `ff`, ...) | WARNING: can redirect traffic or run firmware tricks |
+| HID (`03:*`) | WARNING: claims to be a keyboard |
+| storage (`08:*`) and HID | STRONG WARNING: the classic Rubber Ducky disguise |
+| no interface info | WARNING: cannot be classified, treat as a possible keyboard |
+
+The dialog's default button is Block (`--default-cancel`), so a stray Enter
+or Space never allows a device.
+
+The device chooses its own name and serial, so the classifier ignores every
+double-quoted string in the rule before looking for `with-interface`; more
+than one block, or an empty one, is treated as the strong warning. The name
+shown in the dialog has control characters and backslashes removed, is capped
+at 64 characters and is displayed without markup.
+
+Every variant says that no check can prove a device is not a Rubber Ducky:
+this is a "claims to be a keyboard" hint, not a detector.
+
+`usbguard-notifier` 0.1.0 (Ubuntu 24.04) was evaluated and not used. Its
+package ships only a user service and binary; the binary registers
+libnotify `Allow`/`Reject` actions, but it does not classify interfaces,
+cannot warn about HID, and has no "Always allow" through polkit. Whether the
+GNOME banner buttons actually work was not tested on hardware.
+
 ## Back out
 
 ```bash
@@ -69,6 +117,7 @@ sudo systemctl disable --now usbguard
 Devices blocked while the daemon ran stay blocked until you replug them or
 reboot. `uninstall_usbguard` does the same and also removes the package; it
 deletes your ACL file and keeps the rest of `/etc/usbguard`, so a reinstall reuses your policy.
+It also stops and removes the Allow/Block prompt's user unit and handler, if installed.
 
 ## Operator check (real hardware)
 
@@ -79,3 +128,7 @@ claim needs one run on a real machine:
 2. Confirm every device that was plugged in at install time still works.
 3. Plug in a new USB device and confirm `usbguard list-devices` shows it as
    `block`.
+4. Run `install_usbguard_prompt`, plug in an unknown pendrive: the dialog
+   appears; Block keeps it blocked, Allow makes it usable.
+5. Plug in a keyboard (or a known storage+HID combo device) with the daemon
+   running: the HID warning (strong warning for the combo) appears.
