@@ -1,0 +1,12 @@
+[Unit]
+Description=Add new apps to GNOME app folders (additive, never removes)
+# An apt run touches many files; triggers arriving while this runs coalesce,
+# and the start limit stops a pathological loop.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+# Debounce: let the package manager finish writing .desktop files.
+ExecStartPre=/bin/sleep 5
+ExecStart=/bin/bash "@WORKSPACE_SCRIPT@" --folders-only --additive
