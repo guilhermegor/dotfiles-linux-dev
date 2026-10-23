@@ -34,6 +34,8 @@ EOF
     chmod +x "$STUB_MAKE"
 
     export CALL_LOG
+    # The stale-checkout preflight (#810) must not fetch the real repo here.
+    export AI_CLIENTS_UPSTREAM_CHECKED=1
     export MAKE_BIN="$STUB_MAKE"
     RUN_CHAIN_TARGETS=(alpha beta gamma)
 
@@ -58,6 +60,13 @@ teardown() {
 @test "the overall exit status is non-zero when a target failed" {
     FAIL_TARGETS="beta" run main
     [ "$status" -ne 0 ]
+}
+
+@test "a stale checkout aborts before any target runs (#810)" {
+    ai_clients_upstream_guard() { return 1; }
+    run main
+    [ "$status" -ne 0 ]
+    [ ! -e "$CALL_LOG" ]
 }
 
 @test "a fully successful run prints no failure summary and exits 0" {

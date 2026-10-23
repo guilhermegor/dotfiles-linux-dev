@@ -32,6 +32,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
+# shellcheck source=../ai_clients/lib/upstream_guard.sh
+source "$SCRIPT_DIR/../ai_clients/lib/upstream_guard.sh"
 
 MAKE_BIN="${MAKE_BIN:-make}"
 
@@ -105,6 +107,10 @@ report_totp_status() {
 }
 
 main() {
+    # ai_clients refuses a stale checkout anyway; refuse it here, before the
+    # ~20-minute chain, instead of at the end with the reason in a log (#810).
+    ai_clients_upstream_guard || return 1
+
     local target
     for target in "${RUN_CHAIN_TARGETS[@]}"; do
         run_target "$target"
