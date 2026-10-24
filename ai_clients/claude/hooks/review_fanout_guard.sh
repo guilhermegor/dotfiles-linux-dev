@@ -203,7 +203,9 @@ REVIEW_DISPATCH_NAME_RE='^review-pr-[0-9]+(-[0-9]+)?$'
 # TSV, in transcript order (the idle must be ordered against dispatches): `A`/`S<TAB>id<TAB>
 # name<TAB>label<TAB>ts` (Agent dispatch / SendMessage to a review teammate), `R<TAB>id<TAB>
 # ack|sent|done`, `E<TAB>id<TAB>effective-name`, `N<TAB>id<TAB>completed|failed`,
-# `I<TAB>name<TAB>completed|failed<TAB>ts`. `-` is an empty name/ts: a tab is whitespace to
+# `I<TAB>name<TAB>completed|failed<TAB>ts`. #818 added `G<TAB>id<TAB>agent-id` (the ack's own agent
+# id), `M<TAB>id<TAB>to` (every SendMessage, any recipient) and a third field on N, the
+# notification's `<task-id>` (= that agent id). `-` is an empty name/ts: a tab is whitespace to
 # `read`, so an empty field would collapse into its neighbour.
 transcript_agent_facts() {
 	local transcript="$1"
@@ -221,9 +223,10 @@ transcript_agent_facts() {
 			  | select(type == "object")
 			  | if (.type == "tool_use" and .name == "Agent") then
 					"A\t\(.id)\t\(.input.name | dash)\t\(.input.name // .input.description // .id)\t\($ts)"
-				elif (.type == "tool_use" and .name == "SendMessage"
-					  and ((.input.to // "") | test($re))) then
-					"S\t\(.id)\t\(.input.to)\t\(.input.to)\t\($ts)"
+				elif (.type == "tool_use" and .name == "SendMessage" and (.input.to | type) == "string") then
+					"M\t\(.id)\t\(.input.to)\t-\t\($ts)",
+					( select(.input.to | test($re))
+					  | "S\t\(.id)\t\(.input.to)\t\(.input.to)\t\($ts)" )
 				elif (.type == "tool_result" and ((.content | norm) | length) > 0) then
 					(.content | norm) as $t
 					| .tool_use_id as $id
@@ -231,13 +234,15 @@ transcript_agent_facts() {
 						if ($t | contains($ack)) or ($t | contains("Spawned successfully")) then "ack"
 						elif (($t | try (fromjson | .success == true) catch false)) and ($t | contains("Message sent to")) then "sent"
 						else "done" end)",
-					  ( $t | select(contains("Spawned successfully")) | capture("(?:^|\n)name: (?<n>[^\\s]+)")? | "E\t\($id)\t\(.n)" )
+					  ( $t | select(contains("Spawned successfully")) | capture("(?:^|\n)name: (?<n>[^\\s]+)")? | "E\t\($id)\t\(.n)" ),
+					  ( $t | select(contains($ack) or contains("Spawned successfully"))
+					    | capture("agent_?[iI]d: (?<a>[^\\s(]+)")? | "G\t\($id)\t\(.a)" )
 				else empty end ),
 			( $rec
 			  | .. | strings
 			  | select(test("<tool-use-id>[^<]+</tool-use-id>"))
 			  | select(test("<status>(completed|failed)</status>"))
-			  | "N\t\(capture("<tool-use-id>(?<i>[^<]+)</tool-use-id>").i)\t\(capture("<status>(?<s>completed|failed)</status>").s)" ),
+			  | "N\t\(capture("<tool-use-id>(?<i>[^<]+)</tool-use-id>").i)\t\(capture("<status>(?<s>completed|failed)</status>").s)\t\(capture("<task-id>(?<t>[^<]+)</task-id>")? // {t: "-"} | .t)" ),
 			( $rec
 			  | select(.type == "user" and (.message.content | type) == "string")
 			  | .message.content
@@ -298,6 +303,9 @@ review_dispatch_running() {
 	[ -r "$transcript" ] || return 1
 
 	local -A agent_name=() agent_label=() agent_result=() agent_note=() agent_ts=()
+	# agent_task: dispatch id -> the agent's own id (task-id on every notification). task_state:
+	# agent id -> its LATEST event, a notification status or `pending` (resumed, not yet reported).
+	local -A agent_task=() task_state=()
 	local -a order=()
 	local kind id field label ts
 	while IFS=$'\t' read -r kind id field label ts; do
@@ -319,7 +327,26 @@ review_dispatch_running() {
 		E) agent_name["$id"]="$field" ;;
 		# Last wins, matching the previous `| tail -1`: a later notification supersedes an
 		# earlier one for the same id.
-		N) agent_note["$id"]="$field" ;;
+		N)
+			agent_note["$id"]="$field"
+			[ "$label" = "-" ] || task_state["$label"]="$field"
+			;;
+		# The ack's own agent id: what a SendMessage resume and its notification name.
+		G) agent_task["$id"]="$field" ;;
+		# A SendMessage `to` an agent id or name. A resume carries its OWN tool-use-id, so its
+		# notification never reaches the original dispatch's id (#818); only the agent id ties
+		# them. It supersedes an agent's last verdict, but only one that exists: a teammate
+		# has no notifications and is settled by its idle (see I).
+		M)
+			local target="$field" unit
+			if [ -z "${task_state[$target]+set}" ]; then
+				for unit in "${order[@]}"; do
+					[ "${agent_name[$unit]}" = "$field" ] && [ -n "${agent_task[$unit]-}" ] \
+						&& target="${agent_task[$unit]}"
+				done
+			fi
+			[ -z "${task_state[$target]+set}" ] || task_state["$target"]=pending
+			;;
 		# A teammate going idle settles every unit of that name dispatched BEFORE it. The
 		# idle blob is re-delivered in several records, so it is ordered by its own embedded
 		# timestamp, never by where the copy sits in the file: a late copy must not settle a
@@ -347,7 +374,7 @@ review_dispatch_running() {
 
 	[ "${#order[@]}" -gt 0 ] || return 1
 
-	local review_running=1 is_review
+	local review_running=1 is_review note
 	for id in "${order[@]}"; do
 		if [[ "${agent_name[$id]}" =~ $REVIEW_DISPATCH_NAME_RE ]]; then
 			is_review=1
@@ -355,12 +382,21 @@ review_dispatch_running() {
 			is_review=0
 		fi
 
+		# The latest verdict for the AGENT (#818), not for the call that launched it: a quota-
+		# killed agent that was resumed and then completed is completed, and one resumed but
+		# not yet reported is working again. Without an agent id, the call's own notification.
+		note="${agent_note[$id]-}"
+		if [ -n "${agent_task[$id]-}" ] && [ -n "${task_state[${agent_task[$id]}]-}" ]; then
+			note="${task_state[${agent_task[$id]}]}"
+			[ "$note" != pending ] || note=""
+		fi
+
 		case "${agent_result[$id]-}" in
 		"")
 			# No result yet — in flight.
 			;;
 		ack | sent)
-			case "${agent_note[$id]-}" in
+			case "$note" in
 			completed) continue ;;
 			failed)
 				FAILED_BACKGROUND_AGENTS="$(printf '%s\n%s' \
@@ -382,7 +418,7 @@ review_dispatch_running() {
 		fi
 	done
 
-	FAILED_BACKGROUND_AGENTS="$(printf '%s\n' "$FAILED_BACKGROUND_AGENTS" | sed '/^$/d')"
+	FAILED_BACKGROUND_AGENTS="$(printf '%s\n' "$FAILED_BACKGROUND_AGENTS" | sed '/^$/d' | awk '!seen[$0]++')"
 	OTHER_AGENTS_IN_FLIGHT="$(printf '%s\n' "$OTHER_AGENTS_IN_FLIGHT" | sed '/^$/d')"
 	[ "$review_running" -eq 0 ] && return 0
 	return 1
