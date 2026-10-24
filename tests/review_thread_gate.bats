@@ -454,10 +454,10 @@ JSON
 # queries never requested one: in production greptile_refusal saw "" and a credit-limit refusal
 # still counted as a review (codex review of #806, head 3e6e400b). Pin the query shape itself.
 @test "#804: both review queries request the review body the refusal filter reads" {
-    run bash -c "source '$GATE'; _gate_query | grep -A3 'reviews(first:100)' | grep -c 'state body commit'"
+    run bash -c "source '$GATE'; _gate_query | grep -A3 'reviews(first:100)' | grep -c 'state body submittedAt commit'"
     [ "$output" = "1" ]
     run bash -c "source '$GATE'; _gate_page_query reviews"
-    [[ "$output" == *"state body commit { oid }"* ]]
+    [[ "$output" == *"state body submittedAt commit { oid }"* ]]
 }
 
 # --- dotfiles-linux-dev#505: a fourth state for "nobody has reviewed this at all" ----------------------
@@ -899,4 +899,57 @@ page_stub_json() {
         echo "detail=$GATE_DETAIL"
     '
     [[ "$output" == *"140 PR comments exist"* ]]
+}
+
+# --- dotfiles-linux-dev#819: a ladder REVIEW's findings block until answered ----------------------------
+#
+# Measured on #815: the ladder posted a COMMENTED review (App identity, #624) with its findings in the
+# body and no thread; the thread gate counted zero unresolved threads, went green, and auto-merge
+# fired 39s later. Same stubbed-`gh` pattern as the #490 regression above.
+ladder_review_gate() {  # <review-body> [reply-body]
+    local fixture
+    fixture="$(mktemp)"
+    jq -nc --arg body "$1" --arg reply "${2:-}" '
+      ([ {author:{login:"ladder-app",__typename:"Bot"}, state:"COMMENTED", body:$body,
+          submittedAt:"2026-10-24T20:50:04Z", commit:{oid:"abc"}} ]) as $revs
+      | ([ if $reply != "" then
+            {id:"c1",author:{login:"guilhermegor",__typename:"User"},authorAssociation:"OWNER",
+             body:$reply,createdAt:"2026-10-24T21:00:00Z"} else empty end ]) as $cs
+      | {data:{repository:{pullRequest:{
+          reviewThreads:{totalCount:0,nodes:[]},
+          comments:{totalCount:($cs|length),nodes:$cs},
+          reviews:{totalCount:1,nodes:$revs},
+          commits:{nodes:[{commit:{oid:"abc",committedDate:"2026-10-24T20:00:00Z",
+            statusCheckRollup:{contexts:{totalCount:0,nodes:[]}}}}]}}}}}' > "$fixture"
+    local roster
+    roster="$(mktemp)"
+    printf -- '- login: ladder-app[bot]\n' > "$roster"
+    run env GH_FIXTURE="$fixture" GATE_LIB="$GATE" ROSTER="$roster" bash -c '
+        gh() { case "$*" in *"-F owner=o -F repo=r -F number=815") cat "$GH_FIXTURE" ;; *) return 1 ;; esac; }
+        source "$GATE_LIB"
+        gate_pr_thread_state o r 815 "$ROSTER"
+        echo "status=$GATE_STATUS"
+        echo "detail=$GATE_DETAIL"
+    '
+    rm -f "$fixture" "$roster"
+}
+
+LADDER_HEAD=$'Fallback review — runtime: claude, model: m (selected by: probe)\nReviewed head: abc\n\n'
+
+@test "#819: ladder review with findings and no reply keeps the gate red" {
+    ladder_review_gate "${LADDER_HEAD}## Findings
+- [P2] fix before merge"
+    [[ "$output" == *"status=problems"* ]]
+    [[ "$output" == *"unanswered ladder review findings (review channel)"* ]]
+}
+
+@test "#819: a later substantive non-roster reply turns it green" {
+    ladder_review_gate "${LADDER_HEAD}## Findings
+- [P2] fix before merge" "$LONG_BODY"
+    [[ "$output" == *"status=clean"* ]]
+}
+
+@test "#819: a ladder review with no findings does not block" {
+    ladder_review_gate "${LADDER_HEAD}Verdict: approve. No issues found."
+    [[ "$output" == *"status=clean"* ]]
 }
