@@ -1960,6 +1960,15 @@ place — <code>dispatch_plan.py</code>'s <code>SURFACE_LABEL_PREFIX</code> (a f
 today; a scope label once blueprintx#314 lands) — and the one-word token is pinned
 on both sides (<code>UNDECLARED_TOKEN</code> in Python, <code>DISPATCH_UNDECLARED_TOKEN</code> in bash)
 by <code>tests/dispatch_claims.bats</code> so they cannot drift.</p>
+<p><strong>A native parent issue is <code>PARENT:</code>, never <code>UNDECLARED</code> (#813).</strong> An issue whose REST
+<code>sub_issues_summary.total &gt; 0</code> owns no files — its children declare the surface and it closes
+when they do — so the planner excludes it with <code>PARENT: N sub-issues (M open) — dispatch the
+children, not the parent</code>, ahead of the claimed/mentioned/UNDECLARED checks (a parent is also
+what PRs mention with "part of #N"). The summary rides on the existing REST list read (no extra
+call). A missing or malformed summary is <code>parent-state UNKNOWN</code>, which the Stop guard already
+fails closed on. A parent with every child closed adds "ready to close" to the reason — reported
+only, never closed from here. The guard names parents as <code>excluded: #N (parent)</code> and never
+demands a surface for them.</p>
 <h2 id="review-fan-out-needs-a-review-is-about-the-head-not-a-count-dotfiles-linux-dev480">Review fan-out: "needs a review?" is about the HEAD, not a count (dotfiles-linux-dev#480)<a class="headerlink" href="#review-fan-out-needs-a-review-is-about-the-head-not-a-count-dotfiles-linux-dev480" title="Permanent link">&para;</a></h2>
 <p><code>hooks/lib/review_fanout_plan.py</code> computes which open PRs need a reviewer and
 <code>hooks/review_fanout_guard.sh</code> (<code>Stop</code>) refuses to end a dev-loop round that had
