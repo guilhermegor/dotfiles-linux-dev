@@ -81,6 +81,8 @@ command -v gh >/dev/null 2>&1 || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/stop_budget.sh
+source "$HOOK_DIR/lib/stop_budget.sh"
 PLANNER="${REVIEW_FANOUT_PLANNER:-$HOOK_DIR/lib/review_fanout_plan.py}"
 PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-90}"
 # A big board takes the planner ~5 min (#696), far past PLANNER_TIMEOUT. A validated plan is
@@ -519,6 +521,9 @@ main() {
 	# Only an unresolved REVIEW dispatch suppresses. An unrelated agent in flight does not —
 	# see review_dispatch_running's own header for the fails-open defect that was.
 	review_dispatch_running "$transcript" && exit 0
+
+	# Budget low => pass, never block a turn on a board that cannot be read (#814).
+	stop_budget_gate || exit 0
 
 	[ -r "$PLANNER" ] || block_unreadable "no review fan-out planner at $PLANNER (run 'make ai_clients')."
 

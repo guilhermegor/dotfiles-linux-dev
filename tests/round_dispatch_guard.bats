@@ -20,6 +20,17 @@ setup() {
     HOOK="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/round_dispatch_guard.sh"
     TEST_TMP="$(mktemp -d)"
     export TMPDIR="$TEST_TMP"
+    # Own repo: the plan cache lives under the cwd's git common dir (#814), and must never be
+    # the real checkout's. Latch file scoped likewise, and a gh stub reporting a healthy quota.
+    cd "$TEST_TMP" || return 1
+    git init -q -b main . && git config user.email t@t && git config user.name t
+    git commit -q --allow-empty -m init
+    export GH_BUDGET_LATCH_FILE="$TEST_TMP/latch"
+    mkdir -p "$TEST_TMP/bin"
+    printf '#!/bin/bash\necho "gh $*" >>"%s/gh.log"\necho '"'"'{"resources":{"graphql":{"remaining":5000,"reset":4102444800}}}'"'"'\n' \
+        "$TEST_TMP" >"$TEST_TMP/bin/gh"
+    chmod +x "$TEST_TMP/bin/gh"
+    export PATH="$TEST_TMP/bin:$PATH"
     TRANSCRIPT="$TEST_TMP/transcript.jsonl"
     export ROUND_DISPATCH_PLANNER="$TEST_TMP/dispatch_plan.py"
 }

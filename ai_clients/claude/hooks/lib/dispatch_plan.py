@@ -87,6 +87,7 @@ import sys
 import time
 from pathlib import Path
 
+from gh_latch import refuse_if_latched
 from open_pr_pages import read_open_prs
 
 LIB_DIR = Path(__file__).resolve().parent
@@ -903,6 +904,8 @@ def build_plan() -> dict:
 
 def main() -> int:
 	"""Print the dispatch plan as one JSON object and return 0."""
+	if refuse_if_latched("dispatch_plan"):
+		return 3
 	print(json.dumps(build_plan()))
 	return 0
 
