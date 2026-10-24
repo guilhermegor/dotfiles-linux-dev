@@ -50,6 +50,9 @@
 # free and never dispatched on a guess. It blocks only while a slot is free,
 # because declaring the surface is refinement work the round can actually do.
 #
+# A native parent issue (sub-issues) is never UNDECLARED: the planner excludes it with a
+# `PARENT:` reason (#813) because its children own the surface. It is only named, as excluded.
+#
 # Fails OPEN on everything it cannot resolve (no repo, no transcript, no
 # dev-loop evidence) — a guard that blocks on its own blindness gets
 # disabled, same rule as every sibling Stop hook here.
@@ -477,6 +480,13 @@ main() {
 	hitl="$(printf '%s' "$plan" |
 		jq -r '.excluded[]? | select(.reason | startswith("HITL")) | "excluded: #\(.issue) (hitl)"')"
 
+	# Parent issues are excluded by the planner (#813): their children declare the surface, so a
+	# parent is never UNDECLARED and never demanded. Named here so the exclusion stays visible;
+	# "PARENT:" with the colon, so the planner's UNKNOWN form (handled above) is not matched.
+	parents="$(printf '%s' "$plan" |
+		jq -r '.excluded[]? | select(.reason | startswith("PARENT:")) |
+			"excluded: #\(.issue) (parent" + (if (.reason | test("ready to close")) then ", ready to close" else "" end) + ")"')"
+
 	# Two independent in-flight sources, unioned: this session's own unresolved dispatches, and
 	# the cross-worktree claims registry (an agent of ANOTHER session holds those).
 	claimed="$(cd "$cwd" && dispatch_claimed_issues)"
@@ -525,6 +535,10 @@ main() {
 				echo
 				printf '%s\n' "$hitl"
 			fi
+			if [ -n "$parents" ]; then
+				echo
+				printf '%s\n' "$parents"
+			fi
 			echo
 			echo "Each agent's brief starts with the claim step (hooks/lib/dispatch_claims.sh):"
 			echo "  claim_files <issue> <paths…>   # CLAIMED, or HELD:<holder> — do not proceed"
@@ -544,11 +558,13 @@ main() {
 			echo
 			echo "Declaring the surface is refinement work this round can do: add a"
 			echo "\`\`\`surface block listing the exact paths, then re-run the round."
+			[ -z "$parents" ] || { echo; printf '%s\n' "$parents"; }
 		} >&2
 		exit 2
 	fi
 
 	[ -z "$hitl" ] || printf '%s\n' "$hitl" >&2
+	[ -z "$parents" ] || printf '%s\n' "$parents" >&2
 	exit 0
 }
 

@@ -102,7 +102,7 @@ issue_json() {
     local number="$1"
     shift
     if [ "$#" -eq 0 ]; then
-        printf '{"number": %s, "body": "no surface here"}' "$number"
+        printf '{"number": %s, "body": "no surface here", "sub_issues_summary": {"total": 0, "completed": 0}}' "$number"
         return
     fi
     local body="\`\`\`surface\\n"
@@ -111,7 +111,7 @@ issue_json() {
         body="${body}${f}\\n"
     done
     body="${body}\`\`\`"
-    printf '{"number": %s, "body": "%s"}' "$number" "$body"
+    printf '{"number": %s, "body": "%s", "sub_issues_summary": {"total": 0, "completed": 0}}' "$number" "$body"
 }
 
 # issue_json_labeled NUMBER LABEL SURFACE_PATH...
@@ -126,7 +126,17 @@ issue_json_labeled() {
         body="${body}${f}\\n"
     done
     body="${body}\`\`\`"
-    printf '{"number": %s, "body": "%s", "labels": [{"name": "%s"}]}' "$number" "$body" "$label"
+    printf '{"number": %s, "body": "%s", "labels": [{"name": "%s"}], "sub_issues_summary": {"total": 0, "completed": 0}}' "$number" "$body" "$label"
+}
+
+# issue_json_parent NUMBER TOTAL COMPLETED [SUMMARY_JSON]
+# A native parent: no surface block (its children own it). SUMMARY_JSON, if given, replaces the
+# whole sub_issues_summary value ("null" or "{}" exercise the malformed-read path, #813).
+issue_json_parent() {
+    local number="$1" total="$2" completed="$3" summary
+    summary="${4:-}"
+    [ -n "$summary" ] || summary="{\"total\": $total, \"completed\": $completed}"
+    printf '{"number": %s, "body": "epic, no surface", "sub_issues_summary": %s}' "$number" "$summary"
 }
 
 # stub_gh ISSUES_JSON [HELD_FILE] [CLAIMED_ISSUE] [FAIL_BRANCH] [FROZEN_PR_FILE] [MENTION_PRS_JSON]
@@ -269,6 +279,11 @@ run_planner() {
     run python3 "$PLANNER"
 }
 
+refute_gh_call() {
+    run grep -q -- "$1" "$BIN/gh.calls"
+    [ "$status" -ne 0 ]
+}
+
 field() {
     # field JQ_EXPR -> evaluate JQ_EXPR against $output.
     printf '%s' "$output" | jq -r "$1"
@@ -329,6 +344,45 @@ field() {
     [ "$(field '.dispatchable | length')" -eq 0 ]
     [ "$(field '.excluded[0].issue')" = "1" ]
     [[ "$(field '.excluded[0].reason')" == *"no declared file surface"* ]]
+}
+
+@test "a parent with open children is excluded as PARENT, never UNDECLARED (#813)" {
+    stub_gh "[$(issue_json_parent 2 9 4), $(issue_json 5 free/a.sh)]"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | map(.issue) | join(",")')" = "5" ]
+    [ "$(field '.excluded | length')" -eq 1 ]
+    [ "$(field '.excluded[0].issue')" = "2" ]
+    [ "$(field '.excluded[0].reason')" = "PARENT: 9 sub-issues (5 open) — dispatch the children, not the parent" ]
+    [[ "$output" != *UNDECLARED* ]]
+}
+
+@test "a leaf with no surface is still UNDECLARED beside a parent (#813)" {
+    stub_gh "[$(issue_json_parent 2 3 1), $(issue_json 6)]"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '[.excluded[] | select(.issue == 2)][0].reason | startswith("PARENT:")')" = "true" ]
+    [ "$(field '[.excluded[] | select(.issue == 6)][0].reason | startswith("UNDECLARED")')" = "true" ]
+}
+
+@test "a parent whose children are all closed is reported ready to close, not closed (#813)" {
+    stub_gh "[$(issue_json_parent 2 3 3)]"
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [[ "$(field '.excluded[0].reason')" == "PARENT: 3 sub-issues (0 open)"*"ready to close"* ]]
+    refute_gh_call "PATCH\|issue close\|state=closed"
+}
+
+@test "a missing or malformed sub_issues_summary is UNKNOWN, never dispatchable (#813)" {
+    local summary
+    for summary in null '{}' '{"total": "3"}' '{"total": 2}'; do
+        stub_gh "[$(issue_json_parent 2 0 0 "$summary")]"
+        run_planner
+        [ "$status" -eq 0 ]
+        [ "$(field '.dispatchable | length')" -eq 0 ]
+        [[ "$(field '.excluded[0].reason')" == *"parent-state UNKNOWN"* ]]
+    done
 }
 
 @test "a surface of only bare globs is UNDECLARED, never an empty surface that collides with nothing" {

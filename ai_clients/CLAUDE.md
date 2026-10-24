@@ -352,6 +352,16 @@ today; a scope label once blueprintx#314 lands) — and the one-word token is pi
 on both sides (`UNDECLARED_TOKEN` in Python, `DISPATCH_UNDECLARED_TOKEN` in bash)
 by `tests/dispatch_claims.bats` so they cannot drift.
 
+**A native parent issue is `PARENT:`, never `UNDECLARED` (#813).** An issue whose REST
+`sub_issues_summary.total > 0` owns no files — its children declare the surface and it closes
+when they do — so the planner excludes it with `PARENT: N sub-issues (M open) — dispatch the
+children, not the parent`, ahead of the claimed/mentioned/UNDECLARED checks (a parent is also
+what PRs mention with "part of #N"). The summary rides on the existing REST list read (no extra
+call). A missing or malformed summary is `parent-state UNKNOWN`, which the Stop guard already
+fails closed on. A parent with every child closed adds "ready to close" to the reason — reported
+only, never closed from here. The guard names parents as `excluded: #N (parent)` and never
+demands a surface for them.
+
 ## Review fan-out: "needs a review?" is about the HEAD, not a count (dotfiles-linux-dev#480)
 
 `hooks/lib/review_fanout_plan.py` computes which open PRs need a reviewer and

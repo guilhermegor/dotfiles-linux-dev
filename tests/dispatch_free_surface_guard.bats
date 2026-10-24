@@ -341,6 +341,30 @@ transcript_dev_loop_many_failed_agents() {
     [[ "$output" == *"excluded: #304 (hitl)"* ]]
 }
 
+@test "a parent issue is never UNDECLARED and does not block the stop (#813)" {
+    stub_plan '{"dispatchable":[],"excluded":[{"issue":2,"reason":"PARENT: 9 sub-issues (5 open) — dispatch the children, not the parent"}]}'
+    run run_guard "$(transcript_dev_loop)"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"excluded: #2 (parent)"* ]]
+    [[ "$output" != *UNDECLARED* ]]
+}
+
+@test "a parent beside a leaf with no surface: only the leaf is UNDECLARED (#813)" {
+    stub_plan '{"dispatchable":[],"excluded":[{"issue":2,"reason":"PARENT: 9 sub-issues (0 open) — dispatch the children, not the parent; every child is closed — ready to close"},{"issue":9,"reason":"UNDECLARED: no declared file surface"}]}'
+    run run_guard "$(transcript_dev_loop)"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"excluded: #2 (parent, ready to close)"* ]]
+    [[ "$output" == *"  #9"* ]]
+    [[ "$output" != *"  #2"* ]]
+}
+
+@test "the planner's parent-state UNKNOWN still fails closed as UNREADABLE (#813)" {
+    stub_plan '{"dispatchable":[],"excluded":[{"issue":2,"reason":"parent-state UNKNOWN (sub_issues_summary missing or malformed) — never assumed dispatchable"}]}'
+    run run_guard "$(transcript_dev_loop)"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNREADABLE"* ]]
+}
+
 @test "an undeclared surface is listed alongside the issues that are dispatchable" {
     stub_plan '{"dispatchable":[{"issue":4,"surface":["f4.sh"]}],"excluded":[{"issue":9,"reason":"UNDECLARED: no declared file surface"}]}'
     run run_guard "$(transcript_dev_loop)"
