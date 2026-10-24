@@ -420,6 +420,7 @@ and match the project titled exactly **`<repo> kanban`** (e.g. `filings-cvm kanb
     updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: [
       {name: "Backlog",     color: GRAY,   description: "This item hasn'"'"'t been started"},
       {name: "Ready",       color: GREEN,  description: "This is ready to be picked up"},
+      {name: "Blocked",     color: RED,    description: "Waiting on an open blocker"},
       {name: "In progress", color: YELLOW, description: "This is actively being worked on"},
       {name: "In review",   color: PURPLE, description: "This item is in review"},
       {name: "Done",        color: PURPLE, description: "This has been completed"}
@@ -475,16 +476,19 @@ Set the column to the value **derived in step 4**. State the derivation in one l
 (`work type <x> → <column>`) and let the user override; do not re-ask the three upstreams.
 
 **A `task` with an open blocker starts in `Blocked`, never `Ready`** (dotfiles-linux-dev#812). Before
-setting the column, read `rtk gh api repos/<owner>/<repo>/issues/<n>/dependencies/blocked_by`
-(and any `**Blocked by:**` line you just wrote into the body): if any entry is still `open`,
+setting the column, read every page of
+`rtk gh api "repos/<owner>/<repo>/issues/<n>/dependencies/blocked_by?per_page=100" --paginate`
+(`--paginate` is load-bearing: an open blocker on page 2 is invisible while page 1 reads
+all-closed, as in `roadmap_unblock.sh`'s `_ru_native_blockers`) (and any `**Blocked by:**` line you just wrote into the body): if any entry is still `open`,
 the column is `Blocked` and the issue gets `state:blocked` instead of `state:ready`, with the
 board's "Blocked by" field set to the blocker refs. A read that fails is unknown, not "no
 blocker" — say so and keep the derived column. **Re-derive the column whenever a blocker is
 added after placement** (a dependency added later, or `--blocked-by` on a resume): the same read,
 the same rule. The sweep's roadmap reconcile (`reconcile_roadmap_unblock`) re-blocks a
-`Ready`/`Backlog` card that gained an open blocker on its own, but it only runs once per round —
-do not leave the column wrong until then. If the board has no `Blocked` option, leave the
-derived column and report the blocker.
+`Ready` card that gained an open blocker on its own (never a `Backlog` card: those sit there on
+purpose, and unblocking always writes `Ready`), but it only runs once per round — do not leave
+the column wrong until then. If the board has no `Blocked` option, leave the derived column and
+report the blocker.
 
 **On the resume path**, first read the card's current status and `Points` value from
 `item-list --format json`. If status is already past `Ready` (e.g. `In progress`), report it and

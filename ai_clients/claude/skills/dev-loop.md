@@ -227,8 +227,9 @@ Report **one line per declared board**, clean or not — `$RECONCILE_BOARDS_REPO
 (`board <owner>/<n> (<repo>): ok — nothing to change`, or `ok — N item line(s)` followed by that
 board's indented item lines: unblocked, still blocked, re-blocked, decision blocker, blocked by
 nothing, UNKNOWN). The reconcile runs both ways (dotfiles-linux-dev#812): beyond unblocking, a
-`Ready`/`Backlog` card whose issue gained an open native or prose blocker is moved to `Blocked`
-and reported `re-blocked: <repo>#N by <repo>#M [blocker-kind: …]`. A board that reconciled clean and a board nobody swept must never look the same. Add or
+`Ready` card whose issue gained an open native or prose blocker is moved to `Blocked` and reported
+`re-blocked: <repo>#N by <repo>#M [blocker-kind: …]` (`Backlog` cards are not scanned: research,
+prototype and grilling cards wait there on purpose). A board that reconciled clean and a board nobody swept must never look the same. Add or
 drop a board by editing `ROADMAP_BOARDS`, not this prose.
 
 Every determinate line also carries a `[blocker-kind: internal|external|decision]` tag

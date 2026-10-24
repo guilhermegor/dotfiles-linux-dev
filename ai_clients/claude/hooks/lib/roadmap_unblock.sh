@@ -18,7 +18,7 @@
 # (repo name, board id) is hardcoded. The `state:ready|blocked|deferred` label triad and the
 # "Status"/"Blocked by" field names are the one convention this file assumes, per the issue spec.
 #
-# Contract (two directions: Blocked unblocks; Ready/Backlog with an open blocker re-blocks, #812):
+# Contract (two directions: Blocked unblocks; Ready with an open blocker re-blocks, #812):
 #   reconcile_roadmap_unblock OWNER PROJECT
 #     Sets two globals (never partial):
 #       RECONCILE_STATUS = ok | unknown
@@ -321,7 +321,7 @@ _ru_open_blockers() {
 # _ru_reblock OWNER PROJECT REPO NUMBER URL DETAIL
 # The mirror of `_ru_unblock` (dotfiles-linux-dev#812): labels, board "Blocked by", audit comment,
 # board Status LAST — same ordering argument. Status is the completion marker, so any earlier
-# failure leaves the item in its Ready/Backlog column, in the candidate set, and the next round
+# failure leaves the item in its Ready column, in the candidate set, and the next round
 # redoes the whole (retry-safe) sequence.
 _ru_reblock() {
 	local owner="$1" project="$2" repo="$3" number="$4" url="$5" detail="$6"
@@ -338,7 +338,7 @@ _ru_reblock() {
 }
 
 # _ru_process_open_item OWNER PROJECT ITEM_JSON
-# The reverse direction (dotfiles-linux-dev#812) for an item in Ready/Backlog. Prints one line
+# The reverse direction (dotfiles-linux-dev#812) for an item in Ready. Prints one line
 # only when something happened or could not be read: a re-block, FAILED, or UNKNOWN. An item
 # with no open blocker (none recorded, or all closed) is left alone silently — it is where it
 # should be. A `decision:` blocker is left alone too: this direction only acts on a blocker it
@@ -406,10 +406,10 @@ reconcile_roadmap_unblock() {
 		[[ -n "$line" ]] && report="$(printf '%s\n%s' "$report" "$line")"
 	done <<<"$blocked"
 
-	# The reverse direction (dotfiles-linux-dev#812): a Ready/Backlog card that gained an open blocker.
+	# The reverse direction (dotfiles-linux-dev#812): a Ready card that gained an open blocker. Backlog is deliberately NOT scanned: research/prototype/grilling cards sit there on purpose, and `_ru_unblock` always writes Ready, so re-blocking one would promote it to Ready when its blocker closed.
 	local open_items
 	open_items="$(printf '%s' "$items_json" \
-		| jq -c '.items[] | select((.status == "Ready" or .status == "Backlog") and .content.type == "Issue")' \
+		| jq -c '.items[] | select(.status == "Ready" and .content.type == "Issue")' \
 			2>/dev/null)" \
 		|| { RECONCILE_REPORT="UNKNOWN (board unreadable): could not parse project $owner/$project"; return 1; }
 	while IFS= read -r item; do

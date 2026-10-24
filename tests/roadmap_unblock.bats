@@ -693,13 +693,15 @@ run_boards() {
     grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Blocked' "$GH_LOG"
 }
 
-@test "re-block: a Backlog item with an open native blocker is moved to Blocked too" {
+@test "re-block: a Backlog item with an open native blocker is left in Backlog, never promoted to Ready" {
     write_items "$(item "owner/repo" 8 "Backlog" "" "")"
     write_blockers 8 "$(blocker 6 open "other/repo")"
     write_fake_gh
     run_reconcile
-    [[ "$output" == *"re-blocked: owner/repo#8 by other/repo#6 [blocker-kind: external]"* ]]
-    grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Blocked' "$GH_LOG"
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" != *"re-blocked"* ]]
+    refute_gh 'issue edit'
+    refute_gh 'item-edit'
 }
 
 @test "re-block: a Ready item whose only blocker is closed is left alone" {
