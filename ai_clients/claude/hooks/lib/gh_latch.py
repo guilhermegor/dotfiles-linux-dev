@@ -24,8 +24,14 @@ def latch_path() -> Path:
 	if runtime and Path(runtime).is_dir():
 		return Path(runtime) / LATCH_NAME
 	home = os.environ.get("HOME", "")
-	if home and (Path(home) / ".cache").is_dir():
-		return Path(home) / ".cache" / LATCH_NAME
+	if home:
+		cache = Path(home) / ".cache"
+		try:  # same as gh_budget_latch_default_dir: create it 0700 rather than skip to /tmp
+			cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+			cache.chmod(0o700)
+			return cache / LATCH_NAME
+		except OSError:
+			pass
 	return Path("/tmp") / LATCH_NAME  # noqa: S108 - same last-resort fallback as gh_budget.sh
 
 

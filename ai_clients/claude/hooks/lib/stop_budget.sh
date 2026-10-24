@@ -50,27 +50,40 @@ stop_plan_cache_dir() {
 	printf '%s\n' "$common/stop-plan-cache"
 }
 
+# _stop_plan_cache_key NAME TRANSCRIPT — one entry per session: the line offset below is only
+# meaningful against the transcript that produced it. Cross-session staleness is bounded by the
+# TTL plus the claims-registry check in stop_plan_cache_read.
+_stop_plan_cache_key() {
+	local sid
+	sid="$(basename "$2" .jsonl)"
+	printf '%s.%s\n' "$1" "${sid//[^A-Za-z0-9_-]/_}"
+}
+
 # stop_plan_cache_read NAME CWD TRANSCRIPT
 # Prints the cached plan and returns 0 on a fresh hit. Meta file: "<write epoch> <transcript lines>".
 # Invalid when older than the TTL, or when the transcript lines added since the write mention a
 # push, a PR create/merge, or an Agent dispatch. The grep is deliberately loose — over-invalidating
 # costs one re-plan, under-invalidating serves a stale board.
 stop_plan_cache_read() {
-	local name="$1" dir ttl="${STOP_PLAN_CACHE_TTL:-180}" wrote lines
+	local name dir ttl="${STOP_PLAN_CACHE_TTL:-180}" wrote lines
+	name="$(_stop_plan_cache_key "$1" "$3")"
 	dir="$(stop_plan_cache_dir "$2")" || return 1
 	[ -r "$dir/$name.json" ] && [ -r "$dir/$name.meta" ] || return 1
 	read -r wrote lines <"$dir/$name.meta"
 	[[ "$wrote" =~ ^[0-9]+$ ]] && [[ "$lines" =~ ^[0-9]+$ ]] || return 1
 	[ "$(($(date +%s) - wrote))" -lt "$ttl" ] || return 1
 	[ "$(wc -l <"$3")" -ge "$lines" ] || return 1
+	# Another session claiming files changes the board without touching this transcript.
+	[ ! "$dir/../dispatch-claims.tsv" -nt "$dir/$name.meta" ] || return 1
 	tail -n "+$((lines + 1))" "$3" |
-		grep -qE '"name": *"Agent"|git push|gh pr (create|merge)|gh api [^"]*pulls' && return 1
+		grep -qE '"name": *"Agent"|git push|gh (pr (create|merge|close)|issue|label)|gh api [^"]*(pulls|issues|labels)' && return 1
 	cat "$dir/$name.json"
 }
 
 # stop_plan_cache_write NAME CWD TRANSCRIPT PLAN — callers pass only a plan they validated.
 stop_plan_cache_write() {
-	local name="$1" dir
+	local name dir
+	name="$(_stop_plan_cache_key "$1" "$3")"
 	dir="$(stop_plan_cache_dir "$2")" || return 0
 	mkdir -p "$dir" 2>/dev/null || return 0
 	printf '%s' "$4" >"$dir/$name.json.$$" && mv -f "$dir/$name.json.$$" "$dir/$name.json"

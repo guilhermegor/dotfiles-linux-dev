@@ -100,3 +100,33 @@ plan_runs() { wc -l <"$PLAN_LOG" 2>/dev/null || echo 0; }
     [[ "$output" == *"BUDGET-LOW"* ]]
     [ ! -s "$GH_LOG" ]
 }
+
+@test "plan cache is keyed per session: another transcript does not reuse it" {
+    payload | bash "$HOOKS/round_dispatch_guard.sh" || true
+    cp "$TRANSCRIPT" "$TEST_TMP/other.jsonl"
+    TRANSCRIPT="$TEST_TMP/other.jsonl"
+    payload | bash "$HOOKS/round_dispatch_guard.sh" || true
+    [ "$(plan_runs)" -eq 2 ]
+}
+
+@test "plan cache: a new claim in the registry (another session) invalidates it" {
+    payload | bash "$HOOKS/round_dispatch_guard.sh" || true
+    sleep 1
+    : >"$TEST_TMP/.git/dispatch-claims.tsv"
+    payload | bash "$HOOKS/round_dispatch_guard.sh" || true
+    [ "$(plan_runs)" -eq 2 ]
+}
+
+@test "plan cache: gh issue create/edit in the transcript invalidates it" {
+    payload | bash "$HOOKS/round_dispatch_guard.sh" || true
+    printf '{"message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"gh issue edit 7 --add-label x"}}]}}\n' >>"$TRANSCRIPT"
+    payload | bash "$HOOKS/round_dispatch_guard.sh" || true
+    [ "$(plan_runs)" -eq 2 ]
+}
+
+@test "gh_latch.py creates ~/.cache like the bash side instead of falling to /tmp" {
+    mkdir "$TEST_TMP/home"
+    run env -u XDG_RUNTIME_DIR -u GH_BUDGET_LATCH_FILE HOME="$TEST_TMP/home" python3 -c \
+        "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; print(gh_latch.latch_path())"
+    [ "$output" = "$TEST_TMP/home/.cache/dotfiles-dev-sweep-403-until" ]
+}
