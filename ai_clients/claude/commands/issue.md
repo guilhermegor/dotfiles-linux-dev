@@ -169,7 +169,7 @@ entirely if `--work` was passed). Explain the table in the prompt so the choice 
 | `research` | AFK | `Backlog` | *how* — the approach is unproven, but an agent can settle it alone |
 | `prototype` | HITL | `Backlog` | *how* — needs a cheap, rough, concrete artifact built with you |
 | `grilling` | HITL | `Backlog` | *what* — no acceptance criteria written down yet |
-| `task` | AFK unless the body names a decision for you | `Ready` | none — *why*, *what* and *how* are all cleared; pull-ready |
+| `task` | AFK unless the body names a decision for you | `Ready` (`Blocked` if it has an open blocker, step 7) | none — *why*, *what* and *how* are all cleared; pull-ready |
 
 This **derives the starting column**, so step 7 confirms a value rather than re-judging the
 three upstreams from scratch every time. The user can still override to any board column.
@@ -473,6 +473,18 @@ Add the card (parents and children both):
 
 Set the column to the value **derived in step 4**. State the derivation in one line
 (`work type <x> → <column>`) and let the user override; do not re-ask the three upstreams.
+
+**A `task` with an open blocker starts in `Blocked`, never `Ready`** (dotfiles-linux-dev#812). Before
+setting the column, read `rtk gh api repos/<owner>/<repo>/issues/<n>/dependencies/blocked_by`
+(and any `**Blocked by:**` line you just wrote into the body): if any entry is still `open`,
+the column is `Blocked` and the issue gets `state:blocked` instead of `state:ready`, with the
+board's "Blocked by" field set to the blocker refs. A read that fails is unknown, not "no
+blocker" — say so and keep the derived column. **Re-derive the column whenever a blocker is
+added after placement** (a dependency added later, or `--blocked-by` on a resume): the same read,
+the same rule. The sweep's roadmap reconcile (`reconcile_roadmap_unblock`) re-blocks a
+`Ready`/`Backlog` card that gained an open blocker on its own, but it only runs once per round —
+do not leave the column wrong until then. If the board has no `Blocked` option, leave the
+derived column and report the blocker.
 
 **On the resume path**, first read the card's current status and `Points` value from
 `item-list --format json`. If status is already past `Ready` (e.g. `In progress`), report it and
