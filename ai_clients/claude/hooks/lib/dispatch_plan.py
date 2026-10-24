@@ -73,6 +73,13 @@ parsing reaches this planner automatically instead of drifting from it. A board-
 ``Status = Blocked`` (no label, no native dependency) is deliberately NOT a third source here —
 that mismatch is `roadmap_unblock.sh`'s own reconciliation gap to close, not a signal this
 planner re-derives. A native-blocker read failure is UNKNOWN and excluded, never "not blocked".
+
+A native PARENT issue (REST ``sub_issues_summary.total > 0``) is excluded with its own named
+reason, ``PARENT:`` (dotfiles-linux-dev#813): it never owns files — its children declare the
+surface and it closes when they do — so demanding a ```surface block on it (UNDECLARED) is a stop
+that never clears. The summary rides on the same REST list read as the labels, so it costs no
+extra call; a record whose summary is missing or malformed is UNKNOWN, never "not a parent". A
+parent whose children are all closed is reported "ready to close" — report only, never closed here.
 """
 
 from __future__ import annotations
@@ -145,6 +152,15 @@ UNDECLARED_TOKEN = "UNDECLARED"
 UNDECLARED_REASON = (
 	f"{UNDECLARED_TOKEN}: no declared file surface (no ```surface block in the issue body) — "
 	"declare the surface and this issue becomes dispatchable; it is never assumed free"
+)
+
+# A native parent issue (one with sub-issues) is excluded, never asked for a file surface
+# (dotfiles-linux-dev#813). The ``PARENT:`` token leads the reason like UNDECLARED_TOKEN so
+# dispatch_free_surface_guard.sh can tell it apart by prefix; the unreadable form deliberately
+# does NOT start with ``PARENT:`` (and carries UNKNOWN, which the guard already fails closed on).
+PARENT_TOKEN = "PARENT"
+PARENT_UNKNOWN_REASON = (
+	"parent-state UNKNOWN (sub_issues_summary missing or malformed) — never assumed dispatchable"
 )
 
 # Open-PR overlap on a declared hot file (dotfiles-linux-dev#714, owner option (c)) is the one
@@ -364,7 +380,12 @@ def open_issues(slug: str) -> list[dict]:
 	)
 	records = json.loads(raw) if raw else []
 	issues = [
-		{"number": r.get("number"), "body": r.get("body") or "", "labels": _label_names(r)}
+		{
+				"number": r.get("number"),
+				"body": r.get("body") or "",
+				"labels": _label_names(r),
+				"sub_issues": r.get("sub_issues_summary"),
+			}
 		for r in records
 		if "pull_request" not in r
 	]
@@ -527,6 +548,38 @@ def blocked_reason(issue: dict, native_refs: list[str] | None) -> str | None:
 			"roadmap_unblock reconcile gap, not cleared here)"
 		)
 	return None
+
+
+def _is_count(value: object) -> bool:
+	"""True for a real integer count (``bool`` is an ``int`` subclass and is not one)."""
+	return isinstance(value, int) and not isinstance(value, bool)
+
+
+def parent_reason(issue: dict) -> str | None:
+	"""Return the exclusion reason for a native parent issue, or ``None`` for a leaf.
+
+	Reads the REST ``sub_issues_summary`` already carried on the issue record
+	(dotfiles-linux-dev#813). A missing or malformed summary is UNKNOWN, never "a leaf": the
+	caller must not offer an issue it could not classify. A parent with every child closed is
+	named "ready to close" — reported only, never closed from here.
+	"""
+	summary = issue.get("sub_issues")
+	if not isinstance(summary, dict) or not _is_count(summary.get("total")):
+		return PARENT_UNKNOWN_REASON
+	total = summary["total"]
+	if total == 0:
+		return None
+	completed = summary.get("completed")
+	if not _is_count(completed):
+		return PARENT_UNKNOWN_REASON
+	open_count = max(total - completed, 0)
+	reason = (
+		f"{PARENT_TOKEN}: {total} sub-issues ({open_count} open) — "
+		"dispatch the children, not the parent"
+	)
+	if open_count == 0:
+		reason += "; every child is closed — ready to close (report only, not closed here)"
+	return reason
 
 
 def declared_surface(body: str) -> list[str]:
@@ -831,6 +884,8 @@ def build_plan() -> dict:
 					"verify non-collision by hand",
 				}
 			)
+		elif (parent := parent_reason(issue)) is not None:
+			excluded.append({"issue": number, "reason": parent})
 		elif HITL_LABEL in (issue.get("labels") or []):
 			excluded.append({"issue": number, "reason": HITL_REASON})
 		elif reason is not None:
