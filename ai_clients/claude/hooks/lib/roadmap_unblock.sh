@@ -18,7 +18,7 @@
 # (repo name, board id) is hardcoded. The `state:ready|blocked|deferred` label triad and the
 # "Status"/"Blocked by" field names are the one convention this file assumes, per the issue spec.
 #
-# Contract:
+# Contract (two directions: Blocked unblocks; Ready/Backlog with an open blocker re-blocks, #812):
 #   reconcile_roadmap_unblock OWNER PROJECT
 #     Sets two globals (never partial):
 #       RECONCILE_STATUS = ok | unknown
@@ -297,6 +297,83 @@ _ru_process_item() {
 	printf 'blocked by nothing %s: Status=Blocked but no blocker recorded anywhere\n' "$ident"
 }
 
+# _ru_open_blockers REPO NUMBER FIELD_TEXT BODY_LINE
+# Prints every OPEN blocker ("owner/repo#number", one per line) of an item, or nothing when none
+# is open. Native `blocked_by` wins; the prose refs are read only when the native relation is
+# empty (same precedence as `_ru_process_item`). Returns 1 on ANY read failure — the caller's
+# UNKNOWN signal, never "no blockers".
+_ru_open_blockers() {
+	local repo="$1" number="$2" field_text="$3" body_line="$4"
+	local native refs ref state
+	native="$(_ru_native_blockers "$repo" "$number")" || return 1
+	if [[ -n "$native" ]]; then
+		printf '%s\n' "$native" | awk -F'\t' '$1 != "closed" {print $2}'
+		return 0
+	fi
+	refs="$(_ru_prose_refs "$field_text"$'\n'"$body_line" "$repo")"
+	while IFS= read -r ref; do
+		[[ -n "$ref" && "$ref" != "$repo#$number" ]] || continue
+		state="$(_ru_ref_state "$ref")" || return 1
+		[[ "$state" == "closed" ]] || printf '%s\n' "$ref"
+	done <<<"$refs"
+}
+
+# _ru_reblock OWNER PROJECT REPO NUMBER URL DETAIL
+# The mirror of `_ru_unblock` (dotfiles-linux-dev#812): labels, board "Blocked by", audit comment,
+# board Status LAST — same ordering argument. Status is the completion marker, so any earlier
+# failure leaves the item in its Ready/Backlog column, in the candidate set, and the next round
+# redoes the whole (retry-safe) sequence.
+_ru_reblock() {
+	local owner="$1" project="$2" repo="$3" number="$4" url="$5" detail="$6"
+	local note="Blocked: open blocker(s) $detail. Status set to Blocked."
+	gh issue edit "$number" --repo "$repo" \
+		--add-label "state:blocked" --remove-label "state:ready" >/dev/null 2>&1 || return 1
+	gh project item-edit "$project" --owner "$owner" --url "$url" \
+		--field "Blocked by" --text "$detail" >/dev/null 2>&1 || return 1
+	if ! _ru_has_comment "$repo" "$number" "$note"; then
+		gh issue comment "$number" --repo "$repo" --body "$note" >/dev/null 2>&1 || return 1
+	fi
+	gh project item-edit "$project" --owner "$owner" --url "$url" \
+		--field "Status" --value "Blocked" >/dev/null 2>&1 || return 1
+}
+
+# _ru_process_open_item OWNER PROJECT ITEM_JSON
+# The reverse direction (dotfiles-linux-dev#812) for an item in Ready/Backlog. Prints one line
+# only when something happened or could not be read: a re-block, FAILED, or UNKNOWN. An item
+# with no open blocker (none recorded, or all closed) is left alone silently — it is where it
+# should be. A `decision:` blocker is left alone too: this direction only acts on a blocker it
+# can verify as open.
+_ru_process_open_item() {
+	local owner="$1" project="$2" item="$3"
+	local number repo url body field_text body_line ident open rc=0
+	number="$(jq -r '.content.number' <<<"$item")"
+	repo="$(jq -r '.content.repository' <<<"$item")"
+	url="$(jq -r '.content.url' <<<"$item")"
+	body="$(jq -r '.content.body // ""' <<<"$item")"
+	field_text="$(jq -r '."blocked by" // ""' <<<"$item")"
+	ident="$repo#$number"
+	body_line="$(_ru_body_blocked_line "$body")"
+
+	if _ru_is_decision "$field_text" || _ru_is_decision "$body_line"; then
+		return 0
+	fi
+
+	open="$(_ru_open_blockers "$repo" "$number" "$field_text" "$body_line")" || rc=1
+	if ((rc != 0)); then
+		printf 'UNKNOWN %s: could not read blockers — left untouched\n' "$ident"
+		return 0
+	fi
+	[[ -n "$open" ]] || return 0
+	local detail kind
+	detail="$(printf '%s' "$open" | paste -sd, -)"
+	kind="$(_ru_refs_kind "$repo" "$open")"
+	if _ru_reblock "$owner" "$project" "$repo" "$number" "$url" "$detail"; then
+		printf 're-blocked: %s by %s%s\n' "$ident" "$detail" "$(_ru_kind_tag "$kind")"
+	else
+		printf 'FAILED to re-block %s: a gh write failed partway — verify by hand\n' "$ident"
+	fi
+}
+
 reconcile_roadmap_unblock() {
 	local owner="$1" project="$2"
 	RECONCILE_STATUS="unknown"
@@ -328,6 +405,18 @@ reconcile_roadmap_unblock() {
 		line="$(_ru_process_item "$owner" "$project" "$item")"
 		[[ -n "$line" ]] && report="$(printf '%s\n%s' "$report" "$line")"
 	done <<<"$blocked"
+
+	# The reverse direction (dotfiles-linux-dev#812): a Ready/Backlog card that gained an open blocker.
+	local open_items
+	open_items="$(printf '%s' "$items_json" \
+		| jq -c '.items[] | select((.status == "Ready" or .status == "Backlog") and .content.type == "Issue")' \
+			2>/dev/null)" \
+		|| { RECONCILE_REPORT="UNKNOWN (board unreadable): could not parse project $owner/$project"; return 1; }
+	while IFS= read -r item; do
+		[[ -n "$item" ]] || continue
+		line="$(_ru_process_open_item "$owner" "$project" "$item")"
+		[[ -n "$line" ]] && report="$(printf '%s\n%s' "$report" "$line")"
+	done <<<"$open_items"
 
 	# shellcheck disable=SC2034 # read by callers after this returns, not within this file
 	RECONCILE_STATUS="ok"

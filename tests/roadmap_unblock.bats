@@ -677,3 +677,104 @@ run_boards() {
     [[ "$output" == *"board owner|16|beta|: UNKNOWN — malformed registry entry"* ]]
     [[ "$output" == *"board owner/17 (alpha): ok — nothing to change"* ]]
 }
+
+# --- re-block: a Ready/Backlog card that gained an open blocker (dotfiles-linux-dev#812) ----------
+
+@test "re-block: a Ready item with an open native blocker is moved to Blocked and reported" {
+    write_items "$(item "owner/repo" 7 "Ready" "" "")"
+    write_blockers 7 "$(blocker 6 open "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" == *"re-blocked: owner/repo#7 by owner/repo#6 [blocker-kind: internal]"* ]]
+    grep -q 'issue edit 7 --repo owner/repo --add-label state:blocked --remove-label state:ready' "$GH_LOG"
+    grep -q 'project item-edit 17 --owner owner --url .*--field Blocked by --text owner/repo#6' "$GH_LOG"
+    grep -q 'issue comment 7 --repo owner/repo' "$GH_LOG"
+    grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Blocked' "$GH_LOG"
+}
+
+@test "re-block: a Backlog item with an open native blocker is moved to Blocked too" {
+    write_items "$(item "owner/repo" 8 "Backlog" "" "")"
+    write_blockers 8 "$(blocker 6 open "other/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"re-blocked: owner/repo#8 by other/repo#6 [blocker-kind: external]"* ]]
+    grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Blocked' "$GH_LOG"
+}
+
+@test "re-block: a Ready item whose only blocker is closed is left alone" {
+    write_items "$(item "owner/repo" 7 "Ready" "" "")"
+    write_blockers 7 "$(blocker 6 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" != *"re-blocked"* ]]
+    refute_gh 'issue edit'
+    refute_gh 'item-edit'
+    refute_gh 'issue comment'
+}
+
+@test "re-block: a Ready item with no blocker at all is left alone" {
+    write_items "$(item "owner/repo" 7 "Ready" "" "")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" != *"re-blocked"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "re-block: a prose Blocked-by line naming an open issue re-blocks a Ready item" {
+    write_items "$(item "owner/repo" 9 "Ready" "" "**Blocked by:** owner/repo#6")"
+    write_ref_state owner/repo 6 OPEN
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"re-blocked: owner/repo#9 by owner/repo#6 [blocker-kind: internal]"* ]]
+    grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Blocked' "$GH_LOG"
+}
+
+@test "re-block: a prose Blocked-by line naming a closed issue leaves a Ready item alone" {
+    write_items "$(item "owner/repo" 9 "Ready" "" "**Blocked by:** owner/repo#6")"
+    write_ref_state owner/repo 6 CLOSED
+    write_fake_gh
+    run_reconcile
+    [[ "$output" != *"re-blocked"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "re-block: an unreadable native blocker read is UNKNOWN and the Ready item is untouched" {
+    write_items "$(item "owner/repo" 7 "Ready" "" "")"
+    write_blockers 7 FAIL
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#7"* ]]
+    [[ "$output" != *"re-blocked"* ]]
+    refute_gh 'issue edit'
+    refute_gh 'item-edit'
+}
+
+@test "re-block: an unreadable prose-blocker state is UNKNOWN and the Ready item is untouched" {
+    write_items "$(item "owner/repo" 9 "Ready" "" "**Blocked by:** owner/repo#6")"
+    write_ref_state owner/repo 6 FAIL
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#9"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "re-block: Status is written last, so a failed earlier write leaves the item Ready" {
+    write_items "$(item "owner/repo" 7 "Ready" "" "")"
+    write_blockers 7 "$(blocker 6 open "owner/repo")"
+    write_fake_gh
+    touch "$TEST_TMP/fail-issue-edit"
+    run_reconcile
+    [[ "$output" == *"FAILED to re-block owner/repo#7"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "re-block: a decision blocker on a Ready item is not touched" {
+    write_items "$(item "owner/repo" 7 "Ready" "decision: pick a vendor" "")"
+    write_blockers 7 "$(blocker 6 open "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" != *"re-blocked"* ]]
+    refute_gh 'item-edit'
+}
