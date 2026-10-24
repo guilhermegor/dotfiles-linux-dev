@@ -7,6 +7,9 @@
 
 setup() {
     source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/reviewer_ladder.sh"
+    # #818: the ladder writes ladder-last-probe into the cwd's git common dir; never the real repo's.
+    git init -q "$BATS_TEST_TMPDIR/probe_repo"
+    cd "$BATS_TEST_TMPDIR/probe_repo"
     # #666: resolving the base refreshes origin/<base>; never over the network here.
     export REVIEWER_LADDER_BASE_FETCH_CMD=true
     FIXTURES="$BATS_TEST_DIRNAME/fixtures/reviewer_ladder"
@@ -1105,6 +1108,18 @@ _only_cli_rungs() {
     run run_fallback_review o r 1 CLEAN 0 99999 '[]'
     [ "$status" -ne 0 ]
     [[ "$output" == *"no rung available"* ]]
+}
+
+@test "no rung available writes '<epoch> none' to the git common dir's ladder-last-probe (#818)" {
+    _only_cli_rungs
+    _fake_cli kimi forbidden
+    _fake_cli coderabbit forbidden
+    _fake_cli copilot forbidden
+    _fake_cli claude quota
+    export REVIEWER_LADDER_HEAD_SHA_CMD=_default_fake_head_sha
+    run run_fallback_review o r 1 CLEAN 0 99999 '[]'
+    [ "$status" -ne 0 ]
+    [[ "$(cat .git/ladder-last-probe)" =~ ^[0-9]+\ none$ ]]
 }
 
 _cli_run_harness() {
