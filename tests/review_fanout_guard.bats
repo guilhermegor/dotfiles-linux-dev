@@ -421,6 +421,15 @@ agent_notification() {
     [ "$status" -eq 2 ]
 }
 
+@test "the rung line says it measures the fallback probe, not the primary slot (#818)" {
+    loop_invoked
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Fallback rung (qwen/codex probe; says nothing of the primary slot): ok qwen"* ]]
+    [[ "$output" != *"Reviewer rung:"* ]]
+}
+
 @test "the block message states the review-pr name convention" {
     # The guard keys on a name the dispatcher must write, so the message has to say what it is
     # — a marker nothing emits would make the predicate always false.

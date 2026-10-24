@@ -671,7 +671,9 @@ main() {
 			printf '%s\n' "$OTHER_AGENTS_IN_FLIGHT" | sed 's/^/  /'
 			echo
 		fi
-		echo "Reviewer rung: $(printf '%s' "$plan" | jq -r '.rung | "\(.status) \(.runtime) \(.model)"')"
+		# What the probe measures is the FALLBACK ladder's first reachable runtime (qwen/codex),
+		# not the primary slot: slot_classify.py can read BUSY on the same plan (#818).
+		echo "Fallback rung (qwen/codex probe; says nothing of the primary slot): $(printf '%s' "$plan" | jq -r '.rung | "\(.status) \(.runtime) \(.model)"')"
 		echo
 		if [ "$(printf '%s' "$plan" | jq -r '.serial // false')" = "true" ]; then
 			echo "Serial drain (strict merges, #646): only the head of the merge queue is listed —"
