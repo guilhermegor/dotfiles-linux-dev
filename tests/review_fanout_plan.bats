@@ -66,7 +66,7 @@ ROSTER
 teardown() {
     cd /
     rm -rf "$TEST_TMP"
-    unset REVIEW_FANOUT_RUNG REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
+    unset REVIEW_FANOUT_RUNG REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS REVIEW_FANOUT_LADDER_PROBE_FILE
     unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED GH_PAGING_FAIL GH_COMPARE_FAIL GH_PARENTS_FAIL GH_SLOT_FAIL
 }
 
@@ -1537,4 +1537,92 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
     [[ "$(reason_for 735)" == *"already triggers a re-review"* ]]
+}
+
+# --- no rung available until the primary slot resets (#818) -----------------------------
+# The ladder's last probe is a one-line file `<epoch> <none|ok>` beside the claims registry
+# (REVIEW_FANOUT_LADDER_PROBE_FILE overrides the path). Its writer lives in reviewer_ladder.sh.
+
+# idle_pr PR — an unreviewed PR whose head is a day old, so only the rung can exclude it.
+idle_pr() {
+    stub_gh_prs <<EOF
+[{"number":$1,"headRefOid":"8888cccc","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"8888cccc","committedDate":"$(ago 86400)"}],
+  "statusCheckRollup":[]}]
+EOF
+}
+
+# busy_slot — the primary reviewer is rate limited with a stated wait still running.
+busy_slot() {
+    cat >"$TEST_TMP/slot.json" <<EOF
+[{"user":{"login":"coderabbitai[bot]"},"created_at":"$(ago 60)",
+  "body":"Rate limit exceeded. Please wait, a review is available in 30 minutes."}]
+EOF
+}
+
+# ladder_probe AGE_SECONDS RESULT — record the ladder's last probe AGE_SECONDS ago.
+ladder_probe() {
+    export REVIEW_FANOUT_LADDER_PROBE_FILE="$TEST_TMP/ladder-last-probe"
+    printf '%s %s\n' "$(($(date -u +%s) - $1))" "$2" >"$REVIEW_FANOUT_LADDER_PROBE_FILE"
+}
+
+@test "a recent 'no rung available' with the slot BUSY excludes the PR, naming the reset (#818)" {
+    idle_pr 875
+    busy_slot
+    ladder_probe 120 none
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 875)" == *"no reviewer rung available until "*"Z"* ]]
+}
+
+@test "a stale ladder probe does not exclude the PR (#818, fail closed)" {
+    idle_pr 875
+    busy_slot
+    ladder_probe 7200 none
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "875" ]
+}
+
+@test "a recent probe that found a rung does not exclude the PR (#818)" {
+    idle_pr 875
+    busy_slot
+    ladder_probe 120 ok
+    run python3 "$PLANNER"
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "875" ]
+}
+
+@test "a recent 'no rung available' with a FREE slot does not exclude the PR (#818)" {
+    idle_pr 875
+    echo '[]' >"$TEST_TMP/slot.json"
+    ladder_probe 120 none
+    run python3 "$PLANNER"
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "875" ]
+}
+
+@test "a BUSY slot with no stated reset does not exclude the PR (#818)" {
+    idle_pr 875
+    cat >"$TEST_TMP/slot.json" <<EOF
+[{"user":{"login":"coderabbitai[bot]"},"created_at":"$(ago 60)","body":"Rate limit exceeded."}]
+EOF
+    ladder_probe 120 none
+    run python3 "$PLANNER"
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "875" ]
+}
+
+@test "a missing or garbled probe file, or an unreadable slot, does not exclude the PR (#818)" {
+    idle_pr 875
+    busy_slot
+    export REVIEW_FANOUT_LADDER_PROBE_FILE="$TEST_TMP/absent"
+    run python3 "$PLANNER"
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "875" ]
+    printf 'garbage\n' >"$REVIEW_FANOUT_LADDER_PROBE_FILE"
+    run python3 "$PLANNER"
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "875" ]
+    ladder_probe 120 none
+    export GH_SLOT_FAIL=1
+    run python3 "$PLANNER"
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "875" ]
 }
