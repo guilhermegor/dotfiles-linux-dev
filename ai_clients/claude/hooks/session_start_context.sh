@@ -168,7 +168,7 @@ emit_elsewhere_status() {
 	common="$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
 	[ -s "$common/elsewhere-held-paths.tsv" ] || return 0
 	while read -r n; do
-		[[ "$local_branches" == *"-$n"$'\n'* ]] && continue
+		branch_list_has_issue "$local_branches" "$n" && continue
 		printf 'in progress elsewhere — #%s has a card In progress (last forge refresh), no local worktree\n' "$n"
 	done < <(cut -f1 "$common/elsewhere-held-paths.tsv" | sort -un)
 }

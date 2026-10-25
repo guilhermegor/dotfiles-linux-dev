@@ -1112,8 +1112,15 @@ Every brief carries:
 - 🔴 **confirm before writing** — the feature/defect check above; state the command and its output;
 - 🔴 **commit and push at the first coherent point, then keep committing** (the measurement above);
   `agent_branch_push_guard.sh` pushes every commit on a loop-owned branch (a linked worktree on
-  `<type>/<slug>-<issue>`), so the pushed branch is the cross-machine "in progress" marker
+  `<type>/<N>-<slug>`; the older `<type>/<slug>-<N>` still matches so in-flight branches stay
+  covered), so the pushed branch is the cross-machine "in progress" marker
   (dotfiles-linux-dev#715); a failed push never blocks and is retried on the next commit;
+- 🔴 **name the branch `<type>/<N>-<slug>`, and read the target repo's own policy first.**
+  BlueprintX projects ship `bin/check_pr_policy.sh` (`branch` check, `^[a-z]+/[0-9]+(-|$)`), a
+  required check, as do `/issue` step 8 and `kanban_lifecycle.sh`; a PR cannot be renamed, so a
+  `<type>/<slug>-<N>` brief costs a superseding PR (filings-rfb #13-#15, #37, measured twice in
+  two days, dotfiles-linux-dev#830). When `bin/check_pr_policy.sh` exists in the target repo, grep
+  it for the branch pattern and put THAT shape in the brief;
 - 🔴 **verify HEAD belongs to you and holds your diff — not just that it exists.** `git log -1`
   shows an empty commit and a foreign commit exactly as it shows a real one; the same
   `[branch abc1234] N files changed` success line prints regardless. Confirm with
