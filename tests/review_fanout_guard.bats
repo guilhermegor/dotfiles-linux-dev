@@ -1140,3 +1140,29 @@ PLAN_EOF
     [ "$status" -eq 2 ]
     [[ "$output" != *"Serial drain"* ]]
 }
+
+# --- review findings on #820 ---------------------------------------------------------------
+
+@test "a failed SendMessage delivery leaves the agent FAILED, a RESCUE case (#818)" {
+    loop_invoked
+    async_agent a1 "issue-872" "a8ed35a93de8c79d5"
+    agent_notification a1 failed a8ed35a93de8c79d5
+    jq -cn '{message: {content: [{type: "tool_use", name: "SendMessage", id: "sm1", input: {to: "a8ed35a93de8c79d5", summary: "resume", message: "go"}}]}}' >>"$TRANSCRIPT"
+    jq -cn '{message: {content: [{type: "tool_result", tool_use_id: "sm1", is_error: true, content: [{type: "text", text: "delivery failed"}]}]}}' >>"$TRANSCRIPT"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE case"* ]]
+}
+
+@test "a resume completion with no task-id settles the agent through the SendMessage tool-use id (#818)" {
+    loop_invoked
+    async_agent a1 "issue-872" "a8ed35a93de8c79d5"
+    agent_notification a1 failed a8ed35a93de8c79d5
+    send_message sm1 a8ed35a93de8c79d5
+    printf '%s\n' '{"content":"<task-notification><tool-use-id>sm1</tool-use-id><status>completed</status></task-notification>"}' >>"$TRANSCRIPT"
+    plan_with_work
+    run_guard
+    [[ "$output" != *"RESCUE case"* ]]
+    [[ "$output" != *"Agents in flight"* ]]
+}

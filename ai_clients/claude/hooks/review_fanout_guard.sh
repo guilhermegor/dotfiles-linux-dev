@@ -203,7 +203,7 @@ REVIEW_DISPATCH_NAME_RE='^review-pr-[0-9]+(-[0-9]+)?$'
 # TSV, in transcript order (the idle must be ordered against dispatches): `A`/`S<TAB>id<TAB>
 # name<TAB>label<TAB>ts` (Agent dispatch / SendMessage to a review teammate), `R<TAB>id<TAB>
 # ack|sent|done`, `E<TAB>id<TAB>effective-name`, `N<TAB>id<TAB>completed|failed`,
-# `I<TAB>name<TAB>completed|failed<TAB>ts`. #818 added `G<TAB>id<TAB>agent-id` (the ack's own agent
+# `I<TAB>name<TAB>completed|failed<TAB>ts`. #818 added `X<TAB>tool-use-id<TAB>-` (an errored tool_result), `G<TAB>id<TAB>agent-id` (the ack's own agent
 # id), `M<TAB>id<TAB>to` (every SendMessage, any recipient) and a third field on N, the
 # notification's `<task-id>` (= that agent id). `-` is an empty name/ts: a tab is whitespace to
 # `read`, so an empty field would collapse into its neighbour.
@@ -227,6 +227,9 @@ transcript_agent_facts() {
 					"M\t\(.id)\t\(.input.to)\t-\t\($ts)",
 					( select(.input.to | test($re))
 					  | "S\t\(.id)\t\(.input.to)\t\(.input.to)\t\($ts)" )
+				elif (.type == "tool_result" and .is_error == true) then
+					"X\t\(.tool_use_id)\t-",
+					"R\t\(.tool_use_id)\tdone"
 				elif (.type == "tool_result" and ((.content | norm) | length) > 0) then
 					(.content | norm) as $t
 					| .tool_use_id as $id
@@ -306,6 +309,10 @@ review_dispatch_running() {
 	# agent_task: dispatch id -> the agent's own id (task-id on every notification). task_state:
 	# agent id -> its LATEST event, a notification status or `pending` (resumed, not yet reported).
 	local -A agent_task=() task_state=()
+	# msg_target / msg_prev: a SendMessage's tool-use id -> the agent id it resumed and that
+	# agent's state before the resume, so a failed delivery (X) restores it and a notification
+	# naming only the SendMessage's tool-use id (no task-id) still reaches the agent.
+	local -A msg_target=() msg_prev=()
 	local -a order=()
 	local kind id field label ts
 	while IFS=$'\t' read -r kind id field label ts; do
@@ -329,7 +336,17 @@ review_dispatch_running() {
 		# earlier one for the same id.
 		N)
 			agent_note["$id"]="$field"
-			[ "$label" = "-" ] || task_state["$label"]="$field"
+			if [ "$label" != "-" ]; then
+				task_state["$label"]="$field"
+			elif [ -n "${msg_target[$id]-}" ]; then
+				task_state["${msg_target[$id]}"]="$field"
+			fi
+			;;
+		# A SendMessage whose delivery errored never resumed anything: undo its `pending`.
+		X)
+			if [ -n "${msg_target[$id]-}" ] && [ "${msg_prev[$id]-}" != "-" ]; then
+				task_state["${msg_target[$id]}"]="${msg_prev[$id]}"
+			fi
 			;;
 		# The ack's own agent id: what a SendMessage resume and its notification name.
 		G) agent_task["$id"]="$field" ;;
@@ -345,6 +362,9 @@ review_dispatch_running() {
 						&& target="${agent_task[$unit]}"
 				done
 			fi
+			msg_target["$id"]="$target"
+			msg_prev["$id"]="${task_state[$target]-}"
+			[ -n "${msg_prev[$id]}" ] || msg_prev["$id"]=-
 			[ -z "${task_state[$target]+set}" ] || task_state["$target"]=pending
 			;;
 		# A teammate going idle settles every unit of that name dispatched BEFORE it. The
