@@ -343,11 +343,12 @@ For each PR with an unanswered thread:
    describe a state that no longer holds. Confirm, then fix.
 3. **Reply** with what changed and why — the rationale is the asset a future session reads; "fixed
    in <sha>" records that something changed, never *why*.
-   🔴 **Push before you reply (dotfiles-linux-dev#825).** Order: fix → commit → push → confirm the
-   remote head moved (`rtk git ls-remote origin <branch>` equals the local sha) → THEN post the
-   verdict. With auto-merge armed the reply is what turns the gate green (#819), so a reply that
+   🔴 **Push before you reply (dotfiles-linux-dev#825).** When the finding needs a change, the
+   order is: fix → commit → push → confirm the remote head moved (`rtk git ls-remote origin
+   <branch>` equals the local sha) → THEN post the verdict. With auto-merge armed the reply is what turns the gate green (#819), so a reply that
    lands first lets it merge the old head and strand the fix on a branch with no PR (#821: merged
-   on `eab87f41`, fix `2f6a0001` pushed a minute later, recovered as #824).
+   on `eab87f41`, fix `2f6a0001` pushed a minute later, recovered as #824). A finding that does
+   not hold needs no commit or push: reply with why and resolve.
 4. **Resolve.** Both halves; neither implies the other.
 
 If the finding does not hold, say why and resolve anyway. ⚠️ A finding you deferred with *"known
@@ -723,7 +724,7 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    cwd would review another repo's PR of the same number;
    the allowed wrapper, dotfiles-linux-dev#738: it derives the pushed epoch from the head commit and calls
    `run_fallback_review`; never source the lib inline),
-   then judge every finding per-finding (never bulk-accept), fix, push, and arm auto-merge. Order is
+   then judge every finding per-finding (never bulk-accept), fix, push, and arm auto-merge. For a finding that holds, the order is
    fix → commit → push → confirm the remote head moved → only then the verdict comment (#825). Bound N
    by the real constraints, not by this rule: API budget (#445's latch is a prerequisite — parallel
    agents re-reading PR state exhausted the GraphQL bucket once already) and file collision between
@@ -807,7 +808,7 @@ applies unchanged) — it never gates DISPATCH, and DISPATCH never waits for it.
    data and may describe a state that no longer holds — the existing step-3 discipline applies
    verbatim: verify against current code, fix if it holds, and if it does not hold, say why and
    resolve anyway. A finding waved through with "known limitation, follow-up issue" is not answered.
-4. **Fix → commit → push → re-check CI.** ⚠️ Push, and confirm the remote head moved
+4. **Fix → commit → push → re-check CI.** ⚠️ When item 3 found something to fix, push and confirm the remote head moved
    (`rtk git ls-remote origin <branch>` equals the local sha), BEFORE the verdict comment of item 3
    goes up: with auto-merge armed that comment turns the gate green and merges the old head (#825).
    On red, fix and repeat. A failing test is a finding,

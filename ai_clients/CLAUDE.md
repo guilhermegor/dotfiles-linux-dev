@@ -226,7 +226,7 @@ The ladder posts a submitted COMMENTED review with its findings in the review BO
 thread, so "zero unresolved threads" is true of it and the gate went green (#815 auto-merged 39s
 after a review asking for two fixes). `review_thread_gate.sh`'s `_gate_review_findings_filter`
 reads the reviews channel: a review whose first line is the ladder marker, authored by a roster
-login (never authorAssociation: a bot is never OWNER/MEMBER), on the CURRENT head, whose body has
+login (never authorAssociation: a bot is never OWNER/MEMBER), on the CURRENT head, whose body
 carries any finding evidence, is `problems` until a later non-roster PR comment of
 >= 100 chars follows it. Evidence (#824, `_gate_has_findings_def`, fail closed) is any list
 item, a whole-word issue/problem/bug/concern/risk heading, a `[Pn]` tag, or the word
