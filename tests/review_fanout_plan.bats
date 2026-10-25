@@ -141,7 +141,7 @@ elif [ "$1" = "api" ] && [[ "$2" == */pulls/*/reviews* ]]; then
     [ -n "${GH_PAGING_FAIL:-}" ] && { echo "gh: HTTP 502" >&2; exit 1; }
     p=1; [[ "$2" == *\&page=* ]] && p="${2##*\&page=}"
     jq --argjson n "$n" --argjson p "$p" '[.[] | select(.number == $n) | (.reviews // [])[]
-        | {commit_id: .commit.oid, user: {login: (.author.login // "coderabbitai"),
+        | {commit_id: .commit.oid, body: (.body // ""), user: {login: (.author.login // "coderabbitai"),
                     type: (.author.__typename // (if .author then "User" else "Bot" end))}}]
         | .[($p - 1) * 100:$p * 100]' "$FIXTURE"
 elif [ "$1" = "api" ] && [[ "$2" == */issues/*/comments* ]]; then
@@ -1078,6 +1078,53 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable[] | select(.pr == 700) | .ladder' <<<"$output")" = "backlog" ]
     [ "$(jq -r '.dispatchable[] | select(.pr == 701) | .ladder' <<<"$output")" = "null" ]
+}
+
+# Greptile's paywall notice is a COMMENTED review on the head (#832, sample from PR #831).
+greptile_review_fixture() {
+    printf 'reviewers:\n  - login: greptile-apps[bot]\n' >"$TEST_TMP/.review-bots.yaml"
+    stub_gh_prs <<EOF
+[{"number":832,"headRefOid":"aaaa8320","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"aaaa8320"},"author":{"login":"greptile-apps","__typename":"Bot"},
+              "body":"$1"}],
+  "comments":[],
+  "commits":[{"oid":"aaaa8320","committedDate":"$(ago 28800)"}],"statusCheckRollup":[]}]
+EOF
+}
+
+TRIAL='Your trial has ended. [Reactivate Greptile](https://app.greptile.com/-/pull-requests) to resume code reviews.'
+
+@test "a Greptile trial-ended notice on the head is not coverage: backlog (#832)" {
+    greptile_review_fixture "$TRIAL"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].ladder' <<<"$output")" = "backlog" ]
+}
+
+@test "REST fallback: a Greptile trial-ended notice is not coverage either (#832)" {
+    GH_GRAPHQL_FAIL=1
+    export GH_GRAPHQL_FAIL
+    greptile_review_fixture "$TRIAL"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].ladder' <<<"$output")" = "backlog" ]
+}
+
+@test "a real Greptile review on the head still counts as coverage (#832)" {
+    greptile_review_fixture "<!-- greptile_summary --> Looks good, no issues."
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 832)" == *"already reviewed at the current head"* ]]
+}
+
+@test "a long real Greptile review quoting a refusal phrase still counts as coverage (#832)" {
+    pad="$(printf 'Reviewed the phrase file diff, nothing blocking. %.0s' {1..12})"
+    greptile_review_fixture "<!-- greptile_summary --> ${pad} Quoted: your trial has ended"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 832)" == *"already reviewed at the current head"* ]]
 }
 
 @test "the backlog window is configurable" {

@@ -121,6 +121,7 @@ from pathlib import Path
 
 from gh_latch import refuse_if_latched
 from open_pr_pages import read_open_prs
+from slot_classify import greptile_body_refused
 
 LIB_DIR = Path(__file__).resolve().parent
 REVIEWER_LADDER_SH = LIB_DIR / "reviewer_ladder.sh"
@@ -140,7 +141,7 @@ OPEN_PR_LIST_CAP = 200
 # (see `truncated_window`).
 PR_SELECTION = (
 	"number headRefOid baseRefName mergeStateStatus isDraft author{login} "
-	"reviews(last:100){totalCount nodes{commit{oid} author{login __typename}}} "
+	"reviews(last:100){totalCount nodes{body commit{oid} author{login __typename}}} "
 	"comments(last:100){totalCount nodes{body createdAt author{login}}} "
 	"commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{"
 	"__typename ... on CheckRun{name status conclusion} "
@@ -318,6 +319,7 @@ def _rest_window(nodes: list) -> dict:
 def _rest_review(review: dict) -> dict:
 	"""Adapt one REST review into the GraphQL review shape (commit and author)."""
 	return {
+		"body": review.get("body"),
 		"commit": {"oid": review.get("commit_id")},
 		"author": {
 			"login": (review.get("user") or {}).get("login"),
@@ -602,6 +604,9 @@ def head_commit_time(pr: dict) -> datetime.datetime | None:
 	return result
 
 
+_GREPTILE_KEY = "greptile-apps"
+
+
 def _login_key(login: str | None) -> str:
 	"""Normalise a login for comparison: GraphQL says ``coderabbitai``, REST ``coderabbitai[bot]``."""
 	return (login or "").removesuffix("[bot]").lower()
@@ -640,14 +645,19 @@ def roster_reviews(pr: dict) -> list[dict]:
 	roster = reviewer_roster()
 	author = _login_key((pr.get("author") or {}).get("login"))
 
-	def counts(who: dict) -> bool:
+	def counts(review: dict) -> bool:
+		who = review.get("author") or {}
 		login = _login_key(who.get("login"))
 		if not login or login == author:
+			return False
+		# A vendor's paywall notice is posted as a COMMENTED review; it reviewed nothing (#832).
+		# The phrase list is slot_classify's, the one the ladder's own refusal probe reads.
+		if login == _GREPTILE_KEY and greptile_body_refused(review.get("body")) == "REFUSED":
 			return False
 		# No roster file: the gate's fallback, a Bot-typed account (never a login substring).
 		return who.get("__typename") == "Bot" if roster is None else login in roster
 
-	return [review for review in pr.get("reviews") or [] if counts(review.get("author") or {})]
+	return [review for review in pr.get("reviews") or [] if counts(review)]
 
 
 def reviewed_at_head(pr: dict) -> bool:
