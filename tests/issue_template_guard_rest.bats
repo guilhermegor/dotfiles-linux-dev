@@ -107,6 +107,26 @@ BAD_BODY='**Python · PyPI · public repo**\n\nNo definition of done here.'
     [ "$status" -eq 0 ]
 }
 
+@test "REST: a variable only in the owner/repo segment is judged by its literal resource (#822)" {
+    run bash -c "payload 'R=o/r; gh api -X PUT repos/\$R/pulls/816/merge -f merge_method=squash -f sha=abc --jq .merged' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api repos/\$R/pulls -X POST -f title=x -f body=hi' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api -X PUT repos/o/\$N/pulls/816/merge -f sha=abc' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: a variable repo path to issues, or a variable resource, still fails closed (#822)" {
+    run bash -c "payload 'gh api repos/\$R/issues -X POST -f title=x -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api repos/\$R/issues/5 -X PATCH -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api repos/\$O/\$N/issues -X POST -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api repos/o/r/\$X -X POST -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
 @test "REST text inside a quoted argument is not a command" {
     run bash -c "payload 'echo \"gh api repos/{owner}/{repo}/issues -X POST\"' | '$GUARD'"
     [ "$status" -eq 0 ]

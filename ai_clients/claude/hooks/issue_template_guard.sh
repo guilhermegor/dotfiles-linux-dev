@@ -8,6 +8,10 @@
 # is given with no -X. The body comes from a `body=` field, `-F body=@file`, or `--input` JSON;
 # a REST create with no body counts as an EMPTY body (REST has no editor mode). Found by the
 # same real-argv tokenizer (`gh_cmd_match.py api-issue`), never a raw-string regex.
+# A path with an unexpanded shell variable fails CLOSED (judged as an unknown write), EXCEPT when
+# the variable sits only in the owner/repo segment and the literal resource after it is not
+# `issues` (dotfiles-linux-dev#822): `repos/$R/pulls/816/merge` is judged like its literal twin
+# and passes. A variable in the resource segment itself, or any `issues` resource, stays closed.
 #
 # Generic and data-driven: a target repo with no issue template is untouched (exit 0) — this is
 # what keeps `/issue` (ai_clients/claude/commands/issue.md), which files its own Goal/Scope/

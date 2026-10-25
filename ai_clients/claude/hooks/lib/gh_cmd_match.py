@@ -323,6 +323,31 @@ API_OTHER_VALUE_FLAGS = {"-H", "--header", "-q", "--jq", "-t", "--template", "--
                          "--cache", "-p", "--preview"}
 
 
+def only_repo_segment_is_dynamic(path):
+    """True when every `$`/backtick in a `repos/...` path sits in the owner/repo segment(s)
+    and the resource after them is a literal other than `issues` (dotfiles-linux-dev#822).
+
+    `repos/$R/pulls/816/merge` is plainly a pull-request write whatever `$R` expands to, so it
+    is judged like its literal twin instead of failing closed as an unknown issue write.
+    `$R` may stand for `owner/name` (one segment) or `$O/$N` two, so every plausible split
+    must agree; a variable in the resource segment itself, or any split whose resource is
+    `issues`, stays fail-closed.
+    """
+    segs = path.split("/")
+    if segs[0] != "repos" or len(segs) < 3:
+        return False
+    var_at = [i for i, seg in enumerate(segs) if "$" in seg or "`" in seg]
+    if not var_at:
+        return False
+    verdicts = []
+    for width in (1, 2):  # owner/name segments: `$R` (one) or `$O/$N` / `o/$N` (two)
+        resource_at = 1 + width
+        if resource_at >= len(segs) or max(var_at) >= resource_at:
+            continue  # no resource segment, or a variable lies at/after it: split not plausible
+        verdicts.append(segs[resource_at] != "issues")
+    return bool(verdicts) and all(verdicts)
+
+
 def api_issue_match(segments):
     """Return the match dict for `[rtk] gh api repos/O/R/issues[/N]` writes, or None.
 
@@ -378,6 +403,8 @@ def api_issue_match(segments):
         path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", (endpoint or "").split("?", 1)[0])
         path = path.rstrip("/")
         dynamic = "$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
+        if dynamic and endpoint and only_repo_segment_is_dynamic(path):
+            dynamic = False  # judged by its literal resource, like the unparameterised twin
         m = API_ISSUE_ENDPOINT.match(path)
         mentions = any("issues" in t for t in rest)
         # Understood as NOT an issue write only when the endpoint is a literal that either does
