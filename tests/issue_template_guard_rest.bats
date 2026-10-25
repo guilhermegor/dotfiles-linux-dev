@@ -127,6 +127,15 @@ BAD_BODY='**Python · PyPI · public repo**\n\nNo definition of done here.'
     [ "$status" -eq 2 ]
 }
 
+@test "REST: a leading slash is judged like the relative path; a tail that completes an issue path fails closed (#822)" {
+    run bash -c "payload 'gh api -X PUT /repos/\$R/pulls/816/merge -f sha=abc' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api -X PATCH repos/\$R/comments/5 -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api -X POST repos/\$R/5/labels -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
 @test "REST text inside a quoted argument is not a command" {
     run bash -c "payload 'echo \"gh api repos/{owner}/{repo}/issues -X POST\"' | '$GUARD'"
     [ "$status" -eq 0 ]

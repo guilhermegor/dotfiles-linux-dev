@@ -333,7 +333,7 @@ def only_repo_segment_is_dynamic(path):
     must agree; a variable in the resource segment itself, or any split whose resource is
     `issues`, stays fail-closed.
     """
-    segs = path.split("/")
+    segs = path.lstrip("/").split("/")
     if segs[0] != "repos" or len(segs) < 3:
         return False
     var_at = [i for i, seg in enumerate(segs) if "$" in seg or "`" in seg]
@@ -344,7 +344,12 @@ def only_repo_segment_is_dynamic(path):
         resource_at = 1 + width
         if resource_at >= len(segs) or max(var_at) >= resource_at:
             continue  # no resource segment, or a variable lies at/after it: split not plausible
-        verdicts.append(segs[resource_at] != "issues")
+        # A variable may also expand to `owner/name/issues`; then the literal tail must not
+        # complete an issue endpoint (`repos/$R/comments/5`, `repos/$R/5/labels`).
+        probe = "repos/o/r/issues/" + "/".join(segs[resource_at:])
+        verdicts.append(segs[resource_at] != "issues"
+                        and not API_ISSUE_ENDPOINT.match(probe)
+                        and not API_ISSUE_SUBRESOURCE.match(probe))
     return bool(verdicts) and all(verdicts)
 
 
