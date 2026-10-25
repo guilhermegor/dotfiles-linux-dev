@@ -253,6 +253,87 @@ wait_refresh_done() {
     [ "$status" -eq 2 ]
 }
 
+# --- resumed background agents settle on their LATEST notification (#818) ---------------
+# Shapes copied from a real transcript: the async ack carries `agentId: <id>`, a resume is a
+# SendMessage `to` that id (or the agent's name), and the notification that follows carries the
+# SAME <task-id> but the SendMessage's tool-use-id, not the original Agent call's.
+
+# async_agent ID NAME AGENT_ID — an Agent dispatch plus its real-shaped async launch ack.
+async_agent() {
+    agent_dispatched "$1" "$2"
+    agent_result "$1" "Async agent launched successfully. (internal metadata)\nagentId: $3 (internal ID - do not mention to user.)\nThe agent is working in the background."
+}
+
+# agent_notification TOOL_USE_ID STATUS TASK_ID — a real-shaped notification (task-id first).
+agent_notification() {
+    printf '%s\n' \
+        "{\"content\":\"<task-notification><task-id>$3</task-id><tool-use-id>$1</tool-use-id><status>$2</status></task-notification>\"}" \
+        >>"$TRANSCRIPT"
+}
+
+@test "a failed agent resumed by agentId and then completed is not a RESCUE case (#818)" {
+    loop_invoked
+    async_agent a1 "issue-872" "a8ed35a93de8c79d5"
+    agent_notification a1 failed a8ed35a93de8c79d5
+    send_message sm1 a8ed35a93de8c79d5
+    agent_notification sm1 completed a8ed35a93de8c79d5
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" != *"RESCUE case"* ]]
+    [[ "$output" != *"issue-872"* ]]
+}
+
+@test "a failed agent resumed by name and then completed is not a RESCUE case (#818)" {
+    loop_invoked
+    async_agent a1 "issue-872" "a8ed35a93de8c79d5"
+    agent_notification a1 failed a8ed35a93de8c79d5
+    send_message sm1 issue-872
+    agent_notification sm1 completed a8ed35a93de8c79d5
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" != *"RESCUE case"* ]]
+}
+
+@test "a failed review agent resumed and then completed does not stay FAILED (#818)" {
+    loop_invoked
+    async_agent a1 "review-pr-874" "a1b2c3d4e5f6a7b8c"
+    agent_notification a1 failed a1b2c3d4e5f6a7b8c
+    send_message sm1 a1b2c3d4e5f6a7b8c
+    agent_notification sm1 completed a1b2c3d4e5f6a7b8c
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" != *"RESCUE case"* ]]
+}
+
+@test "a failed agent that was resumed and has not reported yet is in flight, not FAILED (#818)" {
+    loop_invoked
+    async_agent a1 "issue-872" "a8ed35a93de8c79d5"
+    agent_notification a1 failed a8ed35a93de8c79d5
+    send_message sm1 a8ed35a93de8c79d5
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" != *"RESCUE case"* ]]
+    [[ "$output" == *"Agents in flight"* ]]
+    [[ "$output" == *"issue-872"* ]]
+}
+
+@test "an agent that completed, was resumed, and failed again is a RESCUE case (#818)" {
+    loop_invoked
+    async_agent a1 "issue-872" "a8ed35a93de8c79d5"
+    agent_notification a1 completed a8ed35a93de8c79d5
+    send_message sm1 a8ed35a93de8c79d5
+    agent_notification sm1 failed a8ed35a93de8c79d5
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE case"* ]]
+    [[ "$output" == *"issue-872"* ]]
+}
+
 @test "reports a failed background agent as the RESCUE case, not free capacity" {
     # The agent is named explicitly so the label assertion below is unambiguous: the guard
     # reports `.input.name`, and this fixture previously set that to the bare tool-use id
@@ -338,6 +419,15 @@ wait_refresh_done() {
     plan_with_work
     run_guard
     [ "$status" -eq 2 ]
+}
+
+@test "the rung line says it measures the fallback probe, not the primary slot (#818)" {
+    loop_invoked
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Fallback rung (qwen/codex probe; says nothing of the primary slot): ok qwen"* ]]
+    [[ "$output" != *"Reviewer rung:"* ]]
 }
 
 @test "the block message states the review-pr name convention" {
@@ -1049,4 +1139,30 @@ PLAN_EOF
     run_guard
     [ "$status" -eq 2 ]
     [[ "$output" != *"Serial drain"* ]]
+}
+
+# --- review findings on #820 ---------------------------------------------------------------
+
+@test "a failed SendMessage delivery leaves the agent FAILED, a RESCUE case (#818)" {
+    loop_invoked
+    async_agent a1 "issue-872" "a8ed35a93de8c79d5"
+    agent_notification a1 failed a8ed35a93de8c79d5
+    jq -cn '{message: {content: [{type: "tool_use", name: "SendMessage", id: "sm1", input: {to: "a8ed35a93de8c79d5", summary: "resume", message: "go"}}]}}' >>"$TRANSCRIPT"
+    jq -cn '{message: {content: [{type: "tool_result", tool_use_id: "sm1", is_error: true, content: [{type: "text", text: "delivery failed"}]}]}}' >>"$TRANSCRIPT"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE case"* ]]
+}
+
+@test "a resume completion with no task-id settles the agent through the SendMessage tool-use id (#818)" {
+    loop_invoked
+    async_agent a1 "issue-872" "a8ed35a93de8c79d5"
+    agent_notification a1 failed a8ed35a93de8c79d5
+    send_message sm1 a8ed35a93de8c79d5
+    printf '%s\n' '{"content":"<task-notification><tool-use-id>sm1</tool-use-id><status>completed</status></task-notification>"}' >>"$TRANSCRIPT"
+    plan_with_work
+    run_guard
+    [[ "$output" != *"RESCUE case"* ]]
+    [[ "$output" != *"Agents in flight"* ]]
 }

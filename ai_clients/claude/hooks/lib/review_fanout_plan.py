@@ -167,6 +167,15 @@ _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", re.MULTILIN
 _REVIEWED_HEAD_RE = re.compile(r"^Reviewed head: ([0-9a-fA-F]+)$")
 SLOT_CLASSIFY_PY = LIB_DIR / "slot_classify.py"
 
+# "No rung available until the primary resets" (#818). The ladder's last probe is one line,
+# `<epoch seconds> <none|ok>`, in this file (default: beside the dispatch-claims registry in the
+# git common dir). reviewer_ladder.sh is its writer; until it writes, the file is absent and
+# nothing is excluded. A probe older than the window is stale: it says nothing about now.
+LADDER_PROBE_FILE_ENV = "REVIEW_FANOUT_LADDER_PROBE_FILE"
+LADDER_PROBE_FILE_NAME = "ladder-last-probe"
+LADDER_PROBE_MAX_AGE_MINUTES = float(os.environ.get("REVIEW_FANOUT_LADDER_PROBE_MINUTES", "30"))
+_BUSY_RESET_RE = re.compile(r"^BUSY\|until-(\d{2}:\d{2}Z)$")
+
 # Total budget for the rung probe. resolve_fallback_reviewer makes LIVE model calls (that is
 # the whole point of #479 — the cache lists what exists, never what this account may call)
 # and can walk several candidates at its own per-probe timeout. A Stop hook is synchronous,
@@ -803,12 +812,10 @@ def merge_only_covered_head(pr: dict) -> str | None:
 _SLOT_CACHE: list[str] = []
 
 
-def slot_is_ask_only() -> bool:
-	"""True when the repo's reviewer slot reads ``ASK-ONLY`` -- a push triggers no review (#736).
+def slot_verdict() -> str:
+	"""Return ``slot_classify.py``'s verdict for the repo's reviewer slot, read once per plan.
 
-	Classified by ``slot_classify.py`` (never re-derived), from one REST comment page read once
-	per plan. Any failure reads as not ASK-ONLY, which keeps the recent-push exclusion: the
-	only cost of a wrong "no" is one round's delay, while a wrong "yes" spends an ask.
+	Classified from one REST comment page and never re-derived. Any failure is ``UNKNOWN``.
 	"""
 	if not _SLOT_CACHE:
 		try:
@@ -826,7 +833,65 @@ def slot_is_ask_only() -> bool:
 		except (OSError, subprocess.SubprocessError):
 			verdict = "UNKNOWN"
 		_SLOT_CACHE.append(verdict)
-	return _SLOT_CACHE[0].startswith("ASK-ONLY")
+	return _SLOT_CACHE[0]
+
+
+def slot_is_ask_only() -> bool:
+	"""True when the repo's reviewer slot reads ``ASK-ONLY`` -- a push triggers no review (#736).
+
+	Any failure reads as not ASK-ONLY, which keeps the recent-push exclusion: the only cost of a
+	wrong "no" is one round's delay, while a wrong "yes" spends an ask.
+	"""
+	return slot_verdict().startswith("ASK-ONLY")
+
+
+def _ladder_probe_path() -> Path | None:
+	"""Return where the ladder records its last probe, or None when that is unresolvable."""
+	override = os.environ.get(LADDER_PROBE_FILE_ENV)
+	if override:
+		return Path(override)
+	try:
+		common = _run(["git", "rev-parse", "--git-common-dir"])
+	except (OSError, subprocess.SubprocessError):
+		return None
+	return Path(common) / LADDER_PROBE_FILE_NAME if common else None
+
+
+def ladder_found_no_rung_recently(now: datetime.datetime) -> bool:
+	"""True only when the ladder's LAST probe said ``none`` within the freshness window.
+
+	Fail closed: a missing, unreadable or garbled file, a ``ok`` result, a stale probe and a
+	probe stamped in the future all read False, so none of them can exclude a PR.
+	"""
+	path = _ladder_probe_path()
+	if path is None:
+		return False
+	try:
+		stamp, result = path.read_text(encoding="utf-8").split()
+		age = now.timestamp() - float(stamp)
+	except (OSError, ValueError):
+		return False
+	return result == "none" and 0 <= age <= LADDER_PROBE_MAX_AGE_MINUTES * 60
+
+
+def no_rung_until_reset(now: datetime.datetime) -> str | None:
+	"""Return the exclusion reason when no rung can be reached until the slot resets, else None.
+
+	Needs BOTH facts: the ladder just found no rung (a dispatched agent would only re-run the
+	same failed probes and spend session quota) AND the primary slot is BUSY with a stated
+	reset. A slot that is FREE, UNKNOWN or BUSY with no stated wait names no time to wait for.
+	The cheap file read goes first so a plan with no recent probe makes no slot call.
+	"""
+	if not ladder_found_no_rung_recently(now):
+		return None
+	match = _BUSY_RESET_RE.match(slot_verdict())
+	if match is None:
+		return None
+	return (
+		f"no reviewer rung available until {match.group(1)} (the ladder's last probe found none "
+		f"and the primary slot is BUSY until then) — a new review agent would only re-run the "
+		"same failed probes; resume the existing review agent after the reset (#818)"
+	)
 
 
 def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None:
@@ -885,7 +950,8 @@ def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None
 			f"already covered: this head is a merge-only update, its PR patch equals that of "
 			f"reviewed head {covered[:12]} (#736)"
 		)
-	return None
+	# Last: every PR-specific reason above is the more useful one to read (#818).
+	return no_rung_until_reset(now)
 
 
 def _gh_text(args: list[str]) -> str:
