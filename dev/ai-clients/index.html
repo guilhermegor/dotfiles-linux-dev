@@ -489,6 +489,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#stop-guard-budget-and-plan-cache-dotfiles-linux-dev814" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stop-guard budget and plan cache (dotfiles-linux-dev#814)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#worktree-rescue-fan-out-two-callers-one-implementation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1264,6 +1275,17 @@
     <span class="md-ellipsis">
       
         Review fan-out: "needs a review?" is about the HEAD, not a count (dotfiles-linux-dev#480)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stop-guard-budget-and-plan-cache-dotfiles-linux-dev814" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stop-guard budget and plan cache (dotfiles-linux-dev#814)
       
     </span>
   </a>
@@ -2118,6 +2140,24 @@ author-checked, so a quoted attribution line could spoof them). Fail closed: no 
 red/running/ambiguous check, an empty rollup or any other merge state is not merge-ready.
 Checked before the rung, so they need no reviewer. The guard lists them but never blocks
 on them; <code>dev-loop</code> step 4c-fast is the procedure.</p>
+<h2 id="stop-guard-budget-and-plan-cache-dotfiles-linux-dev814">Stop-guard budget and plan cache (dotfiles-linux-dev#814)<a class="headerlink" href="#stop-guard-budget-and-plan-cache-dotfiles-linux-dev814" title="Permanent link">&para;</a></h2>
+<p><code>Stop</code> runs after every main-session turn, so the three Stop guards
+(<code>dispatch_free_surface_guard.sh</code>, <code>round_dispatch_guard.sh</code>, <code>review_fanout_guard.sh</code>) used to
+re-plan from scratch each time and never consulted the #445 latch; a long <code>/dev-loop</code> session
+drained the shared GraphQL bucket in minutes. <code>hooks/lib/stop_budget.sh</code> is the one fix:</p>
+<ul>
+<li><code>stop_budget_gate</code>: while the latch is active, or <code>gh api rate_limit</code> (free) shows GraphQL under
+  <code>STOP_GRAPHQL_FLOOR</code> (default 100), it writes the latch until the reset, prints
+  <code>BUDGET-LOW (resets HH:MMZ)</code> once per window, and the guard <strong>passes</strong> (exit 0). It never blocks
+  a turn on a board it cannot read, and never spends the remainder.</li>
+<li><code>stop_plan_cache_*</code>: the dispatch planner's result is cached per repo in
+  <code>&lt;git-common-dir&gt;/stop-plan-cache/</code> (shared by both dispatch guards) for <code>STOP_PLAN_CACHE_TTL</code>
+  seconds (default 180). A push, <code>gh pr create|merge</code> or <code>Agent</code> dispatch appearing in the
+  transcript after the cache was written invalidates it. A turn that changed nothing re-queries nothing.</li>
+<li><code>lib/gh_latch.py</code>: both planners refuse (exit 3, <code>BUDGET-LOW</code>) while the latch is active.</li>
+</ul>
+<p><code>review_fanout_guard.sh</code> keeps its own per-heads cache (#696); it only gained the gate. The
+planners' remaining GraphQL (<code>closingIssuesReferences</code>, review threads) was not moved to REST here.</p>
 <h2 id="worktree-rescue-fan-out-two-callers-one-implementation">Worktree rescue fan-out: two callers, one implementation<a class="headerlink" href="#worktree-rescue-fan-out-two-callers-one-implementation" title="Permanent link">&para;</a></h2>
 <p><code>hooks/lib/worktree_fanout.sh</code> (<code>fanout_worktrees()</code> + <code>classify_worktree_diff()</code>,
 dotfiles-linux-dev#383) is the shared implementation of "walk every worktree of this
