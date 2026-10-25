@@ -3,7 +3,8 @@
 #
 # Push = claim (dotfiles-linux-dev#715): the pushed branch is the machine-neutral
 # "in progress" marker. Loop-owned means a LINKED worktree on a branch named
-# <feat|fix|chore|docs|refactor|test|hotfix>/<slug>-<issue number>. Anything else
+# <feat|fix|chore|docs|refactor|test|hotfix>/<issue number>-<slug> (or the older
+# <slug>-<issue number>, see lib/loop_branch.sh). Anything else
 # (main checkout, ad-hoc branches) is untouched. Never blocks: a failed push
 # leaves <git-dir>/pending-push and the next commit retries. See docs/ for the rule.
 set -u
@@ -11,7 +12,8 @@ set -u
 GIT=/usr/bin/git
 command -v jq >/dev/null 2>&1 || exit 0
 
-LOOP_BRANCH_RE='^(feat|fix|chore|docs|refactor|test|hotfix)/.+-[0-9]+$'
+# shellcheck source=lib/loop_branch.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/loop_branch.sh"
 
 # _resolve_dir BASE DIR: strip quotes, expand a leading ~, anchor a relative DIR at BASE.
 _resolve_dir() {
@@ -61,7 +63,7 @@ main() {
 	[ "$gitdir" != "$($GIT -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ] || exit 0
 
 	branch="$($GIT -C "$cwd" symbolic-ref --short -q HEAD)" || exit 0
-	[[ "$branch" =~ $LOOP_BRANCH_RE ]] || exit 0
+	is_loop_branch "$branch" || exit 0
 
 	# Bounded and prompt-free: a stalled remote must reach the pending-push branch, not hang the hook.
 	if GIT_TERMINAL_PROMPT=0 timeout 30 $GIT -C "$cwd" push -q -u origin "$branch" >/dev/null 2>&1; then

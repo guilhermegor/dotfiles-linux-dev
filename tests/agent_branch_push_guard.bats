@@ -49,6 +49,41 @@ refute_remote() {
     remote_has feat/some-thing-715
 }
 
+@test "the policy-compliant <type>/<N>-<slug> shape is a loop branch (#830)" {
+    add_worktree chore/36-split-poe-tasks
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has chore/36-split-poe-tasks
+}
+
+@test "the older <type>/<slug>-<N> shape is still a loop branch (#830)" {
+    add_worktree chore/split-poe-tasks-36
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has chore/split-poe-tasks-36
+}
+
+@test "is_loop_branch accepts both shapes and rejects main and feature/foo (#830)" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/loop_branch.sh"
+    is_loop_branch chore/36-split-poe-tasks
+    is_loop_branch chore/split-poe-tasks-36
+    run is_loop_branch main
+    [ "$status" -ne 0 ]
+    run is_loop_branch feature/foo
+    [ "$status" -ne 0 ]
+}
+
+@test "branch_list_has_issue finds the issue number in either shape, on a boundary (#830)" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/loop_branch.sh"
+    local list=$'main\nchore/36-split-poe-tasks\nfix/other-thing-15'
+    branch_list_has_issue "$list" 36
+    branch_list_has_issue "$list" 15
+    run branch_list_has_issue "$list" 5
+    [ "$status" -ne 0 ]
+    run branch_list_has_issue "$list" 6
+    [ "$status" -ne 0 ]
+}
+
 @test "a non-commit Bash command pushes nothing" {
     add_worktree feat/some-thing-715
     run run_hook "$TEST_TMP/wt" "git status"
