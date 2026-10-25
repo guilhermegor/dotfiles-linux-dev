@@ -453,6 +453,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="PR merge guard: review threads AND a reviewer&#39;s own check">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ladder-review-findings-block-the-thread-gate-dotfiles-linux-dev819" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ladder review findings block the thread gate (dotfiles-linux-dev#819)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1246,6 +1263,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="PR merge guard: review threads AND a reviewer&#39;s own check">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ladder-review-findings-block-the-thread-gate-dotfiles-linux-dev819" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ladder review findings block the thread gate (dotfiles-linux-dev#819)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1844,6 +1878,18 @@ why live, why last) lives in the file's own header, not duplicated here.</p>
    one maintainer and a structurally empty Reviewers panel (#268).</p>
 <p>Both findings share the one escape hatch, since standing aside for either is
 the same deliberate call: <code>ALLOW_UNRESOLVED_THREADS=1 gh pr merge &lt;n&gt;</code>.</p>
+<h3 id="ladder-review-findings-block-the-thread-gate-dotfiles-linux-dev819">Ladder review findings block the thread gate (dotfiles-linux-dev#819)<a class="headerlink" href="#ladder-review-findings-block-the-thread-gate-dotfiles-linux-dev819" title="Permanent link">&para;</a></h3>
+<p>The ladder posts a submitted COMMENTED review with its findings in the review BODY and no
+thread, so "zero unresolved threads" is true of it and the gate went green (#815 auto-merged 39s
+after a review asking for two fixes). <code>review_thread_gate.sh</code>'s <code>_gate_review_findings_filter</code>
+reads the reviews channel: a review whose first line is the ladder marker, authored by a roster
+login (never authorAssociation: a bot is never OWNER/MEMBER), on the CURRENT head, whose body has
+a <code>finding</code> heading or <code>[Pn]</code> marker, is <code>problems</code> until a later non-roster PR comment of</p>
+<blockquote>
+<p>= 100 chars follows it. No findings, or a review of an older head, never blocks. Chosen over
+inline comments: an inline comment needs a valid diff line, LLM line numbers are unreliable, and
+one wrong line fails the whole POST.</p>
+</blockquote>
 <h2 id="stale-local-ref-guard-checkout-and-worktree-add-dotfiles-linux-dev410">Stale-local-ref guard: checkout and worktree add (dotfiles-linux-dev#410)<a class="headerlink" href="#stale-local-ref-guard-checkout-and-worktree-add-dotfiles-linux-dev410" title="Permanent link">&para;</a></h2>
 <p><code>hooks/stale_local_ref_guard.sh</code> (<code>PreToolUse</code>, <code>Bash</code>) blocks <code>git
 checkout</code>/<code>git switch</code>/<code>git worktree add</code> when the target is a bare <strong>local</strong>
