@@ -39,8 +39,10 @@ Before writing anything, ask for any of the following not already in `$ARGUMENTS
 1. **Project name** — exact repository/project name.
 2. **GitHub username** — the owner or organisation for badge and link URLs.
 3. **Brief description** — 2–4 sentences on what the project does and for whom.
-4. **Author name and LinkedIn URL** — the Authors section needs both a
-   `github.com/<user>` and a `linkedin.com/in/<handle>` link per author.
+4. **Per author: name, GitHub username and LinkedIn URL** — the Authors section
+   needs both a `github.com/<user>` and a `linkedin.com/in/<handle>` link per
+   author. The template fills the GitHub link from item 2, which is right only
+   when the author is the repo owner; ask for any other author's own username.
 5. **Archetype** — one of the values `--list-archetypes` prints on the gate.
 6. **Ships to PyPI?** — decides image URLs (below).
 
