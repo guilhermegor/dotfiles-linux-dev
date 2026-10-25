@@ -1883,10 +1883,13 @@ the same deliberate call: <code>ALLOW_UNRESOLVED_THREADS=1 gh pr merge &lt;n&gt;
 thread, so "zero unresolved threads" is true of it and the gate went green (#815 auto-merged 39s
 after a review asking for two fixes). <code>review_thread_gate.sh</code>'s <code>_gate_review_findings_filter</code>
 reads the reviews channel: a review whose first line is the ladder marker, authored by a roster
-login (never authorAssociation: a bot is never OWNER/MEMBER), on the CURRENT head, whose body has
-a <code>finding</code> heading or <code>[Pn]</code> marker, is <code>problems</code> until a later non-roster PR comment of</p>
+login (never authorAssociation: a bot is never OWNER/MEMBER), on the CURRENT head, whose body
+carries any finding evidence, is <code>problems</code> until a later non-roster PR comment of</p>
 <blockquote>
-<p>= 100 chars follows it. No findings, or a review of an older head, never blocks. Chosen over
+<p>= 100 chars follows it. Evidence (#824, <code>_gate_has_findings_def</code>, fail closed) is any list
+item, a whole-word issue/problem/bug/concern/risk heading, a <code>[Pn]</code> tag, or the word
+"finding" anywhere; the only clean exception is the exact line <code>0 finding(s) across N
+reviewed file(s).</code>, stripped before the test. No findings, or a review of an older head, never blocks. Chosen over
 inline comments: an inline comment needs a valid diff line, LLM line numbers are unreliable, and
 one wrong line fails the whole POST.</p>
 </blockquote>
