@@ -998,3 +998,15 @@ LADDER_HEAD=$'Fallback review — runtime: claude, model: m (selected by: probe)
 0 finding(s) across 3 reviewed file(s)."
     [[ "$output" == *"status=problems"* ]]
 }
+
+@test "#819: plain bullets under an Issues heading, with no 'finding' word, block" {
+    ladder_review_gate "${LADDER_HEAD}## Issues
+- parse() drops the error path"
+    [[ "$output" == *"status=problems"* ]]
+}
+
+@test "#819: an Issues heading with prose and no bullets blocks" {
+    ladder_review_gate "${LADDER_HEAD}## Issues found
+The retry loop never terminates."
+    [[ "$output" == *"status=problems"* ]]
+}
