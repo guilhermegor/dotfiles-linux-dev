@@ -20,6 +20,7 @@
 # Run locally: bats tests/dispatch_plan.bats
 
 setup() {
+    export GH_BUDGET_LATCH_FILE="$BATS_TEST_TMPDIR/latch" # a live latch must not reach the planner (#814)
     PLANNER="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib/dispatch_plan.py"
     TEST_TMP="$(mktemp -d)"
     cd "$TEST_TMP" || return 1

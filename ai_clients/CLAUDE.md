@@ -485,6 +485,26 @@ red/running/ambiguous check, an empty rollup or any other merge state is not mer
 Checked before the rung, so they need no reviewer. The guard lists them but never blocks
 on them; `dev-loop` step 4c-fast is the procedure.
 
+## Stop-guard budget and plan cache (dotfiles-linux-dev#814)
+
+`Stop` runs after every main-session turn, so the three Stop guards
+(`dispatch_free_surface_guard.sh`, `round_dispatch_guard.sh`, `review_fanout_guard.sh`) used to
+re-plan from scratch each time and never consulted the #445 latch; a long `/dev-loop` session
+drained the shared GraphQL bucket in minutes. `hooks/lib/stop_budget.sh` is the one fix:
+
+- `stop_budget_gate`: while the latch is active, or `gh api rate_limit` (free) shows GraphQL under
+  `STOP_GRAPHQL_FLOOR` (default 100), it writes the latch until the reset, prints
+  `BUDGET-LOW (resets HH:MMZ)` once per window, and the guard **passes** (exit 0). It never blocks
+  a turn on a board it cannot read, and never spends the remainder.
+- `stop_plan_cache_*`: the dispatch planner's result is cached per repo in
+  `<git-common-dir>/stop-plan-cache/` (shared by both dispatch guards) for `STOP_PLAN_CACHE_TTL`
+  seconds (default 180). A push, `gh pr create|merge` or `Agent` dispatch appearing in the
+  transcript after the cache was written invalidates it. A turn that changed nothing re-queries nothing.
+- `lib/gh_latch.py`: both planners refuse (exit 3, `BUDGET-LOW`) while the latch is active.
+
+`review_fanout_guard.sh` keeps its own per-heads cache (#696); it only gained the gate. The
+planners' remaining GraphQL (`closingIssuesReferences`, review threads) was not moved to REST here.
+
 ## Worktree rescue fan-out: two callers, one implementation
 
 `hooks/lib/worktree_fanout.sh` (`fanout_worktrees()` + `classify_worktree_diff()`,

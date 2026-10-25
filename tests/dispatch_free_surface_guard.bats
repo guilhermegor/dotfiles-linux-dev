@@ -29,12 +29,18 @@ setup() {
     git config user.email t@t && git config user.name t
     git commit -q --allow-empty -m init
 
+    export GH_BUDGET_LATCH_FILE="$TEST_TMP/latch"
     BIN="$TEST_TMP/bin"
     mkdir -p "$BIN"
     # Any gh call at all is a failure of this hook's contract, and a call that exits non-zero
     # with a log line makes that visible instead of silently working.
     cat >"$BIN/gh" <<'STUB'
 #!/bin/bash
+# The Stop budget gate's own free quota read (#814) is not a planner/board call.
+if [ "$1 $2" = "api rate_limit" ]; then
+	echo '{"resources":{"graphql":{"remaining":5000,"reset":4102444800}}}'
+	exit 0
+fi
 echo "gh $*" >>"$GH_LOG"
 exit 1
 STUB

@@ -37,6 +37,7 @@ setup() {
     # suite's announce cases exist to catch.
     TMPDIR="$TEST_TMP"
     export TMPDIR
+    export GH_BUDGET_LATCH_FILE="$TEST_TMP/latch"
 
     TRANSCRIPT="$TEST_TMP/transcript.jsonl"
     : >"$TRANSCRIPT"

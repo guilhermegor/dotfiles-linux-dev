@@ -119,6 +119,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from gh_latch import refuse_if_latched
 from open_pr_pages import read_open_prs
 
 LIB_DIR = Path(__file__).resolve().parent
@@ -1078,6 +1079,8 @@ def main() -> int:
 	DIRECTLY during s:dev-loop step 4b sees on its own screen: one line naming the failure,
 	not a raw Python stack trace with no bearing on what to do next.
 	"""
+	if refuse_if_latched("review_fanout_plan"):
+		return 3
 	try:
 		print(json.dumps(build_plan()))
 	except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:

@@ -66,6 +66,8 @@ command -v python3 >/dev/null 2>&1 || exit 0
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/dispatch_claims.sh
 source "$HOOK_DIR/lib/dispatch_claims.sh"
+# shellcheck source=lib/stop_budget.sh
+source "$HOOK_DIR/lib/stop_budget.sh"
 
 PLANNER="${DISPATCH_GUARD_PLANNER:-$HOOK_DIR/lib/dispatch_plan.py}"
 # 60s, not 30: dispatch_plan.py measured 39s on 2026-10-03 15:40Z under a GitHub
@@ -435,7 +437,7 @@ rescue_note() {
 
 main() {
 	local payload active cwd transcript plan dispatchable undeclared
-	local in_flight claimed remaining missing queued slots hitl
+	local in_flight claimed remaining missing queued slots hitl cached
 
 	payload="$(cat)"
 
@@ -453,7 +455,17 @@ main() {
 	dev_loop_invoked "$transcript" || exit 0
 	inflight_dispatch_issues "$transcript"
 
-	plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)"
+	# One planner result per repo per TTL window, shared with round_dispatch_guard.sh; a cache
+	# miss spends GitHub budget, so the gate runs first and PASSES when it is low (#814).
+	cached=1
+	plan="$(stop_plan_cache_read dispatch_plan "$cwd" "$transcript")" || {
+		cached=0
+		stop_budget_gate || exit 0
+		planner_rc=0
+		plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)" || planner_rc=$?
+		# Exit 3 = the latch was written after the gate passed: a blind board, so pass (#814).
+		[ "$planner_rc" -ne 3 ] || exit 0
+	}
 	# Shape, not just keys: `{"dispatchable":null,"excluded":{}}` has both keys, formats to
 	# nothing, and would read as a false "nothing to dispatch". Same check
 	# round_dispatch_guard.sh applies to the same planner.
@@ -470,6 +482,7 @@ main() {
 	if printf '%s' "$plan" | jq -e '.excluded[]? | select(.reason | test("UNKNOWN"))' >/dev/null 2>&1; then
 		report_unreadable "the planner's gate or liveness read failed (UNKNOWN exclusions)"
 	fi
+	[ "$cached" -eq 1 ] || stop_plan_cache_write dispatch_plan "$cwd" "$transcript" "$plan"
 
 	dispatchable="$(printf '%s' "$plan" | jq -r '.dispatchable[]? | .issue')"
 	undeclared="$(printf '%s' "$plan" |

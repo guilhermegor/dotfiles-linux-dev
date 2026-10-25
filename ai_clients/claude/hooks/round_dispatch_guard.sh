@@ -47,6 +47,8 @@ set -u
 command -v jq >/dev/null 2>&1 || exit 0
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/stop_budget.sh
+source "$HOOK_DIR/lib/stop_budget.sh"
 PLANNER="${ROUND_DISPATCH_PLANNER:-$HOOK_DIR/lib/dispatch_plan.py}"
 # 60s, not 30: dispatch_plan.py measured 39s on 2026-10-03 15:40Z under a GitHub
 # burst (every Stop read UNREADABLE) and 17s at 21:15Z after #605/#576 cut its
@@ -102,7 +104,7 @@ announce_no_planner() {
 }
 
 main() {
-	local payload active transcript session_id events plan dispatchable excluded
+	local payload active transcript session_id events plan dispatchable excluded cwd cached
 
 	payload="$(cat)"
 
@@ -120,7 +122,20 @@ main() {
 
 	[ -r "$PLANNER" ] || announce_no_planner "$session_id"
 
-	plan="$(timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)"
+	# Same cache as dispatch_free_surface_guard.sh (key dispatch_plan); gate before spending (#814).
+	cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
+	[ -n "$cwd" ] || cwd="${CLAUDE_PROJECT_DIR:-$PWD}"
+	cached=1
+	plan="$(stop_plan_cache_read dispatch_plan "$cwd" "$transcript")" || {
+		cached=0
+		stop_budget_gate || exit 0
+		# A deleted worktree is not a board we can read; the old ambient-cwd run never blocked on it.
+		[ -d "$cwd" ] || exit 0
+		planner_rc=0
+		plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)" || planner_rc=$?
+		# Exit 3 = the latch was written after the gate passed: a blind board, so pass (#814).
+		[ "$planner_rc" -ne 3 ] || exit 0
+	}
 	# Shape, not just keys: `{"dispatchable":null,"excluded":{}}` has both keys, formats to
 	# nothing, and would exit 0 below as a false "nothing to dispatch". Every dispatchable
 	# record needs an issue number; every excluded record needs a non-empty reason — an
@@ -140,6 +155,10 @@ main() {
 		} >&2
 		exit 2
 	fi
+
+	# A fail-closed plan (UNKNOWN exclusions) must not be served to the dispatch guard for the TTL.
+	printf '%s' "$plan" | jq -e '.excluded[]? | select(.reason | test("UNKNOWN"))' >/dev/null 2>&1 && cached=1
+	[ "$cached" -eq 1 ] || stop_plan_cache_write dispatch_plan "$cwd" "$transcript" "$plan"
 
 	dispatchable="$(printf '%s' "$plan" |
 		jq -r '.dispatchable[]? | "  #\(.issue)  \((.surface // []) | join(", "))"')"

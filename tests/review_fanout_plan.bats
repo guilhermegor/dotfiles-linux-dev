@@ -35,6 +35,7 @@
 # Run locally: bats tests/review_fanout_plan.bats
 
 setup() {
+    export GH_BUDGET_LATCH_FILE="$BATS_TEST_TMPDIR/latch" # a live latch must not reach the planner (#814)
     PLANNER="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib/review_fanout_plan.py"
     TEST_TMP="$(mktemp -d)"
     cd "$TEST_TMP" || return 1
