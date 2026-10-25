@@ -37,7 +37,9 @@ stop_budget_gate() {
 	until="$(cat "$(gh_budget_latch_path)" 2>/dev/null)"
 	# Once per latch window: the marker remembers which reset was already announced.
 	if [ "$(cat "$(gh_budget_latch_path).noticed" 2>/dev/null)" != "$until" ]; then
-		echo "BUDGET-LOW (resets $(date -u -d "@${until:-0}" +%H:%MZ 2>/dev/null)) — Stop guard skipped, not blocking (dotfiles-linux-dev#814)." >&2
+		local when="soon"
+		[[ "$until" =~ ^[0-9]+$ ]] && when="$(date -u -d "@$until" +%H:%MZ 2>/dev/null)"
+		echo "BUDGET-LOW (resets $when) — Stop guard skipped, not blocking (dotfiles-linux-dev#814)." >&2
 		printf '%s\n' "$until" >"$(gh_budget_latch_path).noticed" 2>/dev/null || true
 	fi
 	return 1
@@ -76,7 +78,7 @@ stop_plan_cache_read() {
 	# Another session claiming files changes the board without touching this transcript.
 	[ ! "$dir/../dispatch-claims.tsv" -nt "$dir/$name.meta" ] || return 1
 	tail -n "+$((lines + 1))" "$3" |
-		grep -qE '"name": *"Agent"|git push|gh (pr (create|merge|close)|issue|label)|gh api [^"]*(pulls|issues|labels)' && return 1
+		grep -qE '"name": *"Agent"|git push|gh (pr|issue|label)|gh api [^"]*(pulls|issues|labels)' && return 1
 	cat "$dir/$name.json"
 }
 
@@ -87,5 +89,5 @@ stop_plan_cache_write() {
 	dir="$(stop_plan_cache_dir "$2")" || return 0
 	mkdir -p "$dir" 2>/dev/null || return 0
 	printf '%s' "$4" >"$dir/$name.json.$$" && mv -f "$dir/$name.json.$$" "$dir/$name.json"
-	printf '%s %s\n' "$(date +%s)" "$(wc -l <"$3")" >"$dir/$name.meta"
+	printf '%s %s\n' "$(date +%s)" "$(wc -l <"$3")" >"$dir/$name.meta.$$" && mv -f "$dir/$name.meta.$$" "$dir/$name.meta"
 }

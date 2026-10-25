@@ -1,7 +1,7 @@
 """Read-only twin of gh_budget.sh's 403 latch, for the planners (dotfiles-linux-dev#814).
 
-The path logic must match ``gh_budget_latch_path``; ``tests/stop_budget.bats`` pins both
-sides to the same marker so they cannot drift.
+The path logic must match ``gh_budget_latch_path``; ``tests/stop_budget.bats`` round-trips a
+marker written by ``gh_budget_latch_write`` through ``refuse_if_latched`` to catch drift.
 """
 
 from __future__ import annotations

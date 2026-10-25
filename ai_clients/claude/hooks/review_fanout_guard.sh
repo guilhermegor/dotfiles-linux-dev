@@ -522,7 +522,8 @@ main() {
 	# see review_dispatch_running's own header for the fails-open defect that was.
 	review_dispatch_running "$transcript" && exit 0
 
-	# Budget low => pass, never block a turn on a board that cannot be read (#814).
+	# Budget low => pass, never block a turn on a board that cannot be read (#814). Above the
+	# cache on purpose: the cache key needs open_pr_heads, itself a gh call.
 	stop_budget_gate || exit 0
 
 	[ -r "$PLANNER" ] || block_unreadable "no review fan-out planner at $PLANNER (run 'make ai_clients')."
@@ -550,6 +551,8 @@ main() {
 		block_unreadable "review fan-out plan not cached yet — a background refresh is already running (up to ${REFRESH_TIMEOUT}s); the next Stop reads its cached plan. Not the same as empty."
 	else
 		plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)" || planner_rc=$?
+		# Exit 3 = the latch was written after the gate passed: pass, do not block (#814).
+		[ "$planner_rc" -ne 3 ] || exit 0
 	fi
 
 	if [ "$planner_rc" -eq 124 ]; then

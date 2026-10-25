@@ -129,7 +129,12 @@ main() {
 	plan="$(stop_plan_cache_read dispatch_plan "$cwd" "$transcript")" || {
 		cached=0
 		stop_budget_gate || exit 0
-		plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)"
+		# A deleted worktree is not a board we can read; the old ambient-cwd run never blocked on it.
+		[ -d "$cwd" ] || exit 0
+		planner_rc=0
+		plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)" || planner_rc=$?
+		# Exit 3 = the latch was written after the gate passed: a blind board, so pass (#814).
+		[ "$planner_rc" -ne 3 ] || exit 0
 	}
 	# Shape, not just keys: `{"dispatchable":null,"excluded":{}}` has both keys, formats to
 	# nothing, and would exit 0 below as a false "nothing to dispatch". Every dispatchable
@@ -151,6 +156,8 @@ main() {
 		exit 2
 	fi
 
+	# A fail-closed plan (UNKNOWN exclusions) must not be served to the dispatch guard for the TTL.
+	printf '%s' "$plan" | jq -e '.excluded[]? | select(.reason | test("UNKNOWN"))' >/dev/null 2>&1 && cached=1
 	[ "$cached" -eq 1 ] || stop_plan_cache_write dispatch_plan "$cwd" "$transcript" "$plan"
 
 	dispatchable="$(printf '%s' "$plan" |

@@ -130,3 +130,56 @@ plan_runs() { wc -l <"$PLAN_LOG" 2>/dev/null || echo 0; }
         "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; print(gh_latch.latch_path())"
     [ "$output" = "$TEST_TMP/home/.cache/dotfiles-dev-sweep-403-until" ]
 }
+
+@test "plan cache: a gh pr edit in the transcript invalidates it" {
+    payload | bash "$HOOKS/round_dispatch_guard.sh" || true
+    printf '{"message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"gh pr edit 3 --body x"}}]}}\n' >>"$TRANSCRIPT"
+    payload | bash "$HOOKS/round_dispatch_guard.sh" || true
+    [ "$(plan_runs)" -eq 2 ]
+}
+
+@test "plan cache: a lapsed TTL forces a re-plan" {
+    STOP_PLAN_CACHE_TTL=0 payload | STOP_PLAN_CACHE_TTL=0 bash "$HOOKS/round_dispatch_guard.sh" || true
+    STOP_PLAN_CACHE_TTL=0 payload | STOP_PLAN_CACHE_TTL=0 bash "$HOOKS/round_dispatch_guard.sh" || true
+    [ "$(plan_runs)" -eq 2 ]
+}
+
+@test "plan cache: the round guard's plan is reused by the dispatch guard" {
+    payload | bash "$HOOKS/round_dispatch_guard.sh" || true
+    payload | bash "$HOOKS/dispatch_free_surface_guard.sh" || true
+    [ "$(plan_runs)" -eq 1 ]
+}
+
+@test "plan cache: a plan with UNKNOWN exclusions is not cached" {
+    cat >"$DISPATCH_GUARD_PLANNER" <<'STUB'
+import os
+open(os.environ["PLAN_LOG"], "a").write("run\n")
+print('{"dispatchable":[],"excluded":[{"issue":7,"reason":"UNKNOWN: read failed"}]}')
+STUB
+    payload | bash "$HOOKS/round_dispatch_guard.sh" || true
+    payload | bash "$HOOKS/round_dispatch_guard.sh" || true
+    [ "$(plan_runs)" -eq 2 ]
+}
+
+@test "a planner exit 3 (latch written after the gate) passes instead of blocking" {
+    cat >"$DISPATCH_GUARD_PLANNER" <<'STUB'
+import sys
+sys.exit(3)
+STUB
+    run bash -c "$(declare -f payload); TEST_TMP=$TEST_TMP TRANSCRIPT=$TRANSCRIPT; payload | bash $HOOKS/round_dispatch_guard.sh"
+    [ "$status" -eq 0 ]
+    run bash -c "$(declare -f payload); TEST_TMP=$TEST_TMP TRANSCRIPT=$TRANSCRIPT; payload | bash $HOOKS/dispatch_free_surface_guard.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "the claims-registry path stop_budget.sh checks is the one dispatch_claims.sh writes" {
+    run bash -c "source $HOOKS/lib/dispatch_claims.sh; dispatch_claims_file $TEST_TMP"
+    [ "$output" = "$TEST_TMP/.git/dispatch-claims.tsv" ]
+}
+
+@test "a latch written by gh_budget_latch_write is read by gh_latch.py" {
+    run bash -c "source $HOOKS/lib/gh_budget.sh; gh_budget_latch_write 600"
+    [ "$status" -eq 0 ]
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.refuse_if_latched('t') else 1)"
+    [ "$status" -eq 0 ]
+}

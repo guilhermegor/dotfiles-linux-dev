@@ -458,7 +458,10 @@ main() {
 	plan="$(stop_plan_cache_read dispatch_plan "$cwd" "$transcript")" || {
 		cached=0
 		stop_budget_gate || exit 0
-		plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)"
+		planner_rc=0
+		plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)" || planner_rc=$?
+		# Exit 3 = the latch was written after the gate passed: a blind board, so pass (#814).
+		[ "$planner_rc" -ne 3 ] || exit 0
 	}
 	# Shape, not just keys: `{"dispatchable":null,"excluded":{}}` has both keys, formats to
 	# nothing, and would read as a false "nothing to dispatch". Same check
