@@ -102,7 +102,7 @@ query($owner:String!, $repo:String!, $number:Int!) {
       reviews(first:100) {
         totalCount
         pageInfo { hasNextPage endCursor }
-        nodes { author { login __typename } state body commit { oid } }
+        nodes { id author { login __typename } state body submittedAt commit { oid } }
       }
       commits(last:1) {
         nodes {
@@ -159,7 +159,7 @@ _gate_page_query() {
 		;;
 	reviews)
 		sel='reviews(first:100, after:$cursor) { totalCount pageInfo { hasNextPage endCursor }
-			nodes { author { login __typename } state body commit { oid } } }'
+			nodes { id author { login __typename } state body submittedAt commit { oid } } }'
 		;;
 	esac
 	printf 'query($owner:String!, $repo:String!, $number:Int!, $cursor:String!) { repository(owner:$owner, name:$repo) { pullRequest(number:$number) { %s } } }' "$sel"
@@ -300,7 +300,24 @@ JQ
 # `$answers == 0` because both share one login. `createdAt > $lc.createdAt` already excludes the
 # ladder comment from counting itself (a comment cannot postdate its own timestamp); `.id` is kept
 # as the explicit, unforgeable "not the same comment" guard the ordering alone does not name.
+# One "does this ladder report carry findings?" predicate for BOTH the comment and review channels
+# (#819), so they cannot drift apart. FAIL CLOSED: the only clean exception is CodeRabbit's exact
+# rendered summary line "0 finding(s) across N reviewed file(s)." alone on its own line. That line
+# is stripped, then ANY remaining evidence counts -- a bullet entry, a [P<n>] tag, or the word
+# "finding" anywhere else. A negation elsewhere in the body ("no findings in X") never cancels
+# evidence. Emitted as a jq `def` to prepend.
+_gate_has_findings_def() {
+	cat <<'JQ'
+def has_findings:
+  ((. // "") | gsub("(^|\n)[ \t]*0 finding\\(s\\) across [0-9]+ reviewed file\\(s\\)\\.?[ \t]*(?=\n|$)"; "\n")) as $b
+  | ($b | test("(^|\n)- \\*\\*"))
+    or ($b | test("\\[P[0-9]+\\]"))
+    or ($b | test("finding"; "i"));
+JQ
+}
+
 _gate_comment_findings_filter() {
+	_gate_has_findings_def
 	cat <<'JQ'
 ($roster | split("\n") | map(select(length > 0)) | map(ascii_downcase)) as $bots
 | ($bots | index("__no_roster__")) as $no_roster
@@ -312,8 +329,7 @@ _gate_comment_findings_filter() {
 | $ladder[]
 | . as $lc
 | select(
-    (($lc.body // "") | test("finding"; "i"))
-    or (($lc.body // "") | test("\\[P[0-9]+\\]"))
+    ($lc.body | has_findings)
   )
 | ($cs
    | map(select(
@@ -341,6 +357,47 @@ _gate_comment_findings_filter() {
                 and ((((.body // "") | split("\n"))[1] // "") != ((($lc.body // "") | split("\n"))[1] // ""))))))
    | length) as $answers
 | if $answers == 0 then "  unanswered ladder finding (comment channel)" else empty end
+JQ
+}
+
+# The jq program behind the REVIEW-channel half of `problems` (dotfiles-linux-dev#819). Since #624
+# the ladder posts a submitted COMMENTED review as the App, with every finding in the review BODY
+# and no inline thread -- invisible to the thread filter (no threads) and to the comment filter
+# above (not an issue comment), so the gate went green and auto-merge fired 39s later on #815.
+#
+# Chosen over posting inline comments: an inline comment needs a valid diff line and LLM-reported
+# line numbers are unreliable, so a wrong one fails the whole POST and the findings are lost.
+#
+# Trust is the ROSTER (the App's `<slug>[bot]` login), not authorAssociation: a bot is never
+# OWNER/MEMBER, and the marker line alone is forgeable (CWE-345). No roster falls back to any Bot.
+# Only a review of the CURRENT head blocks -- a push replaces the code it judged and the new head is
+# covered by `unreviewed`. Answered by a later substantive PR comment from outside the roster.
+_gate_review_findings_filter() {
+	_gate_has_findings_def
+	cat <<'JQ'
+($roster | split("\n") | map(select(length > 0)) | map(ascii_downcase)) as $bots
+| ($bots | index("__no_roster__")) as $no_roster
+| (.data.repository.pullRequest.comments.nodes // []) as $cs
+| (.data.repository.pullRequest.commits.nodes[0].commit.oid // "") as $head_oid
+| (.data.repository.pullRequest.reviews.nodes // [])[]
+| . as $r
+| select(
+    ((((.body // "") | split("\n")[0]) // "") | test($marker))
+    and (. as $n | if $no_roster then (($n.author.__typename // "") == "Bot")
+         else ($bots | index(($n.author.login // "") | ascii_downcase)) != null end)
+    and ($head_oid == "" or ((.commit.oid // "") == $head_oid))
+    and (.body | has_findings)
+  )
+| ($cs
+   | map(select(
+       ((.createdAt // "") > ($r.submittedAt // "9"))
+       # A ladder report posted from a non-roster account is still a report, never an answer.
+       and ((((.body // "") | split("\n")[0]) | test($marker)) | not)
+       and (((.body // "") | length) >= $min)
+       and ((. as $n | if $no_roster then (($n.author.__typename // "") != "Bot")
+             else (($bots | index(($n.author.login // "") | ascii_downcase)) == null) end))))
+   | length) as $answers
+| if $answers == 0 then "  unanswered ladder review findings (review channel)" else empty end
 JQ
 }
 
@@ -459,7 +516,7 @@ _gate_filter_aborted() {
 
 gate_pr_thread_state() {
 	local owner="$1" repo="$2" number="$3" roster_file="${4:-.review-bots.yaml}"
-	local threads roster problems truncated running comment_problems reported
+	local threads roster problems truncated running comment_problems review_problems reported
 	GATE_STATUS="unreadable"
 	GATE_DETAIL="could not reach the GitHub API"
 
@@ -547,6 +604,14 @@ gate_pr_thread_state() {
 		return 0
 	}
 	[ -n "$comment_problems" ] && problems="$(printf '%s\n%s' "$problems" "$comment_problems")"
+
+	review_problems="$(_gate_run_jq "$threads" "$(_gate_review_findings_filter)" "$jq_err" \
+		--argjson min "$_gate_min_reply_chars" --arg marker "$_gate_ladder_marker_re" \
+		--arg roster "$roster")" || {
+		_gate_filter_aborted "$jq_err" "review-findings"
+		return 0
+	}
+	[ -n "$review_problems" ] && problems="$(printf '%s\n%s' "$problems" "$review_problems")"
 
 	# Reviewer checks (CheckRun or StatusContext) still running, minus the repo's own CI app.
 	running="$(_gate_run_jq "$threads" "$(_gate_running_filter)" "$jq_err" --arg roster "$roster")" || {

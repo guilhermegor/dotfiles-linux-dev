@@ -819,6 +819,15 @@ _coderabbit_render_findings() {
 	printf '%s\n' "$out"
 }
 
+# _write_ladder_probe none|ok — the last probe result, "<epoch> <none|ok>", in the shared
+# git common dir, for the dispatch planner's "no rung available until ..." exclusion (#818).
+# Fail soft: a write error must never fail the review.
+_write_ladder_probe() {
+	local dir
+	dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
+	printf '%s %s\n' "$(date +%s)" "$1" >"$dir/ladder-last-probe" 2>/dev/null || true
+}
+
 # _post_pr_review OWNER REPO PR_NUMBER BODY HEAD_SHA
 # Posts BODY as a submitted COMMENT review on HEAD_SHA, as the ladder App
 # (issue #624) — the shape a review-roster gate counts, which an issue comment
@@ -1061,6 +1070,7 @@ run_fallback_review() {
 	local LADDER_SKIP_RUNGS="${LADDER_SKIP_RUNGS:-}" attribution findings
 	while :; do
 		if ! resolve_fallback_reviewer; then
+			_write_ladder_probe none
 			print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable)"
 			return 1
 		fi
@@ -1094,6 +1104,7 @@ run_fallback_review() {
 		LADDER_SKIP_RUNGS="$LADDER_SKIP_RUNGS $LADDER_RUNTIME"
 	done
 
+	_write_ladder_probe ok
 	local body
 	body="$attribution"$'\n\n'"$findings"
 	_post_pr_review "$owner" "$repo" "$pr_number" "$body" "$head_sha"

@@ -220,6 +220,18 @@ It blocks the merge on **either** of two independent findings:
 Both findings share the one escape hatch, since standing aside for either is
 the same deliberate call: `ALLOW_UNRESOLVED_THREADS=1 gh pr merge <n>`.
 
+### Ladder review findings block the thread gate (dotfiles-linux-dev#819)
+
+The ladder posts a submitted COMMENTED review with its findings in the review BODY and no
+thread, so "zero unresolved threads" is true of it and the gate went green (#815 auto-merged 39s
+after a review asking for two fixes). `review_thread_gate.sh`'s `_gate_review_findings_filter`
+reads the reviews channel: a review whose first line is the ladder marker, authored by a roster
+login (never authorAssociation: a bot is never OWNER/MEMBER), on the CURRENT head, whose body has
+a `finding` heading or `[Pn]` marker, is `problems` until a later non-roster PR comment of
+>= 100 chars follows it. No findings, or a review of an older head, never blocks. Chosen over
+inline comments: an inline comment needs a valid diff line, LLM line numbers are unreliable, and
+one wrong line fails the whole POST.
+
 ## Stale-local-ref guard: checkout and worktree add (dotfiles-linux-dev#410)
 
 `hooks/stale_local_ref_guard.sh` (`PreToolUse`, `Bash`) blocks `git

@@ -711,6 +711,9 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
    Dispatch up to N subagents, each given exactly one starving PR (blast radius, then age — the
    same ranking item 2 already uses) and told to run
    `cd <absolute-repo-path> && ~/.claude/hooks/run_ladder_review.sh <pr-number>` on that PR alone
+   A ladder review is a COMMENTED review with its findings in the body, and "Review threads answered"
+   stays RED on it (#819) until a substantive non-roster comment answers it: read the findings,
+   judge them, reply. Never treat a green gate as proof the ladder had nothing to say.
    (the `cd` is load-bearing: the wrapper picks OWNER/REPO from the cwd's `origin`, and a reset
    cwd would review another repo's PR of the same number;
    the allowed wrapper, dotfiles-linux-dev#738: it derives the pushed epoch from the head commit and calls
