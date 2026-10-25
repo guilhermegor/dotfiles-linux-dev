@@ -369,11 +369,19 @@ _gate_review_findings_filter() {
     and (. as $n | if $no_roster then (($n.author.__typename // "") == "Bot")
          else ($bots | index(($n.author.login // "") | ascii_downcase)) != null end)
     and ($head_oid == "" or ((.commit.oid // "") == $head_oid))
-    and (((.body // "") | test("finding"; "i")) or ((.body // "") | test("\\[P[0-9]+\\]")))
+    # A CLEAN review still says "0 finding(s) across N reviewed file(s)" (CodeRabbit renderer), so
+    # the bare word is not evidence: a finding is a bullet entry, a [P<n>] tag, or "finding" not
+    # preceded by 0/no/zero.
+    and (((.body // "") | test("(^|\n)- \\*\\*"))
+         or ((.body // "") | test("\\[P[0-9]+\\]"))
+         or (((.body // "") | test("finding"; "i"))
+             and (((.body // "") | test("\\b(0|no|zero) finding"; "i")) | not)))
   )
 | ($cs
    | map(select(
        ((.createdAt // "") > ($r.submittedAt // "9"))
+       # A ladder report posted from a non-roster account is still a report, never an answer.
+       and ((((.body // "") | split("\n")[0]) | test($marker)) | not)
        and (((.body // "") | length) >= $min)
        and ((. as $n | if $no_roster then (($n.author.__typename // "") != "Bot")
              else (($bots | index(($n.author.login // "") | ascii_downcase)) == null) end))))

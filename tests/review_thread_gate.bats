@@ -953,3 +953,22 @@ LADDER_HEAD=$'Fallback review — runtime: claude, model: m (selected by: probe)
     ladder_review_gate "${LADDER_HEAD}Verdict: approve. No issues found."
     [[ "$output" == *"status=clean"* ]]
 }
+
+@test "#819: a clean CodeRabbit review ('0 finding(s)') does not block" {
+    ladder_review_gate "${LADDER_HEAD}
+0 finding(s) across 6 reviewed file(s)."
+    [[ "$output" == *"status=clean"* ]]
+}
+
+@test "#819: a bullet-entry review still blocks even with a findings count line" {
+    ladder_review_gate "${LADDER_HEAD}- **minor** \`a.sh\`: fix this
+
+1 finding(s) across 6 reviewed file(s)."
+    [[ "$output" == *"status=problems"* ]]
+}
+
+@test "#819: a long ladder report from a non-roster account is not an answer" {
+    ladder_review_gate "${LADDER_HEAD}## Findings
+- [P2] fix before merge" "${LADDER_HEAD}${LONG_BODY}"
+    [[ "$output" == *"status=problems"* ]]
+}
