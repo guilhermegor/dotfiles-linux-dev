@@ -300,7 +300,22 @@ JQ
 # `$answers == 0` because both share one login. `createdAt > $lc.createdAt` already excludes the
 # ladder comment from counting itself (a comment cannot postdate its own timestamp); `.id` is kept
 # as the explicit, unforgeable "not the same comment" guard the ordering alone does not name.
+# One "does this ladder report carry findings?" predicate for BOTH the comment and review channels
+# (#819), so they cannot drift apart. A CLEAN report still says "0 finding(s) across N reviewed
+# file(s)" (CodeRabbit renderer), so the bare word is no evidence: a finding is a bullet entry, a
+# [P<n>] tag, or "finding" not preceded by 0/no/zero. Emitted as a jq `def` to prepend.
+_gate_has_findings_def() {
+	cat <<'JQ'
+def has_findings:
+  (. // "") as $b
+  | ($b | test("(^|\n)- \\*\\*"))
+    or ($b | test("\\[P[0-9]+\\]"))
+    or (($b | test("finding"; "i")) and (($b | test("\\b(0|no|zero) finding"; "i")) | not));
+JQ
+}
+
 _gate_comment_findings_filter() {
+	_gate_has_findings_def
 	cat <<'JQ'
 ($roster | split("\n") | map(select(length > 0)) | map(ascii_downcase)) as $bots
 | ($bots | index("__no_roster__")) as $no_roster
@@ -312,8 +327,7 @@ _gate_comment_findings_filter() {
 | $ladder[]
 | . as $lc
 | select(
-    (($lc.body // "") | test("finding"; "i"))
-    or (($lc.body // "") | test("\\[P[0-9]+\\]"))
+    ($lc.body | has_findings)
   )
 | ($cs
    | map(select(
@@ -357,6 +371,7 @@ JQ
 # Only a review of the CURRENT head blocks -- a push replaces the code it judged and the new head is
 # covered by `unreviewed`. Answered by a later substantive PR comment from outside the roster.
 _gate_review_findings_filter() {
+	_gate_has_findings_def
 	cat <<'JQ'
 ($roster | split("\n") | map(select(length > 0)) | map(ascii_downcase)) as $bots
 | ($bots | index("__no_roster__")) as $no_roster
@@ -369,13 +384,7 @@ _gate_review_findings_filter() {
     and (. as $n | if $no_roster then (($n.author.__typename // "") == "Bot")
          else ($bots | index(($n.author.login // "") | ascii_downcase)) != null end)
     and ($head_oid == "" or ((.commit.oid // "") == $head_oid))
-    # A CLEAN review still says "0 finding(s) across N reviewed file(s)" (CodeRabbit renderer), so
-    # the bare word is not evidence: a finding is a bullet entry, a [P<n>] tag, or "finding" not
-    # preceded by 0/no/zero.
-    and (((.body // "") | test("(^|\n)- \\*\\*"))
-         or ((.body // "") | test("\\[P[0-9]+\\]"))
-         or (((.body // "") | test("finding"; "i"))
-             and (((.body // "") | test("\\b(0|no|zero) finding"; "i")) | not)))
+    and (.body | has_findings)
   )
 | ($cs
    | map(select(

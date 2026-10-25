@@ -972,3 +972,10 @@ LADDER_HEAD=$'Fallback review — runtime: claude, model: m (selected by: probe)
 - [P2] fix before merge" "${LADDER_HEAD}${LONG_BODY}"
     [[ "$output" == *"status=problems"* ]]
 }
+
+@test "comment channel: a clean '0 finding(s)' report is clean (#819)" {
+    body=$'Fallback review — runtime: coderabbit, model: default (selected by: probe)\n\n0 finding(s) across 6 reviewed file(s).'
+    run_comment_filter "$(ladder_comment_fixture MEMBER "$body")"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
