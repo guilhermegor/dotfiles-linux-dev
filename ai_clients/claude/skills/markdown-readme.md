@@ -24,7 +24,9 @@ Read these from blueprintx `main` before writing (REST works without a clone):
 | The contract, in prose | `docs/readme-layout.md` |
 
 ```bash
-gh api repos/guilhermegor/blueprintx/contents/templates/common/README.template.md --jq .content | base64 -d
+set -o pipefail
+gh api "repos/guilhermegor/blueprintx/contents/templates/common/README.template.md?ref=main" \
+  --jq .content | base64 -d
 ```
 
 The slug order is whatever the gate enforces today. If this file and the gate
