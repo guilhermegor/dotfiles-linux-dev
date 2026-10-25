@@ -979,3 +979,22 @@ LADDER_HEAD=$'Fallback review — runtime: claude, model: m (selected by: probe)
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
+
+@test "#819: prose findings plus a stray 'no findings in tests' still block" {
+    ladder_review_gate "${LADDER_HEAD}The gate drops the error path in parse(); this finding is serious. There are no findings in tests."
+    [[ "$output" == *"status=problems"* ]]
+}
+
+@test "#819: the exact clean summary line alone stays green" {
+    ladder_review_gate "${LADDER_HEAD}
+  0 finding(s) across 3 reviewed file(s).
+"
+    [[ "$output" == *"status=clean"* ]]
+}
+
+@test "#819: the clean summary line plus a bullet blocks" {
+    ladder_review_gate "${LADDER_HEAD}- **major** \`a.sh\`: broken
+
+0 finding(s) across 3 reviewed file(s)."
+    [[ "$output" == *"status=problems"* ]]
+}

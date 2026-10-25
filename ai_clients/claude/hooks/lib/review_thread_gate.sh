@@ -301,16 +301,18 @@ JQ
 # ladder comment from counting itself (a comment cannot postdate its own timestamp); `.id` is kept
 # as the explicit, unforgeable "not the same comment" guard the ordering alone does not name.
 # One "does this ladder report carry findings?" predicate for BOTH the comment and review channels
-# (#819), so they cannot drift apart. A CLEAN report still says "0 finding(s) across N reviewed
-# file(s)" (CodeRabbit renderer), so the bare word is no evidence: a finding is a bullet entry, a
-# [P<n>] tag, or "finding" not preceded by 0/no/zero. Emitted as a jq `def` to prepend.
+# (#819), so they cannot drift apart. FAIL CLOSED: the only clean exception is CodeRabbit's exact
+# rendered summary line "0 finding(s) across N reviewed file(s)." alone on its own line. That line
+# is stripped, then ANY remaining evidence counts -- a bullet entry, a [P<n>] tag, or the word
+# "finding" anywhere else. A negation elsewhere in the body ("no findings in X") never cancels
+# evidence. Emitted as a jq `def` to prepend.
 _gate_has_findings_def() {
 	cat <<'JQ'
 def has_findings:
-  (. // "") as $b
+  ((. // "") | gsub("(^|\n)[ \t]*0 finding\\(s\\) across [0-9]+ reviewed file\\(s\\)\\.?[ \t]*(?=\n|$)"; "\n")) as $b
   | ($b | test("(^|\n)- \\*\\*"))
     or ($b | test("\\[P[0-9]+\\]"))
-    or (($b | test("finding"; "i")) and (($b | test("\\b(0|no|zero) finding"; "i")) | not));
+    or ($b | test("finding"; "i"));
 JQ
 }
 
