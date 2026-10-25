@@ -227,8 +227,11 @@ thread, so "zero unresolved threads" is true of it and the gate went green (#815
 after a review asking for two fixes). `review_thread_gate.sh`'s `_gate_review_findings_filter`
 reads the reviews channel: a review whose first line is the ladder marker, authored by a roster
 login (never authorAssociation: a bot is never OWNER/MEMBER), on the CURRENT head, whose body has
-a `finding` heading or `[Pn]` marker, is `problems` until a later non-roster PR comment of
->= 100 chars follows it. No findings, or a review of an older head, never blocks. Chosen over
+carries any finding evidence, is `problems` until a later non-roster PR comment of
+>= 100 chars follows it. Evidence (#824, `_gate_has_findings_def`, fail closed) is any list
+item, a whole-word issue/problem/bug/concern/risk heading, a `[Pn]` tag, or the word
+"finding" anywhere; the only clean exception is the exact line `0 finding(s) across N
+reviewed file(s).`, stripped before the test. No findings, or a review of an older head, never blocks. Chosen over
 inline comments: an inline comment needs a valid diff line, LLM line numbers are unreliable, and
 one wrong line fails the whole POST.
 
