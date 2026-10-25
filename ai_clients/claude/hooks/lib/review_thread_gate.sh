@@ -303,14 +303,15 @@ JQ
 # One "does this ladder report carry findings?" predicate for BOTH the comment and review channels
 # (#819), so they cannot drift apart. FAIL CLOSED: the only clean exception is CodeRabbit's exact
 # rendered summary line "0 finding(s) across N reviewed file(s)." alone on its own line. That line
-# is stripped, then ANY remaining evidence counts -- a bullet entry, a [P<n>] tag, or the word
+# is stripped, then ANY remaining evidence counts -- any list item, an issue/problem heading, a [P<n>] tag, or the word
 # "finding" anywhere else. A negation elsewhere in the body ("no findings in X") never cancels
 # evidence. Emitted as a jq `def` to prepend.
 _gate_has_findings_def() {
 	cat <<'JQ'
 def has_findings:
   ((. // "") | gsub("(^|\n)[ \t]*0 finding\\(s\\) across [0-9]+ reviewed file\\(s\\)\\.?[ \t]*(?=\n|$)"; "\n")) as $b
-  | ($b | test("(^|\n)- \\*\\*"))
+  | ($b | test("(^|\n)[ \t]*([-*]|[0-9]+[.)]) +[^ \t\n]"))
+    or ($b | test("(^|\n)#+ [^\n]*(issue|problem|bug|concern|risk)"; "i"))
     or ($b | test("\\[P[0-9]+\\]"))
     or ($b | test("finding"; "i"));
 JQ
