@@ -56,6 +56,18 @@ put_review() {
     [ "$output" = "OK" ]
 }
 
+@test "classifier: a long real review quoting a refusal phrase reads OK (#832)" {
+    put_review 'greptile-apps[bot]' 2026-10-17T10:00:00Z "<!-- greptile_summary --> $(printf 'x%.0s' {1..500}) your trial has ended"
+    run bash -c "jq -nc --slurpfile r '$BATS_TEST_TMPDIR/reviews.json' '{reviews:\$r[0],comments:[]}' | python3 '$CLASSIFY' greptile-refused"
+    [ "$output" = "OK" ]
+}
+
+@test "classifier: the real trial-ended notice reads REFUSED (#832)" {
+    put_review 'greptile-apps[bot]' 2026-10-17T10:00:00Z 'Your trial has ended. [Reactivate Greptile](https://app.greptile.com/-/pull-requests) to resume code reviews.'
+    run bash -c "jq -nc --slurpfile r '$BATS_TEST_TMPDIR/reviews.json' '{reviews:\$r[0],comments:[]}' | python3 '$CLASSIFY' greptile-refused"
+    [ "$output" = "REFUSED" ]
+}
+
 @test "classifier: the refusal phrase from another login is ignored" {
     put_review coderabbitai[bot] 2026-10-17T10:00:00Z "$REFUSAL"
     run bash -c "jq -nc --slurpfile r '$BATS_TEST_TMPDIR/reviews.json' '{reviews:\$r[0],comments:[]}' | python3 '$CLASSIFY' greptile-refused"

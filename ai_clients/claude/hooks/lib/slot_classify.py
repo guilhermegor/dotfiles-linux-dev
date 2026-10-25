@@ -307,6 +307,33 @@ def classify_greptile(list_comments: list) -> str:
 REFUSAL_PHRASES_FILE = pathlib.Path(__file__).with_name("greptile_refusal_phrases.txt")
 
 
+# Real notices are ~110-200 chars; a real review quoting a phrase is far longer (headroom to 400).
+REFUSAL_NOTICE_MAX_CHARS = 400
+
+
+def greptile_body_refused(str_body: str | None) -> str:
+	"""Report whether one Greptile review/comment body is a credit/plan refusal notice.
+
+	A refusal is a short body carrying a phrase from ``greptile_refusal_phrases.txt``; a long
+	real review that merely quotes a phrase is not one.
+
+	Returns
+	-------
+	str
+		``REFUSED``, ``OK``, or ``UNKNOWN`` when the phrase file is unreadable or empty.
+	"""
+	try:
+		list_phrases = [p for p in REFUSAL_PHRASES_FILE.read_text().lower().splitlines() if p]
+	except OSError:
+		return "UNKNOWN"
+	if not list_phrases:
+		return "UNKNOWN"
+	str_lower = (str_body or "").lower()
+	if len(str_lower) > REFUSAL_NOTICE_MAX_CHARS:
+		return "OK"
+	return "REFUSED" if any(p in str_lower for p in list_phrases) else "OK"
+
+
 def greptile_refused(dict_payload: dict) -> str:
 	"""Report whether the NEWEST Greptile review or comment is a credit/plan refusal.
 
@@ -325,21 +352,12 @@ def greptile_refused(dict_payload: dict) -> str:
 		``REFUSED``, ``OK``, or ``UNKNOWN`` when the phrase file is unreadable or empty
 		(fail closed: the caller skips the rung on anything but ``OK``).
 	"""
-	try:
-		list_phrases = [p for p in REFUSAL_PHRASES_FILE.read_text().lower().splitlines() if p]
-	except OSError:
-		return "UNKNOWN"
-	if not list_phrases:
-		return "UNKNOWN"
 	list_items = [
-		(r.get("submitted_at") or r.get("created_at") or "", (r.get("body") or "").lower())
+		(r.get("submitted_at") or r.get("created_at") or "", r.get("body") or "")
 		for r in (dict_payload.get("reviews") or []) + (dict_payload.get("comments") or [])
 		if ((r.get("user") or {}).get("login") or "").removesuffix("[bot]") == "greptile-apps"
 	]
-	if not list_items:
-		return "OK"
-	str_body = max(list_items)[1]
-	return "REFUSED" if any(p in str_body for p in list_phrases) else "OK"
+	return greptile_body_refused(max(list_items)[1] if list_items else "")
 
 
 def greptile_unsolicited(dict_payload: dict) -> str:

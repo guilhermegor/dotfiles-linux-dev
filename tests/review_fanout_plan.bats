@@ -1118,6 +1118,15 @@ TRIAL='Your trial has ended. [Reactivate Greptile](https://app.greptile.com/-/pu
     [[ "$(reason_for 832)" == *"already reviewed at the current head"* ]]
 }
 
+@test "a long real Greptile review quoting a refusal phrase still counts as coverage (#832)" {
+    pad="$(printf 'Reviewed the phrase file diff, nothing blocking. %.0s' {1..12})"
+    greptile_review_fixture "<!-- greptile_summary --> ${pad} Quoted: your trial has ended"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 832)" == *"already reviewed at the current head"* ]]
+}
+
 @test "the backlog window is configurable" {
     export REVIEW_FANOUT_BACKLOG_HOURS=0.5
     stub_gh_prs <<EOF
