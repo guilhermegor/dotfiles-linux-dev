@@ -123,3 +123,62 @@ commit_py() {
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
+
+# --- dotfiles-linux-dev#836: judge origin/<base>, never the checkout's local HEAD ---------------
+
+# Wire the fixture repo to a bare origin (main + tags pushed) and set $OTHER to a second clone, so
+# a test can land a commit on the remote that the fixture repo has not fetched.
+with_origin() {
+    ORIGIN="$(mktemp -d)"
+    git init -q --bare -b main "$ORIGIN"
+    git remote add origin "$ORIGIN"
+    git push -q origin main --tags
+    OTHER="$(mktemp -d)"
+    git clone -q "$ORIGIN" "$OTHER"
+    git -C "$OTHER" config user.email t@t
+    git -C "$OTHER" config user.name t
+}
+
+@test "ALLOWED: shipped change exists only on origin, local branch is behind" {
+    with_origin
+    printf 'GREETING = "hallo"\n' > "$OTHER/src/lib.py"
+    git -C "$OTHER" commit -q -am "fix: change greeting"
+    git -C "$OTHER" push -q origin main
+
+    run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
+    rm -rf "$ORIGIN" "$OTHER"
+    # Non-vacuity: the pre-fix guard diffed local HEAD (== v1.0.0 here), saw nothing and blocked.
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "BLOCKED: shipped change exists only in an unpushed local commit" {
+    with_origin
+    commit_py "fix: change greeting" $'GREETING = "hallo"\n'
+
+    run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
+    rm -rf "$ORIGIN" "$OTHER"
+    # Non-vacuity: the pre-fix guard diffed local HEAD, saw the unpushed change and allowed.
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"no shipped-artifact change"* ]]
+}
+
+@test "offline: a failed fetch falls back to last-known origin/<base>, never local HEAD" {
+    with_origin
+    printf 'GREETING = "hallo"\n' > "$OTHER/src/lib.py"
+    git -C "$OTHER" commit -q -am "fix: change greeting"
+    git -C "$OTHER" push -q origin main
+    git fetch -q origin                                   # last-known origin/main carries the change
+    git remote set-url origin "$TEST_TMP/does-not-exist"  # now every fetch fails
+
+    run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+
+    # An unpushed local commit must not rescue a last-known origin that has no shipped change.
+    git update-ref refs/remotes/origin/main "$(git rev-parse v1.0.0)"
+    commit_py "fix: unpushed" $'GREETING = "hi"\n'
+    run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
+    rm -rf "$ORIGIN" "$OTHER"
+    [ "$status" -eq 2 ]
+}
