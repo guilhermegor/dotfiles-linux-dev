@@ -189,7 +189,7 @@ with_origin() {
     commit_py "feat: change greeting" $'GREETING = "hallo"\n'
 
     run run_hook "gh workflow run release-pypi.yaml -f version=0.2.0"
-    # Non-vacuity: the `"$ref"--format` typo made git log fail, so the signal was always "none".
+    # Guards highest_signal reading the log: a git-log failure would leave the signal at "none".
     [ "$status" -eq 0 ]
     [[ "$output" == *"highest commit signal since the tag is feat"* ]]
 }

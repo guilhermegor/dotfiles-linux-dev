@@ -87,6 +87,7 @@ resolve_base_ref() {
     # Offline: a failed fetch is NOT fatal when a remote-tracking ref already exists — that
     # last-known origin/<base> is used. It never degrades to local HEAD, which may hold unpushed
     # commits that the release workflow cannot see. No ref at all -> failure (caller fails open).
+    # The fetch is bounded (no credential prompt, 10s) so a stalled network cannot hang the hook.
     # The one exception is a repo with no `origin` remote: nothing remote exists to lag behind,
     # so local HEAD is the only tree there is.
     git remote get-url origin >/dev/null 2>&1 || { printf 'HEAD'; return 0; }
@@ -94,7 +95,7 @@ resolve_base_ref() {
     base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)"
     base="${base#origin/}"
     for cand in $base main master; do   # unquoted on purpose: an empty $base vanishes
-        git fetch --quiet origin "+refs/heads/$cand:refs/remotes/origin/$cand" 2>/dev/null
+        GIT_TERMINAL_PROMPT=0 timeout 10 git fetch --quiet origin "+refs/heads/$cand:refs/remotes/origin/$cand" 2>/dev/null
         if git rev-parse --verify --quiet "refs/remotes/origin/$cand^{commit}" >/dev/null; then
             printf 'origin/%s' "$cand"
             return 0
