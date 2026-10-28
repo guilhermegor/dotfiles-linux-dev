@@ -369,6 +369,7 @@ _ladder_app_token() {
 	pem="$(jq -er '.pem' "$config" 2>/dev/null)" || pem=""
 	pem="${pem/#\~/$HOME}"
 	if [ -z "$app_id" ] || [ ! -r "$pem" ]; then
+		_note_setup_failure "ladder identity not configured"
 		print_status "error" "ladder identity not configured: $config needs app_id and a readable pem (dotfiles-linux-dev#624)"
 		return 1
 	fi
@@ -379,6 +380,7 @@ _ladder_app_token() {
 	jwt="$header.$payload.$sig"
 	inst="$(curl -fsS --max-time 15 -H "Authorization: Bearer $jwt" -H 'Accept: application/vnd.github+json' \
 		"https://api.github.com/repos/$owner/$repo/installation" | jq -er '.id')" || {
+		_note_setup_failure "review App not installed"
 		print_status "error" "ladder App is not installed on $owner/$repo — install it before reviewing"
 		return 1
 	}
@@ -698,6 +700,7 @@ _run_runtime_review() {
 		# global option and stays before the subcommand.
 		local base
 		base="$(_review_base_ref)" || {
+			_note_setup_failure "cannot resolve the review base"
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
 			return 2
 		}
@@ -743,6 +746,7 @@ _run_runtime_review() {
 		# `--use-credits` or any paid flag (#626: no rung may spend money).
 		local cr_base
 		cr_base="$(cd "$workdir" && _review_base_ref)" || {
+			_note_setup_failure "cannot resolve the review base"
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
 			return 2
 		}
@@ -757,6 +761,7 @@ _run_runtime_review() {
 		# so no tool permission (and no --yolo/--allow-all) is ever needed.
 		local rv_base diff prompt full total notice="" out
 		rv_base="$(cd "$workdir" && _review_base_ref)" || {
+			_note_setup_failure "cannot resolve the review base"
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
 			return 2
 		}
@@ -868,8 +873,28 @@ _post_pr_review() {
 		return $?
 	fi
 	token="$(_ladder_app_token "$owner" "$repo")" || return 1
-	jq -cn --arg b "$body" --arg c "$head_sha" '{body: $b, commit_id: $c, event: "COMMENT"}' |
-		GH_TOKEN="$token" gh api --method POST "repos/$owner/$repo/pulls/$pr_number/reviews" --input -
+	local out
+	out="$(jq -cn --arg b "$body" --arg c "$head_sha" '{body: $b, commit_id: $c, event: "COMMENT"}' |
+		GH_TOKEN="$token" gh api --method POST "repos/$owner/$repo/pulls/$pr_number/reviews" --input - 2>&1)" || {
+		[[ "$out" != *404* ]] || _note_setup_failure "posting the review returned 404"
+		printf '%s\n' "$out" >&2
+		return 1
+	}
+	[ -z "$out" ] || printf '%s\n' "$out"
+}
+
+# _note_setup_failure REASON / _setup_reasons
+# A setup failure (base unresolved, App not installed, post 404) is not an
+# unavailable rung (#835), and the summary must name it. Rungs run inside
+# $(...), so the reason travels through the file run_fallback_review points
+# LADDER_SETUP_REASONS at; unset (a direct call) makes the note a no-op.
+_note_setup_failure() {
+	[ -z "${LADDER_SETUP_REASONS:-}" ] || printf '%s\n' "$1" >>"$LADDER_SETUP_REASONS"
+	return 0
+}
+_setup_reasons() {
+	[ -s "${LADDER_SETUP_REASONS:-}" ] || return 0
+	awk '!seen[$0]++' "$LADDER_SETUP_REASONS" | paste -sd ';' - | sed 's/;/; /g'
 }
 
 # --- hosted rung: greptile (dotfiles-linux-dev#713) -------------------------
@@ -1034,6 +1059,15 @@ run_hosted_rungs() {
 # UNPROBED: the probe is itself a live model call, and "no runtime" has to
 # mean no runtime.
 run_fallback_review() {
+	# Owns the setup-failure reasons file (#835) so every return path cleans it up.
+	local LADDER_SETUP_REASONS rc=0
+	LADDER_SETUP_REASONS="$(mktemp)" || return 1
+	_run_fallback_review "$@" || rc=$?
+	rm -f "$LADDER_SETUP_REASONS"
+	return "$rc"
+}
+
+_run_fallback_review() {
 	local owner="$1" repo="$2" pr_number="$3" merge_state="$4" \
 		pushed="$5" now="$6" comments="$7"
 	local dry_run="${DRY_RUN:-0}"
@@ -1100,7 +1134,7 @@ run_fallback_review() {
 		if ! resolve_fallback_reviewer; then
 			_write_ladder_probe none
 			if [ "$setup_failed" -gt 0 ]; then
-				print_status "warning" "no rung available — $setup_failed rung(s) failed on setup: cannot resolve the review base"
+				print_status "warning" "no rung available — $setup_failed rung(s) failed on setup: $(_setup_reasons)"
 			else
 				print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable)"
 			fi
@@ -1140,5 +1174,11 @@ run_fallback_review() {
 	_write_ladder_probe ok
 	local body
 	body="$attribution"$'\n\n'"$findings"
-	_post_pr_review "$owner" "$repo" "$pr_number" "$body" "$head_sha"
+	local post_rc=0 reasons
+	_post_pr_review "$owner" "$repo" "$pr_number" "$body" "$head_sha" || post_rc=$?
+	reasons="$(_setup_reasons)"
+	if [ "$post_rc" -ne 0 ] && [ -n "$reasons" ]; then
+		print_status "warning" "review not posted — 1 rung(s) failed on setup: $reasons"
+	fi
+	return "$post_rc"
 }

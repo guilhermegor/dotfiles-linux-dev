@@ -559,7 +559,7 @@ _fake_gh() {
     fake_checkout() { echo "$BATS_TEST_TMPDIR"; }
     export -f fake_checkout
     export REVIEWER_LADDER_CHECKOUT_CMD=fake_checkout
-    fake_run() { return 2; }
+    fake_run() { _note_setup_failure "cannot resolve the review base"; return 2; }
     export -f fake_run
     export REVIEWER_LADDER_RUN_CMD=fake_run
     fake_post() { echo "SHOULD NOT POST" >&2; }
@@ -587,6 +587,78 @@ _fake_gh() {
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
     [ "$status" -eq 1 ]
     [[ "$output" == *"no rung available (qwen"* ]]
+    [[ "$output" != *"failed on setup"* ]]
+}
+
+_ladder_ready_for_codex() {
+    export REVIEWER_LADDER_QWEN_SETTINGS="$FIXTURES/qwen_malformed.json"
+    export REVIEWER_LADDER_CODEX_CACHE="$FIXTURES/codex_full.json"
+    fake_codex_probe() { [ "$1" = "codex-auto-review" ]; }
+    export REVIEWER_LADDER_CODEX_PROBE=fake_codex_probe
+    # A dedicated dir: the ladder tears the checkout down with rm -rf.
+    fake_checkout() { mkdir -p "$BATS_TEST_TMPDIR/wt" && echo "$BATS_TEST_TMPDIR/wt"; }
+    export -f fake_checkout
+    export REVIEWER_LADDER_CHECKOUT_CMD=fake_checkout
+    fake_run() { echo "1 finding"; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+    unset REVIEWER_LADDER_POST_CMD
+}
+
+@test "setup reasons are de-duplicated and joined for the summary (#835)" {
+    LADDER_SETUP_REASONS="$BATS_TEST_TMPDIR/reasons"
+    _note_setup_failure "cannot resolve the review base"
+    _note_setup_failure "review App not installed"
+    _note_setup_failure "cannot resolve the review base"
+    run _setup_reasons
+    [ "$output" = "cannot resolve the review base; review App not installed" ]
+}
+
+@test "a rung's recorded setup reason reaches the no-rung summary (#835)" {
+    _ladder_ready_for_codex
+    fake_run() { _note_setup_failure "review App not installed"; return 2; }
+    export -f fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no rung available — 1 rung(s) failed on setup: review App not installed"* ]]
+}
+
+@test "run_fallback_review: App not installed at post time is named, not a bare failure (#835)" {
+    _ladder_ready_for_codex
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    printf 'x' >"$BATS_TEST_TMPDIR/app.pem"
+    printf '{"app_id":"1","pem":"%s/app.pem"}' "$BATS_TEST_TMPDIR" >"$BATS_TEST_TMPDIR/app.json"
+    export REVIEWER_LADDER_APP_CONFIG="$BATS_TEST_TMPDIR/app.json"
+    printf '#!/bin/bash\nif [ "$1" = dgst ]; then echo sig; else cat; fi\n' >"$BATS_TEST_TMPDIR/bin/openssl"
+    printf '#!/bin/bash\nexit 22\n' >"$BATS_TEST_TMPDIR/bin/curl"
+    chmod +x "$BATS_TEST_TMPDIR/bin/openssl" "$BATS_TEST_TMPDIR/bin/curl"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"review not posted — 1 rung(s) failed on setup: review App not installed"* ]]
+}
+
+@test "run_fallback_review: a 404 when posting the review is named (#835)" {
+    _ladder_ready_for_codex
+    _ladder_app_token() { echo tok; }
+    gh() { cat >/dev/null; echo "gh: Not Found (HTTP 404)"; return 1; }
+    export -f _ladder_app_token gh
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"review not posted — 1 rung(s) failed on setup: posting the review returned 404"* ]]
+}
+
+@test "run_fallback_review: a non-setup post failure adds no setup summary (#835)" {
+    _ladder_ready_for_codex
+    _ladder_app_token() { echo tok; }
+    gh() { cat >/dev/null; echo "gh: HTTP 500"; return 1; }
+    export -f _ladder_app_token gh
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
     [[ "$output" != *"failed on setup"* ]]
 }
 
