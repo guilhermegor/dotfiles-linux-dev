@@ -1,18 +1,27 @@
-# dotfiles-linux-dev <img src="https://upload.wikimedia.org/wikipedia/commons/3/35/Tux.svg" align="right" width="120" style="border-radius: 15px;" alt="Linux Penguin">
+<!-- readme-archetype: toolkit -->
+# dotfiles-linux-dev
+
+<p align="center"><img src="https://raw.githubusercontent.com/guilhermegor/dotfiles-linux-dev/master/assets/logo.png" width="200" alt="Tux, the Linux penguin"></p>
 
 [![Project Status: Active – The project has reached a stable, usable state and is being actively developed.](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
 ![Shell Version](https://img.shields.io/badge/shell-Bash%20%7C%20Zsh-blue.svg)
+[![Docs](https://img.shields.io/badge/docs-latest-blue.svg)](https://guilhermegor.github.io/dotfiles-linux-dev/)
+[![Linting](https://img.shields.io/badge/linting-shellcheck-blue)](https://www.shellcheck.net)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Open Issues](https://img.shields.io/github/issues/guilhermegor/dotfiles-linux-dev)
 ![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-darkgreen.svg)
 
+<!-- slug: overview -->
+## Overview
+
 **dotfiles-linux-dev** is a comprehensive initialization and configuration toolkit for Linux distributions. It provides automated setup scripts for system configuration, driver installation, storage management, and development environment setup.
 
-**🎯 Features a powerful Makefile** for easy command execution and workflow automation - no need to remember complex script paths!
+**Features a powerful Makefile** for easy command execution and workflow automation - no need to remember complex script paths!
 
-## ✨ Key Features
+<!-- slug: features -->
+## Key Features
 
-### 🛠️ System Configuration
+### System Configuration
 
 #### **Distribution Setup**
 - [Install Programs](distro_config/install_programs.sh) - Automated installation of essential programs (`make install_programs`)
@@ -25,7 +34,7 @@
 - [rclone On-Demand Cloud Mount](distro_config/install_lib/sharing.sh) - Installs `rclone`, writes the `rclone.conf` skeleton and a systemd user mount unit (creating the mount point, default `~/OneDrive`, never running the interactive `rclone config` wizard; `make rclone_mount` enables and verifies the mount, and the installer runs it unattended — re-runs on an already-mounted machine are a no-op), replacing Insync (no longer installed; `uninstall_insync` remains the migration path) and its full local mirror — remote name, region, account kind, and mount point are asked in Custom Installation only, defaulted silently otherwise — see [docs/rclone-mount-migration-360.md](docs/rclone-mount-migration-360.md) for the operator runbook
 - [OpenWhispr Voice Dictation](distro_config/install_lib/media.sh) - Installs the open-source dictation app from the latest upstream amd64 `.deb` (apt distros only; `uninstall_openwhispr` reverses it), listed in the Media app folder. The `.deb` depends on `ydotool`, which apt pulls in and which provides auto-paste on Wayland; log out and in once after install so the `input` group applies
 
-### 🔧 Hardware Drivers
+### Hardware Drivers
 
 #### **Peripheral Configuration**
 - [Bluetooth Adapter](drivers/bluetooth_adapter.sh) - Bluetooth driver setup and configuration (`make setup_bluetooth`)
@@ -36,7 +45,7 @@
 
 **Quick setup:** Run `make setup_all_drivers` to configure every driver that is safe on any PC (Bluetooth, keyboard, mouse, battery). `make setup_wifi` is not part of it — run it only on the machine that has the adapter.
 
-### 💾 Storage Management
+### Storage Management
 
 #### **Drive Operations**
 - [Legitimacy Check](storage/check_legitimity.sh) - Drive authenticity and integrity verification (`make check_drive_legitimacy`)
@@ -47,7 +56,7 @@
 
 **Quick setup:** Run `make storage_setup` for complete storage configuration.
 
-### 🖥️ Operating System Management
+### Operating System Management
 
 #### **Virtualization & OS Tools**
 - [ISO OS Manager](os/isos_os_manager.sh) - ISO file and operating system management (`make manage_isos`)
@@ -59,7 +68,24 @@
 #### **Storage Analysis**
 - [Storage Hiato](storage/storage_hiato.sh) - Storage gap analysis and monitoring (`make storage_analysis`)
 
-## 🚀 Getting Started
+<!-- slug: documentation -->
+## Documentation
+
+The docs are a MkDocs Material site versioned with mike (`dev`, alias `latest`),
+single-sourced from this README and the area `CLAUDE.md` files. The site lives at
+https://guilhermegor.github.io/dotfiles-linux-dev/.
+
+```bash
+make docs_serve    # live preview on :8000
+make docs_build    # strict build, same as CI
+make enable_pages  # once, AFTER the first deploy created gh-pages (no-op before)
+```
+
+First-deploy order: merge to `master` → the `docs` workflow creates `gh-pages` →
+run `make enable_pages` to serve Pages from that branch.
+
+<!-- slug: getting-started -->
+## Getting Started
 
 ### Prerequisites
 
@@ -67,7 +93,10 @@
 - **Bash Shell** 4.0+
 - **Sudo Privileges** for system-wide installations
 
-### ⚡ Quick Start (Recommended)
+<!-- slug: install -->
+### Install
+
+#### Quick Start (Recommended)
 
 Get your Linux system configured in seconds:
 ```bash
@@ -82,7 +111,7 @@ cd dotfiles-linux-dev
 make run
 ```
 
-### 📋 Important Notes
+#### Important Notes
 
 **⚠️ Administrator Privileges Required**
 
@@ -119,90 +148,7 @@ make storage_setup        # Setup storage management
 make vm_setup            # Configure virtual machines
 ```
 
-**Contributing to this repo?** Enable the local commit-message linter once so
-gitlint catches title/body length violations *before* you push (the same check
-runs in CI):
-```bash
-make install_coding   # installs gitlint (among other dev tools)
-make git_hooks        # points core.hooksPath at .githooks (gitlint commit-msg)
-```
-
-### 🔐 Machine Secrets (never in this public repo)
-
-This repo is **public**, so no credential value ever lives in it — only the
-*mechanism* to reproduce one on a fresh machine. The project-root `.env`
-(git-ignored, documented by `.env.example`) is the **single authored source
-of truth**. `make run` / `make setup_env` (via `distro_config/setup_env.sh`)
-**generates** `~/.claude/.env` from it — a derived copy, never hand-edited —
-then appends a guarded block to `~/.bashrc` that sources `~/.claude/.env` and
-exports every key it finds, so a value set once in the project `.env` is
-visible to `gh`, to scaffolded projects, and to any tool that reads the
-environment. `~/.claude/.env` keeps its own path (outside every repo's
-working tree) so the shell still works if this repo moves or is deleted; it
-is regenerated on every `setup_env.sh` run, so it cannot drift from the
-project `.env`. Both files are written mode `600`.
-
-| Key | Purpose | Scopes | Consumers |
-|---|---|---|---|
-| `GH_REVIEW_TRIGGER_PAT` | User PAT so CodeRabbit answers a review request — it silently ignores bot-authored (`GITHUB_TOKEN`) comments | Fine-grained PAT, **All repositories**, `Pull requests: Read and write` | `.github/workflows/coderabbit_trigger.yml` in `blueprintx` and every project it scaffolds |
-
-**Where secrets live.** Variable *names* live in `.env.example` (committed).
-Values live in a password manager of your choosing — this repo does not depend
-on any particular one. The real `.env` is machine-local and is **not backed
-up**: it dies with the OS install, by design, and you re-create it from
-`.env.example` plus your password manager.
-
-**Re-minting `GH_REVIEW_TRIGGER_PAT` on a new/lost machine** (a PAT is re-minted,
-not restored):
-1. github.com/settings/tokens → generate a new fine-grained token with the
-   scopes above.
-2. `echo 'GH_REVIEW_TRIGGER_PAT=<value>' >> .env` (project-root `.env` —
-   create it first with `cp .env.example .env` if it doesn't exist yet).
-3. `make setup_env` to regenerate `~/.claude/.env` from it, then
-   `source ~/.bashrc` (or open a new shell).
-4. Verify: `[ -n "$GH_REVIEW_TRIGGER_PAT" ] && echo "set"` — and that
-   `gh secret set GH_REVIEW_TRIGGER_PAT --body "$GH_REVIEW_TRIGGER_PAT"` on
-   the target repo succeeds.
-
-### 🧠 AI state across machines (private repo)
-
-Authored Claude Code state (`~/.claude/memory`, `projects/*/memory`, `tasks`, `specs`,
-`plans`, `issue-trackers.conf`) syncs through a **private** GitHub repo
-(`AI_STATE_REPO`, default `guilhermegor/ai-clients-state`). Credentials, `.env`,
-plugins, caches and session transcripts are never included (whitelist, not blacklist).
-
-```bash
-gh repo create guilhermegor/ai-clients-state --private   # once, ever
-./ai_clients/claude/main.sh hooks settings state_sync     # on each machine
-```
-
-Sessions then pull on start and commit + push on exit, automatically. Outside a
-session (or from a keyboard shortcut) run `ai-state-sync pull` / `ai-state-sync push`.
-Conflicts are reported, never auto-resolved. Details: `ai_clients/CLAUDE.md`.
-
-Codex's memory (`~/.codex/memories_1.sqlite`, `goals_1.sqlite`) rides the same repo on
-its own `codex` branch, as **text dumps** (`state-dump/*.sql`) taken from a sqlite
-online-backup snapshot, never as binary files. The `state_sync` step restores them only
-into an absent or empty DB and refuses otherwise. This is a backup plus a one-time seed,
-not a merge: use Codex's memory on one machine at a time (see `ai_clients/CLAUDE.md`). `auth.json` and everything else in
-`~/.codex` is never synced; `~/.qwen`, `~/.copilot` and `~/.kimi-code` hold no authored
-state beyond the `AGENTS.md` that `make ai_clients` deploys.
-
-### 📚 Documentation site
-
-The docs are a MkDocs Material site versioned with mike (`dev`, alias `latest`),
-single-sourced from this README and the area `CLAUDE.md` files.
-
-```bash
-make docs_serve    # live preview on :8000
-make docs_build    # strict build, same as CI
-make enable_pages  # once, AFTER the first deploy created gh-pages (no-op before)
-```
-
-First-deploy order: merge to `master` → the `docs` workflow creates `gh-pages` →
-run `make enable_pages` to serve Pages from that branch.
-
-### Alternative Installation Methods
+#### Alternative Installation Methods
 
 **Option 1: Step-by-Step with Makefile**
 ```bash
@@ -230,9 +176,12 @@ chmod +x drivers/*.sh
 bash drivers/tplink_wifi_adapter.sh
 ```
 
-## 🧪 Running Configuration
+<!-- slug: usage -->
+### Usage
 
-### Using Makefile (Recommended)
+#### Running Configuration
+
+##### Using Makefile (Recommended)
 
 View all available commands:
 ```bash
@@ -270,7 +219,7 @@ make install_espanso_packages
 make bash_profile
 ```
 
-### Direct Script Execution
+##### Direct Script Execution
 
 Alternatively, execute scripts directly:
 ```bash
@@ -283,8 +232,151 @@ bash storage/format_neat.sh
 bash storage/storage_hiato.sh
 ```
 
-## 📂 Project Structure
+#### Configuration Workflow
+
+##### Recommended Workflow (Using `make run`)
+
+1. **Clone and Initialize (One Command)**
+```bash
+   git clone https://github.com/guilhermegor/dotfiles-linux-dev.git
+   cd dotfiles-linux-dev
+   make run
 ```
+
+2. **Optional: Additional Configuration**
+   
+   After `make run` completes, optionally configure:
+
+   **Hardware Configuration**
+```bash
+   make setup_all_drivers
+   # Or individually:
+   make setup_battery
+   make setup_wifi    # only on the PC with the TP-Link adapter
+   make setup_bluetooth
+   make setup_keyboard
+   make setup_mouse
+```
+
+   **Storage Setup**
+```bash
+   make storage_setup
+   # Or individually:
+   make format_neat
+   make vault_setup
+   make storage_analysis
+```
+
+   **Virtualization Environment**
+```bash
+   make vm_setup
+   # Or individually:
+   make manage_isos
+   make create_vm
+   make launch_vm
+```
+
+##### Alternative: Step-by-Step Configuration
+
+1. **Setup Permissions**
+```bash
+   make permissions
+```
+
+2. **Complete System Setup (All-in-One)**
+```bash
+   make full_setup
+```
+
+3. **Or Individual Configuration:**
+
+   **Software Installation**
+```bash
+   make install_programs
+   make ubuntu_workspace
+   make set_shortcuts
+   make irpf_download
+```
+
+   **Hardware Configuration**
+```bash
+   make setup_all_drivers
+```
+
+   **Storage Setup**
+```bash
+   make storage_setup
+```
+
+   **Virtualization Environment**
+```bash
+   make vm_setup
+```
+
+## Machine Secrets (never in this public repo)
+
+This repo is **public**, so no credential value ever lives in it — only the
+*mechanism* to reproduce one on a fresh machine. The project-root `.env`
+(git-ignored, documented by `.env.example`) is the **single authored source
+of truth**. `make run` / `make setup_env` (via `distro_config/setup_env.sh`)
+**generates** `~/.claude/.env` from it — a derived copy, never hand-edited —
+then appends a guarded block to `~/.bashrc` that sources `~/.claude/.env` and
+exports every key it finds, so a value set once in the project `.env` is
+visible to `gh`, to scaffolded projects, and to any tool that reads the
+environment. `~/.claude/.env` keeps its own path (outside every repo's
+working tree) so the shell still works if this repo moves or is deleted; it
+is regenerated on every `setup_env.sh` run, so it cannot drift from the
+project `.env`. Both files are written mode `600`.
+
+| Key | Purpose | Scopes | Consumers |
+|---|---|---|---|
+| `GH_REVIEW_TRIGGER_PAT` | User PAT so CodeRabbit answers a review request — it silently ignores bot-authored (`GITHUB_TOKEN`) comments | Fine-grained PAT, **All repositories**, `Pull requests: Read and write` | `.github/workflows/coderabbit_trigger.yml` in `blueprintx` and every project it scaffolds |
+
+**Where secrets live.** Variable *names* live in `.env.example` (committed).
+Values live in a password manager of your choosing — this repo does not depend
+on any particular one. The real `.env` is machine-local and is **not backed
+up**: it dies with the OS install, by design, and you re-create it from
+`.env.example` plus your password manager.
+
+**Re-minting `GH_REVIEW_TRIGGER_PAT` on a new/lost machine** (a PAT is re-minted,
+not restored):
+1. github.com/settings/tokens → generate a new fine-grained token with the
+   scopes above.
+2. `echo 'GH_REVIEW_TRIGGER_PAT=<value>' >> .env` (project-root `.env` —
+   create it first with `cp .env.example .env` if it doesn't exist yet).
+3. `make setup_env` to regenerate `~/.claude/.env` from it, then
+   `source ~/.bashrc` (or open a new shell).
+4. Verify: `[ -n "$GH_REVIEW_TRIGGER_PAT" ] && echo "set"` — and that
+   `gh secret set GH_REVIEW_TRIGGER_PAT --body "$GH_REVIEW_TRIGGER_PAT"` on
+   the target repo succeeds.
+
+## AI State Across Machines (private repo)
+
+Authored Claude Code state (`~/.claude/memory`, `projects/*/memory`, `tasks`, `specs`,
+`plans`, `issue-trackers.conf`) syncs through a **private** GitHub repo
+(`AI_STATE_REPO`, default `guilhermegor/ai-clients-state`). Credentials, `.env`,
+plugins, caches and session transcripts are never included (whitelist, not blacklist).
+
+```bash
+gh repo create guilhermegor/ai-clients-state --private   # once, ever
+./ai_clients/claude/main.sh hooks settings state_sync     # on each machine
+```
+
+Sessions then pull on start and commit + push on exit, automatically. Outside a
+session (or from a keyboard shortcut) run `ai-state-sync pull` / `ai-state-sync push`.
+Conflicts are reported, never auto-resolved. Details: `ai_clients/CLAUDE.md`.
+
+Codex's memory (`~/.codex/memories_1.sqlite`, `goals_1.sqlite`) rides the same repo on
+its own `codex` branch, as **text dumps** (`state-dump/*.sql`) taken from a sqlite
+online-backup snapshot, never as binary files. The `state_sync` step restores them only
+into an absent or empty DB and refuses otherwise. This is a backup plus a one-time seed,
+not a merge: use Codex's memory on one machine at a time (see `ai_clients/CLAUDE.md`). `auth.json` and everything else in
+`~/.codex` is never synced; `~/.qwen`, `~/.copilot` and `~/.kimi-code` hold no authored
+state beyond the `AGENTS.md` that `make ai_clients` deploys.
+
+<!-- slug: project-structure -->
+## Project Structure
+```text
 dotfiles-linux-dev/
 │
 ├── 📋 Makefile                   # Automation recipes for all scripts
@@ -332,91 +424,50 @@ dotfiles-linux-dev/
 │   ├── 🔒 vault.sh               # Secure vault management
 │   └── 📊 storage_hiato.sh       # Storage capacity analysis
 │
+├── 📁 bin/                       # README structure gate (vendored from BlueprintX)
+│   ├── ✅ check_readme_structure.sh # Fails when README.md leaves the house layout
+│   └── 📚 lib/md_structure.sh    # Markdown heading parser the gate sources
+│
+├── 📁 assets/                    # Committed images
+│   └── 🐧 logo.png               # README logo
+│
 └── 📖 README.md                  # Project documentation
 ```
 
-## ⚙️ Configuration Workflow
+<!-- slug: development -->
+## Development
 
-### Recommended Workflow (Using `make run`)
+Run the bats unit suite locally (CI runs the same suite plus shellcheck, actionlint,
+yamllint, and gitlint):
 
-1. **Clone and Initialize (One Command)**
 ```bash
-   git clone https://github.com/guilhermegor/dotfiles-linux-dev.git
-   cd dotfiles-linux-dev
-   make run
+make install_coding   # installs gitlint, bats (among other dev tools)
+make test             # bats unit tests under tests/
 ```
 
-2. **Optional: Additional Configuration**
-   
-   After `make run` completes, optionally configure:
+Enable the local git hooks once so violations are caught *before* you push (the same
+checks run in CI):
 
-   **Hardware Configuration**
 ```bash
-   make setup_all_drivers
-   # Or individually:
-   make setup_battery
-   make setup_wifi    # only on the PC with the TP-Link adapter
-   make setup_bluetooth
-   make setup_keyboard
-   make setup_mouse
+make git_hooks        # points core.hooksPath at .githooks
 ```
 
-   **Storage Setup**
+- `commit-msg` runs gitlint, so it catches title/body length violations.
+- `pre-commit` runs the `.specs/` structure gate and the README structure gate.
+
+The README must keep the BlueprintX `toolkit` layout (archetype marker, slug-marked
+sections, no emoji in headings, footer). Check it with:
+
 ```bash
-   make storage_setup
-   # Or individually:
-   make format_neat
-   make vault_setup
-   make storage_analysis
+bash bin/check_readme_structure.sh README.md
 ```
 
-   **Virtualization Environment**
-```bash
-   make vm_setup
-   # Or individually:
-   make manage_isos
-   make create_vm
-   make launch_vm
-```
+`bin/check_readme_structure.sh` and `bin/lib/md_structure.sh` are vendored from
+[BlueprintX](https://github.com/guilhermegor/BlueprintX) (`templates/common/bin/`).
+Never edit them in place: fix the gate in BlueprintX and re-sync.
 
-### Alternative: Step-by-Step Configuration
-
-1. **Setup Permissions**
-```bash
-   make permissions
-```
-
-2. **Complete System Setup (All-in-One)**
-```bash
-   make full_setup
-```
-
-3. **Or Individual Configuration:**
-
-   **Software Installation**
-```bash
-   make install_programs
-   make ubuntu_workspace
-   make set_shortcuts
-   make irpf_download
-```
-
-   **Hardware Configuration**
-```bash
-   make setup_all_drivers
-```
-
-   **Storage Setup**
-```bash
-   make storage_setup
-```
-
-   **Virtualization Environment**
-```bash
-   make vm_setup
-```
-
-## 🎯 Available Make Commands
+<!-- slug: commands -->
+## Commands
 
 Run `make help` to see all available commands, or check these common recipes:
 
@@ -469,24 +520,34 @@ Run `make help` to see all available commands, or check these common recipes:
 - `make check_status` - Check system and scripts status
 - `make list_scripts` - List all available bash scripts
 - `make clean` - Clean temporary files
+- `make test` - Run the bats unit test suite
 - `make help` - Show all available commands
 
-## 👨‍💻 Authors
+<!-- slug: contributing -->
+## Contributing
 
-**Guilherme Rodrigues**  
-[![GitHub](https://img.shields.io/badge/GitHub-guilhermegor-181717?style=flat&logo=github)](https://github.com/guilhermegor)  
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Guilherme_Rodrigues-0077B5?style=flat&logo=linkedin)](https://www.linkedin.com/in/guilhermegor/)
+Contributions are welcome. `master` is protected: branch, commit with
+[Conventional Commits](https://www.conventionalcommits.org/), and open a pull
+request. Enable the local hooks first (see [Development](#development)) so gitlint
+and the structure gates catch problems before CI does.
 
-## 📜 License
+<!-- slug: license -->
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙌 Acknowledgments
+<!-- slug: authors -->
+## Authors
 
-- Inspired by various Linux distribution setup scripts and automation tools
-- Thanks to the Linux community for best practices and configuration examples
+- Guilherme Rodrigues — [GitHub](https://github.com/guilhermegor) | [LinkedIn](https://www.linkedin.com/in/guilhermegor/)
 
-## 🔗 Useful Links
+<!-- slug: useful-links -->
+## Useful Links
 
 - [GitHub Repository](https://github.com/guilhermegor/dotfiles-linux-dev)
 - [Issue Tracker](https://github.com/guilhermegor/dotfiles-linux-dev/issues)
+- [Documentation](https://guilhermegor.github.io/dotfiles-linux-dev/)
+
+---
+
+<sub>Inspired by various Linux distribution setup scripts and automation tools; thanks to the Linux community for best practices and configuration examples. Logo: Tux by Larry Ewing (created with The GIMP), via Wikimedia Commons.</sub>
