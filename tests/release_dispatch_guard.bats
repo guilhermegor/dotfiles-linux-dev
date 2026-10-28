@@ -182,3 +182,14 @@ with_origin() {
     rm -rf "$ORIGIN" "$OTHER"
     [ "$status" -eq 2 ]
 }
+
+@test "advisory: pre-1.0 feat taking the minor axis is flagged (highest_signal reads the log)" {
+    git tag -d v1.0.0 >/dev/null
+    git tag v0.1.0
+    commit_py "feat: change greeting" $'GREETING = "hallo"\n'
+
+    run run_hook "gh workflow run release-pypi.yaml -f version=0.2.0"
+    # Non-vacuity: the `"$ref"--format` typo made git log fail, so the signal was always "none".
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"highest commit signal since the tag is feat"* ]]
+}

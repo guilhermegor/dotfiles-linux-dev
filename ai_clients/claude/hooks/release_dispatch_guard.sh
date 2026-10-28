@@ -184,7 +184,7 @@ PYEOF
 highest_signal() {
     # breaking > feat > fix > none, over commit subjects+bodies since the tag.
     local last_tag="$1" ref="$2" log
-    log="$(git log "$last_tag".."$ref"--format='%s%n%b' 2>/dev/null)" || { printf 'none'; return; }
+    log="$(git log "$last_tag".."$ref" --format='%s%n%b' 2>/dev/null)" || { printf 'none'; return; }
     printf '%s' "$log" | grep -Eq 'BREAKING[ -]CHANGE|^[a-z]+(\([^)]*\))?!:' && { printf 'breaking'; return; }
     printf '%s' "$log" | grep -Eq '^feat(\([^)]*\))?:' && { printf 'feat'; return; }
     printf '%s' "$log" | grep -Eq '^fix(\([^)]*\))?:' && { printf 'fix'; return; }
