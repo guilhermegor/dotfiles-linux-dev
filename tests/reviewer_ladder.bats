@@ -568,7 +568,7 @@ _fake_gh() {
 
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no rung available — 1 rung(s) failed on setup: cannot resolve the review base"* ]]
+    [[ "$output" == *"no rung available — setup failed: cannot resolve the review base"* ]]
     [[ "$output" != *"SHOULD NOT POST"* ]]
 }
 
@@ -621,7 +621,7 @@ _ladder_ready_for_codex() {
 
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no rung available — 1 rung(s) failed on setup: review App not installed"* ]]
+    [[ "$output" == *"no rung available — setup failed: review App not installed"* ]]
 }
 
 @test "run_fallback_review: App not installed at post time is named, not a bare failure (#835)" {
@@ -637,7 +637,7 @@ _ladder_ready_for_codex() {
 
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"review not posted — 1 rung(s) failed on setup: review App not installed"* ]]
+    [[ "$output" == *"review not posted — setup failed: review App not installed"* ]]
 }
 
 @test "run_fallback_review: a 404 when posting the review is named (#835)" {
@@ -648,7 +648,7 @@ _ladder_ready_for_codex() {
 
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"review not posted — 1 rung(s) failed on setup: posting the review returned 404"* ]]
+    [[ "$output" == *"review not posted — setup failed: posting the review returned 404"* ]]
 }
 
 @test "run_fallback_review: a non-setup post failure adds no setup summary (#835)" {
@@ -1752,4 +1752,34 @@ STUB
     run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash "$SANDBOX/run_ladder_review.sh" 7
     [ "$status" -eq 1 ]
     [[ "$output" != *"ARGS"* ]]
+}
+
+@test "run_fallback_review: a CLI that exits 2 on its own is not reported as a setup failure (#835)" {
+    _ladder_ready_for_codex
+    fake_run() { return 2; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no rung available (qwen"* ]]
+    [[ "$output" != *"failed on setup"* ]]
+}
+
+@test "run_fallback_review: an earlier rung's setup reason is not blamed for a post failure (#835)" {
+    _ladder_ready_for_codex
+    unset REVIEWER_LADDER_CLAUDE_PROBE
+    export REVIEWER_LADDER_PROBE_TIMEOUT=1
+    _fake_cli claude ok
+    fake_run() { if [ "$1" = codex ]; then _note_setup_failure "cannot resolve the review base"; return 2; fi; echo "finding"; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+    _ladder_app_token() { echo tok; }
+    gh() { cat >/dev/null; echo "gh: HTTP 500"; return 1; }
+    export -f _ladder_app_token gh
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"failed on setup"* ]]
+    [[ "$output" != *"cannot resolve the review base"* ]]
 }

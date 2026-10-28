@@ -481,7 +481,9 @@ _review_base_ref() {
 # while the summary read like "every reviewer is busy". Resolve in order:
 # 1. the PR's own base branch, read over REST (works with GraphQL exhausted)
 #    from LADDER_PR_CTX ("OWNER REPO PR", set by run_fallback_review);
-# 2. `git remote set-head origin -a`, once, then origin/HEAD again.
+# 2. `git remote set-head origin -a`, once, then origin/HEAD again (this writes
+#    refs/remotes/origin/HEAD into the shared git dir, so the main checkout
+#    gains it too).
 # Prints the base ref; return 1 (fail closed) when neither resolves.
 _review_base_fallback() {
 	local owner repo pr name
@@ -876,7 +878,7 @@ _post_pr_review() {
 	local out
 	out="$(jq -cn --arg b "$body" --arg c "$head_sha" '{body: $b, commit_id: $c, event: "COMMENT"}' |
 		GH_TOKEN="$token" gh api --method POST "repos/$owner/$repo/pulls/$pr_number/reviews" --input - 2>&1)" || {
-		[[ "$out" != *404* ]] || _note_setup_failure "posting the review returned 404"
+		[[ "$out" != *"HTTP 404"* ]] || _note_setup_failure "posting the review returned 404"
 		printf '%s\n' "$out" >&2
 		return 1
 	}
@@ -1126,15 +1128,17 @@ _run_fallback_review() {
 	# again — it never stops at the first rung that merely proved it is logged
 	# in, and an empty review is never posted as a clean one (#626 review).
 	local LADDER_SKIP_RUNGS="${LADDER_SKIP_RUNGS:-}" attribution findings
-	# #835: a rung that died on its own setup (rc 2 from _run_runtime_review) is
-	# not an unavailable rung, and the summary must not read as one.
-	local setup_failed=0
+	# #835: a rung that died on its own setup is not an unavailable rung, and the
+	# summary must not read as one. Setup is detected by a recorded reason, never
+	# by exit code: a reviewer CLI's own usage error exits 2 too.
+	local setup_reasons
 	local LADDER_PR_CTX="$owner $repo $pr_number"
 	while :; do
 		if ! resolve_fallback_reviewer; then
 			_write_ladder_probe none
-			if [ "$setup_failed" -gt 0 ]; then
-				print_status "warning" "no rung available — $setup_failed rung(s) failed on setup: $(_setup_reasons)"
+			setup_reasons="$(_setup_reasons)"
+			if [ -n "$setup_reasons" ]; then
+				print_status "warning" "no rung available — setup failed: $setup_reasons"
 			else
 				print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable)"
 			fi
@@ -1163,7 +1167,6 @@ _run_fallback_review() {
 		local rc=0
 		findings="$(_run_runtime_review "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_FALLBACK_MODELS" "$pr_number" "$workdir")" || rc=$?
 		[ -n "$worktree_dir" ] && _teardown_pr_worktree "$worktree_dir"
-		if [ "$rc" -eq 2 ]; then setup_failed=$((setup_failed + 1)); fi
 		if [ "$rc" -eq 0 ] && [ -n "${findings//[[:space:]]/}" ]; then
 			break
 		fi
@@ -1175,10 +1178,12 @@ _run_fallback_review() {
 	local body
 	body="$attribution"$'\n\n'"$findings"
 	local post_rc=0 reasons
+	# Reasons from earlier rungs belong to those rungs, not to a post failure.
+	: >"$LADDER_SETUP_REASONS"
 	_post_pr_review "$owner" "$repo" "$pr_number" "$body" "$head_sha" || post_rc=$?
 	reasons="$(_setup_reasons)"
 	if [ "$post_rc" -ne 0 ] && [ -n "$reasons" ]; then
-		print_status "warning" "review not posted — 1 rung(s) failed on setup: $reasons"
+		print_status "warning" "review not posted — setup failed: $reasons"
 	fi
 	return "$post_rc"
 }
