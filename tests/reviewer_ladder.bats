@@ -498,8 +498,96 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
     export -f codex git
     unset REVIEWER_LADDER_BASE
     run _run_runtime_review codex codex-auto-review "" 447
-    [ "$status" -eq 1 ]
+    # #835: 2 = setup failure (was 1), so the summary can tell it from an unavailable rung.
+    [ "$status" -eq 2 ]
     [[ "$output" != *"RUNTIME CALLED"* ]]
+}
+
+# A pushed (not cloned) repo: origin has main (its HEAD) and develop, but the
+# local clone-less checkout carries no refs/remotes/origin/HEAD (#835).
+_repo_without_origin_head() {
+    local bare="$BATS_TEST_TMPDIR/origin.git" seed="$BATS_TEST_TMPDIR/seed"
+    git init -q --bare -b main "$bare"
+    git init -q -b main "$seed"
+    git -C "$seed" -c user.name=t -c user.email=t@t commit -q --allow-empty -m one
+    git -C "$seed" branch develop
+    git -C "$seed" push -q "$bare" main develop
+    git remote add origin "$bare"
+    git fetch -q origin
+    [ -z "$(git symbolic-ref -q refs/remotes/origin/HEAD)" ]
+}
+
+_fake_gh() {
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    printf '#!/bin/bash\n%s\n' "$1" >"$BATS_TEST_TMPDIR/bin/gh"
+    chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+}
+
+@test "base ref: no origin/HEAD resolves from the PR's own base branch over REST (#835)" {
+    _repo_without_origin_head
+    _fake_gh 'echo "$*" >>"$BATS_TEST_TMPDIR/gh.argv"; echo develop'
+    unset REVIEWER_LADDER_BASE
+    LADDER_PR_CTX="o r 42" run _review_base_ref
+    [ "$status" -eq 0 ]
+    [ "$output" = "origin/develop" ]
+    grep -q 'repos/o/r/pulls/42 --jq .base.ref' "$BATS_TEST_TMPDIR/gh.argv"
+}
+
+@test "base ref: with no PR base, set-head -a recovers origin/HEAD once (#835)" {
+    _repo_without_origin_head
+    _fake_gh 'exit 1'
+    unset REVIEWER_LADDER_BASE
+    LADDER_PR_CTX="o r 42" run _review_base_ref
+    [ "$status" -eq 0 ]
+    [ "$output" = "origin/main" ]
+}
+
+@test "base ref: still fails closed when neither the PR base nor set-head resolves (#835)" {
+    git remote add origin "$BATS_TEST_TMPDIR/nowhere.git"
+    _fake_gh 'exit 1'
+    unset REVIEWER_LADDER_BASE
+    LADDER_PR_CTX="o r 42" run _review_base_ref
+    [ "$status" -eq 1 ]
+}
+
+@test "run_fallback_review: a rung that died on setup is named in the summary (#835)" {
+    export REVIEWER_LADDER_QWEN_SETTINGS="$FIXTURES/qwen_malformed.json"
+    export REVIEWER_LADDER_CODEX_CACHE="$FIXTURES/codex_full.json"
+    fake_codex_probe() { [ "$1" = "codex-auto-review" ]; }
+    export REVIEWER_LADDER_CODEX_PROBE=fake_codex_probe
+    fake_checkout() { echo "$BATS_TEST_TMPDIR"; }
+    export -f fake_checkout
+    export REVIEWER_LADDER_CHECKOUT_CMD=fake_checkout
+    fake_run() { return 2; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+    fake_post() { echo "SHOULD NOT POST" >&2; }
+    export -f fake_post
+    export REVIEWER_LADDER_POST_CMD=fake_post
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no rung available — 1 rung(s) failed on setup: cannot resolve the review base"* ]]
+    [[ "$output" != *"SHOULD NOT POST"* ]]
+}
+
+@test "run_fallback_review: a plain review failure keeps the unavailable-rung summary (#835)" {
+    export REVIEWER_LADDER_QWEN_SETTINGS="$FIXTURES/qwen_malformed.json"
+    export REVIEWER_LADDER_CODEX_CACHE="$FIXTURES/codex_full.json"
+    fake_codex_probe() { [ "$1" = "codex-auto-review" ]; }
+    export REVIEWER_LADDER_CODEX_PROBE=fake_codex_probe
+    fake_checkout() { echo "$BATS_TEST_TMPDIR"; }
+    export -f fake_checkout
+    export REVIEWER_LADDER_CHECKOUT_CMD=fake_checkout
+    fake_run() { return 1; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no rung available (qwen"* ]]
+    [[ "$output" != *"failed on setup"* ]]
 }
 
 @test "print_status falls back to stderr, never to silence, when common.sh is absent" {
@@ -513,7 +601,7 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
     export -f codex
     export REVIEWER_LADDER_BASE=origin/no-such-branch-xyz
     run _run_runtime_review codex codex-auto-review "" 447
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]
     [[ "$output" != *"RUNTIME CALLED"* ]]
 }
 

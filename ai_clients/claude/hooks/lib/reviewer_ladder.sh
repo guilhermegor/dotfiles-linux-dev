@@ -463,13 +463,37 @@ ladder_candidate_ok() {
 _review_base_ref() {
 	local base="${REVIEWER_LADDER_BASE:-}"
 	if [ -z "$base" ]; then
-		base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" || return 1
+		base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" ||
+			base="$(_review_base_fallback)" || return 1
 	fi
 	# A name is not a ref: a typo in REVIEWER_LADDER_BASE or a dangling
 	# origin/HEAD must fail closed here, not inside `codex review`.
 	_refresh_base_ref "$base"
 	git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1 || return 1
 	printf '%s\n' "$base"
+}
+
+# _review_base_fallback
+# A repo that was pushed rather than cloned has no origin/HEAD (#835), and
+# every rung that needs a base then died on "cannot resolve the review base"
+# while the summary read like "every reviewer is busy". Resolve in order:
+# 1. the PR's own base branch, read over REST (works with GraphQL exhausted)
+#    from LADDER_PR_CTX ("OWNER REPO PR", set by run_fallback_review);
+# 2. `git remote set-head origin -a`, once, then origin/HEAD again.
+# Prints the base ref; return 1 (fail closed) when neither resolves.
+_review_base_fallback() {
+	local owner repo pr name
+	if [ -n "${LADDER_PR_CTX:-}" ]; then
+		read -r owner repo pr <<<"$LADDER_PR_CTX"
+		name="$(timeout "${REVIEWER_LADDER_FETCH_TIMEOUT:-60}" \
+			gh api "repos/$owner/$repo/pulls/$pr" --jq .base.ref 2>/dev/null)"
+		if [ -n "$name" ] && [[ "$name" != -* ]]; then
+			printf 'origin/%s\n' "$name"
+			return 0
+		fi
+	fi
+	timeout "${REVIEWER_LADDER_FETCH_TIMEOUT:-60}" git remote set-head origin -a >/dev/null 2>&1 || true
+	git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null
 }
 
 # _refresh_base_ref BASE
@@ -675,7 +699,7 @@ _run_runtime_review() {
 		local base
 		base="$(_review_base_ref)" || {
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
-			return 1
+			return 2
 		}
 		# `--base` and the positional [PROMPT] are mutually exclusive (measured
 		# live on #434: "the argument '--base <BRANCH>' cannot be used with
@@ -720,7 +744,7 @@ _run_runtime_review() {
 		local cr_base
 		cr_base="$(cd "$workdir" && _review_base_ref)" || {
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
-			return 1
+			return 2
 		}
 		local cr_out
 		cr_out="$(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
@@ -734,7 +758,7 @@ _run_runtime_review() {
 		local rv_base diff prompt full total notice="" out
 		rv_base="$(cd "$workdir" && _review_base_ref)" || {
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
-			return 1
+			return 2
 		}
 		# The prompt is ONE argv string: Linux caps that at MAX_ARG_STRLEN (131072
 		# bytes), so 200000 made every large diff fail with "Argument list too long"
@@ -1068,10 +1092,18 @@ run_fallback_review() {
 	# again — it never stops at the first rung that merely proved it is logged
 	# in, and an empty review is never posted as a clean one (#626 review).
 	local LADDER_SKIP_RUNGS="${LADDER_SKIP_RUNGS:-}" attribution findings
+	# #835: a rung that died on its own setup (rc 2 from _run_runtime_review) is
+	# not an unavailable rung, and the summary must not read as one.
+	local setup_failed=0
+	local LADDER_PR_CTX="$owner $repo $pr_number"
 	while :; do
 		if ! resolve_fallback_reviewer; then
 			_write_ladder_probe none
-			print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable)"
+			if [ "$setup_failed" -gt 0 ]; then
+				print_status "warning" "no rung available — $setup_failed rung(s) failed on setup: cannot resolve the review base"
+			else
+				print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable)"
+			fi
 			return 1
 		fi
 
@@ -1095,8 +1127,9 @@ run_fallback_review() {
 		fi
 
 		local rc=0
-		findings="$(_run_runtime_review "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_FALLBACK_MODELS" "$pr_number" "$workdir")" || rc=1
+		findings="$(_run_runtime_review "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_FALLBACK_MODELS" "$pr_number" "$workdir")" || rc=$?
 		[ -n "$worktree_dir" ] && _teardown_pr_worktree "$worktree_dir"
+		if [ "$rc" -eq 2 ]; then setup_failed=$((setup_failed + 1)); fi
 		if [ "$rc" -eq 0 ] && [ -n "${findings//[[:space:]]/}" ]; then
 			break
 		fi
