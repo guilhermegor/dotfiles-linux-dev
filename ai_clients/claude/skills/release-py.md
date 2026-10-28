@@ -53,8 +53,9 @@ duplicate version, so the run goes red *again* and you still have no tag. Instea
 ## B. Publish — Test PyPI first, then PyPI, each verified
 
 Only after `s:release` has the user's explicit confirmation. Dispatch it yourself: the two PyPI
-release workflows are in `permissions.allow` (`gh workflow run` and the REST `/dispatches` form,
-bare and `rtk`-prefixed), so do not hand the command to the operator.
+release workflows are in `permissions.allow` (`gh workflow run`, bare and `rtk`-prefixed), so do
+not hand the command to the operator. Use only the `gh workflow run` form: the REST `/dispatches`
+form is not covered by the release guard.
 
 **Fallback — only if the auto-mode classifier still refuses** (`[Create Public Surface]`, measured
 on filings-rfb, 2026-10-25): stop, print the exact command for the operator to run by hand, and
