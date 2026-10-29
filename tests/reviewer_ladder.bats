@@ -551,6 +551,48 @@ _fake_gh() {
     [ "$status" -eq 1 ]
 }
 
+@test "base ref: the fallback resolves once per ladder walk, success cached (#835)" {
+    _repo_without_origin_head
+    _fake_gh 'echo x >>"$BATS_TEST_TMPDIR/gh.calls"; echo develop'
+    unset REVIEWER_LADDER_BASE
+    export LADDER_SETUP_REASONS="$BATS_TEST_TMPDIR/reasons" LADDER_PR_CTX="o r 42"
+    run _review_base_fallback
+    [ "$output" = "origin/develop" ]
+    run _review_base_fallback
+    [ "$status" -eq 0 ]
+    [ "$output" = "origin/develop" ]
+    [ "$(wc -l <"$BATS_TEST_TMPDIR/gh.calls")" -eq 1 ]
+}
+
+@test "base ref: a failed fallback is cached too, no second network wait (#835)" {
+    git remote add origin "$BATS_TEST_TMPDIR/nowhere.git"
+    _fake_gh 'echo x >>"$BATS_TEST_TMPDIR/gh.calls"; exit 1'
+    unset REVIEWER_LADDER_BASE
+    export LADDER_SETUP_REASONS="$BATS_TEST_TMPDIR/reasons" LADDER_PR_CTX="o r 42"
+    run _review_base_fallback
+    [ "$status" -eq 1 ]
+    run _review_base_fallback
+    [ "$status" -eq 1 ]
+    [ "$(wc -l <"$BATS_TEST_TMPDIR/gh.calls")" -eq 1 ]
+}
+
+@test "_post_pr_review: gh stderr on success stays on stderr, not stdout (#835)" {
+    _ladder_app_token() { echo tok; }
+    gh() { cat >/dev/null; echo '{"id":1}'; echo "gh: warning" >&2; }
+    export -f _ladder_app_token gh
+    unset REVIEWER_LADDER_POST_CMD
+    out="$(_post_pr_review o r 1 body sha 2>/dev/null)"
+    [ "$out" = '{"id":1}' ]
+}
+
+@test "_setup_reasons: a reason containing ';' is kept intact (#835)" {
+    LADDER_SETUP_REASONS="$BATS_TEST_TMPDIR/reasons"
+    _note_setup_failure "a;b"
+    _note_setup_failure "c"
+    run _setup_reasons
+    [ "$output" = "a;b; c" ]
+}
+
 @test "run_fallback_review: a rung that died on setup is named in the summary (#835)" {
     export REVIEWER_LADDER_QWEN_SETTINGS="$FIXTURES/qwen_malformed.json"
     export REVIEWER_LADDER_CODEX_CACHE="$FIXTURES/codex_full.json"
@@ -568,7 +610,7 @@ _fake_gh() {
 
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no rung available — setup failed: cannot resolve the review base"* ]]
+    [[ "$output" == *"no rung available ("*" — setup failed: cannot resolve the review base"* ]]
     [[ "$output" != *"SHOULD NOT POST"* ]]
 }
 
@@ -587,7 +629,7 @@ _fake_gh() {
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
     [ "$status" -eq 1 ]
     [[ "$output" == *"no rung available (qwen"* ]]
-    [[ "$output" != *"failed on setup"* ]]
+    [[ "$output" != *"setup failed"* ]]
 }
 
 _ladder_ready_for_codex() {
@@ -621,7 +663,7 @@ _ladder_ready_for_codex() {
 
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no rung available — setup failed: review App not installed"* ]]
+    [[ "$output" == *"no rung available ("*" — setup failed: review App not installed"* ]]
 }
 
 @test "run_fallback_review: App not installed at post time is named, not a bare failure (#835)" {
@@ -643,7 +685,7 @@ _ladder_ready_for_codex() {
 @test "run_fallback_review: a 404 when posting the review is named (#835)" {
     _ladder_ready_for_codex
     _ladder_app_token() { echo tok; }
-    gh() { cat >/dev/null; echo "gh: Not Found (HTTP 404)"; return 1; }
+    gh() { cat >/dev/null; echo "gh: Not Found (HTTP 404)" >&2; return 1; }
     export -f _ladder_app_token gh
 
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
@@ -654,12 +696,12 @@ _ladder_ready_for_codex() {
 @test "run_fallback_review: a non-setup post failure adds no setup summary (#835)" {
     _ladder_ready_for_codex
     _ladder_app_token() { echo tok; }
-    gh() { cat >/dev/null; echo "gh: HTTP 500"; return 1; }
+    gh() { cat >/dev/null; echo "gh: HTTP 500" >&2; return 1; }
     export -f _ladder_app_token gh
 
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
     [ "$status" -eq 1 ]
-    [[ "$output" != *"failed on setup"* ]]
+    [[ "$output" != *"setup failed"* ]]
 }
 
 @test "print_status falls back to stderr, never to silence, when common.sh is absent" {
@@ -1763,7 +1805,7 @@ STUB
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
     [ "$status" -eq 1 ]
     [[ "$output" == *"no rung available (qwen"* ]]
-    [[ "$output" != *"failed on setup"* ]]
+    [[ "$output" != *"setup failed"* ]]
 }
 
 @test "run_fallback_review: an earlier rung's setup reason is not blamed for a post failure (#835)" {
@@ -1775,11 +1817,11 @@ STUB
     export -f fake_run
     export REVIEWER_LADDER_RUN_CMD=fake_run
     _ladder_app_token() { echo tok; }
-    gh() { cat >/dev/null; echo "gh: HTTP 500"; return 1; }
+    gh() { cat >/dev/null; echo "gh: HTTP 500" >&2; return 1; }
     export -f _ladder_app_token gh
 
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
     [ "$status" -eq 1 ]
-    [[ "$output" != *"failed on setup"* ]]
+    [[ "$output" != *"setup failed"* ]]
     [[ "$output" != *"cannot resolve the review base"* ]]
 }

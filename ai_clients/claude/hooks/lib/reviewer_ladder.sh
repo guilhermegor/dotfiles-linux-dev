@@ -484,8 +484,24 @@ _review_base_ref() {
 # 2. `git remote set-head origin -a`, once, then origin/HEAD again (this writes
 #    refs/remotes/origin/HEAD into the shared git dir, so the main checkout
 #    gains it too).
-# Prints the base ref; return 1 (fail closed) when neither resolves.
+# Prints the base ref; return 1 (fail closed) when neither resolves. The result,
+# failure included, is cached for one run_fallback_review walk: every rung that
+# needs a base calls this, and an unreachable origin would otherwise cost two
+# fetch timeouts per rung. Rungs run in $(...), so the cache is a file.
 _review_base_fallback() {
+	local cache="${LADDER_SETUP_REASONS:+$LADDER_SETUP_REASONS.base}" base rc=0
+	if [ -n "$cache" ] && [ -e "$cache" ]; then
+		[ -s "$cache" ] || return 1
+		cat "$cache"
+		return 0
+	fi
+	base="$(_review_base_fallback_uncached)" || rc=$?
+	[ -z "$cache" ] || printf '%s' "${base:+$base$'\n'}" >"$cache"
+	[ "$rc" -eq 0 ] && [ -n "$base" ] || return 1
+	printf '%s\n' "$base"
+}
+
+_review_base_fallback_uncached() {
 	local owner repo pr name
 	if [ -n "${LADDER_PR_CTX:-}" ]; then
 		read -r owner repo pr <<<"$LADDER_PR_CTX"
@@ -875,14 +891,15 @@ _post_pr_review() {
 		return $?
 	fi
 	token="$(_ladder_app_token "$owner" "$repo")" || return 1
-	local out
-	out="$(jq -cn --arg b "$body" --arg c "$head_sha" '{body: $b, commit_id: $c, event: "COMMENT"}' |
-		GH_TOKEN="$token" gh api --method POST "repos/$owner/$repo/pulls/$pr_number/reviews" --input - 2>&1)" || {
-		[[ "$out" != *"HTTP 404"* ]] || _note_setup_failure "posting the review returned 404"
-		printf '%s\n' "$out" >&2
-		return 1
-	}
-	[ -z "$out" ] || printf '%s\n' "$out"
+	# stderr is read only on failure (the 404 check); on success it passes
+	# through to stderr untouched, as it did before #835.
+	local err rc=0
+	{ err="$(jq -cn --arg b "$body" --arg c "$head_sha" '{body: $b, commit_id: $c, event: "COMMENT"}' |
+		GH_TOKEN="$token" gh api --method POST "repos/$owner/$repo/pulls/$pr_number/reviews" --input - 2>&1 >&3)" || rc=$?; } 3>&1
+	[ -z "$err" ] || printf '%s\n' "$err" >&2
+	[ "$rc" -eq 0 ] && return 0
+	[[ "$err" != *"HTTP 404"* ]] || _note_setup_failure "posting the review returned 404"
+	return 1
 }
 
 # _note_setup_failure REASON / _setup_reasons
@@ -896,7 +913,7 @@ _note_setup_failure() {
 }
 _setup_reasons() {
 	[ -s "${LADDER_SETUP_REASONS:-}" ] || return 0
-	awk '!seen[$0]++' "$LADDER_SETUP_REASONS" | paste -sd ';' - | sed 's/;/; /g'
+	awk '!seen[$0]++ { printf "%s%s", sep, $0; sep = "; " } END { print "" }' "$LADDER_SETUP_REASONS"
 }
 
 # --- hosted rung: greptile (dotfiles-linux-dev#713) -------------------------
@@ -1063,9 +1080,12 @@ run_hosted_rungs() {
 run_fallback_review() {
 	# Owns the setup-failure reasons file (#835) so every return path cleans it up.
 	local LADDER_SETUP_REASONS rc=0
-	LADDER_SETUP_REASONS="$(mktemp)" || return 1
+	LADDER_SETUP_REASONS="$(mktemp)" || {
+		print_status "error" "reviewer ladder: mktemp failed — cannot track setup failures"
+		return 1
+	}
 	_run_fallback_review "$@" || rc=$?
-	rm -f "$LADDER_SETUP_REASONS"
+	rm -f "$LADDER_SETUP_REASONS" "$LADDER_SETUP_REASONS.base"
 	return "$rc"
 }
 
@@ -1137,11 +1157,9 @@ _run_fallback_review() {
 		if ! resolve_fallback_reviewer; then
 			_write_ladder_probe none
 			setup_reasons="$(_setup_reasons)"
-			if [ -n "$setup_reasons" ]; then
-				print_status "warning" "no rung available — setup failed: $setup_reasons"
-			else
-				print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable)"
-			fi
+			# Mixed walks happen (one rung failed setup, the rest were
+			# unavailable), so the setup part is appended, never substituted.
+			print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable or failed)${setup_reasons:+ — setup failed: $setup_reasons}"
 			return 1
 		fi
 
