@@ -1121,6 +1121,18 @@ when `HEAD..@{upstream}` is non-empty: a deploy from a stale `master` once rewro
 3. Add `"key|Label"` to the `STEPS` array
 4. Add a `case` branch in `dispatch_step()`
 
+## README layout (BlueprintX `toolkit` archetype, dotfiles-linux-dev#828)
+
+The root `README.md` follows the BlueprintX house layout, not a layout of its own: the
+spec is `docs/readme-layout.md` and the reference shape `templates/common/README.template.md`
+in guilhermegor/BlueprintX (the `<!-- only: toolkit -->` blocks). Sections are matched by
+`<!-- slug: NAME -->` markers, headings carry no emoji or image, and a rule plus a `<sub>`
+footer closes the file. `bin/check_readme_structure.sh` (with `bin/lib/md_structure.sh`)
+enforces it from `.githooks/pre-commit` and the `readme_structure` job in `tests.yml`.
+Both scripts are vendored byte-identical from BlueprintX `templates/common/bin/`; never edit
+them here, fix the gate upstream and re-sync. When generating a README for another project,
+use the `s:markdown-readme` skill, which reads the same template.
+
 ## Commit message constraints (gitlint)
 
 This repo enforces gitlint. Commits must satisfy:

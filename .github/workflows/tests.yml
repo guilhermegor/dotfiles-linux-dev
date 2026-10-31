@@ -96,6 +96,20 @@ jobs:
         # had no validator for its own tree).
         run: bash tests/check_specs_structure.sh
 
+  readme_structure:
+    name: README structure gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run README structure gate
+        # House README layout (BlueprintX docs/readme-layout.md, `toolkit`
+        # archetype): archetype marker, slug-marked sections in order, plain
+        # headings, Authors links (dotfiles-linux-dev#828). The two scripts
+        # are vendored from BlueprintX templates/common/bin/; never edit them
+        # in place -- fix the gate there and re-sync.
+        run: bash bin/check_readme_structure.sh README.md
+
   actionlint:
     name: actionlint (workflow lint)
     runs-on: ubuntu-latest
