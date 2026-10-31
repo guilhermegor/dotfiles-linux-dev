@@ -347,6 +347,16 @@ transcript_dev_loop_many_failed_agents() {
     [[ "$output" == *"excluded: #304 (hitl)"* ]]
 }
 
+@test "the block message has the orchestrator claim before dispatch, not the brief (#845)" {
+    stub_plan '{"dispatchable":[{"issue":4,"surface":["f4.sh"]}],"excluded":[]}'
+    run run_guard "$(transcript_dev_loop)"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"BEFORE the Agent call"* ]]
+    [[ "$output" == *"claim_files <issue>"* ]]
+    [[ "$output" == *"UNKNOWN means do not dispatch"* ]]
+    [[ "$output" != *"brief starts with the claim"* ]]
+}
+
 @test "a parent issue is never UNDECLARED and does not block the stop (#813)" {
     stub_plan '{"dispatchable":[],"excluded":[{"issue":2,"reason":"PARENT: 9 sub-issues (5 open) — dispatch the children, not the parent"}]}'
     run run_guard "$(transcript_dev_loop)"

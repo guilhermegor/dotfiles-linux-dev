@@ -553,8 +553,10 @@ main() {
 				printf '%s\n' "$parents"
 			fi
 			echo
-			echo "Each agent's brief starts with the claim step (hooks/lib/dispatch_claims.sh):"
-			echo "  claim_files <issue> <paths…>   # CLAIMED, or HELD:<holder> — do not proceed"
+			echo "Claim each issue's surface BEFORE the Agent call (hooks/lib/dispatch_claims.sh):"
+			echo "  cd <repo> && source ai_clients/claude/hooks/lib/dispatch_claims.sh && claim_files <issue> <paths…>"
+			echo "  (one Bash call; dispatch only on CLAIMED — HELD:<holder> or UNKNOWN means do not dispatch)"
+			echo "The brief only says the surface is already claimed; an isolated agent cannot source the lib."
 		} >&2
 		exit 2
 	fi

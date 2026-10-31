@@ -1106,7 +1106,20 @@ on at merge time.
 
 ⚠️ **If the free surface is empty, state it.** That is information, not silence.
 
+🔴 **Claim the surface at dispatch — the orchestrator claims, the agent never does.** Before each
+`Agent` call, run the claim yourself in ONE Bash call (shell state does not survive between calls):
+`cd <absolute-repo-path> && source ai_clients/claude/hooks/lib/dispatch_claims.sh && claim_files <issue> <paths…>`.
+Dispatch only on `CLAIMED`; on `HELD:<holder>:<path>` or `UNKNOWN` do not dispatch that issue. An
+agent with `isolation: "worktree"` runs under a guard that refuses `source <lib>`, so a claim step
+inside its brief can never run and a disciplined agent stops at the refusal (measured on
+filings-cvm#296, 2026-10-31; dotfiles-linux-dev#845). The brief only states the surface is already
+claimed and how to verify it without `source`:
+`grep -P '\t<issue>\t' "$(git -C <worktree> rev-parse --path-format=absolute --git-common-dir)/dispatch-claims.tsv"`
+(one `epoch<TAB>issue<TAB>path` line per claimed path; read-only, never re-claim from inside).
+
 Every brief carries:
+- the claimed surface — "the surface is already claimed for you, do NOT run `claim_files`", plus the
+  verify command above;
 - 🔴 **qualify the target — always, not just here.** Every repository command starts with
   `cd <absolute-path> &&`; every git command that compares with a base names it explicitly as
   `origin/<base>`, never a bare local branch or an implicit `HEAD`. The harness resets cwd after
