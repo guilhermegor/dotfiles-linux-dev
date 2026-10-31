@@ -215,6 +215,20 @@ with_origin() {
     [ -z "$output" ]
 }
 
+@test "with no origin/HEAD, the remote's master default beats a live stale main" {
+    with_origin
+    git -C "$OTHER" checkout -q -b master
+    printf 'GREETING = "hallo"\n' > "$OTHER/src/lib.py"
+    git -C "$OTHER" commit -q -am "feat: change greeting"
+    git -C "$OTHER" push -q origin master
+    git -C "$ORIGIN" symbolic-ref HEAD refs/heads/master
+
+    run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
+    # Non-vacuity: picking `main` (still at v1.0.0) sees no shipped change and blocks.
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
 @test "--ref naming another branch is allowed, it builds a line this guard cannot judge" {
     with_origin
     run run_hook "gh workflow run release-pypi.yaml --ref release/1.x -f version=1.0.1"

@@ -111,10 +111,17 @@ resolve_base_ref() {
         BASE_REF_FRESH=1
         return 0
     fi
-    local base cand rc
+    local base cand rc=0 head
     base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)"
     base="${base#origin/}"
-    for cand in $base main master; do   # unquoted on purpose: an empty $base vanishes
+    if [[ -z "$base" ]]; then
+        # No origin/HEAD (git init + remote add): ask the remote, so a live but stale `main`
+        # never wins over a `master` default. A stall here spends the loop's one budget.
+        head="$(GIT_TERMINAL_PROMPT=0 timeout 10 git ls-remote --symref origin HEAD 2>/dev/null)"
+        rc=$?
+        base="$(awk '$1 == "ref:" { sub("^refs/heads/", "", $2); print $2; exit }' <<<"$head")"
+    fi
+    (( rc == 124 )) || for cand in $base main master; do   # unquoted: an empty $base vanishes
         GIT_TERMINAL_PROMPT=0 timeout 10 git fetch --quiet origin "+refs/heads/$cand:refs/remotes/origin/$cand" 2>/dev/null
         rc=$?
         if (( rc == 0 )); then
