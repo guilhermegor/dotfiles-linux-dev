@@ -893,15 +893,16 @@ time is blocked until you allow it.</p>
    before the daemon runs). <code>IPCAllowedUsers</code> is deliberately left alone: a user
    listed there with no ACL file gets every privilege, including
    <code>Parameters=modify</code>, so any process running as you could set
-   <code>ImplicitPolicyTarget=allow</code>. For the same reason the installer <strong>refuses</strong>
-   (exit 1, before any config change or daemon start) when your user belongs to
-   a group listed in <code>IPCAllowedGroups</code>, since every member gets full rights.
+   <code>ImplicitPolicyTarget=allow</code>. For the same reason, before the daemon starts,
+   the installer <strong>removes every group you belong to from <code>IPCAllowedGroups</code></strong>,
+   since every member of a listed group gets full rights.
    Debian/Ubuntu (<code>usbguard</code> 1.1.2+ds-6build2) ships <code>IPCAllowedGroups=root
-   plugdev</code>, and a desktop user is normally in <code>plugdev</code>, so expect this
-   refusal on a stock Ubuntu install. The error names the group; fix
-   it by removing the group from <code>IPCAllowedGroups</code> in <code>usbguard-daemon.conf</code>
-   or removing yourself from the group. Under <code>DRY_RUN</code> it reports what it
-   would refuse.</li>
+   plugdev</code>, and a desktop user is normally in <code>plugdev</code>, so on a stock Ubuntu
+   install <code>plugdev</code> is removed and the value becomes <code>root</code>. Other members of
+   that group lose full usbguard rights too. The conf is first copied to
+   <code>usbguard-daemon.conf.bak.&lt;timestamp&gt;</code>, and the warning names each group it
+   removed (#848). Under <code>DRY_RUN</code> it reports what it would remove and changes
+   nothing.</li>
 <li>Runs <code>systemctl enable usbguard</code> and <code>systemctl restart usbguard</code>.</li>
 </ol>
 <p>There are no prompts, and <code>DRY_RUN=1</code> prints every step without running it.</p>
