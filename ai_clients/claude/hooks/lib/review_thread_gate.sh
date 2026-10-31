@@ -68,8 +68,8 @@ _gate_refusal_jq_def() {
 	cat <<'JQ'
 def greptile_refusal:
   (((.author.login // "") | sub("\\[bot\\]$"; "") | ascii_downcase) == "greptile-apps")
-  and ((.body // "") | ascii_downcase) as $b
-  | ($refusal | split("\n") | map(select(length > 0)) | any(. as $p | $b | contains($p)));
+  and (((.body // "") | ascii_downcase) as $b
+    | ($refusal | split("\n") | map(select(length > 0)) | any(. as $p | $b | contains($p))));
 JQ
 }
 
@@ -354,7 +354,7 @@ _gate_comment_findings_filter() {
                 # Both second lines must BE head lines: a marker with no/garbled head line must
                 # not "differ" its way into superseding a finding.
                 and ((((.body // "") | split("\n"))[1] // "") | startswith("Reviewed head: "))
-                and ((($lc.body // "") | split("\n"))[1] // "") as $fh | ($fh | startswith("Reviewed head: "))
+                and (((($lc.body // "") | split("\n"))[1] // "") | startswith("Reviewed head: "))
                 and ((((.body // "") | split("\n"))[1] // "") != ((($lc.body // "") | split("\n"))[1] // ""))))))
    | length) as $answers
 | if $answers == 0 then "  unanswered ladder finding (comment channel)" else empty end
