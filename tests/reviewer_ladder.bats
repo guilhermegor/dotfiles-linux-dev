@@ -534,13 +534,22 @@ _fake_gh() {
     grep -q 'repos/o/r/pulls/42 --jq .base.ref' "$BATS_TEST_TMPDIR/gh.argv"
 }
 
-@test "base ref: with no PR base, set-head -a recovers origin/HEAD once (#835)" {
+@test "base ref: with no PR context, set-head -a recovers origin/HEAD once (#835)" {
+    _repo_without_origin_head
+    unset REVIEWER_LADDER_BASE LADDER_PR_CTX
+    run _review_base_ref
+    [ "$status" -eq 0 ]
+    [ "$output" = "origin/main" ]
+}
+
+@test "base ref: a PR whose base cannot be read fails closed, never guesses the default" {
     _repo_without_origin_head
     _fake_gh 'exit 1'
     unset REVIEWER_LADDER_BASE
     LADDER_PR_CTX="o r 42" run _review_base_ref
-    [ "$status" -eq 0 ]
-    [ "$output" = "origin/main" ]
+    # Non-vacuity: set-head would resolve origin/main here, which may not be the PR's base.
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
 }
 
 @test "base ref: still fails closed when neither the PR base nor set-head resolves (#835)" {

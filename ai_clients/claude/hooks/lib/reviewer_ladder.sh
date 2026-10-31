@@ -481,9 +481,11 @@ _review_base_ref() {
 # while the summary read like "every reviewer is busy". Resolve in order:
 # 1. the PR's own base branch, read over REST (works with GraphQL exhausted)
 #    from LADDER_PR_CTX ("OWNER REPO PR", set by run_fallback_review);
-# 2. `git remote set-head origin -a`, once, then origin/HEAD again (this writes
-#    refs/remotes/origin/HEAD into the shared git dir, so the main checkout
-#    gains it too).
+# 2. only with no PR context (a manual run): `git remote set-head origin -a`,
+#    once, then origin/HEAD again (this writes refs/remotes/origin/HEAD into
+#    the shared git dir, so the main checkout gains it too). With a PR, the
+#    remote's default is a guess at its base: a PR into another branch would be
+#    reviewed against the wrong diff (#666), so a failed read fails closed.
 # Prints the base ref; return 1 (fail closed) when neither resolves. The result,
 # failure included, is cached for one run_fallback_review walk: every rung that
 # needs a base calls this, and an unreachable origin would otherwise cost two
@@ -511,6 +513,7 @@ _review_base_fallback_uncached() {
 			printf 'origin/%s\n' "$name"
 			return 0
 		fi
+		return 1
 	fi
 	timeout "${REVIEWER_LADDER_FETCH_TIMEOUT:-60}" git remote set-head origin -a >/dev/null 2>&1 || true
 	git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null
