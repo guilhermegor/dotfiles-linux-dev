@@ -192,26 +192,43 @@ call_line() {
     grep -q 'systemctl restart usbguard' "$CALLS"
 }
 
-@test "refuses when the user is in a group listed in IPCAllowedGroups, daemon untouched" {
+# #848: the user's groups are stripped from IPCAllowedGroups (owner decision),
+# not refused; the conf is backed up first and unrelated groups stay.
+@test "strips the user's group from IPCAllowedGroups, keeps others, backs up, installs" {
     printf '#!/bin/bash\necho "alice plugdev"\n' > "$TMP/bin/id"
     chmod +x "$TMP/bin/id"
     cp "$_UG_DIR/usbguard-daemon.conf" "$TMP/conf.before"
     run install_usbguard
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"plugdev"* ]]
-    [[ "$output" == *"remove 'plugdev' from IPCAllowedGroups"* ]]
-    refute_call 'systemctl'
-    [ ! -e "$_UG_DIR/IPCAccessControl.d/alice" ]
-    run diff "$_UG_DIR/usbguard-daemon.conf" "$TMP/conf.before"
     [ "$status" -eq 0 ]
+    [[ "$output" == *"Removed 'plugdev' from IPCAllowedGroups"* ]]
+    grep -qx 'IPCAllowedGroups=root' "$_UG_DIR/usbguard-daemon.conf"
+    compgen -G "$_UG_DIR/usbguard-daemon.conf.bak.*" > /dev/null
+    cmp "$TMP/conf.before" "$(compgen -G "$_UG_DIR/usbguard-daemon.conf.bak.*" | head -1)"
+    [ -e "$_UG_DIR/IPCAccessControl.d/alice" ]
 }
 
-@test "DRY_RUN reports the IPCAllowedGroups refusal without changing anything" {
+@test "strips the group when it is first or the only entry" {
     printf '#!/bin/bash\necho "alice plugdev"\n' > "$TMP/bin/id"
     chmod +x "$TMP/bin/id"
+    sed -i 's/^IPCAllowedGroups=.*/IPCAllowedGroups=plugdev wheel/' "$_UG_DIR/usbguard-daemon.conf"
+    run install_usbguard
+    [ "$status" -eq 0 ]
+    grep -qx 'IPCAllowedGroups=wheel' "$_UG_DIR/usbguard-daemon.conf"
+
+    sed -i 's/^IPCAllowedGroups=.*/IPCAllowedGroups=plugdev/' "$_UG_DIR/usbguard-daemon.conf"
+    run install_usbguard
+    [ "$status" -eq 0 ]
+    grep -qx 'IPCAllowedGroups=' "$_UG_DIR/usbguard-daemon.conf"
+}
+
+@test "DRY_RUN reports the IPCAllowedGroups removal without changing anything" {
+    printf '#!/bin/bash\necho "alice plugdev"\n' > "$TMP/bin/id"
+    chmod +x "$TMP/bin/id"
+    cp "$_UG_DIR/usbguard-daemon.conf" "$TMP/conf.before"
     DRY_RUN=1 run install_usbguard
-    [[ "$output" == *"would refuse"* ]]
+    [[ "$output" == *"would remove 'plugdev' from IPCAllowedGroups"* ]]
     refute_call 'systemctl'
+    cmp "$_UG_DIR/usbguard-daemon.conf" "$TMP/conf.before"
 }
 
 @test "DRY_RUN says the group check was skipped when the root-only config is unreadable" {
@@ -224,11 +241,11 @@ call_line() {
     DRY_RUN=1 run install_usbguard
     chmod 600 "$_UG_DIR/usbguard-daemon.conf"
     [[ "$output" == *"IPCAllowedGroups check was skipped"* ]]
-    [[ "$output" != *"would refuse"* ]]
+    [[ "$output" != *"would remove"* ]]
     refute_call 'systemctl'
 }
 
-@test "DRY_RUN reads a root-only config through cached sudo and reports the refusal" {
+@test "DRY_RUN reads a root-only config through cached sudo and reports the removal" {
     [ "$(id -u)" -ne 0 ] || skip "root can read a 0000 file"
     printf '#!/bin/bash\necho "alice plugdev"\n' > "$TMP/bin/id"
     chmod +x "$TMP/bin/id"
@@ -238,7 +255,7 @@ call_line() {
     chmod 000 "$_UG_DIR/usbguard-daemon.conf"
     DRY_RUN=1 run install_usbguard
     chmod 600 "$_UG_DIR/usbguard-daemon.conf"
-    [[ "$output" == *"would refuse"* ]]
+    [[ "$output" == *"would remove"* ]]
     refute_call 'systemctl'
 }
 
