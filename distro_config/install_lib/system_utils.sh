@@ -1516,18 +1516,24 @@ _ug_set_key() {
     fi
 }
 
-# Drops USER from IPCAllowedUsers, keeping root and other entries. An earlier
-# version of this installer put the user there, which grants every privilege.
-_ug_revoke_allowed_user() {
-    run_or_echo sudo sed -i -E "/^IPCAllowedUsers=/{s/ $1( |\$)/\\1/g;s/=$1( |\$)/=\\1/;s/= +/=/}" \
+# Drops NAME from the space-separated list in KEY=, keeping the other entries.
+_ug_drop_from_key() {
+    run_or_echo sudo sed -i -E "/^$1=/{s/ $2( |\$)/\\1/g;s/=$2( |\$)/=\\1/;s/= +/=/}" \
         "$_UG_DIR/usbguard-daemon.conf"
 }
 
+# Drops USER from IPCAllowedUsers, keeping root and other entries. An earlier
+# version of this installer put the user there, which grants every privilege.
+_ug_revoke_allowed_user() {
+    _ug_drop_from_key IPCAllowedUsers "$1"
+}
+
 # IPCAllowedGroups grants every privilege to its members, bypassing the scoped
-# ACL below. Refuses (return 1) when USER sits in a listed group; under DRY_RUN
-# it only reports what it would refuse. Read-only, so it can run before any change.
-_ug_refuse_group_grant() {
-    local grp allowed hit=0 conf="$_UG_DIR/usbguard-daemon.conf"
+# ACL below (stock Ubuntu lists plugdev). Removes each of USER's groups from it,
+# after backing up the conf once (#848); other members of those groups lose
+# full rights too. Under DRY_RUN it only reports what it would remove.
+_ug_revoke_group_grant() {
+    local grp allowed backed_up=0 conf="$_UG_DIR/usbguard-daemon.conf"
     if [ "${DRY_RUN:-0}" = "1" ]; then
         # The daemon config is usually root-only (0600). A dry run never prompts
         # for a password, so use cached sudo (-n) at most, and say so if the file
@@ -1542,18 +1548,19 @@ _ug_refuse_group_grant() {
         allowed="$(sudo sed -n 's/^IPCAllowedGroups=//p' "$conf" 2>/dev/null)"
     fi
     for grp in $(id -nG "$1" 2>/dev/null); do
-        case " $allowed " in
-            *" $grp "*)
-                hit=1
-                print_status "error" "$1 is in group '$grp' listed in IPCAllowedGroups: that grants FULL usbguard rights (incl. Parameters=modify), so the scoped ACL would not limit $1. Fix: remove '$grp' from IPCAllowedGroups in $conf, or remove $1 from the group."
-                ;;
-        esac
+        case " $allowed " in *" $grp "*) ;; *) continue ;; esac
+        if [ "${DRY_RUN:-0}" = "1" ]; then
+            print_status "info" "DRY_RUN: would remove '$grp' from IPCAllowedGroups in $conf (it grants $1 FULL usbguard rights)"
+            continue
+        fi
+        if [ "$backed_up" = "0" ]; then
+            sudo cp -p "$conf" "$conf.bak.$(date +%Y%m%d%H%M%S)" || return 1
+            backed_up=1
+        fi
+        _ug_drop_from_key IPCAllowedGroups "$grp" || return 1
+        print_status "warning" "Removed '$grp' from IPCAllowedGroups in $conf: it granted FULL usbguard rights (incl. Parameters=modify) to every member, $1 included. Other '$grp' members lose them too; backup kept next to the conf."
     done
-    if [ "$hit" = "1" ] && [ "${DRY_RUN:-0}" = "1" ]; then
-        print_status "info" "DRY_RUN: install_usbguard would refuse here and leave enforcement unchanged"
-        return 0
-    fi
-    [ "$hit" = "0" ]
+    return 0
 }
 
 # Scoped IPC ACL for USER (#789), the file equivalent of
@@ -1594,10 +1601,9 @@ install_usbguard() {
     fi
 
     local user="${SUDO_USER:-$(id -un)}"
-    # Refuse before ANY config change or daemon start if a group grant would
-    # bypass the scoped ACL.
+    # Revoke a group grant before the daemon starts: it would bypass the scoped ACL.
     if [ "$user" != "root" ]; then
-        _ug_refuse_group_grant "$user" || return 1
+        _ug_revoke_group_grant "$user" || return 1
     fi
 
     if [ "${DRY_RUN:-0}" != "1" ] && _ug_has_rules; then
