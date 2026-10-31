@@ -342,8 +342,9 @@ up**: it dies with the OS install, by design, and you re-create it from
 not restored):
 1. github.com/settings/tokens → generate a new fine-grained token with the
    scopes above.
-2. `echo 'GH_REVIEW_TRIGGER_PAT=<value>' >> .env` (project-root `.env` —
-   create it first with `cp .env.example .env` if it doesn't exist yet).
+2. In the project root, lock `.env` down before the secret reaches it:
+   `[ -e .env ] || cp .env.example .env; chmod 600 .env`, then
+   `echo 'GH_REVIEW_TRIGGER_PAT=<value>' >> .env`.
 3. `make setup_env` to regenerate `~/.claude/.env` from it, then
    `source ~/.bashrc` (or open a new shell).
 4. Verify: `[ -n "$GH_REVIEW_TRIGGER_PAT" ] && echo "set"` — and that
