@@ -280,3 +280,17 @@ with_origin() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"highest commit signal since the tag is feat"* ]]
 }
+
+@test "advisory: highest_signal reads origin/<base>'s log, not local HEAD's" {
+    git tag -d v1.0.0 >/dev/null
+    git tag v0.1.0
+    with_origin
+    printf 'GREETING = "hallo"\n' > "$OTHER/src/lib.py"
+    git -C "$OTHER" commit -q -am "feat: change greeting"
+    git -C "$OTHER" push -q origin main
+
+    run run_hook "gh workflow run release-pypi.yaml -f version=0.2.0"
+    # Non-vacuity: local HEAD is still at v0.1.0, so a HEAD-ranged log finds no feat.
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"highest commit signal since the tag is feat"* ]]
+}
