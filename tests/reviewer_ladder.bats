@@ -514,6 +514,8 @@ _repo_without_origin_head() {
     git -C "$seed" branch develop
     git -C "$seed" push -q "$bare" main develop
     git remote add origin "$bare"
+    # git >= 2.48 creates origin/HEAD on fetch by default (followRemoteHEAD=create).
+    git config remote.origin.followRemoteHEAD never
     git fetch -q origin
     [ -z "$(git symbolic-ref -q refs/remotes/origin/HEAD)" ]
 }
