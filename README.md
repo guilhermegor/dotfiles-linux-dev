@@ -276,6 +276,19 @@ bash storage/storage_hiato.sh
    make launch_vm
 ```
 
+3. **Optional: Two-Factor Login (TOTP)**
+
+   `make run` installs the TOTP PAM profile, but it is **not enforced until you enroll**
+   (the end of `make run` says so). To turn it on for your user:
+```bash
+   make totp_enroll
+```
+   Scan the QR code with an authenticator app and put the scratch codes in your password manager. From then on,
+   `sudo`, the login and lock screens, TTY login, `su` and polkit prompts ask for a code.
+   Keep a root shell open (`sudo -i` in another terminal) while you test the first login,
+   `sudo` and `ssh`, so a mistake cannot lock you out. Details, SSH behaviour and how to
+   undo it: [docs/totp-2fa.md](docs/totp-2fa.md).
+
 ##### Alternative: Step-by-Step Configuration
 
 1. **Setup Permissions**
