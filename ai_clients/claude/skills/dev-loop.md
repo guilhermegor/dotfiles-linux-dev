@@ -1107,8 +1107,9 @@ on at merge time.
 ⚠️ **If the free surface is empty, state it.** That is information, not silence.
 
 🔴 **Claim the surface at dispatch — the orchestrator claims, the agent never does.** Before each
-`Agent` call, run `claim_files <issue> <paths…>` (`hooks/lib/dispatch_claims.sh`) yourself and
-dispatch only on `CLAIMED`; on `HELD:<holder>:<path>` or `UNKNOWN` do not dispatch that issue. An
+`Agent` call, run the claim yourself in ONE Bash call (shell state does not survive between calls):
+`cd <absolute-repo-path> && source ai_clients/claude/hooks/lib/dispatch_claims.sh && claim_files <issue> <paths…>`.
+Dispatch only on `CLAIMED`; on `HELD:<holder>:<path>` or `UNKNOWN` do not dispatch that issue. An
 agent with `isolation: "worktree"` runs under a guard that refuses `source <lib>`, so a claim step
 inside its brief can never run and a disciplined agent stops at the refusal (measured on
 filings-cvm#296, 2026-10-31; dotfiles-linux-dev#845). The brief only states the surface is already

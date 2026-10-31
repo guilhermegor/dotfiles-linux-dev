@@ -554,7 +554,8 @@ main() {
 			fi
 			echo
 			echo "Claim each issue's surface BEFORE the Agent call (hooks/lib/dispatch_claims.sh):"
-			echo "  claim_files <issue> <paths…>   # CLAIMED, or HELD:<holder> — do not dispatch"
+			echo "  cd <repo> && source ai_clients/claude/hooks/lib/dispatch_claims.sh && claim_files <issue> <paths…>"
+			echo "  (one Bash call; dispatch only on CLAIMED — HELD:<holder> or UNKNOWN means do not dispatch)"
 			echo "The brief only says the surface is already claimed; an isolated agent cannot source the lib."
 		} >&2
 		exit 2

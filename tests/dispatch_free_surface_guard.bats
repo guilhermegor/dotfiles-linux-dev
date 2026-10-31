@@ -353,6 +353,7 @@ transcript_dev_loop_many_failed_agents() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"BEFORE the Agent call"* ]]
     [[ "$output" == *"claim_files <issue>"* ]]
+    [[ "$output" == *"UNKNOWN means do not dispatch"* ]]
     [[ "$output" != *"brief starts with the claim"* ]]
 }
 
