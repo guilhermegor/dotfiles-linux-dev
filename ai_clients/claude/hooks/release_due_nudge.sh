@@ -131,7 +131,7 @@ check_release_due() {
     # HEAD" edge case cannot arise from how last_tag is derived here.
     last_tag="$(git describe --tags --abbrev=0 "$ref" 2>/dev/null)" || exit 0
 
-    mapfile -t paths < <(shipped_paths "$root")
+    mapfile -t paths < <(shipped_paths "$ref")
     if shipped_diff_empty "$last_tag" "$ref" "${paths[@]}"; then
         announce_none
         exit 0
@@ -147,12 +147,12 @@ check_release_due() {
 }
 
 shipped_paths() {
-    # One path/glob per line: the repo's .claude/release.conf if present, else the Python default.
+    # One path/glob per line: <ref>'s .claude/release.conf if present, else the Python default.
     # IDENTICAL to release_dispatch_guard.sh's shipped_paths — the guard, this nudge, and the skill
     # MUST read the same list or they contradict each other.
-    local root="$1" conf="$1/.claude/release.conf"
-    if [[ -r "$conf" ]]; then
-        grep -vE '^[[:space:]]*(#|$)' "$conf"
+    local conf
+    if conf="$(git show "$1:.claude/release.conf" 2>/dev/null)"; then
+        printf '%s\n' "$conf" | grep -vE '^[[:space:]]*(#|$)'
         return
     fi
     printf '%s\n' "src/" "pyproject.toml"
