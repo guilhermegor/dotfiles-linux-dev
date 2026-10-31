@@ -816,6 +816,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#readme-layout-blueprintx-toolkit-archetype-dotfiles-linux-dev828" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        README layout (BlueprintX toolkit archetype, dotfiles-linux-dev#828)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#commit-message-constraints-gitlint" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1619,6 +1630,17 @@
     <span class="md-ellipsis">
       
         Adding a new step to the orchestrator
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#readme-layout-blueprintx-toolkit-archetype-dotfiles-linux-dev828" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        README layout (BlueprintX toolkit archetype, dotfiles-linux-dev#828)
       
     </span>
   </a>
@@ -2939,6 +2961,16 @@ when <code>HEAD..@{upstream}</code> is non-empty: a deploy from a stale <code>ma
 <li>Add <code>"key|Label"</code> to the <code>STEPS</code> array</li>
 <li>Add a <code>case</code> branch in <code>dispatch_step()</code></li>
 </ol>
+<h2 id="readme-layout-blueprintx-toolkit-archetype-dotfiles-linux-dev828">README layout (BlueprintX <code>toolkit</code> archetype, dotfiles-linux-dev#828)<a class="headerlink" href="#readme-layout-blueprintx-toolkit-archetype-dotfiles-linux-dev828" title="Permanent link">&para;</a></h2>
+<p>The root <code>README.md</code> follows the BlueprintX house layout, not a layout of its own: the
+spec is <code>docs/readme-layout.md</code> and the reference shape <code>templates/common/README.template.md</code>
+in guilhermegor/BlueprintX (the <code>&lt;!-- only: toolkit --&gt;</code> blocks). Sections are matched by
+<code>&lt;!-- slug: NAME --&gt;</code> markers, headings carry no emoji or image, and a rule plus a <code>&lt;sub&gt;</code>
+footer closes the file. <code>bin/check_readme_structure.sh</code> (with <code>bin/lib/md_structure.sh</code>)
+enforces it from <code>.githooks/pre-commit</code> and the <code>readme_structure</code> job in <code>tests.yml</code>.
+Both scripts are vendored byte-identical from BlueprintX <code>templates/common/bin/</code>; never edit
+them here, fix the gate upstream and re-sync. When generating a README for another project,
+use the <code>s:markdown-readme</code> skill, which reads the same template.</p>
 <h2 id="commit-message-constraints-gitlint">Commit message constraints (gitlint)<a class="headerlink" href="#commit-message-constraints-gitlint" title="Permanent link">&para;</a></h2>
 <p>This repo enforces gitlint. Commits must satisfy:</p>
 <ul>
