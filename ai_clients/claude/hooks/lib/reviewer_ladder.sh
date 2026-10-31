@@ -369,6 +369,7 @@ _ladder_app_token() {
 	pem="$(jq -er '.pem' "$config" 2>/dev/null)" || pem=""
 	pem="${pem/#\~/$HOME}"
 	if [ -z "$app_id" ] || [ ! -r "$pem" ]; then
+		_note_setup_failure "ladder identity not configured"
 		print_status "error" "ladder identity not configured: $config needs app_id and a readable pem (dotfiles-linux-dev#624)"
 		return 1
 	fi
@@ -379,7 +380,9 @@ _ladder_app_token() {
 	jwt="$header.$payload.$sig"
 	inst="$(curl -fsS --max-time 15 -H "Authorization: Bearer $jwt" -H 'Accept: application/vnd.github+json' \
 		"https://api.github.com/repos/$owner/$repo/installation" | jq -er '.id')" || {
-		print_status "error" "ladder App is not installed on $owner/$repo — install it before reviewing"
+		# curl -f cannot tell a 404 from a network error, a 5xx or a rejected JWT.
+		_note_setup_failure "review App installation unreadable"
+		print_status "error" "could not read the ladder App installation on $owner/$repo (not installed, network, or a rejected JWT: check the key and clock)"
 		return 1
 	}
 	curl -fsS --max-time 15 -X POST -H "Authorization: Bearer $jwt" -H 'Accept: application/vnd.github+json' \
@@ -457,19 +460,68 @@ ladder_candidate_ok() {
 
 # _review_base_ref
 # The base `codex review --base` diffs against: REVIEWER_LADDER_BASE, else the
-# remote's default branch as the current checkout knows it. Empty (return 1)
-# when neither resolves — the caller fails closed rather than diffing against
-# a guessed branch name.
+# PR's own base when a PR is in context (LADDER_PR_CTX), else the remote's
+# default branch as the current checkout knows it. A PR into `develop` must
+# never be diffed against the default just because origin/HEAD exists (#666).
+# Empty (return 1) when nothing resolves — the caller fails closed rather than
+# diffing against a guessed branch name.
 _review_base_ref() {
 	local base="${REVIEWER_LADDER_BASE:-}"
-	if [ -z "$base" ]; then
-		base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" || return 1
+	if [ -z "$base" ] && [ -n "${LADDER_PR_CTX:-}" ]; then
+		base="$(_review_base_fallback)" || return 1
+	elif [ -z "$base" ]; then
+		base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" ||
+			base="$(_review_base_fallback)" || return 1
 	fi
 	# A name is not a ref: a typo in REVIEWER_LADDER_BASE or a dangling
 	# origin/HEAD must fail closed here, not inside `codex review`.
 	_refresh_base_ref "$base"
 	git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1 || return 1
 	printf '%s\n' "$base"
+}
+
+# _review_base_fallback
+# A repo that was pushed rather than cloned has no origin/HEAD (#835), and
+# every rung that needs a base then died on "cannot resolve the review base"
+# while the summary read like "every reviewer is busy". Resolve in order:
+# 1. the PR's own base branch, read over REST (works with GraphQL exhausted)
+#    from LADDER_PR_CTX ("OWNER REPO PR", set by run_fallback_review);
+# 2. only with no PR context (a manual run): `git remote set-head origin -a`,
+#    once, then origin/HEAD again (this writes refs/remotes/origin/HEAD into
+#    the shared git dir, so the main checkout gains it too). With a PR, the
+#    remote's default is a guess at its base: a PR into another branch would be
+#    reviewed against the wrong diff (#666), so a failed read fails closed.
+# Prints the base ref; return 1 (fail closed) when neither resolves. The result,
+# failure included, is cached for one run_fallback_review walk: every rung that
+# needs a base calls this, and an unreachable origin would otherwise cost two
+# fetch timeouts per rung. Rungs run in $(...), so the cache is a file.
+_review_base_fallback() {
+	local cache="${LADDER_SETUP_REASONS:+$LADDER_SETUP_REASONS.base}" base rc=0
+	if [ -n "$cache" ] && [ -e "$cache" ]; then
+		[ -s "$cache" ] || return 1
+		cat "$cache"
+		return 0
+	fi
+	base="$(_review_base_fallback_uncached)" || rc=$?
+	[ -z "$cache" ] || printf '%s' "${base:+$base$'\n'}" >"$cache"
+	[ "$rc" -eq 0 ] && [ -n "$base" ] || return 1
+	printf '%s\n' "$base"
+}
+
+_review_base_fallback_uncached() {
+	local owner repo pr name
+	if [ -n "${LADDER_PR_CTX:-}" ]; then
+		read -r owner repo pr <<<"$LADDER_PR_CTX"
+		name="$(timeout "${REVIEWER_LADDER_FETCH_TIMEOUT:-60}" \
+			gh api "repos/$owner/$repo/pulls/$pr" --jq .base.ref 2>/dev/null)"
+		if [ -n "$name" ] && [[ "$name" != -* ]]; then
+			printf 'origin/%s\n' "$name"
+			return 0
+		fi
+		return 1
+	fi
+	timeout "${REVIEWER_LADDER_FETCH_TIMEOUT:-60}" git remote set-head origin -a >/dev/null 2>&1 || true
+	git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null
 }
 
 # _refresh_base_ref BASE
@@ -674,8 +726,9 @@ _run_runtime_review() {
 		# global option and stays before the subcommand.
 		local base
 		base="$(_review_base_ref)" || {
+			_note_setup_failure "cannot resolve the review base"
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
-			return 1
+			return 2
 		}
 		# `--base` and the positional [PROMPT] are mutually exclusive (measured
 		# live on #434: "the argument '--base <BRANCH>' cannot be used with
@@ -719,8 +772,9 @@ _run_runtime_review() {
 		# `--use-credits` or any paid flag (#626: no rung may spend money).
 		local cr_base
 		cr_base="$(cd "$workdir" && _review_base_ref)" || {
+			_note_setup_failure "cannot resolve the review base"
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
-			return 1
+			return 2
 		}
 		local cr_out
 		cr_out="$(cd "$workdir" && timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" \
@@ -733,8 +787,9 @@ _run_runtime_review() {
 		# so no tool permission (and no --yolo/--allow-all) is ever needed.
 		local rv_base diff prompt full total notice="" out
 		rv_base="$(cd "$workdir" && _review_base_ref)" || {
+			_note_setup_failure "cannot resolve the review base"
 			print_status "error" "cannot resolve the review base (set REVIEWER_LADDER_BASE)"
-			return 1
+			return 2
 		}
 		# The prompt is ONE argv string: Linux caps that at MAX_ARG_STRLEN (131072
 		# bytes), so 200000 made every large diff fail with "Argument list too long"
@@ -844,8 +899,29 @@ _post_pr_review() {
 		return $?
 	fi
 	token="$(_ladder_app_token "$owner" "$repo")" || return 1
-	jq -cn --arg b "$body" --arg c "$head_sha" '{body: $b, commit_id: $c, event: "COMMENT"}' |
-		GH_TOKEN="$token" gh api --method POST "repos/$owner/$repo/pulls/$pr_number/reviews" --input -
+	# stderr is read only on failure (the 404 check); on success it passes
+	# through to stderr untouched, as it did before #835.
+	local err rc=0
+	{ err="$(jq -cn --arg b "$body" --arg c "$head_sha" '{body: $b, commit_id: $c, event: "COMMENT"}' |
+		GH_TOKEN="$token" gh api --method POST "repos/$owner/$repo/pulls/$pr_number/reviews" --input - 2>&1 >&3)" || rc=$?; } 3>&1
+	[ -z "$err" ] || printf '%s\n' "$err" >&2
+	[ "$rc" -eq 0 ] && return 0
+	[[ "$err" != *"HTTP 404"* ]] || _note_setup_failure "posting the review returned 404"
+	return 1
+}
+
+# _note_setup_failure REASON / _setup_reasons
+# A setup failure (base unresolved, App not installed, post 404) is not an
+# unavailable rung (#835), and the summary must name it. Rungs run inside
+# $(...), so the reason travels through the file run_fallback_review points
+# LADDER_SETUP_REASONS at; unset (a direct call) makes the note a no-op.
+_note_setup_failure() {
+	[ -z "${LADDER_SETUP_REASONS:-}" ] || printf '%s\n' "$1" >>"$LADDER_SETUP_REASONS"
+	return 0
+}
+_setup_reasons() {
+	[ -s "${LADDER_SETUP_REASONS:-}" ] || return 0
+	awk '!seen[$0]++ { printf "%s%s", sep, $0; sep = "; " } END { print "" }' "$LADDER_SETUP_REASONS"
 }
 
 # --- hosted rung: greptile (dotfiles-linux-dev#713) -------------------------
@@ -1010,6 +1086,18 @@ run_hosted_rungs() {
 # UNPROBED: the probe is itself a live model call, and "no runtime" has to
 # mean no runtime.
 run_fallback_review() {
+	# Owns the setup-failure reasons file (#835) so every return path cleans it up.
+	local LADDER_SETUP_REASONS rc=0
+	LADDER_SETUP_REASONS="$(mktemp)" || {
+		print_status "error" "reviewer ladder: mktemp failed — cannot track setup failures"
+		return 1
+	}
+	_run_fallback_review "$@" || rc=$?
+	rm -f "$LADDER_SETUP_REASONS" "$LADDER_SETUP_REASONS.base"
+	return "$rc"
+}
+
+_run_fallback_review() {
 	local owner="$1" repo="$2" pr_number="$3" merge_state="$4" \
 		pushed="$5" now="$6" comments="$7"
 	local dry_run="${DRY_RUN:-0}"
@@ -1068,10 +1156,18 @@ run_fallback_review() {
 	# again — it never stops at the first rung that merely proved it is logged
 	# in, and an empty review is never posted as a clean one (#626 review).
 	local LADDER_SKIP_RUNGS="${LADDER_SKIP_RUNGS:-}" attribution findings
+	# #835: a rung that died on its own setup is not an unavailable rung, and the
+	# summary must not read as one. Setup is detected by a recorded reason, never
+	# by exit code: a reviewer CLI's own usage error exits 2 too.
+	local setup_reasons
+	local LADDER_PR_CTX="$owner $repo $pr_number"
 	while :; do
 		if ! resolve_fallback_reviewer; then
 			_write_ladder_probe none
-			print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable)"
+			setup_reasons="$(_setup_reasons)"
+			# Mixed walks happen (one rung failed setup, the rest were
+			# unavailable), so the setup part is appended, never substituted.
+			print_status "warning" "no rung available (qwen, codex, kimi, coderabbit, copilot, claude all unavailable or failed)${setup_reasons:+ — setup failed: $setup_reasons}"
 			return 1
 		fi
 
@@ -1095,7 +1191,7 @@ run_fallback_review() {
 		fi
 
 		local rc=0
-		findings="$(_run_runtime_review "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_FALLBACK_MODELS" "$pr_number" "$workdir")" || rc=1
+		findings="$(_run_runtime_review "$LADDER_RUNTIME" "$LADDER_MODEL" "$LADDER_FALLBACK_MODELS" "$pr_number" "$workdir")" || rc=$?
 		[ -n "$worktree_dir" ] && _teardown_pr_worktree "$worktree_dir"
 		if [ "$rc" -eq 0 ] && [ -n "${findings//[[:space:]]/}" ]; then
 			break
@@ -1107,5 +1203,13 @@ run_fallback_review() {
 	_write_ladder_probe ok
 	local body
 	body="$attribution"$'\n\n'"$findings"
-	_post_pr_review "$owner" "$repo" "$pr_number" "$body" "$head_sha"
+	local post_rc=0 reasons
+	# Reasons from earlier rungs belong to those rungs, not to a post failure.
+	: >"$LADDER_SETUP_REASONS"
+	_post_pr_review "$owner" "$repo" "$pr_number" "$body" "$head_sha" || post_rc=$?
+	reasons="$(_setup_reasons)"
+	if [ "$post_rc" -ne 0 ] && [ -n "$reasons" ]; then
+		print_status "warning" "review not posted — setup failed: $reasons"
+	fi
+	return "$post_rc"
 }
