@@ -35,6 +35,20 @@ setup() {
     [[ "$output" == *"sudo apt install linux-headers-7.0.0-38-generic && sudo dpkg --configure -a"* ]]
 }
 
+# #847: a held kernel metapackage ("hi" = hold + fully installed) keeps the
+# headers behind while the unheld nvidia modules move on; the fix must unhold it.
+@test "cleanup hint unholds a held kernel metapackage and does not call it unconfigured" {
+    apt() { [ "$1" = list ] && return 0; return 100; }
+    dpkg() { printf 'hi  linux-generic-hwe-24.04 1\niF  linux-modules-nvidia-580-7.0.0-42-generic 1\n'; }
+    dpkg-query() { return 1; }
+
+    run cleanup_system
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"not fully configured: linux-generic-hwe-24.04"* ]]
+    [[ "$output" == *"held: linux-generic-hwe-24.04"* ]]
+    [[ "$output" == *"Fix: sudo apt-mark unhold linux-generic-hwe-24.04 && sudo apt install linux-headers-7.0.0-42-generic && sudo dpkg --configure -a"* ]]
+}
+
 @test "cleanup_system succeeds and reports cleaned up when apt works" {
     apt() { return 0; }
 

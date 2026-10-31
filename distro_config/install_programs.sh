@@ -161,18 +161,28 @@ cleanup_system() {
 
 # Names half-configured dpkg packages after an apt failure; for a
 # linux-modules-*-<kver> whose linux-headers-<kver> is missing, prints the fix.
+# dpkg state is <desired><actual>: "hi" is a hold on a fully installed package.
+# A held linux-* metapackage keeps the headers on the old kernel while unheld
+# module packages move on (#847), so the fix has to unhold it first.
 _hint_unconfigured_kernel_modules() {
-    local state pkg rest kver
+    local state pkg rest kver listing held unhold=""
+    listing="$(dpkg -l 2>/dev/null | awk '/^[a-z][a-zA-Z]/ {print $1, $2}')"
+    held="$(awk '$1 ~ /^h/ && $2 ~ /^linux-/ {printf "%s ", $2}' <<<"$listing")"
+    held="${held% }"
+    if [ -n "$held" ]; then
+        print_status "warning" "Kernel packages held: $held (their headers cannot follow new kernels)"
+        unhold="sudo apt-mark unhold $held && "
+    fi
     while read -r state pkg rest; do
-        case "$state" in ii|rc|un|"") continue ;; esac
+        case "$state" in ii|hi|rc|un|"") continue ;; esac
         print_status "warning" "Package not fully configured: $pkg ($state)"
         if [[ "$pkg" =~ ^linux-modules-.*-([0-9]+\.[0-9]+\.[0-9]+-[0-9]+-[a-z0-9]+)$ ]]; then
             kver="${BASH_REMATCH[1]}"
             if ! dpkg-query -W -f='${Status}' "linux-headers-$kver" 2>/dev/null | grep -q "install ok installed"; then
-                print_status "info" "Fix: sudo apt install linux-headers-$kver && sudo dpkg --configure -a"
+                print_status "info" "Fix: ${unhold}sudo apt install linux-headers-$kver && sudo dpkg --configure -a"
             fi
         fi
-    done < <(dpkg -l 2>/dev/null | awk '/^[a-z][a-zA-Z]/ {print $1, $2}')
+    done <<<"$listing"
     return 0
 }
 
