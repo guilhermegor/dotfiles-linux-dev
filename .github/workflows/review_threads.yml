@@ -90,9 +90,11 @@ jobs:
       # One-time bootstrap for #842 (dotfiles-linux-dev#841): master's gate
       # crashes on the runner's jq 1.8 and only this PR can fix it, so judge it
       # by its own reviewed script, pinned by SHA. Inert on every other PR;
-      # delete this step once #842 is on master.
+      # delete this step once #842 is on master. Keyed on the same PR number the
+      # gate step resolves: a reply comment is an issue_comment event, where
+      # only github.event.issue.number is set.
       - name: Use the fixed gate for its own PR
-        if: github.event.pull_request.number == 842
+        if: (github.event.pull_request.number || github.event.issue.number || inputs.pr_number) == 842
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
