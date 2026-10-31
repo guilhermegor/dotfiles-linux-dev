@@ -380,8 +380,9 @@ _ladder_app_token() {
 	jwt="$header.$payload.$sig"
 	inst="$(curl -fsS --max-time 15 -H "Authorization: Bearer $jwt" -H 'Accept: application/vnd.github+json' \
 		"https://api.github.com/repos/$owner/$repo/installation" | jq -er '.id')" || {
-		_note_setup_failure "review App not installed"
-		print_status "error" "ladder App is not installed on $owner/$repo — install it before reviewing"
+		# curl -f cannot tell a 404 from a network error, a 5xx or a rejected JWT.
+		_note_setup_failure "review App installation unreadable"
+		print_status "error" "could not read the ladder App installation on $owner/$repo (not installed, network, or a rejected JWT: check the key and clock)"
 		return 1
 	}
 	curl -fsS --max-time 15 -X POST -H "Authorization: Bearer $jwt" -H 'Accept: application/vnd.github+json' \
@@ -459,12 +460,16 @@ ladder_candidate_ok() {
 
 # _review_base_ref
 # The base `codex review --base` diffs against: REVIEWER_LADDER_BASE, else the
-# remote's default branch as the current checkout knows it. Empty (return 1)
-# when neither resolves — the caller fails closed rather than diffing against
-# a guessed branch name.
+# PR's own base when a PR is in context (LADDER_PR_CTX), else the remote's
+# default branch as the current checkout knows it. A PR into `develop` must
+# never be diffed against the default just because origin/HEAD exists (#666).
+# Empty (return 1) when nothing resolves — the caller fails closed rather than
+# diffing against a guessed branch name.
 _review_base_ref() {
 	local base="${REVIEWER_LADDER_BASE:-}"
-	if [ -z "$base" ]; then
+	if [ -z "$base" ] && [ -n "${LADDER_PR_CTX:-}" ]; then
+		base="$(_review_base_fallback)" || return 1
+	elif [ -z "$base" ]; then
 		base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" ||
 			base="$(_review_base_fallback)" || return 1
 	fi

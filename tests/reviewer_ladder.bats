@@ -498,7 +498,8 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
     export -f codex git
     unset REVIEWER_LADDER_BASE
     run _run_runtime_review codex codex-auto-review "" 447
-    # #835: 2 = setup failure (was 1), so the summary can tell it from an unavailable rung.
+    # #835: 2 = setup failure (was 1). The summary names it from the recorded
+    # reason, not from this status; 2 only keeps the two outcomes distinct here.
     [ "$status" -eq 2 ]
     [[ "$output" != *"RUNTIME CALLED"* ]]
 }
@@ -552,12 +553,32 @@ _fake_gh() {
     [ -z "$output" ]
 }
 
-@test "base ref: still fails closed when neither the PR base nor set-head resolves (#835)" {
+@test "base ref: an unreachable origin and an unreadable PR base fail closed (#835)" {
     git remote add origin "$BATS_TEST_TMPDIR/nowhere.git"
     _fake_gh 'exit 1'
     unset REVIEWER_LADDER_BASE
     LADDER_PR_CTX="o r 42" run _review_base_ref
     [ "$status" -eq 1 ]
+}
+
+@test "base ref: with no PR context, a failing set-head fails closed (#835)" {
+    git remote add origin "$BATS_TEST_TMPDIR/nowhere.git"
+    unset REVIEWER_LADDER_BASE LADDER_PR_CTX
+    run _review_base_ref
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
+
+@test "base ref: a PR's own base wins over an existing origin/HEAD (#666)" {
+    _repo_without_origin_head
+    git remote set-head origin -a >/dev/null
+    [ "$(git symbolic-ref --short refs/remotes/origin/HEAD)" = "origin/main" ]
+    _fake_gh 'echo develop'
+    unset REVIEWER_LADDER_BASE
+    LADDER_PR_CTX="o r 42" run _review_base_ref
+    # Non-vacuity: origin/HEAD resolves to origin/main here, the default, not the PR's base.
+    [ "$status" -eq 0 ]
+    [ "$output" = "origin/develop" ]
 }
 
 @test "base ref: the fallback resolves once per ladder walk, success cached (#835)" {
@@ -675,7 +696,7 @@ _ladder_ready_for_codex() {
     [[ "$output" == *"no rung available ("*" — setup failed: review App not installed"* ]]
 }
 
-@test "run_fallback_review: App not installed at post time is named, not a bare failure (#835)" {
+@test "run_fallback_review: an unreadable App installation is named, never guessed as missing (#835)" {
     _ladder_ready_for_codex
     mkdir -p "$BATS_TEST_TMPDIR/bin"
     printf 'x' >"$BATS_TEST_TMPDIR/app.pem"
@@ -688,7 +709,8 @@ _ladder_ready_for_codex() {
 
     run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"review not posted — setup failed: review App not installed"* ]]
+    # curl exit 22 is any HTTP error: the reason must not claim a 404 it cannot see.
+    [[ "$output" == *"review not posted — setup failed: review App installation unreadable"* ]]
 }
 
 @test "run_fallback_review: a 404 when posting the review is named (#835)" {
