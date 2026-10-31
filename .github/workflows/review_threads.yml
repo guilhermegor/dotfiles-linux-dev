@@ -87,6 +87,23 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
 
+      # One-time bootstrap for #842 (dotfiles-linux-dev#841): master's gate
+      # crashes on the runner's jq 1.8 and only this PR can fix it, so judge it
+      # by its own reviewed script, pinned by SHA. Inert on every other PR;
+      # delete this step once #842 is on master. Keyed on the same PR number the
+      # gate step resolves: a reply comment is an issue_comment event, where
+      # only github.event.issue.number is set.
+      - name: Use the fixed gate for its own PR
+        if: (github.event.pull_request.number || github.event.issue.number || inputs.pr_number) == 842
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          GATE_PATH: ai_clients/claude/hooks/lib/review_thread_gate.sh
+          FIXED_SHA: b1f805e067252558076470cda72c27db3c5a178c
+        run: |
+          gh api "repos/$REPOSITORY/contents/$GATE_PATH?ref=$FIXED_SHA" \
+            -H 'Accept: application/vnd.github.raw' > "$GATE_PATH"
+
       - name: Check review-thread state
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
