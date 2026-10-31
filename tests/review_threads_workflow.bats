@@ -17,7 +17,7 @@ setup() {
     python3 - "$WORKFLOW" "$RUN_SCRIPT" <<'PY'
 import sys, yaml
 doc = yaml.safe_load(open(sys.argv[1]))
-step = next(s for s in doc["jobs"]["gate"]["steps"] if "run" in s)
+step = next(s for s in doc["jobs"]["gate"]["steps"] if s.get("name") == "Check review-thread state")
 open(sys.argv[2], "w").write(step["run"])
 PY
 }
