@@ -38,7 +38,7 @@ PY
 }
 
 teardown() {
-    rm -rf "$TEST_TMP"
+    rm -rf "$TEST_TMP" "${ORIGIN:-}" "${OTHER:-}"
 }
 
 payload() {
@@ -146,7 +146,6 @@ with_origin() {
     git -C "$OTHER" push -q origin main
 
     run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
-    rm -rf "$ORIGIN" "$OTHER"
     # Non-vacuity: the pre-fix guard diffed local HEAD (== v1.0.0 here), saw nothing and blocked.
     [ "$status" -eq 0 ]
     [ -z "$output" ]
@@ -157,7 +156,6 @@ with_origin() {
     commit_py "fix: change greeting" $'GREETING = "hallo"\n'
 
     run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
-    rm -rf "$ORIGIN" "$OTHER"
     # Non-vacuity: the pre-fix guard diffed local HEAD, saw the unpushed change and allowed.
     [ "$status" -eq 2 ]
     [[ "$output" == *"no shipped-artifact change"* ]]
@@ -175,11 +173,86 @@ with_origin() {
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 
-    # An unpushed local commit must not rescue a last-known origin that has no shipped change.
-    git update-ref refs/remotes/origin/main "$(git rev-parse v1.0.0)"
+}
+
+@test "offline: no change on an unrefreshed origin/<base> advises, never hard-blocks" {
+    with_origin
+    git remote set-url origin "$TEST_TMP/does-not-exist"
+    # The unpushed commit must not count as a shipped change: the note still fires.
     commit_py "fix: unpushed" $'GREETING = "hi"\n'
+
     run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
-    rm -rf "$ORIGIN" "$OTHER"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"could not be refreshed"* ]]
+}
+
+@test "a renamed default branch: a working fetch beats the dead tracking ref" {
+    with_origin
+    git update-ref refs/remotes/origin/master "$(git rev-parse v1.0.0)"
+    git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master
+    printf 'GREETING = "hallo"\n' > "$OTHER/src/lib.py"
+    git -C "$OTHER" commit -q -am "fix: change greeting"
+    git -C "$OTHER" push -q origin main
+
+    run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
+    # Non-vacuity: the dead origin/master has no shipped change and would have blocked.
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "a master default branch is found with no origin/HEAD" {
+    with_origin
+    git -C "$OTHER" branch -m main master
+    printf 'GREETING = "hallo"\n' > "$OTHER/src/lib.py"
+    git -C "$OTHER" commit -q -am "feat: change greeting"
+    git -C "$OTHER" push -q origin master
+    git -C "$ORIGIN" symbolic-ref HEAD refs/heads/master
+    git -C "$ORIGIN" branch -D main >/dev/null
+    git update-ref -d refs/remotes/origin/main
+
+    run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "--ref naming another branch is allowed, it builds a line this guard cannot judge" {
+    with_origin
+    run run_hook "gh workflow run release-pypi.yaml --ref release/1.x -f version=1.0.1"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "--ref naming the default branch is still judged" {
+    with_origin
+    run run_hook "gh workflow run release-pypi.yaml --ref main -f version=1.0.1"
+    [ "$status" -eq 2 ]
+}
+
+@test "a remote not named origin fails open instead of judging local HEAD" {
+    with_origin
+    git remote rename origin upstream
+    run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "shipped paths come from origin/<base>, not a lagging checkout" {
+    with_origin
+    printf 'lib/\n' > "$OTHER/.claude/release.conf"
+    git -C "$OTHER" add .claude
+    git -C "$OTHER" commit -q -m "chore: move shipped path"
+    git -C "$OTHER" push -q origin main
+
+    run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
+    # release.conf is not under lib/, so origin's list sees no shipped change. The checkout's src/
+    # list also sees none, so make the checkout's list wrong in the other direction:
+    [ "$status" -eq 2 ]
+
+    printf 'GREETING = "hallo"\n' > "$OTHER/src/lib.py"
+    git -C "$OTHER" commit -q -am "fix: outside the shipped path now"
+    git -C "$OTHER" push -q origin main
+    run run_hook "gh workflow run release-pypi.yaml -f version=1.0.1"
+    # Non-vacuity: the checkout's src/ list would see this change and allow.
     [ "$status" -eq 2 ]
 }
 

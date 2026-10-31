@@ -29,14 +29,16 @@
 #
 # Hook I/O contract (same as the other guards): a hard block is exit 2 + stderr; an advisory is a
 # stdout JSON additionalContext on exit 0. It fails OPEN everywhere: not a release dispatch, no
-# tags yet (first release), unparseable versions, or any unresolvable state exits 0.
+# tags yet (first release), unparseable versions, or any unresolvable state exits 0. A block that
+# could only judge an unrefreshed origin/<base> is downgraded to an advisory: that tree may be
+# behind the remote, and this guard promises never to false-block (#838 review).
 
 set -u
 
 command -v jq >/dev/null 2>&1 || exit 0
 
 main() {
-    local payload tool command version root ref last_tag paths signal bump
+    local payload tool command version ref last_tag paths signal bump
 
     payload="$(cat)"
     tool="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
@@ -48,11 +50,13 @@ main() {
     is_release_dispatch "$command" || exit 0
     version="$(extract_version "$command")" || exit 0   # no -f version= → cannot reason → allow
 
-    root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
-    ref="$(resolve_base_ref)" || exit 0                  # origin/<base> unresolvable → cannot reason
+    git rev-parse --show-toplevel >/dev/null 2>&1 || exit 0
+    resolve_base_ref || exit 0                           # origin/<base> unresolvable → cannot reason
+    ref="$BASE_REF"
+    dispatch_targets_other_ref "$command" "${ref#origin/}" && exit 0
     last_tag="$(git describe --tags --abbrev=0 "$ref" 2>/dev/null)" || exit 0   # no tags → first release
 
-    mapfile -t paths < <(shipped_paths "$root")
+    mapfile -t paths < <(shipped_paths "$ref")
     shipped_diff_empty "$last_tag" "$ref" "${paths[@]}" && block_no_shipped_change "$last_tag" "$ref" "${paths[@]}"
     semantic_diff_empty "$last_tag" "$ref" "${paths[@]}" && block_comment_only_change "$last_tag" "$ref" "${paths[@]}"
 
@@ -78,26 +82,52 @@ extract_version() {
     return 1
 }
 
+dispatch_targets_other_ref() {
+    # `gh workflow run --ref X` builds X, not the default branch, and this guard only knows the
+    # default branch's release line: a differing --ref cannot be reasoned about, so allow it.
+    local s=" $1" base="$2"
+    [[ "$s" =~ [[:space:]](--ref|-r)[[:space:]=]*([^[:space:]\"\']+) ]] || return 1
+    [[ "${BASH_REMATCH[2]}" != "$base" ]]
+}
+
 resolve_base_ref() {
     # The tree a release workflow builds is the REMOTE default branch, never this checkout's HEAD
     # (dotfiles-linux-dev#836, same class as #229/#410): a checkout lagging origin made the guard
-    # judge the wrong tree. Emit `origin/<base>` after force-updating that remote-tracking ref —
-    # mirrors release_due_nudge.sh. <base> is origin/HEAD's target, else main, else master.
+    # judge the wrong tree. Sets BASE_REF to `origin/<base>` after force-updating that
+    # remote-tracking ref, mirroring release_due_nudge.sh, and BASE_REF_FRESH to whether that
+    # update worked. Globals because a $(...) caller would lose BASE_REF_FRESH.
+    # <base> is origin/HEAD's target, else main, else master.
     #
-    # Offline: a failed fetch is NOT fatal when a remote-tracking ref already exists — that
-    # last-known origin/<base> is used. It never degrades to local HEAD, which may hold unpushed
-    # commits that the release workflow cannot see. No ref at all -> failure (caller fails open).
-    # The fetch is bounded (no credential prompt, 10s) so a stalled network cannot hang the hook.
-    # The one exception is a repo with no `origin` remote: nothing remote exists to lag behind,
-    # so local HEAD is the only tree there is.
-    git remote get-url origin >/dev/null 2>&1 || { printf 'HEAD'; return 0; }
-    local base cand
+    # A candidate whose fetch succeeds wins over a tracking ref left behind by a deleted or renamed
+    # branch. With no fetch working, the last-known origin/<base> is used, never local HEAD, which
+    # may hold unpushed commits that the release workflow cannot see. No ref at all -> failure
+    # (caller fails open). The fetch has no credential prompt, and a stall spends one 10s budget
+    # across the loop, so a stalled network cannot hang the hook.
+    # A repo with no remotes has nothing to lag behind, so local HEAD is the only tree there is.
+    # One with remotes but no `origin` fails open: the default branch cannot be named.
+    if ! git remote get-url origin >/dev/null 2>&1; then
+        [[ -z "$(git remote)" ]] || return 1
+        BASE_REF="HEAD"
+        BASE_REF_FRESH=1
+        return 0
+    fi
+    local base cand rc
     base="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)"
     base="${base#origin/}"
     for cand in $base main master; do   # unquoted on purpose: an empty $base vanishes
         GIT_TERMINAL_PROMPT=0 timeout 10 git fetch --quiet origin "+refs/heads/$cand:refs/remotes/origin/$cand" 2>/dev/null
+        rc=$?
+        if (( rc == 0 )); then
+            BASE_REF="origin/$cand"
+            BASE_REF_FRESH=1
+            return 0
+        fi
+        (( rc == 124 )) && break
+    done
+    for cand in $base main master; do
         if git rev-parse --verify --quiet "refs/remotes/origin/$cand^{commit}" >/dev/null; then
-            printf 'origin/%s' "$cand"
+            BASE_REF="origin/$cand"
+            BASE_REF_FRESH=0
             return 0
         fi
     done
@@ -105,12 +135,13 @@ resolve_base_ref() {
 }
 
 shipped_paths() {
-    # One path/glob per line: the repo's .claude/release.conf if present, else the Python default.
+    # One path/glob per line: <ref>'s .claude/release.conf if present, else the Python default.
+    # Read from the judged ref, not the checkout, so a lagging checkout cannot pick the paths.
     # Committed on purpose (unlike the tracker map): a repo's shipped layout is its own metadata,
     # and you only release repos you control.
-    local root="$1" conf="$1/.claude/release.conf"
-    if [[ -r "$conf" ]]; then
-        grep -vE '^[[:space:]]*(#|$)' "$conf"
+    local conf
+    if conf="$(git show "$1:.claude/release.conf" 2>/dev/null)"; then
+        printf '%s\n' "$conf" | grep -vE '^[[:space:]]*(#|$)'
         return
     fi
     printf '%s\n' "src/" "pyproject.toml"
@@ -234,8 +265,20 @@ advise_if_overbump() {
     exit 0
 }
 
+advise_if_ref_stale() {
+    [[ "$BASE_REF_FRESH" == 1 ]] && return 0
+    jq -n --arg r "$1" --arg w "$2" '{
+        hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            additionalContext: ("release_dispatch_guard (advisory): \($w), but \($r) could not be refreshed, so the remote may have moved. Check it before releasing. Not blocking.")
+        }
+    }' 2>/dev/null || true
+    exit 0
+}
+
 block_no_shipped_change() {
     local last_tag="$1" ref="$2"; shift 2
+    advise_if_ref_stale "$ref" "no shipped-artifact change since ${last_tag}"
     {
         echo "BLOCKED: no shipped-artifact change since ${last_tag} — refusing to release."
         echo
@@ -251,6 +294,7 @@ block_no_shipped_change() {
 
 block_comment_only_change() {
     local last_tag="$1" ref="$2"; shift 2
+    advise_if_ref_stale "$ref" "the shipped diff since ${last_tag} is comment-only"
     {
         echo "BLOCKED: shipped diff since ${last_tag} is comment-only — refusing to release."
         echo
