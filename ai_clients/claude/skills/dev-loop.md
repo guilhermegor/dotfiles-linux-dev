@@ -74,6 +74,14 @@ An agent killed mid-flight leaves work in its worktree. A worktree is torn down;
     def="${def#origin/}"
     if [ -n "$def" ] && [ "$b" != "$def" ]; then
       u=$(/usr/bin/git -C "$p" cherry "origin/$def" HEAD 2>/dev/null | grep -c '^+')
+      # Per-commit patch-ids miss a multi-commit squash merge (#837): if every path the
+      # branch changed is byte-identical on origin/$def, it shipped. Undecidable = report.
+      if [ "$u" != "0" ]; then
+        mb=$(/usr/bin/git -C "$p" merge-base "origin/$def" HEAD 2>/dev/null)
+        [ -n "$mb" ] && /usr/bin/git -C "$p" diff --name-only -z --no-renames "$mb" HEAD 2>/dev/null \
+          | xargs -0 /usr/bin/git -C "$p" --literal-pathspecs diff --quiet "origin/$def" HEAD -- \
+              2>/dev/null && u=0
+      fi
       [ "$u" != "0" ] && u="${u}-NO-UPSTREAM"
     else
       u=NO-REMOTE

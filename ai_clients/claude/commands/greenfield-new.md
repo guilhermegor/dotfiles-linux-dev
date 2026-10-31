@@ -201,6 +201,7 @@ No spec file: `--spec` has no named-key map for `<skeleton>` yet, so this table 
 ## Documentation
 - Update `docs/` and the `README.md` where relevant — new behaviour, a change to the public
   API, or a new usage example. The work is not complete until the documentation matches it.
+  The README layout is the BlueprintX template's (`templates/common/README.template.md`).
 ```
 
 ```

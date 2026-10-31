@@ -111,6 +111,20 @@ merged_pr_covers_head() {
 	return 1
 }
 
+# True when every path the worktree at <path> changed since it forked from origin/<default>
+# is byte-identical on origin/<default> — the work shipped, however it was squashed.
+# `git cherry` compares per-commit patch-ids, so a multi-commit branch squash-merged into
+# ONE commit reads as N unshipped commits (dotfiles-linux-dev#837); this compares content.
+# Any undecidable step (no merge-base, a failed diff) returns 1: fail toward reporting.
+branch_content_shipped() {
+	local path="$1" db="$2" base
+	base="$(git -C "$path" merge-base "origin/$db" HEAD 2>/dev/null)" || return 1
+	# NUL-separated names stay in the pipe: a command substitution would drop the NULs.
+	# An empty list makes the diff compare whole trees — stricter, so it still fails toward reporting.
+	git -C "$path" diff --name-only -z --no-renames "$base" HEAD 2>/dev/null \
+		| xargs -0 git -C "$path" --literal-pathspecs diff --quiet "origin/$db" HEAD -- 2>/dev/null
+}
+
 # `git worktree list` entries for THIS repo (parallel-agent worktrees included) — unpushed
 # commits, classified dirty state, and (when the GitHub half answered) a branch that was
 # pushed but never got a PR. One walk, no per-branch `gh` calls.
@@ -178,6 +192,9 @@ fanout_worktrees() {
 					never_pushed="$(git -C "$path" cherry "origin/$default_branch" HEAD 2>/dev/null \
 						| grep -c '^+')"
 					[ -n "$never_pushed" ] || never_pushed=0
+					# A multi-commit squash merge leaves every commit "+": settle it by content (#837).
+					[ "$never_pushed" -gt 0 ] && branch_content_shipped "$path" "$default_branch" \
+						&& never_pushed=0
 					if [ "$never_pushed" -gt 0 ]; then
 						printf '[fan-out] worktree %s: %s commit(s) never pushed — no upstream\n' \
 							"$name" "$never_pushed"

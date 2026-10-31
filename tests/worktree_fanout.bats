@@ -64,9 +64,10 @@ setup() {
     wtE="$BATS_TEST_TMPDIR/wtE"
     git -C "$work" worktree add --quiet -b branchE "$wtE" master
 
-    # branchF / branchG: TWO commits each, no upstream, then squash-merged into master as ONE
-    # commit — the dotfiles-linux-dev#606 shape. The squashed commit's patch-id equals neither branch
-    # commit, so `git cherry` marks both "+" and only the forge can say the work shipped.
+    # branchF: TWO commits, no upstream, then squash-merged into master as ONE commit — the
+    # dotfiles-linux-dev#606/#837 shape. The squashed commit's patch-id equals neither branch
+    # commit, so `git cherry` marks both "+"; only a content comparison (or the forge) says the
+    # work shipped. branchG: the same two commits but NEVER merged — real unshipped work.
     wtF="$BATS_TEST_TMPDIR/wtF"
     wtG="$BATS_TEST_TMPDIR/wtG"
     git -C "$work" worktree add --quiet -b branchF "$wtF" master
@@ -77,11 +78,11 @@ setup() {
             git -C "${pair%%:*}" add "${pair#*:}$n.txt"
             git -C "${pair%%:*}" commit --quiet -m "feat: add ${pair#*:}$n"
         done
-        echo "${pair#*:}1" >"$work/${pair#*:}1.txt"
-        echo "${pair#*:}2" >"$work/${pair#*:}2.txt"
-        git -C "$work" add "${pair#*:}1.txt" "${pair#*:}2.txt"
-        git -C "$work" commit --quiet -m "feat: add ${pair#*:}1 and ${pair#*:}2 (squash)"
     done
+    echo f1 >"$work/f1.txt"
+    echo f2 >"$work/f2.txt"
+    git -C "$work" add f1.txt f2.txt
+    git -C "$work" commit --quiet -m "feat: add f1 and f2 (squash)"
     git -C "$work" push --quiet origin master
     headF="$(git -C "$wtF" rev-parse HEAD)"
     headG="$(git -C "$wtG" rev-parse HEAD)"
@@ -135,7 +136,23 @@ pr_row() {
     [[ ! "$output" == *"RESUME"*"wtF"* ]]
 }
 
-@test "multi-commit squash-merged branch is still reported when the forge is unreadable" {
+@test "multi-commit squash-merged branch is not reported even when the forge is unreadable" {
+    run fanout_worktrees "$work" 0 ""
+    [ "$status" -eq 0 ]
+    [[ ! "$output" == *"worktree wtF: "*"never pushed"* ]]
+    [[ ! "$output" == *"RESUME"*"wtF"* ]]
+}
+
+@test "multi-commit branch never merged is reported when the forge is unreadable" {
+    run fanout_worktrees "$work" 0 ""
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtG: 2 commit(s) never pushed"* ]]
+}
+
+@test "squash-merged branch whose files changed again on default is still reported" {
+    echo later >"$work/f1.txt"
+    git -C "$work" commit --quiet -am "fix: touch f1 again"
+    git -C "$work" push --quiet origin master
     run fanout_worktrees "$work" 0 ""
     [ "$status" -eq 0 ]
     [[ "$output" == *"worktree wtF: 2 commit(s) never pushed"* ]]
@@ -160,21 +177,21 @@ pr_row() {
 }
 
 @test "merged PR whose head descends from the local HEAD suppresses the report" {
-    later="$(git -C "$wtF" commit-tree 'HEAD^{tree}' -p "$headF" -m "later push")"
-    run fanout_worktrees "$work" 1 "$(pr_row MERGED branchF "$later")"
+    later="$(git -C "$wtG" commit-tree 'HEAD^{tree}' -p "$headG" -m "later push")"
+    run fanout_worktrees "$work" 1 "$(pr_row MERGED branchG "$later")"
     [ "$status" -eq 0 ]
-    [[ ! "$output" == *"worktree wtF: "*"never pushed"* ]]
+    [[ ! "$output" == *"worktree wtG: "*"never pushed"* ]]
 }
 
 @test "merged PR head absent locally still reports the worktree" {
-    run fanout_worktrees "$work" 1 "$(pr_row MERGED branchF "0123456789abcdef0123456789abcdef01234567")"
+    run fanout_worktrees "$work" 1 "$(pr_row MERGED branchG "0123456789abcdef0123456789abcdef01234567")"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"worktree wtF: 2 commit(s) never pushed"* ]]
+    [[ "$output" == *"worktree wtG: 2 commit(s) never pushed"* ]]
 }
 
 @test "merged PR head that is an ancestor of the local HEAD does not suppress the report" {
-    parent="$(git -C "$wtF" rev-parse HEAD~1)"
-    run fanout_worktrees "$work" 1 "$(pr_row MERGED branchF "$parent")"
+    parent="$(git -C "$wtG" rev-parse HEAD~1)"
+    run fanout_worktrees "$work" 1 "$(pr_row MERGED branchG "$parent")"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"worktree wtF: 2 commit(s) never pushed"* ]]
+    [[ "$output" == *"worktree wtG: 2 commit(s) never pushed"* ]]
 }
