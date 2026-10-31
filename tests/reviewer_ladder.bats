@@ -498,8 +498,241 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
     export -f codex git
     unset REVIEWER_LADDER_BASE
     run _run_runtime_review codex codex-auto-review "" 447
-    [ "$status" -eq 1 ]
+    # #835: 2 = setup failure (was 1). The summary names it from the recorded
+    # reason, not from this status; 2 only keeps the two outcomes distinct here.
+    [ "$status" -eq 2 ]
     [[ "$output" != *"RUNTIME CALLED"* ]]
+}
+
+# A pushed (not cloned) repo: origin has main (its HEAD) and develop, but the
+# local clone-less checkout carries no refs/remotes/origin/HEAD (#835).
+_repo_without_origin_head() {
+    local bare="$BATS_TEST_TMPDIR/origin.git" seed="$BATS_TEST_TMPDIR/seed"
+    git init -q --bare -b main "$bare"
+    git init -q -b main "$seed"
+    git -C "$seed" -c user.name=t -c user.email=t@t commit -q --allow-empty -m one
+    git -C "$seed" branch develop
+    git -C "$seed" push -q "$bare" main develop
+    git remote add origin "$bare"
+    git fetch -q origin
+    [ -z "$(git symbolic-ref -q refs/remotes/origin/HEAD)" ]
+}
+
+_fake_gh() {
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    printf '#!/bin/bash\n%s\n' "$1" >"$BATS_TEST_TMPDIR/bin/gh"
+    chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+}
+
+@test "base ref: no origin/HEAD resolves from the PR's own base branch over REST (#835)" {
+    _repo_without_origin_head
+    _fake_gh 'echo "$*" >>"$BATS_TEST_TMPDIR/gh.argv"; echo develop'
+    unset REVIEWER_LADDER_BASE
+    LADDER_PR_CTX="o r 42" run _review_base_ref
+    [ "$status" -eq 0 ]
+    [ "$output" = "origin/develop" ]
+    grep -q 'repos/o/r/pulls/42 --jq .base.ref' "$BATS_TEST_TMPDIR/gh.argv"
+}
+
+@test "base ref: with no PR context, set-head -a recovers origin/HEAD once (#835)" {
+    _repo_without_origin_head
+    unset REVIEWER_LADDER_BASE LADDER_PR_CTX
+    run _review_base_ref
+    [ "$status" -eq 0 ]
+    [ "$output" = "origin/main" ]
+}
+
+@test "base ref: a PR whose base cannot be read fails closed, never guesses the default" {
+    _repo_without_origin_head
+    _fake_gh 'exit 1'
+    unset REVIEWER_LADDER_BASE
+    LADDER_PR_CTX="o r 42" run _review_base_ref
+    # Non-vacuity: set-head would resolve origin/main here, which may not be the PR's base.
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
+
+@test "base ref: an unreachable origin and an unreadable PR base fail closed (#835)" {
+    git remote add origin "$BATS_TEST_TMPDIR/nowhere.git"
+    _fake_gh 'exit 1'
+    unset REVIEWER_LADDER_BASE
+    LADDER_PR_CTX="o r 42" run _review_base_ref
+    [ "$status" -eq 1 ]
+}
+
+@test "base ref: with no PR context, a failing set-head fails closed (#835)" {
+    git remote add origin "$BATS_TEST_TMPDIR/nowhere.git"
+    unset REVIEWER_LADDER_BASE LADDER_PR_CTX
+    run _review_base_ref
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
+
+@test "base ref: a PR's own base wins over an existing origin/HEAD (#666)" {
+    _repo_without_origin_head
+    git remote set-head origin -a >/dev/null
+    [ "$(git symbolic-ref --short refs/remotes/origin/HEAD)" = "origin/main" ]
+    _fake_gh 'echo develop'
+    unset REVIEWER_LADDER_BASE
+    LADDER_PR_CTX="o r 42" run _review_base_ref
+    # Non-vacuity: origin/HEAD resolves to origin/main here, the default, not the PR's base.
+    [ "$status" -eq 0 ]
+    [ "$output" = "origin/develop" ]
+}
+
+@test "base ref: the fallback resolves once per ladder walk, success cached (#835)" {
+    _repo_without_origin_head
+    _fake_gh 'echo x >>"$BATS_TEST_TMPDIR/gh.calls"; echo develop'
+    unset REVIEWER_LADDER_BASE
+    export LADDER_SETUP_REASONS="$BATS_TEST_TMPDIR/reasons" LADDER_PR_CTX="o r 42"
+    run _review_base_fallback
+    [ "$output" = "origin/develop" ]
+    run _review_base_fallback
+    [ "$status" -eq 0 ]
+    [ "$output" = "origin/develop" ]
+    [ "$(wc -l <"$BATS_TEST_TMPDIR/gh.calls")" -eq 1 ]
+}
+
+@test "base ref: a failed fallback is cached too, no second network wait (#835)" {
+    git remote add origin "$BATS_TEST_TMPDIR/nowhere.git"
+    _fake_gh 'echo x >>"$BATS_TEST_TMPDIR/gh.calls"; exit 1'
+    unset REVIEWER_LADDER_BASE
+    export LADDER_SETUP_REASONS="$BATS_TEST_TMPDIR/reasons" LADDER_PR_CTX="o r 42"
+    run _review_base_fallback
+    [ "$status" -eq 1 ]
+    run _review_base_fallback
+    [ "$status" -eq 1 ]
+    [ "$(wc -l <"$BATS_TEST_TMPDIR/gh.calls")" -eq 1 ]
+}
+
+@test "_post_pr_review: gh stderr on success stays on stderr, not stdout (#835)" {
+    _ladder_app_token() { echo tok; }
+    gh() { cat >/dev/null; echo '{"id":1}'; echo "gh: warning" >&2; }
+    export -f _ladder_app_token gh
+    unset REVIEWER_LADDER_POST_CMD
+    out="$(_post_pr_review o r 1 body sha 2>/dev/null)"
+    [ "$out" = '{"id":1}' ]
+}
+
+@test "_setup_reasons: a reason containing ';' is kept intact (#835)" {
+    LADDER_SETUP_REASONS="$BATS_TEST_TMPDIR/reasons"
+    _note_setup_failure "a;b"
+    _note_setup_failure "c"
+    run _setup_reasons
+    [ "$output" = "a;b; c" ]
+}
+
+@test "run_fallback_review: a rung that died on setup is named in the summary (#835)" {
+    export REVIEWER_LADDER_QWEN_SETTINGS="$FIXTURES/qwen_malformed.json"
+    export REVIEWER_LADDER_CODEX_CACHE="$FIXTURES/codex_full.json"
+    fake_codex_probe() { [ "$1" = "codex-auto-review" ]; }
+    export REVIEWER_LADDER_CODEX_PROBE=fake_codex_probe
+    fake_checkout() { echo "$BATS_TEST_TMPDIR"; }
+    export -f fake_checkout
+    export REVIEWER_LADDER_CHECKOUT_CMD=fake_checkout
+    fake_run() { _note_setup_failure "cannot resolve the review base"; return 2; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+    fake_post() { echo "SHOULD NOT POST" >&2; }
+    export -f fake_post
+    export REVIEWER_LADDER_POST_CMD=fake_post
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no rung available ("*" — setup failed: cannot resolve the review base"* ]]
+    [[ "$output" != *"SHOULD NOT POST"* ]]
+}
+
+@test "run_fallback_review: a plain review failure keeps the unavailable-rung summary (#835)" {
+    export REVIEWER_LADDER_QWEN_SETTINGS="$FIXTURES/qwen_malformed.json"
+    export REVIEWER_LADDER_CODEX_CACHE="$FIXTURES/codex_full.json"
+    fake_codex_probe() { [ "$1" = "codex-auto-review" ]; }
+    export REVIEWER_LADDER_CODEX_PROBE=fake_codex_probe
+    fake_checkout() { echo "$BATS_TEST_TMPDIR"; }
+    export -f fake_checkout
+    export REVIEWER_LADDER_CHECKOUT_CMD=fake_checkout
+    fake_run() { return 1; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no rung available (qwen"* ]]
+    [[ "$output" != *"setup failed"* ]]
+}
+
+_ladder_ready_for_codex() {
+    export REVIEWER_LADDER_QWEN_SETTINGS="$FIXTURES/qwen_malformed.json"
+    export REVIEWER_LADDER_CODEX_CACHE="$FIXTURES/codex_full.json"
+    fake_codex_probe() { [ "$1" = "codex-auto-review" ]; }
+    export REVIEWER_LADDER_CODEX_PROBE=fake_codex_probe
+    # A dedicated dir: the ladder tears the checkout down with rm -rf.
+    fake_checkout() { mkdir -p "$BATS_TEST_TMPDIR/wt" && echo "$BATS_TEST_TMPDIR/wt"; }
+    export -f fake_checkout
+    export REVIEWER_LADDER_CHECKOUT_CMD=fake_checkout
+    fake_run() { echo "1 finding"; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+    unset REVIEWER_LADDER_POST_CMD
+}
+
+@test "setup reasons are de-duplicated and joined for the summary (#835)" {
+    LADDER_SETUP_REASONS="$BATS_TEST_TMPDIR/reasons"
+    _note_setup_failure "cannot resolve the review base"
+    _note_setup_failure "review App not installed"
+    _note_setup_failure "cannot resolve the review base"
+    run _setup_reasons
+    [ "$output" = "cannot resolve the review base; review App not installed" ]
+}
+
+@test "a rung's recorded setup reason reaches the no-rung summary (#835)" {
+    _ladder_ready_for_codex
+    fake_run() { _note_setup_failure "review App not installed"; return 2; }
+    export -f fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no rung available ("*" — setup failed: review App not installed"* ]]
+}
+
+@test "run_fallback_review: an unreadable App installation is named, never guessed as missing (#835)" {
+    _ladder_ready_for_codex
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    printf 'x' >"$BATS_TEST_TMPDIR/app.pem"
+    printf '{"app_id":"1","pem":"%s/app.pem"}' "$BATS_TEST_TMPDIR" >"$BATS_TEST_TMPDIR/app.json"
+    export REVIEWER_LADDER_APP_CONFIG="$BATS_TEST_TMPDIR/app.json"
+    printf '#!/bin/bash\nif [ "$1" = dgst ]; then echo sig; else cat; fi\n' >"$BATS_TEST_TMPDIR/bin/openssl"
+    printf '#!/bin/bash\nexit 22\n' >"$BATS_TEST_TMPDIR/bin/curl"
+    chmod +x "$BATS_TEST_TMPDIR/bin/openssl" "$BATS_TEST_TMPDIR/bin/curl"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    # curl exit 22 is any HTTP error: the reason must not claim a 404 it cannot see.
+    [[ "$output" == *"review not posted — setup failed: review App installation unreadable"* ]]
+}
+
+@test "run_fallback_review: a 404 when posting the review is named (#835)" {
+    _ladder_ready_for_codex
+    _ladder_app_token() { echo tok; }
+    gh() { cat >/dev/null; echo "gh: Not Found (HTTP 404)" >&2; return 1; }
+    export -f _ladder_app_token gh
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"review not posted — setup failed: posting the review returned 404"* ]]
+}
+
+@test "run_fallback_review: a non-setup post failure adds no setup summary (#835)" {
+    _ladder_ready_for_codex
+    _ladder_app_token() { echo tok; }
+    gh() { cat >/dev/null; echo "gh: HTTP 500" >&2; return 1; }
+    export -f _ladder_app_token gh
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"setup failed"* ]]
 }
 
 @test "print_status falls back to stderr, never to silence, when common.sh is absent" {
@@ -513,7 +746,7 @@ STALE_CREATED_AT='2026-09-27T12:43:28Z'   # before HEAD_DATE -- #546's own marke
     export -f codex
     export REVIEWER_LADDER_BASE=origin/no-such-branch-xyz
     run _run_runtime_review codex codex-auto-review "" 447
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]
     [[ "$output" != *"RUNTIME CALLED"* ]]
 }
 
@@ -1592,4 +1825,34 @@ STUB
     run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash "$SANDBOX/run_ladder_review.sh" 7
     [ "$status" -eq 1 ]
     [[ "$output" != *"ARGS"* ]]
+}
+
+@test "run_fallback_review: a CLI that exits 2 on its own is not reported as a setup failure (#835)" {
+    _ladder_ready_for_codex
+    fake_run() { return 2; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no rung available (qwen"* ]]
+    [[ "$output" != *"setup failed"* ]]
+}
+
+@test "run_fallback_review: an earlier rung's setup reason is not blamed for a post failure (#835)" {
+    _ladder_ready_for_codex
+    unset REVIEWER_LADDER_CLAUDE_PROBE
+    export REVIEWER_LADDER_PROBE_TIMEOUT=1
+    _fake_cli claude ok
+    fake_run() { if [ "$1" = codex ]; then _note_setup_failure "cannot resolve the review base"; return 2; fi; echo "finding"; }
+    export -f fake_run
+    export REVIEWER_LADDER_RUN_CMD=fake_run
+    _ladder_app_token() { echo tok; }
+    gh() { cat >/dev/null; echo "gh: HTTP 500" >&2; return 1; }
+    export -f _ladder_app_token gh
+
+    run run_fallback_review o r 474 BLOCKED "" 5000 "[]"
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"setup failed"* ]]
+    [[ "$output" != *"cannot resolve the review base"* ]]
 }
