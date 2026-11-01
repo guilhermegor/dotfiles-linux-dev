@@ -256,8 +256,9 @@ of these holds — otherwise do not raise it at all:
 When you do ask, offer: one flat issue, or a parent plus one sub-issue per deliverable (list the
 deliverables you inferred so the user can correct them).
 
-Parent bodies carry **What / Why** (or the target template's equivalent first section, per
-step 6) plus a checklist of their children; children carry the full template. There is no separate `/epic` command — it would duplicate the repo, board and branch
+Parent bodies pass the same guard as any other issue: every header of the skeleton step 6
+selects (the target template's, or the built-in one), with a checklist of their children under
+**Scope** (or the template's equivalent section). Children carry the full template too. There is no separate `/epic` command — it would duplicate the repo, board and branch
 logic for no gain.
 
 ## 5a. Score the issue(s) — blocking
@@ -300,10 +301,12 @@ repo's templates, so the body must be built from them (dotfiles-linux-dev#853; m
 `feature_or_fix.md`, which requires `## What / Why`). Apply the guard's own rule, not a
 paraphrase of it:
 
-1. List `.github/ISSUE_TEMPLATE/*.md` in the **target** repo (the `--repo` checkout, not the
-   session cwd — `rtk gh api repos/<o>/<r>/contents/.github/ISSUE_TEMPLATE` when it is not
-   checked out locally). Only top-level `*.md` files count; `config.yml` and YAML form templates
-   are ignored, exactly as the guard ignores them.
+1. List `.github/ISSUE_TEMPLATE/*.md` in the **target** repo's local checkout, resolved the way
+   the guard resolves it: the session cwd when its `origin` names the target, else
+   `~/github/<name>`. If neither exists, stop and ask for a local clone first: the guard blocks
+   a `--repo` target it cannot resolve to a checkout, whatever the body says. Only top-level
+   `*.md` files count; `config.yml` and YAML form templates are ignored, exactly as the guard
+   ignores them.
 2. **No template found → use the built-in skeleton below** as written.
 3. **One or more found → build the body from a template**: take its `##`/`###` headers
    verbatim (after stripping the YAML frontmatter and `<!-- -->` comments), in the template's
