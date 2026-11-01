@@ -13,10 +13,10 @@
 # `issues` (dotfiles-linux-dev#822): `repos/$R/pulls/816/merge` is judged like its literal twin
 # and passes. A variable in the resource segment itself, or any `issues` resource, stays closed.
 #
-# Generic and data-driven: a target repo with no issue template is untouched (exit 0) — this is
-# what keeps `/issue` (ai_clients/claude/commands/issue.md), which files its own Goal/Scope/
-# Documentation body into repos that ship no issue template (dotfiles-dev, blueprintx, ...), from
-# ever hitting this guard. Nothing here names a specific repo or template.
+# Generic and data-driven: a target repo with no issue template is untouched (exit 0). `/issue`
+# (ai_clients/claude/commands/issue.md) builds its body from the target repo's templates when
+# they exist, and falls back to its own What / Why / Scope / Documentation skeleton only when
+# they do not (dotfiles-linux-dev#853). Nothing here names a specific repo or template.
 #
 # What is checked, all DERIVED FROM THE TEMPLATE FILE ITSELF, never hardcoded to one project's
 # wording:
