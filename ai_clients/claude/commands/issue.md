@@ -256,8 +256,8 @@ of these holds — otherwise do not raise it at all:
 When you do ask, offer: one flat issue, or a parent plus one sub-issue per deliverable (list the
 deliverables you inferred so the user can correct them).
 
-Parent bodies carry **Goal** plus a checklist of their children; children carry the full
-template. There is no separate `/epic` command — it would duplicate the repo, board and branch
+Parent bodies carry **What / Why** (or the target template's equivalent first section, per
+step 6) plus a checklist of their children; children carry the full template. There is no separate `/epic` command — it would duplicate the repo, board and branch
 logic for no gain.
 
 ## 5a. Score the issue(s) — blocking
@@ -293,14 +293,40 @@ scored before the parent is written.
 
 *(Create path only — skip if step 2 resolved an existing issue.)*
 
-Body template. The **Documentation** section is mandatory and stays verbatim — it is a standing
-requirement. It is written in English, like the rest of this repo's durable record
-(`gh_prose_language_guard.sh` enforces exactly that for whatever is published here — a template
-demanding non-English prose would fight its own guard, dotfiles-linux-dev#187):
+**Which skeleton: the target repo's issue template wins.** `issue_template_guard.sh` rejects any
+`gh issue create`/`edit` (and the REST twin) whose body lacks a `##`/`###` header of the target
+repo's templates, so the body must be built from them (dotfiles-linux-dev#853; measured on
+#847–#849, where the built-in `## Goal` skeleton was refused by this repo's own
+`feature_or_fix.md`, which requires `## What / Why`). Apply the guard's own rule, not a
+paraphrase of it:
+
+1. List `.github/ISSUE_TEMPLATE/*.md` in the **target** repo (the `--repo` checkout, not the
+   session cwd — `rtk gh api repos/<o>/<r>/contents/.github/ISSUE_TEMPLATE` when it is not
+   checked out locally). Only top-level `*.md` files count; `config.yml` and YAML form templates
+   are ignored, exactly as the guard ignores them.
+2. **No template found → use the built-in skeleton below** as written.
+3. **One or more found → build the body from a template**: take its `##`/`###` headers
+   verbatim (after stripping the YAML frontmatter and `<!-- -->` comments), in the template's
+   order, and fill each from the same material as the skeleton (`What / Why` ← the goal, `Scope`
+   ← scope bullets, and so on). With several templates, pick the best fit for the work — the guard
+   passes a body that satisfies any one of them, so satisfy one completely rather than blending.
+4. Whatever the template, **append the mandatory `## File surface` and `## Documentation`
+   sections** if the chosen template does not already carry a header of that name. Extra
+   sections never fail the guard; a missing template header always does.
+5. Honour the rest of the template's contract: a bold or `·`-separated first line when its
+   first line is shaped that way, at least one `- [ ]` item under a header whose template section
+   has one, and any `issue-template-guard: require "<text>" [if-label <label>]` directive in its
+   comments (the label form applies when you pass that `--label`).
+
+Built-in body skeleton (used only when the repo has no issue template). The **Documentation**
+section is mandatory and stays verbatim — it is a standing requirement. It is written in
+English, like the rest of this repo's durable record (`gh_prose_language_guard.sh` enforces
+exactly that for whatever is published here — a template demanding non-English prose would
+fight its own guard, dotfiles-linux-dev#187):
 
 ````
-## Goal
-<one-paragraph statement of what this work delivers>
+## What / Why
+<one-paragraph statement of what this work delivers and why>
 
 ## Scope
 - <bullet(s) scoping the change>
@@ -341,7 +367,7 @@ work will create, name its path anyway.
 Read the repo's open milestones once: `rtk gh api repos/<owner>/<repo>/milestones --jq '.[] | "\(.number)\t\(.title)\t\(.description // "")"'`.
 
 - **Milestones exist and one fits the surface** → propose the best match (by the milestone's
-  title/description against the surface and Goal) and confirm with AskUserQuestion; **accept the
+  title/description against the surface and What / Why) and confirm with AskUserQuestion; **accept the
   proposal without asking under `--quick`**. Pass `--milestone "<title>"` to `gh issue create`
   (or `-F milestone=<number>` on the REST path).
 - **Milestones exist and none fits** → say so in one line and ask (pick one anyway, or
