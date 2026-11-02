@@ -499,3 +499,25 @@ assert_rest_call_moves_nothing() {
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
+
+# --- #861 review: parser edge cases that must not move a guessed card ---------------------------
+
+@test "gh api pulls -F head=@<file> moves nothing" {
+    assert_rest_call_moves_nothing "gh api repos/acme/widgets/pulls -F head=@564-x.txt"
+}
+
+@test "gh api pulls --input with -f head= moves nothing" {
+    assert_rest_call_moves_nothing "gh api repos/acme/widgets/pulls --input body.json -f head=fix/564-other"
+}
+
+@test "checkout -b compounded with a REST PR call does not use the REST issue" {
+    assert_rest_call_moves_nothing "git checkout -b feat/1-x ; gh api repos/acme/widgets/pulls -f head=fix/564-other"
+}
+
+@test "gh api pulls with an attached short value flag before the path still moves the card" {
+    assert_rest_pr_moves_card "gh api -pshadow-cat repos/acme/widgets/pulls -f head=fix/564-other"
+}
+
+@test "gh api pulls head with leading zeros resolves to the plain issue number" {
+    assert_rest_pr_moves_card "gh api repos/acme/widgets/pulls -f head=fix/0564-other"
+}

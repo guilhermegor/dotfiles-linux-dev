@@ -67,18 +67,20 @@ main() {
 
     # A REST-opened PR names its repo in the URL path and its branch in the `head=` field, so
     # neither cwd nor HEAD is consulted (#859); everything else resolves from cwd as before.
-    if rest="$(rest_pr_from_command "$command")"; then
+    # Only for the PR-open verb, so a `checkout -b ; gh api …/pulls` compound never pairs one
+    # command's column with the other's issue.
+    if [[ "$target" == "In review" ]] && rest="$(rest_pr_from_command "$command")"; then
         read -r owner repo rest_head <<<"$rest"
         issue="$(branch_issue "$rest_head")" || exit 0
     else
         read -r owner repo < <(owner_repo) || exit 0
         [[ -n "$owner" && -n "$repo" ]] || exit 0
+        # issue.md names branches `<type>/<N>-<slug>`, so the branch carries the ref. `checkout -b`
+        # checks the branch out, but `gh pr create --head <b>` may target a branch that is NOT HEAD
+        # (dev-loop RESCUE opens PRs for other worktrees' branches from the main checkout) — then
+        # the card to move is <b>'s, and HEAD is the wrong answer (#591).
         issue="$(issue_for_command "$command")" || exit 0
     fi
-    # issue.md names branches `<type>/<N>-<slug>`, so the branch carries the ref. `checkout -b`
-    # checks the branch out, but `gh pr create --head <b>` may target a branch that is NOT HEAD
-    # (dev-loop RESCUE opens PRs for other worktrees' branches from the main checkout) — then the
-    # card to move is <b>'s, and HEAD is the wrong answer (#591).
     [[ -n "$issue" ]] || exit 0
 
     [[ "$(issue_state "$owner" "$repo" "$issue")" != "CLOSED" ]] || exit 0
@@ -162,13 +164,14 @@ def parse_api(rest):
                 has_input = True
             i += 1 if attached else 2
         elif name in g.API_OTHER_VALUE_FLAGS:
-            i += 1 if inline else 2
+            i += 1 if inline or (len(tok) > 2 and tok[1] != "-") else 2
         elif tok.startswith("-"):
             i += 1
         else:
             endpoint = endpoint or tok
             i += 1
-    return endpoint, method or ("POST" if fields or has_input else "GET"), fields
+    # With --input, gh sends -f/-F as query parameters; the body (and its head) is the file's.
+    return endpoint, method or ("POST" if fields or has_input else "GET"), [] if has_input else fields
 
 
 try:
@@ -182,7 +185,8 @@ try:
         m = PULLS.match(path)
         heads = [f.partition("=")[2] for f in fields if f.partition("=")[0] == "head"]
         head = heads[-1].split(":")[-1] if heads else ""
-        if method == "POST" and m and head and not DYNAMIC.search(path + head):
+        # `-F head=@file` makes gh read the value from a file, so the text is not the branch.
+        if method == "POST" and m and head and not head.startswith("@") and not DYNAMIC.search(path + head):
             print(m.group(1), m.group(2), head)
             sys.exit(0)
 except ValueError:
@@ -230,7 +234,7 @@ issue_for_command() {
 branch_issue() {
     # Leftmost number run in branch name $1 (feat/46-slug → 46), or return 1 when it has none.
     [[ "$1" =~ (^|[^0-9])([0-9]+)([^0-9]|$) ]] || return 1
-    printf '%s' "${BASH_REMATCH[2]}"
+    printf '%s' "$((10#${BASH_REMATCH[2]}))"   # 007 → 7: jq --argjson rejects leading zeros
 }
 
 issue_state() {
