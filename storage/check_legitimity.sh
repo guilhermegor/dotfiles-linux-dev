@@ -38,6 +38,9 @@ check_f3_installed() {
     else
         print_status "success" "f3 tools are already installed."
     fi
+    if command -v f3-qt &> /dev/null; then
+        print_status "info" "f3-qt (GUI front-end for f3) is also available."
+    fi
 }
 
 # List available drives
