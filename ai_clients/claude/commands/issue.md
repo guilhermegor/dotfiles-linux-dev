@@ -538,6 +538,23 @@ Resolve the ids and set it:
 skipped, using the field id from the same `field-list` read:
 `rtk gh project item-edit --project-id <project-node-id> --id <item-id> --field-id <points-field-id> --number <score>`
 
+**Also link the new issue as a blocker of `Cut 1.0.0` (github only)** — so the release card's
+native "Blocked by" list never goes stale (dotfiles-linux-dev#858). Find the open issue titled
+exactly `Cut 1.0.0`:
+`rtk gh issue list --repo <owner>/<repo> --state open --search '"Cut 1.0.0" in:title' --json number,title --jq '.[] | select(.title=="Cut 1.0.0") | .number'`
+
+- **None → clean no-op**; report `Cut 1.0.0: none in this repo`.
+- **Skip** (no link, no error) when the new issue is the `Cut 1.0.0` issue itself, carries the
+  `post-1.0` label, or is a parent container (its children are linked instead).
+- Otherwise get the new issue's numeric id (the endpoint takes the **id**, not the number):
+  `rtk gh api repos/<owner>/<repo>/issues/<N> --jq .id`, then read
+  `rtk gh api "repos/<owner>/<repo>/issues/<cut>/dependencies/blocked_by?per_page=100" --paginate --jq '.[].number'`;
+  if `<N>` is already listed → no-op (idempotent). If not:
+  `rtk gh api -X POST repos/<owner>/<repo>/issues/<cut>/dependencies/blocked_by -F issue_id=<id>`
+- **Fail-soft:** any API error is reported in step 9 and never stops the command.
+- **Applying `post-1.0` later removes the link** (no hook):
+  `rtk gh api -X DELETE repos/<owner>/<repo>/issues/<cut>/dependencies/blocked_by/<id>`
+
 ## 8. Open the linked branch — leaf issues only
 
 **`--quick` → skip this step entirely.** No branch is opened; report
@@ -581,6 +598,7 @@ Surface: <n> path(s)                   (say "inferred" under --quick)
 Milestone: <title> | none (repo has no milestones) | none (no fit)   (omit for linear)
 Parent:  #<P>                          (omit when flat)
 Board:   <project> → <column>          (omit for linear)
+Cut 1.0.0: #<cut> now blocked by #<N> | none in this repo | skipped (<reason>) | link failed (<error>)   (omit for linear)
 Branch:  <type>/<ref>-<slug> (checked out)   (omit for parents)
 ```
 
