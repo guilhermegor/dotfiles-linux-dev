@@ -240,6 +240,63 @@ install_ventoy() {
     [ "$ventoy_installed" -eq 1 ] || return 1
 }
 
+# Qt5 build toolchain for f3-qt, per package-manager family.
+_f3_qt_install_build_deps() {
+    case "$PACKAGE_MANAGER" in
+        apt|zypper) install_packages_verified g++ make git qtbase5-dev qt5-qmake ;;
+        dnf|yum)    install_packages_verified gcc-c++ make git qt5-qtbase-devel ;;
+        *)          print_status "error" "No f3-qt build recipe for $PACKAGE_MANAGER"; return 1 ;;
+    esac
+}
+
+# Clone, qmake, make and install f3-qt + its .desktop (upstream file: f3-qt.desktop).
+_f3_qt_build_from_source() {
+    local tmp_dir qmake_bin=qmake
+    command_exists qmake-qt5 && qmake_bin=qmake-qt5
+    tmp_dir=$(mktemp -d)
+    if ! run_or_echo git clone --depth 1 https://github.com/zwpwjwtz/f3-qt.git "$tmp_dir/f3-qt" 2>>"$LOG_FILE"; then
+        print_status "warning" "Clone failed. Visit https://github.com/zwpwjwtz/f3-qt"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+    if ! (cd "$tmp_dir/f3-qt" && run_or_echo "$qmake_bin" && run_or_echo make -j"$(nproc)") 2>>"$LOG_FILE"; then
+        print_status "error" "f3-qt build failed (see $LOG_FILE)"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+    run_or_echo sudo install -Dm755 "$tmp_dir/f3-qt/f3-qt" /usr/local/bin/f3-qt
+    run_or_echo sudo install -Dm644 "$tmp_dir/f3-qt/f3-qt.desktop" /usr/local/share/applications/f3-qt.desktop
+    rm -rf "$tmp_dir"
+}
+
+install_f3_qt() {
+    print_status "section" "F3-QT (FLASH FRAUD TESTER)"
+
+    if command_exists f3-qt; then
+        print_status "info" "f3-qt already installed"
+        return 0
+    fi
+
+    # f3-qt only wraps f3write/f3read/f3probe.
+    if ! command_exists f3write || ! command_exists f3read; then
+        print_status "info" "Installing f3 (f3write/f3read)..."
+        install_package f3 || return 1
+    fi
+
+    if [ "$PACKAGE_MANAGER" = "pacman" ]; then
+        if ! command_exists yay; then
+            print_status "warning" "yay not found. Install it, then: yay -S f3-qt"
+            return 1
+        fi
+        run_or_echo yay -S --noconfirm f3-qt || return 1
+    else
+        print_status "info" "f3-qt is not packaged for this distro; building from source..."
+        _f3_qt_install_build_deps || return 1
+        _f3_qt_build_from_source || return 1
+    fi
+    print_status "success" "f3-qt installed"
+}
+
 # ============================================================================
 # REGISTRY
 # ============================================================================
@@ -248,4 +305,5 @@ INSTALL_REGISTRY+=(
     "install_virtual_machine_manager:VM Manager:Infra:virt-manager.desktop"
     "install_balena_etcher:Balena Etcher (USB Image Writer):Infra:balena-etcher.desktop"
     "install_ventoy:Ventoy (Multiboot USB):Infra:ventoy.desktop"
+    "install_f3_qt:F3-QT (Flash Fraud Tester):Infra:f3-qt.desktop"
 )
