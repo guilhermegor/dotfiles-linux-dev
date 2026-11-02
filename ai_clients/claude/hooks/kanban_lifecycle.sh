@@ -4,6 +4,7 @@
 #
 #   git checkout -b / git switch -c  (a linked branch opened) -> card to "In progress"
 #   gh pr create                     (the PR opened)          -> card to "In review"
+#   gh api repos/<o>/<r>/pulls -f head=<b>  (the REST twin, #859) -> card to "In review"
 #
 # NOT handled here — on purpose: "PR merged / issue closed -> Done" is a built-in GitHub Projects
 # workflow (issue.md already relies on it via `Closes #N`). Duplicating it in a hook would race the
@@ -33,6 +34,11 @@
 # Hook I/O contract: PostToolUse, so the tool already ran — this never blocks. It fails OPEN
 # everywhere (no gh/jq, no repo, no board, no card, any gh error) by exiting 0 silently; on a
 # successful move it emits an additionalContext note. Never exits non-zero.
+#
+# One exception to "silent": when the board READ or WRITE itself fails (the board is GraphQL-backed,
+# so the same rate limit that sends an agent to the REST PR fallback also stops the move), it
+# emits a warning naming the issue, the board and the target column (#859). "No board" and "issue
+# not on the board" stay silent — only a gh failure is worth telling the session about.
 
 set -u
 
@@ -47,7 +53,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HOOK_DIR/lib/kanban_reconcile.sh"
 
 main() {
-    local payload tool command target owner repo issue
+    local payload tool command target owner repo issue rest rest_head
     local project_number project_node status_field option_id item_id
 
     payload="$(cat)"
@@ -59,32 +65,42 @@ main() {
 
     target="$(target_column "$command")" || exit 0     # not a lifecycle verb → nothing to do
 
-    read -r owner repo < <(owner_repo) || exit 0
-    [[ -n "$owner" && -n "$repo" ]] || exit 0
-
+    # A REST-opened PR names its repo in the URL path and its branch in the `head=` field, so
+    # neither cwd nor HEAD is consulted (#859); everything else resolves from cwd as before.
+    if rest="$(rest_pr_from_command "$command")"; then
+        read -r owner repo rest_head <<<"$rest"
+        issue="$(branch_issue "$rest_head")" || exit 0
+    else
+        read -r owner repo < <(owner_repo) || exit 0
+        [[ -n "$owner" && -n "$repo" ]] || exit 0
+        issue="$(issue_for_command "$command")" || exit 0
+    fi
     # issue.md names branches `<type>/<N>-<slug>`, so the branch carries the ref. `checkout -b`
     # checks the branch out, but `gh pr create --head <b>` may target a branch that is NOT HEAD
     # (dev-loop RESCUE opens PRs for other worktrees' branches from the main checkout) — then the
     # card to move is <b>'s, and HEAD is the wrong answer (#591).
-    issue="$(issue_for_command "$command")" || exit 0
     [[ -n "$issue" ]] || exit 0
 
     [[ "$(issue_state "$owner" "$repo" "$issue")" != "CLOSED" ]] || exit 0
 
     read -r project_number project_node status_field option_id \
-        < <(board_config "$owner" "$repo" "$target") || exit 0
+        < <(board_config "$owner" "$repo" "$target") \
+        || { warn_if_board_unreadable "$owner" "$repo" "$issue" "$target"; exit 0; }
     [[ "$project_number" == "AMBIGUOUS" ]] && { warn_ambiguous "$repo"; exit 0; }
     [[ -n "$project_number" && -n "$option_id" ]] || exit 0
 
-    item_id="$(card_item_id "$project_number" "$owner" "$issue")" || exit 0
+    item_id="$(card_item_id "$project_number" "$owner" "$issue")" \
+        || { warn_failed "$repo" "$issue" "$target" "read the board's cards"; exit 0; }
     [[ -n "$item_id" ]] || exit 0     # issue not on the board → nothing to move
 
     if ! move_card "$project_node" "$item_id" "$status_field" "$option_id"; then
         # A stale cache is the likely cause — refresh once and retry before giving up.
         rm -f "$(cache_file "$owner" "$repo")"
         read -r project_number project_node status_field option_id \
-            < <(board_config "$owner" "$repo" "$target") || exit 0
-        move_card "$project_node" "$item_id" "$status_field" "$option_id" || exit 0
+            < <(board_config "$owner" "$repo" "$target") \
+            || { warn_if_board_unreadable "$owner" "$repo" "$issue" "$target"; exit 0; }
+        move_card "$project_node" "$item_id" "$status_field" "$option_id" \
+            || { warn_failed "$repo" "$issue" "$target" "move the card"; exit 0; }
     fi
 
     announce "$issue" "$target"
@@ -101,7 +117,78 @@ target_column() {
         | grep -Eq '^[[:space:]]*(rtk[[:space:]]+)?gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
         printf 'In review'; return 0
     fi
+    # Cheap gate first: python only spawns for a command that could be `gh api .../pulls`.
+    if printf '%s' "$cmd" | grep -Eq '(^|[^[:alnum:]_])api[[:space:]].*pulls' \
+        && rest_pr_from_command "$cmd" >/dev/null; then
+        printf 'In review'; return 0
+    fi
     return 1
+}
+
+rest_pr_from_command() {
+    # `<owner> <repo> <branch>` for a `[rtk] gh api repos/<o>/<r>/pulls` call that creates a PR
+    # (#859): POST — explicit `-X`/`--method POST`, or implicit when a field flag is given and no
+    # method is — carrying a `head=<branch>` field via -f/-F/--field/--raw-field (any spelling,
+    # `--field=head=x` and `-fhead=x` included). Returns 1 for everything else: a GET, a
+    # `pulls/<n>/...` subpath, no head field, or an owner/repo/head the shell builds (`$VAR`).
+    # Tokenizes with gh_cmd_match.py's own argv helpers, so a `pulls` inside a quoted argument or
+    # an `echo` is not mistaken for the call.
+    KANBAN_CMD="$1" python3 - "$(dirname "${BASH_SOURCE[0]}")/lib" 2>/dev/null <<'PY'
+import os, re, sys
+sys.path.insert(0, sys.argv[1])
+import gh_cmd_match as g
+
+PULLS = re.compile(r"^/?repos/([^/]+)/([^/]+)/pulls$")
+DYNAMIC = re.compile(r"[$`{}]")
+
+
+def parse_api(rest):
+    method, fields, has_input, endpoint = None, [], False, None
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        name, inline = (tok.partition("=")[0], tok.partition("=")[2]) if tok.startswith("--") else (tok, "")
+        if tok[:1] == "-" and tok[1:2] != "-" and len(tok) > 2 and tok[:2] in g.API_VALUE_FLAGS:
+            name, inline = tok[:2], tok[2:].lstrip("=")
+        if name in g.API_VALUE_FLAGS:
+            attached = bool(inline) or tok != name
+            value = inline if attached else (rest[i + 1] if i + 1 < len(rest) else "")
+            kind = g.API_VALUE_FLAGS[name]
+            if kind == "method":
+                method = value.upper()
+            elif kind == "field":
+                fields.append(value)
+            else:
+                has_input = True
+            i += 1 if attached else 2
+        elif name in g.API_OTHER_VALUE_FLAGS:
+            i += 1 if inline else 2
+        elif tok.startswith("-"):
+            i += 1
+        else:
+            endpoint = endpoint or tok
+            i += 1
+    return endpoint, method or ("POST" if fields or has_input else "GET"), fields
+
+
+try:
+    for argv in g.iter_argvs(g.split_segments(os.environ["KANBAN_CMD"])):
+        at = g.gh_start(argv)
+        sub = g.gh_sub(argv, at) if at >= 0 else -1
+        if sub < 0 or argv[sub:sub + 1] != ["api"]:
+            continue
+        endpoint, method, fields = parse_api(argv[sub + 1:])
+        path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", (endpoint or "").split("?", 1)[0]).rstrip("/")
+        m = PULLS.match(path)
+        heads = [f.partition("=")[2] for f in fields if f.partition("=")[0] == "head"]
+        head = heads[-1].split(":")[-1] if heads else ""
+        if method == "POST" and m and head and not DYNAMIC.search(path + head):
+            print(m.group(1), m.group(2), head)
+            sys.exit(0)
+except ValueError:
+    pass
+sys.exit(1)
+PY
 }
 
 head_from_command() {
@@ -137,7 +224,12 @@ issue_for_command() {
         1) branch="$(git symbolic-ref --short HEAD 2>/dev/null)" || return 1 ;;
         *) return 1 ;;   # unparseable command: fail open, never guess a card
     esac
-    [[ "$branch" =~ (^|[^0-9])([0-9]+)([^0-9]|$) ]] || return 1
+    branch_issue "$branch"
+}
+
+branch_issue() {
+    # Leftmost number run in branch name $1 (feat/46-slug → 46), or return 1 when it has none.
+    [[ "$1" =~ (^|[^0-9])([0-9]+)([^0-9]|$) ]] || return 1
     printf '%s' "${BASH_REMATCH[2]}"
 }
 
@@ -151,7 +243,11 @@ issue_state() {
 card_item_id() {
     # Item id of the card whose content is issue <issue> on this board, or nothing.
     local num="$1" owner="$2" issue="$3"
-    gh project item-list "$num" --owner "$owner" --format json --limit 500 2>/dev/null \
+    local cards
+    # Read first, so a gh failure (return 1) is told apart from "issue not on the board" (empty).
+    cards="$(gh project item-list "$num" --owner "$owner" --format json --limit 500 2>/dev/null)" \
+        || return 1
+    printf '%s' "$cards" \
         | jq -r --argjson n "$issue" \
             'first(.items[] | select(.content.type=="Issue" and .content.number==$n) | .id) // empty' \
             2>/dev/null
@@ -164,6 +260,24 @@ announce() {
             additionalContext: ("kanban_lifecycle: moved issue #\($n)'"'"'s card to \"\($col)\".")
         }
     }' 2>/dev/null || true
+}
+
+warn_failed() {
+    # $1 repo, $2 issue, $3 target column, $4 the step that failed. Never blocks — PostToolUse.
+    jq -n --arg repo "$1" --argjson n "$2" --arg col "$3" --arg step "$4" '{
+        hookSpecificOutput: {
+            hookEventName: "PostToolUse",
+            additionalContext: ("kanban_lifecycle: could NOT \($step) on the \"\($repo) kanban\" board — issue #\($n)'"'"'s card was NOT moved to \"\($col)\" (gh failed; often a GraphQL rate limit). Move it by hand once the limit resets: `gh project item-edit`, or re-run the reconcile.")
+        }
+    }' 2>/dev/null || true
+}
+
+warn_if_board_unreadable() {
+    # board_config returns 1 both for "no `<repo> kanban` board" (a legitimate silent no-op) and
+    # for a gh failure. Re-ask `gh project list` to tell them apart: warn only when it errors.
+    local owner="$1" repo="$2" issue="$3" target="$4"
+    gh project list --owner "$owner" --format json >/dev/null 2>&1 \
+        || warn_failed "$repo" "$issue" "$target" "read the board"
 }
 
 warn_ambiguous() {

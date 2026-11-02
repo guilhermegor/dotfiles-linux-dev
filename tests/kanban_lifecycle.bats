@@ -338,3 +338,164 @@ write_fake_gh_two_cards() {
     [ "$status" -eq 0 ]
     [[ "$output" != *"moved issue"* ]]
 }
+
+# --- #859: a REST-opened PR (`gh api repos/<o>/<r>/pulls ... head=<b>`) is a PR-open event ------
+# The REST fallback is what /issue and s:dev-loop tell agents to use when GraphQL is rate-limited,
+# and it never matched the literal `gh pr create` verb, so the card stayed in Ready.
+
+# Wrap the fake gh so every call is logged to $TEST_TMP/gh.log (owner/repo must come from the URL).
+log_gh_calls() {
+    mv "$FAKE_BIN/gh" "$FAKE_BIN/gh.real"
+    cat > "$FAKE_BIN/gh" <<EOF2
+#!/bin/bash
+echo "\$*" >> "$TEST_TMP/gh.log"
+exec "$FAKE_BIN/gh.real" "\$@"
+EOF2
+    chmod +x "$FAKE_BIN/gh"
+}
+
+# The board is looked up by the URL's repo ("widgets kanban"), not cwd's ("dotfiles-dev kanban").
+write_fake_gh_widgets_board() {
+    write_fake_gh_two_cards
+    sed -i 's|dotfiles-dev kanban|widgets kanban|' "$FAKE_BIN/gh"
+}
+
+assert_rest_pr_moves_card() {
+    write_fake_gh_widgets_board
+    run run_hook "$1"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+    [[ "$output" == *"In review"* ]]
+}
+
+assert_rest_call_moves_nothing() {
+    write_fake_gh_widgets_board
+    run run_hook "$1"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh api pulls -f head=<b> (implicit POST) moves the card of <b>" {
+    assert_rest_pr_moves_card "gh api repos/acme/widgets/pulls -f title=x -f head=fix/564-other -f base=main"
+}
+
+@test "gh api pulls -F head=<b> moves the card" {
+    assert_rest_pr_moves_card "gh api repos/acme/widgets/pulls -F head=fix/564-other"
+}
+
+@test "gh api pulls --field head=<b> moves the card" {
+    assert_rest_pr_moves_card "gh api repos/acme/widgets/pulls --field head=fix/564-other"
+}
+
+@test "gh api pulls --raw-field head=<b> moves the card" {
+    assert_rest_pr_moves_card "gh api repos/acme/widgets/pulls --raw-field head=fix/564-other"
+}
+
+@test "gh api pulls --field=head=<b> (attached) moves the card" {
+    assert_rest_pr_moves_card "gh api repos/acme/widgets/pulls --field=head=fix/564-other"
+}
+
+@test "gh api pulls -fhead=<b> (attached short flag) moves the card" {
+    assert_rest_pr_moves_card "gh api repos/acme/widgets/pulls -fhead=fix/564-other"
+}
+
+@test "gh api pulls -X POST -f head=<b> moves the card" {
+    assert_rest_pr_moves_card "gh api -X POST repos/acme/widgets/pulls -f head=fix/564-other"
+}
+
+@test "gh api pulls --method POST -f head=<b> moves the card" {
+    assert_rest_pr_moves_card "gh api repos/acme/widgets/pulls --method POST -f head=fix/564-other"
+}
+
+@test "rtk gh api pulls -f head=<b> moves the card" {
+    assert_rest_pr_moves_card "rtk gh api repos/acme/widgets/pulls -f head=fix/564-other"
+}
+
+@test "gh api pulls with head=owner:<b> strips the owner prefix" {
+    assert_rest_pr_moves_card "gh api repos/acme/widgets/pulls -f head=acme:fix/564-other"
+}
+
+@test "gh api pulls takes owner/repo from the URL, not from cwd" {
+    write_fake_gh_widgets_board
+    log_gh_calls
+    run run_hook "gh api repos/acme/widgets/pulls -f head=fix/564-other"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"issue #564"* ]]
+    grep -q -- "--repo acme/widgets" "$TEST_TMP/gh.log"
+}
+
+@test "gh api GET on pulls (no fields) moves nothing" {
+    assert_rest_call_moves_nothing "gh api repos/acme/widgets/pulls"
+}
+
+@test "gh api -X GET on pulls with a head= field moves nothing" {
+    assert_rest_call_moves_nothing "gh api -X GET repos/acme/widgets/pulls -f head=fix/564-other"
+}
+
+@test "gh api pulls POST without a head field moves nothing" {
+    assert_rest_call_moves_nothing "gh api repos/acme/widgets/pulls -f title=x -f base=main"
+}
+
+@test "gh api pulls/<n>/reviews moves nothing" {
+    assert_rest_call_moves_nothing "gh api repos/acme/widgets/pulls/5/reviews -f head=fix/564-other"
+}
+
+@test "gh api pulls/<n>/comments moves nothing" {
+    assert_rest_call_moves_nothing "gh api repos/acme/widgets/pulls/5/comments -f body=x -f head=fix/564-other"
+}
+
+@test "gh api pulls/<n>/update-branch moves nothing" {
+    assert_rest_call_moves_nothing "gh api -X PUT repos/acme/widgets/pulls/5/update-branch -f head=fix/564-other"
+}
+
+@test "gh api pulls/<n>/merge moves nothing" {
+    assert_rest_call_moves_nothing "gh api -X PUT repos/acme/widgets/pulls/5/merge -f head=fix/564-other"
+}
+
+@test "echo of a gh api pulls call moves nothing" {
+    assert_rest_call_moves_nothing "echo gh api repos/acme/widgets/pulls -f head=fix/564-other"
+}
+
+@test "gh api pulls with a shell-built head moves nothing" {
+    assert_rest_call_moves_nothing 'gh api repos/acme/widgets/pulls -f head=$BRANCH'
+}
+
+# --- #859: a failed board read/write warns instead of exiting silently --------------------------
+
+@test "board write failure warns with issue, board and target column" {
+    write_fake_gh "OPEN"
+    sed -i 's|echo .{"id":"ITEM_1"}.|exit 1|' "$FAKE_BIN/gh"
+    run run_hook "gh pr create --title x --body y"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"additionalContext"* ]]
+    [[ "$output" == *"#131"* ]]
+    [[ "$output" == *"dotfiles-dev kanban"* ]]
+    [[ "$output" == *"In review"* ]]
+    [[ "$output" == *"NOT moved"* ]]
+}
+
+@test "board card read failure warns" {
+    write_fake_gh "OPEN"
+    sed -i '/"project item-list")/{n;s|.*|        exit 1|}' "$FAKE_BIN/gh"
+    run run_hook "gh pr create --title x --body y"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#131"* ]]
+    [[ "$output" == *"NOT moved"* ]]
+}
+
+@test "board read failure (project list errors) warns" {
+    write_fake_gh "OPEN"
+    sed -i '/"project list")/{n;s|.*|        exit 1|}' "$FAKE_BIN/gh"
+    run run_hook "gh pr create --title x --body y"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"read the board"* ]]
+    [[ "$output" == *"In review"* ]]
+}
+
+@test "no matching board stays silent (not a failure)" {
+    write_fake_gh "OPEN"
+    sed -i 's|dotfiles-dev kanban|other kanban|' "$FAKE_BIN/gh"
+    run run_hook "gh pr create --title x --body y"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
