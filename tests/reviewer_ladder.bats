@@ -1164,6 +1164,50 @@ _make_bare_remote_with_pr() {
     [[ "$output" != *"does not match the forge's head"* ]]
 }
 
+# --- dotfiles-linux-dev#857: concurrent checkouts must not race on FETCH_HEAD ---
+
+@test "_checkout_pr_worktree: a fetch for another PR landing mid-checkout cannot swap the head (#857)" {
+    export TMPDIR="$BATS_TEST_TMPDIR"
+    local bare="$BATS_TEST_TMPDIR/remote-857.git"
+    _make_bare_remote_with_pr "$bare" 857
+    local pr_a_sha="$PR_HEAD_SHA"
+    local work="$BATS_TEST_TMPDIR/seed-857"
+    echo other >"$work/f.txt"
+    command git -C "$work" commit --quiet -am "other pr"
+    command git -C "$work" push --quiet origin "HEAD:refs/pull/858/head"
+    local pr_b_sha
+    pr_b_sha="$(command git -C "$work" rev-parse HEAD)"
+    [ "$pr_a_sha" != "$pr_b_sha" ]
+
+    fake_url() { printf 'file://%s\n' "$bare"; }
+    export -f fake_url
+    export REVIEWER_LADDER_REMOTE_URL_CMD=fake_url
+    export PR_A_SHA="$pr_a_sha" BARE="$bare"
+    fake_head_sha() { printf '%s\n' "$PR_A_SHA"; }
+    export -f fake_head_sha
+    export REVIEWER_LADDER_HEAD_SHA_CMD=fake_head_sha
+    unset REVIEWER_LADDER_CHECKOUT_CMD
+
+    # Simulate the race deterministically: right after PR 857's fetch, a
+    # "concurrent run" fetches PR 858 into the same repository's FETCH_HEAD.
+    git() {
+        command git "$@"
+        local rc=$?
+        if [ "$1" = "fetch" ] && [ -z "${IN_RACE:-}" ] && [[ "$*" == *"pull/857/head"* ]]; then
+            IN_RACE=1 command git fetch --quiet "file://$BARE" "pull/858/head" 2>/dev/null
+        fi
+        return $rc
+    }
+
+    local rc=0
+    _checkout_pr_worktree o r 857 || rc=$?
+    [ "$rc" -eq 0 ]
+    [ "$(command git -C "$PR_WORKTREE_DIR" rev-parse HEAD)" = "$pr_a_sha" ]
+    run command git for-each-ref "refs/ladder/pr857-*"
+    [ -z "$output" ]
+    _teardown_pr_worktree "$PR_WORKTREE_DIR"
+}
+
 # --- _run_runtime_review: an empty diff is an error, never a finding --------
 
 @test "codex review: an empty diff is an ERROR that posts nothing — never a finding" {

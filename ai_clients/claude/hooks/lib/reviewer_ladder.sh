@@ -671,14 +671,20 @@ _checkout_pr_worktree() {
 		[ -n "$PR_WORKTREE_DIR" ]
 		return $?
 	fi
-	local dir url
+	local dir url ref
 	dir="$(mktemp -d "${TMPDIR:-/tmp}/reviewer-ladder-pr${pr_number}-XXXXXX")" || return 1
 	url="$(_pr_remote_url "$owner" "$repo")"
-	if ! git fetch --quiet "$url" "pull/$pr_number/head" 2>/dev/null ||
-		! git worktree add --detach --quiet "$dir" FETCH_HEAD 2>/dev/null; then
+	# issue #857: FETCH_HEAD is one file shared by every worktree, so a
+	# concurrent run's fetch could swap it between our fetch and worktree add.
+	# A per-run ref is ours alone; deleted once the detached worktree exists.
+	ref="refs/ladder/pr${pr_number}-$$-${dir##*-}"
+	if ! git fetch --quiet "$url" "+pull/$pr_number/head:$ref" 2>/dev/null ||
+		! git worktree add --detach --quiet "$dir" "$ref" 2>/dev/null; then
+		git update-ref -d "$ref" 2>/dev/null
 		rmdir "$dir" 2>/dev/null
 		return 1
 	fi
+	git update-ref -d "$ref" 2>/dev/null
 	if ! assert_worktree_matches_pr "$dir" "$owner" "$repo" "$pr_number"; then
 		if [ "$ASSERT_WORKTREE_STATUS" = "unanswerable" ]; then
 			# issue #543: an ABSENT forge answer is not a CONTRADICTED one —
