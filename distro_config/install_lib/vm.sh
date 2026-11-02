@@ -249,13 +249,33 @@ _f3_qt_install_build_deps() {
     esac
 }
 
+# Release 2.2.0 (supply chain: the build is installed as root, so never track a moving branch).
+readonly F3_QT_COMMIT="c8ee27be78d6f3697d1ffe1f9c8fbf0950118831"
+
+# Fetch exactly $F3_QT_COMMIT into DIR and abort on any mismatch, before any build or sudo step.
+_f3_qt_fetch_pinned() {
+    local dir="$1" head
+    mkdir -p "$dir"
+    if ! { run_or_echo git -C "$dir" init -q \
+        && run_or_echo git -C "$dir" fetch -q --depth 1 https://github.com/zwpwjwtz/f3-qt.git "$F3_QT_COMMIT" \
+        && run_or_echo git -C "$dir" checkout -q FETCH_HEAD; } 2>>"$LOG_FILE"; then
+        print_status "warning" "Fetch failed. Visit https://github.com/zwpwjwtz/f3-qt"
+        return 1
+    fi
+    [ "${DRY_RUN:-0}" = "1" ] && return 0
+    head=$(git -C "$dir" rev-parse HEAD)
+    if [ "$head" != "$F3_QT_COMMIT" ]; then
+        print_status "error" "f3-qt commit mismatch ($head != $F3_QT_COMMIT); aborting"
+        return 1
+    fi
+}
+
 # Clone, qmake, make and install f3-qt + its .desktop (upstream file: f3-qt.desktop).
 _f3_qt_build_from_source() {
     local tmp_dir qmake_bin=qmake
     command_exists qmake-qt5 && qmake_bin=qmake-qt5
     tmp_dir=$(mktemp -d)
-    if ! run_or_echo git clone --depth 1 https://github.com/zwpwjwtz/f3-qt.git "$tmp_dir/f3-qt" 2>>"$LOG_FILE"; then
-        print_status "warning" "Clone failed. Visit https://github.com/zwpwjwtz/f3-qt"
+    if ! _f3_qt_fetch_pinned "$tmp_dir/f3-qt"; then
         rm -rf "$tmp_dir"
         return 1
     fi

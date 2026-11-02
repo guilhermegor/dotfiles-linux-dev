@@ -40,6 +40,20 @@ _stub() {
     [ ! -s "$CALLS" ]
 }
 
+@test "a fetched commit that is not the pinned SHA aborts before build or install" {
+    run_or_echo() { "$@"; }
+    _stub git 'echo "git $*" >> "$CALLS"; [ "$3" = rev-parse ] && echo deadbeef; exit 0'
+    run _f3_qt_build_from_source
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"commit mismatch"* ]]
+    run grep -E "^(qmake|make|sudo)" "$CALLS"
+    [ "$status" -eq 1 ]
+}
+
+@test "the pinned SHA is a 40-char hex commit" {
+    [[ "$F3_QT_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+}
+
 @test "registry maps f3-qt to the Infra folder" {
     local entry found=1
     for entry in "${INSTALL_REGISTRY[@]}"; do
