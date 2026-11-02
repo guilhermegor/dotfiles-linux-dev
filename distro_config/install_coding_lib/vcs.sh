@@ -355,6 +355,49 @@ install_graphite() {
     fi
 }
 
+# snapcraft (dotfiles-linux-dev#855): the Snap Store publishing CLI. Needed locally to run
+# `snapcraft export-login` when creating a CI's SNAPCRAFT_STORE_CREDENTIALS secret. The
+# installer only installs; login is interactive and never triggered here.
+print_snapcraft_login_hint() {
+    print_status "config" "  Login (manual): snapcraft login"
+    print_status "config" "  CI credentials: snapcraft export-login --snaps=<name> --acls package_access,package_push,package_update,package_release"
+}
+
+install_snapcraft() {
+    print_status "section" "SNAPCRAFT INSTALLATION"
+
+    if command_exists snapcraft; then
+        print_status "info" "snapcraft already installed ($(timeout 10 snapcraft --version 2>/dev/null | head -n1 || echo "unknown"))"
+        print_snapcraft_login_hint
+        return 0
+    fi
+
+    if ! command_exists snap; then
+        print_status "error" "snap is not available — install snapd first (e.g. sudo apt install snapd), then re-run"
+        return 1
+    fi
+
+    print_status "info" "Installing snapcraft via snap (classic confinement)..."
+    if ! run_or_echo sudo snap install snapcraft --classic &>> "$LOG_FILE"; then
+        print_status "error" "snapcraft install failed — check $LOG_FILE"
+        return 1
+    fi
+
+    # A DRY_RUN preview installs nothing, so the binary check below would be a false failure.
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        print_status "info" "DRY_RUN: would install snapcraft; skipping verification"
+        return 0
+    fi
+
+    if command_exists snapcraft; then
+        print_status "success" "snapcraft installed ($(timeout 10 snapcraft --version 2>/dev/null | head -n1 || echo "unknown"))"
+        print_snapcraft_login_hint
+    else
+        print_status "error" "snapcraft installation failed — ensure /snap/bin is on PATH; check $LOG_FILE"
+        return 1
+    fi
+}
+
 INSTALL_REGISTRY+=(
     "install_graphite:Graphite CLI (gt)::"
     "install_github_cli:GitHub CLI::"
@@ -364,4 +407,5 @@ INSTALL_REGISTRY+=(
     "install_gitlint:gitlint (Commit Message Linter)::"
     "install_bats:bats (Bash Test Framework)::"
     "install_coderabbit:CodeRabbit CLI (AI Code Review)::"
+    "install_snapcraft:snapcraft (Snap Store Publishing CLI)::"
 )
