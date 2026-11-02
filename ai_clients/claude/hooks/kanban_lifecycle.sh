@@ -38,7 +38,8 @@
 # One exception to "silent": when the board READ or WRITE itself fails (the board is GraphQL-backed,
 # so the same rate limit that sends an agent to the REST PR fallback also stops the move), it
 # emits a warning naming the issue, the board and the target column (#859). "No board" and "issue
-# not on the board" stay silent — only a gh failure is worth telling the session about.
+# not on the board" stay silent — only a gh failure is worth telling the session about
+# (board_config returns 3 for no-board, 1 for a gh failure — #865).
 
 set -u
 
@@ -83,11 +84,16 @@ main() {
     fi
     [[ -n "$issue" ]] || exit 0
 
+    # A failed PR-open (non-zero exit, HTTP error, no PR URL) must not move the card (#865).
+    if [[ "$target" == "In review" ]]; then
+        local is_cli=0
+        printf '%s' "$command" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+create' && is_cli=1
+        ! tool_response_failed "$payload" "$is_cli" || exit 0
+    fi
+
     [[ "$(issue_state "$owner" "$repo" "$issue")" != "CLOSED" ]] || exit 0
 
-    read -r project_number project_node status_field option_id \
-        < <(board_config "$owner" "$repo" "$target") \
-        || { warn_if_board_unreadable "$owner" "$repo" "$issue" "$target"; exit 0; }
+    resolve_board "$owner" "$repo" "$issue" "$target" || exit 0
     [[ "$project_number" == "AMBIGUOUS" ]] && { warn_ambiguous "$repo"; exit 0; }
     [[ -n "$project_number" && -n "$option_id" ]] || exit 0
 
@@ -98,9 +104,7 @@ main() {
     if ! move_card "$project_node" "$item_id" "$status_field" "$option_id"; then
         # A stale cache is the likely cause — refresh once and retry before giving up.
         rm -f "$(cache_file "$owner" "$repo")"
-        read -r project_number project_node status_field option_id \
-            < <(board_config "$owner" "$repo" "$target") \
-            || { warn_if_board_unreadable "$owner" "$repo" "$issue" "$target"; exit 0; }
+        resolve_board "$owner" "$repo" "$issue" "$target" || exit 0
         move_card "$project_node" "$item_id" "$status_field" "$option_id" \
             || { warn_failed "$repo" "$issue" "$target" "move the card"; exit 0; }
     fi
@@ -276,12 +280,35 @@ warn_failed() {
     }' 2>/dev/null || true
 }
 
-warn_if_board_unreadable() {
-    # board_config returns 1 both for "no `<repo> kanban` board" (a legitimate silent no-op) and
-    # for a gh failure. Re-ask `gh project list` to tell them apart: warn only when it errors.
-    local owner="$1" repo="$2" issue="$3" target="$4"
-    gh project list --owner "$owner" --format json >/dev/null 2>&1 \
-        || warn_failed "$repo" "$issue" "$target" "read the board"
+resolve_board() {
+    # Sets project_number/project_node/status_field/option_id (caller's locals) from board_config.
+    # Returns 1 on no board (silent) or a gh failure (warns); board_config's own status tells the
+    # two apart (#865): 3 = no board, anything else non-zero = gh error.
+    local out rc=0
+    out="$(board_config "$1" "$2" "$4")" || rc=$?
+    if (( rc != 0 )); then
+        (( rc == 3 )) || warn_failed "$2" "$3" "$4" "read the board"
+        return 1
+    fi
+    read -r project_number project_node status_field option_id <<<"$out"
+}
+
+tool_response_failed() {
+    # True when the PostToolUse payload ($1) shows the command FAILED (#865). Missing/unknown
+    # shape fails open (not failed). Signals: non-zero exit code, is_error, a string response
+    # starting "Error", an HTTP 4xx/5xx in stderr (gh api), or — for `gh pr create` ($2=1) —
+    # stdout present but without a pull URL.
+    printf '%s' "$1" | jq -e --argjson pr "$2" '
+        .tool_response as $r
+        | if $r == null then false
+          elif ($r | type) == "string" then ($r | test("^Error"))
+          elif ($r | type) != "object" then false
+          else
+            (($r.exit_code // $r.exitCode // $r.returncode // 0) != 0)
+            or ($r.is_error == true) or ($r.isError == true)
+            or (($r.stderr // "") | test("\\(HTTP [45][0-9][0-9]\\)"))
+            or ($pr == 1 and ($r.stdout | type) == "string" and ($r.stdout | test("/pull/[0-9]+") | not))
+          end' >/dev/null 2>&1
 }
 
 warn_ambiguous() {
