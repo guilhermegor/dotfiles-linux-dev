@@ -136,6 +136,11 @@ files), which is the PR author's own code on a single-maintainer repo. Required
 contexts come from classic protection (a 404 "Branch not protected" is an empty
 list; any other read error is UNKNOWN) plus rulesets, and are matched in the Checks
 and the commit Status APIs; `skipped`/`neutral` pass, except for the review gate.
+A commit status is forgeable by any token with repo access (this account's own `gh`
+included; a personal token cannot create a check-run), so the review gate is
+satisfied by a **check-run only**, and any other context accepts a status only when
+`creator.login` is not the authenticated user (case-insensitive). Still open: pinning
+`app_id`/`integration_id` per context (#891).
 The merge PUT is **never retried** (a PUT that succeeded server-side but errored
 client-side would be re-sent into a 405 and misreported): on failure the PR's
 `merged` flag is re-read. Read retries happen once and only for transient errors.

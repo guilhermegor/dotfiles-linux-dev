@@ -50,8 +50,8 @@ if [[ "$args" == *"/check-runs"* ]]; then
     n="${args#*commits/sha}"; n="${n%%/*}"
     c="CHECK_$n"; c="${!c:-success}"
     [ "$c" = missing ] && exit 0
-    printf 'build\t%s\n' "$c"
-    printf 'Review threads answered\t%s\n' "$c"
+    printf 'build\t%s\t::check::\n' "$c"
+    printf 'Review threads answered\t%s\t::check::\n' "$c"
     exit 0
 fi
 if [[ "$args" == *"/status"* ]]; then
@@ -114,10 +114,30 @@ refute_log() {
     refute_log "PUT"
 }
 
-@test "a required context posted through the commit Status API counts" {
-    STATUS_7=$'ci/extra\tsuccess' RULE_CTX="ci/extra" run bash "$SCRIPT" 7
+@test "a non-gate status from another creator counts" {
+    STATUS_7=$'ci/extra\tsuccess\tci-bot' RULE_CTX="ci/extra" run bash "$SCRIPT" 7
     [ "$status" -eq 0 ]
     [[ "$output" == *"#7 MERGED"* ]]
+}
+
+@test "a non-gate status created by the authenticated user is refused (case-insensitive)" {
+    STATUS_7=$'ci/extra\tsuccess\tACME' RULE_CTX="ci/extra" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"ci/extra"* ]]
+    refute_log "PUT"
+}
+
+@test "a forged review-gate status by the user cannot replace the check-run" {
+    CHECK_7=missing STATUS_7=$'Review threads answered\tsuccess\tacme' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Review threads answered"* ]]
+    refute_log "PUT"
+}
+
+@test "a review-gate status from any creator is never enough" {
+    CHECK_7=missing STATUS_7=$'Review threads answered\tsuccess\tci-bot' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
 }
 
 @test "a required context from rulesets that is not green is refused" {

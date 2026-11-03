@@ -133,18 +133,27 @@ merge_one() {
 	# State is normalised to "success"; GitHub counts skipped/neutral as passing, so they
 	# are accepted too, except for the review gate itself (strict success).
 	checks="$(gh_retry api --paginate "repos/$owner/$repo/commits/$head/check-runs?per_page=100" \
-		--jq '.check_runs[] | [.name, (.conclusion // "pending")] | @tsv')" ||
+		--jq '.check_runs[] | [.name, (.conclusion // "pending"), "::check::"] | @tsv')" ||
 		{ echo "#$pr UNKNOWN: cannot read check-runs of $head"; return 1; }
+	# A commit status is forgeable by any token with repo access, this account's own gh
+	# included (a personal token cannot create a check-run). So a status never satisfies
+	# the review gate, and for any other context it counts only when its creator is not
+	# the authenticated user. Third column: "::check::" for a check-run, else the creator.
 	statuses="$(gh_retry api "repos/$owner/$repo/commits/$head/status" \
-		--jq '.statuses[] | [.context, .state] | @tsv')" ||
+		--jq '.statuses[] | [.context, .state, (.creator.login // "-")] | @tsv')" ||
 		{ echo "#$pr UNKNOWN: cannot read commit statuses of $head"; return 1; }
 	checks="$(printf '%s\n%s\n' "$checks" "$statuses")"
 
 	bad=""
 	while IFS= read -r name; do
-		# Every run with this name must pass; a missing or mixed name is not green.
-		if ! awk -F'\t' -v n="$name" -v gate="$GATE_CHECK" '
-			$1==n {seen=1; ok=($2=="success" || (n!=gate && ($2=="skipped" || $2=="neutral"))); if (!ok) fail=1}
+		# Every counted run with this name must pass; a missing or mixed name is not green.
+		if ! awk -F'\t' -v n="$name" -v gate="$GATE_CHECK" -v me="${me,,}" '
+			$1==n {
+				if ($3!="::check::" && (n==gate || tolower($3)==me)) next
+				seen=1
+				ok=($2=="success" || (n!=gate && ($2=="skipped" || $2=="neutral")))
+				if (!ok) fail=1
+			}
 			END {exit !(seen && !fail)}' <<<"$checks"; then
 			bad="$bad [$name]"
 		fi
