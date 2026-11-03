@@ -218,6 +218,56 @@ run_reconcile() {
     [[ "$output" != *"STALE"* ]]
 }
 
+@test "an unrelated fresh branch with the digits does not hide the stale one" {
+    write_issues "$(open_issue 50)"
+    write_items "$(item ITEM_50 "In progress" 50)"
+    branch "fix/50-slow" 30
+    branch "maintenance/release-50" 0
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STALE issue #50"*"fix/50-slow"* ]]
+}
+
+@test "a push after the last fetch is dated from the live SHA, not the old tracking ref" {
+    write_issues "$(open_issue 50)"
+    write_items "$(item ITEM_50 "In progress" 50)"
+    branch "fix/50-slow" 30
+    git -C "$REPO_DIR" checkout -q fix/50-slow
+    git -C "$REPO_DIR" commit -q --allow-empty -m newer
+    git -C "$REPO_DIR" checkout -q -
+    write_fake_gh
+    run_reconcile
+    [[ "$output" != *"STALE"* ]]
+}
+
+@test "Closes OWNER/REPO#N in an open PR body keeps the card from moving" {
+    write_issues "$(open_issue 42)"
+    write_items "$(item ITEM_42 "In review" 42)"
+    pr closed "" "fix/42-old"
+    pr open "" "odd-branch" "Fixes owner/repo#42"
+    write_fake_gh
+    run_reconcile
+    refute_gh 'item-edit'
+}
+
+@test "Closes other/repo#N does not name this repo's issue" {
+    write_issues "$(open_issue 42)"
+    write_items "$(item ITEM_42 "In review" 42)"
+    pr closed "" "fix/42-old"
+    pr open "" "odd-branch" "Fixes other/repo#42"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"moved issue #42 to Ready"* ]]
+}
+
+@test "the closed-PR read is paginated so an old merged PR cannot be missed" {
+    write_issues "$(open_issue 42)"
+    write_items "$(item ITEM_42 "In review" 42)"
+    write_fake_gh
+    run_reconcile
+    grep -q 'pulls?state=closed&per_page=100 --paginate' "$GH_LOG"
+}
+
 @test "the threshold is the named constant" {
     write_issues "$(open_issue 50)"
     write_items "$(item ITEM_50 "In progress" 50)"

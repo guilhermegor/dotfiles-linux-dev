@@ -31,29 +31,31 @@ KANBAN_STALE_DAYS="${KANBAN_STALE_DAYS:-7}"
 _KRS_GIT=/usr/bin/git
 
 # _krs_pr_lists OWNER REPO
-# Prints one JSON array of the open PRs plus the 100 most recently updated closed ones.
-# ponytail: closed PRs capped at one page; a card whose closed PR is older stays put, add
-# --paginate if that ever matters. Returns 1 on any read/parse failure.
+# Prints one JSON array of every open and closed PR, all pages: a merged PR beyond a capped page
+# would hide behind a closed-unmerged one and let the card move. REST only, one call per 100 PRs.
+# Returns 1 on any read/parse failure.
 _krs_pr_lists() {
 	local owner="$1" repo="$2" open closed
 	open="$(gh api "repos/$owner/$repo/pulls?state=open&per_page=100" --paginate 2>/dev/null)" || return 1
-	closed="$(gh api "repos/$owner/$repo/pulls?state=closed&per_page=100&sort=updated&direction=desc" 2>/dev/null)" || return 1
+	closed="$(gh api "repos/$owner/$repo/pulls?state=closed&per_page=100" --paginate 2>/dev/null)" || return 1
 	printf '%s\n%s' "$open" "$closed" |
 		jq -se 'length > 0 and all(type == "array")' >/dev/null 2>&1 || return 1
 	printf '%s\n%s' "$open" "$closed" | jq -sc 'add'
 }
 
-# _krs_pr_kind PRS_JSON NUMBER
+# _krs_pr_kind PRS_JSON NUMBER OWNER/REPO
+# The body form is `Closes #N` or `Closes OWNER/REPO#N` (this repo's slug only).
 # "open" if an open PR names the issue, else "merged" if a merged one does (a merge always blocks
 # the move to Ready), else "unmerged" if a closed-unmerged one does, else "none".
 # Only PRs by a trusted author (OWNER/MEMBER/COLLABORATOR) count: anyone can open and close a PR
 # naming #N, and that must not drive a board change. A PR names the issue by the repo branch
 # convention `<type>/N-...` or a Closes/Fixes/Resolves #N in its (trusted) body.
 _krs_pr_kind() {
-	printf '%s' "$1" | jq -r --arg n "$2" '
+	printf '%s' "$1" | jq -r --arg n "$2" --arg slug "$3" '
 		def trusted: .author_association | IN("OWNER", "MEMBER", "COLLABORATOR");
 		def names: (.head.ref | test("^[a-z]+/" + $n + "-")) or
-			((.body // "") | test("(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?):? +#" + $n + "([^0-9]|$)"));
+			((.body // "") | test("(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?):? +(" +
+				($slug | gsub("[.]"; "\\.")) + ")?#" + $n + "([^0-9]|$)"));
 		[.[] | select(trusted and names)] as $m |
 		if any($m[]; .state == "open") then "open"
 		elif any($m[]; .merged_at != null) then "merged"
@@ -65,19 +67,21 @@ _krs_pr_kind() {
 # Prints "<days> <branch>" for the newest tip among remote branches naming NUMBER, or nothing when
 # none exists. Returns 1 when the branch list or a tip's date cannot be read — never "fresh".
 _krs_last_commit_age_days() {
-	local cwd="$1" number="$2" refs b ts newest=0 newest_b="" now
+	local cwd="$1" number="$2" refs sha ref b ts newest=0 newest_b="" now
 	refs="$($_KRS_GIT -C "$cwd" ls-remote --heads origin 2>/dev/null)" || return 1
 	now="$(date +%s)"
-	while IFS= read -r b; do
-		[[ -n "$b" ]] || continue
-		grep -qE "(^|[^0-9])$number([^0-9]|$)" <<<"$b" || continue
-		ts="$($_KRS_GIT -C "$cwd" log -1 --format=%ct "refs/remotes/origin/$b" 2>/dev/null)" || return 1
+	# Dated from the SHA ls-remote returned, never a local tracking ref that may predate a push;
+	# a SHA missing locally fails the read (UNKNOWN), it is not read as "old".
+	while read -r sha ref; do
+		b="${ref#refs/heads/}"
+		[[ -n "$sha" && "$b" =~ ^[a-z]+/$number- ]] || continue
+		ts="$($_KRS_GIT -C "$cwd" log -1 --format=%ct "$sha^{commit}" 2>/dev/null)" || return 1
 		[[ "$ts" =~ ^[0-9]+$ ]] || return 1
 		if ((ts > newest)); then
 			newest="$ts"
 			newest_b="$b"
 		fi
-	done < <(printf '%s\n' "$refs" | sed -n 's#.*refs/heads/##p')
+	done <<<"$refs"
 	[[ -n "$newest_b" ]] || return 0
 	echo "$(((now - newest) / 86400)) $newest_b"
 }
@@ -121,7 +125,7 @@ reconcile_kanban_stale() {
 		[[ -n "$id" ]] || continue
 		# Only an OPEN issue is this file's concern; closed ones belong to reconcile_kanban_done.
 		printf '%s\n' "$open_facts" | awk -F'\t' -v n="$number" '$1 == n {f=1} END {exit !f}' || continue
-		kind="$(_krs_pr_kind "$prs" "$number")" || {
+		kind="$(_krs_pr_kind "$prs" "$number" "$owner/$repo")" || {
 			report="$(printf '%s\nUNKNOWN issue #%s: could not match its pull requests' "$report" "$number")"
 			continue
 		}
