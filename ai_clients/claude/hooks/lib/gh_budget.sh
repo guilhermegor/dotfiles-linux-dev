@@ -305,7 +305,7 @@ gh_budget_with_backoff() {
 
 # gh_budget_poll_allowed [FLOOR]
 # Call BEFORE starting a poll loop. Returns 1 (GH_BUDGET_POLL_REASON says why) while the 403 latch is
-# active or `rate_limit` shows GraphQL under FLOOR (default $GH_POLL_GRAPHQL_FLOOR, else 200 - well
+# active or `rate_limit` shows GraphQL under FLOOR (default $GH_POLL_GRAPHQL_FLOOR, else $STOP_GRAPHQL_FLOOR (100, one floor with stop_budget.sh) - well
 # above gh_budget_quota_exhausted's 5, because a loop spends many points per hour, not one call).
 # Returns 0 otherwise, and the reason then carries the standing caveat: a full budget does NOT prove
 # the secondary limit is clear (measured 2026-11-03: rate_limit said 5000/5000 while GraphQL still
@@ -313,8 +313,12 @@ gh_budget_with_backoff() {
 # rate_limit allows the loop - the same fail-open gh_budget_quota_exhausted uses.
 # shellcheck disable=SC2034 # GH_BUDGET_POLL_REASON is read by the caller after this returns
 gh_budget_poll_allowed() {
-	local floor="${1:-${GH_POLL_GRAPHQL_FLOOR:-200}}" json remaining
+	local floor="${1:-${GH_POLL_GRAPHQL_FLOOR:-${STOP_GRAPHQL_FLOOR:-100}}}" json remaining
 	GH_BUDGET_POLL_REASON=""
+	if ! [[ "$floor" =~ ^[0-9]+$ ]]; then
+		GH_BUDGET_POLL_REASON="poll floor '$floor' is not a number - not starting a poll loop"
+		return 1
+	fi
 	if gh_budget_latch_active; then
 		GH_BUDGET_POLL_REASON="403 latch active - GitHub API budget still exhausted, not starting a poll loop"
 		return 1

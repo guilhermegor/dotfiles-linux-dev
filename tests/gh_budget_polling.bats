@@ -113,6 +113,21 @@ STUB
     [ "$status" -eq 1 ]
 }
 
+@test "poll_allowed refuses a non-numeric floor instead of allowing the loop" {
+    stub_rate_limit 10
+    GH_POLL_GRAPHQL_FLOOR=abc run gh_budget_poll_allowed
+    [ "$status" -eq 1 ]
+}
+
+@test "poll_allowed default floor is the Stop guards' 100" {
+    stub_rate_limit 150
+    run gh_budget_poll_allowed
+    [ "$status" -eq 0 ]
+    stub_rate_limit 99
+    run gh_budget_poll_allowed
+    [ "$status" -eq 1 ]
+}
+
 @test "poll_allowed fails open when rate_limit is unreadable" {
     printf '#!/bin/bash\nexit 1\n' >"$BIN/gh"
     chmod +x "$BIN/gh"
@@ -136,7 +151,7 @@ STUB
     cp "$HOOKS"/lib/*.sh "$DIR/lib/"
     source "$DIR/funcs.sh"
     run sweep_review_gate o r o/r /dev/null
-    [[ "$output" == *"UNKNOWN"*"GraphQL budget 10 < 200"* ]]
+    [[ "$output" == *"UNKNOWN"*"GraphQL budget 10 < 100"* ]]
     run grep -c graphql "$DIR/gh.log"
     [ "$output" = 0 ]
 }
