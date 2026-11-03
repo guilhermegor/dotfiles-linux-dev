@@ -120,7 +120,10 @@ any was refused.
 Two trust checks keep the check gate honest. (1) **Check-run spoofing:** a PR can
 add a workflow that posts a green check named like a required one, so a PR whose
 files (REST, paginated) touch `.github/workflows/` or `.github/actions/` is refused
-("touches CI definitions — merge by hand"); an unreadable file list is UNKNOWN.
+("touches CI definitions — merge by hand"), including a rename out of them
+(`previous_filename`); an unreadable file list is UNKNOWN, and so is a list whose
+length differs from the PR's `changed_files` ("file list incomplete", since the
+endpoint caps at 3000).
 (2) **Redirected target:** OWNER/REPO come from a remote an agent can rewrite, so
 the derived owner must equal `gh api user --jq .login` (unreadable is UNKNOWN) and
 every PR's author must equal it too; bot and dependabot PRs fall back to the normal

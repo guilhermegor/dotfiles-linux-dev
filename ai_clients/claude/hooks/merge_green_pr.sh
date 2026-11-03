@@ -48,19 +48,25 @@ merge_one() {
 	local pr="$1" info head state draft base author prot required checks bad name files
 
 	info="$(gh_retry api "repos/$owner/$repo/pulls/$pr" \
-		--jq '[.head.sha, .mergeable_state, (.draft|tostring), .base.ref, .user.login] | @tsv')" && [ -n "$info" ] ||
+		--jq '[.head.sha, .mergeable_state, (.draft|tostring), .base.ref, .user.login, (.changed_files|tostring)] | @tsv')" && [ -n "$info" ] ||
 		{ echo "#$pr UNKNOWN: cannot read the PR"; return 1; }
-	IFS=$'\t' read -r head state draft base author <<<"$info"
-	[ -n "$head" ] && [ -n "$base" ] && [ -n "$author" ] || { echo "#$pr UNKNOWN: malformed PR read"; return 1; }
+	IFS=$'\t' read -r head state draft base author changed <<<"$info"
+	[ -n "$head" ] && [ -n "$base" ] && [ -n "$author" ] && [[ "$changed" =~ ^[0-9]+$ ]] || { echo "#$pr UNKNOWN: malformed PR read"; return 1; }
 	[ "$author" = "$me" ] || { echo "#$pr REFUSED: author '$author' is not '$me' — merge by hand"; return 1; }
 	[ "$draft" = "false" ] || { echo "#$pr REFUSED: draft"; return 1; }
 	[ "$state" = "clean" ] || { echo "#$pr REFUSED: mergeable_state is '$state', not clean"; return 1; }
 
 	# A PR can add a workflow that posts a green check with a required name, so the
 	# check gate below is only trustworthy for a PR that cannot change CI definitions.
-	files="$(gh_retry api --paginate "repos/$owner/$repo/pulls/$pr/files?per_page=100" --jq '.[].filename')" ||
+	files="$(gh_retry api --paginate "repos/$owner/$repo/pulls/$pr/files?per_page=100" --jq '.[] | [.filename, (.previous_filename // "")] | @tsv')" ||
 		{ echo "#$pr UNKNOWN: cannot read the PR's files"; return 1; }
-	if grep -q -E '^\.github/(workflows|actions)/' <<<"$files"; then
+	# The files endpoint stops at 3000, so a short list could hide a .github/ change.
+	if [ "$(grep -c . <<<"$files")" -ne "$changed" ]; then
+		echo "#$pr REFUSED: file list incomplete — merge by hand"
+		return 1
+	fi
+	# Either column: a rename out of .github/ keeps the old path in previous_filename.
+	if grep -q -E $'(^|\t)\\.github/(workflows|actions)/' <<<"$files"; then
 		echo "#$pr REFUSED: touches CI definitions — merge by hand"
 		return 1
 	fi

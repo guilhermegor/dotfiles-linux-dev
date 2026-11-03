@@ -22,7 +22,7 @@ if [[ "$args" == *"-X PUT"* ]]; then exit 0; fi
 if [[ "$args" == *"/files"* ]]; then
     [ -n "${FILES_FAIL:-}" ] && exit 1
     n="${args#*pulls/}"; n="${n%%/*}"
-    f="FILES_$n"; echo "${!f:-src/app.sh}"; exit 0
+    f="FILES_$n"; printf '%s\n' "${!f:-src/app.sh$(printf '\t')}"; exit 0
 fi
 if [[ "$args" == *"/protection"* ]]; then
     [ -n "${PROT_FAIL:-}" ] && exit 1
@@ -40,7 +40,9 @@ if [[ "$args" == *"/pulls/"* ]]; then
     n="${args#*pulls/}"; n="${n%% *}"
     s="STATE_$n"; s="${!s:-clean}"
     a="AUTHOR_$n"; a="${!a:-acme}"
-    printf 'sha%s\t%s\tfalse\tmaster\t%s\n' "$n" "$s" "$a"
+    f="FILES_$n"; cf="$(printf '%s\n' "${!f:-x}" | grep -c .)"
+    c="CHANGED_$n"; c="${!c:-$cf}"
+    printf 'sha%s\t%s\tfalse\tmaster\t%s\t%s\n' "$n" "$s" "$a" "$c"
     exit 0
 fi
 exit 1
@@ -112,11 +114,25 @@ refute_log() {
 }
 
 @test "refuses a PR touching .github/workflows or .github/actions" {
-    FILES_7=$'src/a.sh\n.github/workflows/ci.yml' run bash "$SCRIPT" 7
+    FILES_7=$'src/a.sh\t\n.github/workflows/ci.yml\t' run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]
     [[ "$output" == *"touches CI definitions"* ]]
-    FILES_8=".github/actions/x/action.yml" run bash "$SCRIPT" 8
+    FILES_8=".github/actions/x/action.yml"$'\t' run bash "$SCRIPT" 8
     [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "refuses when the file list is shorter than changed_files" {
+    CHANGED_7=3001 run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"file list incomplete"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses a rename out of .github/workflows" {
+    FILES_7="docs/ci.yml"$'\t'".github/workflows/ci.yml" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"touches CI definitions"* ]]
     refute_log "PUT"
 }
 
