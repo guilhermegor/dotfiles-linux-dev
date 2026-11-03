@@ -64,7 +64,7 @@
       "Bash(rtk discover:*)",
       "Bash(rtk --version)",
       "Bash(~/.claude/hooks/run_ladder_review.sh:*)",
-      "Bash(rtk gh pr merge * --squash --auto --match-head-commit *)",
+      "Bash(~/.claude/hooks/merge_green_pr.sh:*)",
       "Bash(diff:*)",
       "Bash(cut:*)",
       "Bash(tr:*)",

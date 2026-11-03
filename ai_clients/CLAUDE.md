@@ -94,22 +94,29 @@ wrapper takes one positive integer, and derives the pushed epoch from the
 head commit's committer date (a NOW epoch makes the ladder refuse the PR as
 "recently pushed"). The rule only takes effect after `make ai_clients`.
 
-### Sha-pinned squash merge: one allow rule (dotfiles-linux-dev#868)
+### Merge wrapper: one exact allow rule (dotfiles-linux-dev#868)
 
 On a single-maintainer repo no PR can get a human approval, so the auto-mode
-classifier denied every merge as "Merge Without Review" even with all checks
-green. `permissions.allow` carries exactly
-`Bash(rtk gh pr merge * --squash --auto --match-head-commit *)`, so a merge
-without the sha pin goes through the classifier. A glob cannot forbid extra
-trailing flags, so `--admin` after the sha is not excluded by the pattern; the
-guards below are the boundary there. There is deliberately **no** REST
-`gh api .../merge` allow: a glob cannot fix `merge_method` or the field set, and
-`pr_merge_threads_guard.sh` only matches `gh pr merge`, so the REST path would
-skip it. If a REST form is ever needed, use a validating wrapper script and
-extend that guard first. There is
-deliberately **no** blanket `gh pr merge` allow: `pr_merge_threads_guard.sh`,
-branch protection's required checks (which `--auto` cannot bypass) and the sha
-pin refusing a moved head are the boundary. Takes effect after `make ai_clients`.
+classifier denies every merge as "Merge Without Review" even with all checks
+green. `hooks/merge_green_pr.sh <pr-number>...` is the stable entry point and
+`permissions.allow` carries exactly `Bash(~/.claude/hooks/merge_green_pr.sh:*)`
+for it, the same precedent as the ladder wrapper above. Run it as
+`cd <absolute-repo-path> && ~/.claude/hooks/merge_green_pr.sh 27 29 30`.
+
+**Why a wrapper and not glob rules.** Measured on layouts-cvm: `gh pr merge`
+failed on all 5 PRs with a GraphQL rate limit, so only the REST merge worked, and
+the commands the classifier denied were a bare `gh api -X PUT .../merge`, a `for`
+loop and a scratch script. No glob matches those shapes, and a glob cannot pin
+`merge_method` or forbid trailing flags such as `--admin`.
+
+The wrapper takes positive integers only (no flags, so no `--admin` and no
+merge_method choice), uses REST only, and per PR requires: not a draft,
+`mergeable_state` clean, and every required check-run on the head `success`
+(the base branch's protection contexts plus `Review threads answered`). An
+unreadable protection is UNKNOWN and fails closed. The PUT is
+`merge_method=squash` with the head sha pinned. One line per PR; non-zero exit if
+any was refused. There is deliberately **no** blanket `gh pr merge` or
+`gh api .../merge` allow. Takes effect after `make ai_clients`.
 
 ## Body-template guards: PR and issue
 
