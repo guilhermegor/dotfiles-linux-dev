@@ -1190,22 +1190,30 @@ _make_bare_remote_with_pr() {
 
     # Simulate the race deterministically: right after PR 857's fetch, a
     # "concurrent run" fetches PR 858 into the same repository's FETCH_HEAD.
+    # The sentinel file proves the race actually fired, so a refspec respelling
+    # cannot turn this into a test that passes without exercising anything.
+    export RACE_SENTINEL="$BATS_TEST_TMPDIR/race-fired"
     git() {
         command git "$@"
         local rc=$?
-        if [ "$1" = "fetch" ] && [ -z "${IN_RACE:-}" ] && [[ "$*" == *"pull/857/head"* ]]; then
-            IN_RACE=1 command git fetch --quiet "file://$BARE" "pull/858/head" 2>/dev/null
+        if [ "$1" = "fetch" ] && [[ "$*" == *"pull/857/head"* ]]; then
+            command git fetch --quiet "file://$BARE" "pull/858/head" 2>/dev/null
+            : >"$RACE_SENTINEL"
         fi
         return $rc
     }
 
     local rc=0
     _checkout_pr_worktree o r 857 || rc=$?
+    # Tear down before asserting so a failing assertion cannot leak the worktree.
+    local head_sha=""
+    [ "$rc" -eq 0 ] && head_sha="$(command git -C "$PR_WORKTREE_DIR" rev-parse HEAD)"
+    [ "$rc" -ne 0 ] || _teardown_pr_worktree "$PR_WORKTREE_DIR"
+    [ -e "$RACE_SENTINEL" ]
     [ "$rc" -eq 0 ]
-    [ "$(command git -C "$PR_WORKTREE_DIR" rev-parse HEAD)" = "$pr_a_sha" ]
+    [ "$head_sha" = "$pr_a_sha" ]
     run command git for-each-ref "refs/ladder/pr857-*"
     [ -z "$output" ]
-    _teardown_pr_worktree "$PR_WORKTREE_DIR"
 }
 
 # --- _run_runtime_review: an empty diff is an error, never a finding --------
