@@ -845,6 +845,37 @@ see #5" "$now")"
     [[ "$output" == *"declaring NO issue"* ]]
 }
 
+@test "three unnamed agents in ONE message take three different claims" {
+    plan_of "41 42 43 5"
+    local now ts f
+    now="$(date +%s)"
+    ts="$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%S.123Z)"
+    claim_issue_at 41 "$((now - 6))"
+    claim_issue_at 42 "$((now - 5))"
+    claim_issue_at 43 "$((now - 4))"
+    f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        for i in 1 2 3; do
+            jq -nc --arg ts "$ts" --arg id "agent$i" \
+                '{type:"assistant",timestamp:$ts,message:{content:[{type:"tool_use",id:$id,name:"Agent",input:{name:("w"+$id),prompt:"work"}}]}}'
+        done
+    } >"$f"
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#5"* ]]
+    [[ ! "$output" == *"#41"* ]]
+    [[ ! "$output" == *"#42"* ]]
+    [[ ! "$output" == *"#43"* ]]
+}
+
+@test "a cross-repo ref like blueprintx#97 on the first line is not local #97" {
+    plan_of "97"
+    run run_guard "$(transcript_named_dispatch foo 'Port the blueprintx#97 fix' "$(date +%s)")"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"declaring NO issue"* ]]
+}
+
 # --- #871: a resumed agent that finished leaves the rescue list ------------------------------------
 # A SendMessage resume keeps the agent's <task-id>; its later notifications carry the SendMessage's
 # own <tool-use-id> (measured on real transcripts), never the original dispatch's.

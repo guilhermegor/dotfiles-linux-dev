@@ -230,28 +230,37 @@ _agent_dispatch_issue() {
 # (dotfiles-linux-dev#872). The claim registry already ties an agent to its issue, and requiring the
 # `issue-<N>-<slug>` shape duplicates it (derive, never restate). Two signals, in this order:
 #   1. the live claim registered most recently BEFORE the dispatch, within DISPATCH_CLAIM_ADOPT_WINDOW
-#      seconds (the orchestrator runs `claim_files` in the Bash call right before the Agent call). A
-#      dispatch with no parsable timestamp can never match: fail closed to "undeclared".
+#      seconds (the orchestrator runs `claim_files` in the Bash call right before the Agent call). Claims
+#      are matched one-to-one: issues a named `issue-<N>-*` dispatch owns are skipped, and the k-th
+#      unnamed dispatch of one message takes the k-th newest claim. No parsable timestamp skips this signal.
 #   2. the `#N` in the FIRST line of the dispatch prompt (later lines legitimately cite blockers).
 _agent_attributed_issue() {
-	local transcript="$1" id="$2" cwd="$3" rec ts first claims at issue
-	rec="$(jq -r --arg id "$id" 'select(.message.content != null) | . as $r | .message.content[]?
-		| select(.type == "tool_use" and .name == "Agent" and .id == $id)
-		| [($r.timestamp // ""), ((.input.prompt // "") | split("\n")[0])] | join("\u0001")' \
-		"$transcript" 2>/dev/null | head -1)"
-	ts="${rec%%$'\001'*}"
-	first="${rec#*$'\001'}"
+	local transcript="$1" id="$2" cwd="$3" rec ts k declared first claims at issue
+	# One record: ts, k (unnamed dispatches earlier in the SAME message, so a fan-out of N agents
+	# takes N DIFFERENT claims, newest first), the issues named dispatches already own, line 1.
+	rec="$(jq -rs --arg id "$id" '
+		[.[] | select(.message.content != null) | . as $r | .message.content[]?
+			| select(.type == "tool_use" and .name == "Agent")
+			| {id, ts: ($r.timestamp // ""), name: (.input.name // ""), first: ((.input.prompt // "") | split("\n")[0])}] as $all
+		| ($all | map(.id) | index($id)) as $i
+		| select($i != null) | $all[$i] as $me
+		| [$me.ts,
+		   ([$all[:$i][] | select(.ts == $me.ts and (.name | test("^issue-[0-9]+(-|$)") | not))] | length),
+		   ([$all[] | .name | capture("^issue-(?<n>[0-9]+)(-|$)").n?] | join(" ")),
+		   $me.first] | map(tostring) | join("\u0001")' "$transcript" 2>/dev/null | head -1)"
+	IFS=$'\001' read -r ts k declared first <<<"$rec"
 
 	if [ -n "$ts" ] && at="$(date -d "$ts" +%s 2>/dev/null)" && claims="$(dispatch_claims_file "$cwd")"; then
-		issue="$(_dispatch_live_claims "$claims" | awk -F'\t' -v at="$at" -v w="$DISPATCH_CLAIM_ADOPT_WINDOW" \
-			'$1 <= at && $1 >= at - w && $1 >= best { best = $1; issue = $2 } END { if (issue != "") print issue }')"
+		issue="$(_dispatch_live_claims "$claims" | awk -F'\t' -v at="$at" -v w="$DISPATCH_CLAIM_ADOPT_WINDOW" -v k="${k:-0}" -v d=" $declared " \
+			'$1 <= at && $1 >= at - w && index(d, " " $2 " ") == 0 { print $1 "\t" $2 }' |
+			sort -k1,1nr -k2,2nr | sed -n "$((${k:-0} + 1))p" | cut -f2)"
 		if [ -n "$issue" ]; then
 			printf '%s\n' "$issue"
 			return 0
 		fi
 	fi
-	[[ "$first" =~ \#([0-9]+) ]] || return 1
-	printf '%s\n' "${BASH_REMATCH[1]}"
+	[[ "$first" =~ (^|[^[:alnum:]_/#-])\#([0-9]+) ]] || return 1
+	printf '%s\n' "${BASH_REMATCH[2]}"
 }
 
 # _sendmessage_resumed TRANSCRIPT ID NAME
