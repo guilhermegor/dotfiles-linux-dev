@@ -127,6 +127,26 @@ BAD_BODY='**Python · PyPI · public repo**\n\nNo definition of done here.'
     [ "$status" -eq 2 ]
 }
 
+@test "REST: a PR-merge loop with a command-substitution read is not an issue write (#870)" {
+    run bash -c "payload 'for n in 27 29; do sha=\$(gh api repos/o/r/pulls/\$n --jq .head.sha); gh api -X PUT repos/o/r/pulls/\$n/merge -f merge_method=squash -f sha=\$sha; done' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'for n in 27 29; do gh api -X PUT repos/o/r/pulls/\$n/merge -f merge_method=squash; done' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api -X PUT repos/o/r/pulls/\$n/merge -f sha=\$sha' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: a real issues write inside the same loop shape stays blocked (#870)" {
+    run bash -c "payload 'for n in 27 29; do sha=\$(gh api repos/o/r/pulls/\$n --jq .head.sha); gh api repos/o/r/issues -X POST -f title=x -f body=nope; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'for n in 27 29; do gh api repos/o/r/issues -X POST -f title=x -f body=nope; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'for n in 27 29; do gh api repos/o/r/issues/\$n -X PATCH -f body=nope; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'if true; then gh api repos/o/r/issues -X POST -f body=nope; fi' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
 @test "REST: a leading slash is judged like the relative path; a tail that completes an issue path fails closed (#822)" {
     run bash -c "payload 'gh api -X PUT /repos/\$R/pulls/816/merge -f sha=abc' | '$GUARD'"
     [ "$status" -eq 0 ]

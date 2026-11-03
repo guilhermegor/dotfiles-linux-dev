@@ -12,6 +12,10 @@
 # the variable sits only in the owner/repo segment and the literal resource after it is not
 # `issues` (dotfiles-linux-dev#822): `repos/$R/pulls/816/merge` is judged like its literal twin
 # and passes. A variable in the resource segment itself, or any `issues` resource, stays closed.
+# The same holds for a loop id after a literal resource (dotfiles-linux-dev#870):
+# `for n in 27 29; do sha=$(gh api repos/o/r/pulls/$n --jq .head.sha); gh api -X PUT
+# repos/o/r/pulls/$n/merge -f sha=$sha; done` is a pulls write, not an issue write. A command
+# right after `do`/`then`/`else` is judged too, so a real `issues -X POST` in that loop stays blocked.
 #
 # Generic and data-driven: a target repo with no issue template is untouched (exit 0). `/issue`
 # (ai_clients/claude/commands/issue.md) builds its body from the target repo's templates when

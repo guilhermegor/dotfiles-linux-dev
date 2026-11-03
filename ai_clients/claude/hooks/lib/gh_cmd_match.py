@@ -119,6 +119,7 @@ WRAPPER_VALUE_FLAGS = {
     "xargs": {"-n", "-I", "-L", "-P", "-d", "-E", "-s", "-a", "--max-args", "--max-procs",
               "--delimiter", "--arg-file", "--max-lines", "--max-chars"},
 }
+LOOP_KEYWORDS = {"do", "then", "else"}
 NESTED_ERRORS = []
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 
@@ -145,8 +146,8 @@ def gh_start(argv):
             skip_next = False
         elif word in WRAPPERS:
             wrapped, wrapper = True, word
-        elif word == "" or re.match(r"^\w+=", word):
-            continue
+        elif word == "" or re.match(r"^\w+=", word) or word in LOOP_KEYWORDS:
+            continue  # `do gh api ...` / `then gh ...`: the keyword is not the command (#870)
         elif wrapper == "timeout" and re.match(r"^\d+(\.\d+)?[smhd]?$", word):
             continue  # `timeout 5 gh ...`: the duration is timeout's operand, not the command
         elif wrapped and word.startswith("-"):
@@ -331,7 +332,8 @@ def only_repo_segment_is_dynamic(path):
     is judged like its literal twin instead of failing closed as an unknown issue write.
     `$R` may stand for `owner/name` (one segment) or `$O/$N` two, so every plausible split
     must agree; a variable in the resource segment itself, or any split whose resource is
-    `issues`, stays fail-closed.
+    `issues`, stays fail-closed. A variable only AFTER a literal `repos/O/R/<resource>` prefix
+    (`repos/o/r/pulls/$n/merge`, a loop id) is the same: the resource is already known (#870).
     """
     segs = path.lstrip("/").split("/")
     if segs[0] != "repos" or len(segs) < 3:
@@ -339,6 +341,8 @@ def only_repo_segment_is_dynamic(path):
     var_at = [i for i, seg in enumerate(segs) if "$" in seg or "`" in seg]
     if not var_at:
         return False
+    if min(var_at) > 3 and len(segs) > 3 and "issues" not in path:
+        return True  # literal repos/O/R/<resource>/...: the variable is a loop id (#870)
     verdicts = []
     for width in (1, 2):  # owner/name segments: `$R` (one) or `$O/$N` / `o/$N` (two)
         resource_at = 1 + width
