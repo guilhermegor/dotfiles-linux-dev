@@ -989,6 +989,54 @@ STUB
     [[ "$output" == *"rung UNKNOWN"* ]]
 }
 
+unknown_plan() {
+    printf '{"rung":{"status":"unknown","reason":"%s","reason_key":"%s"},"dispatchable":[],"excluded":[{"pr":453,"reason":"reviewer rung UNKNOWN"}]}\n' "$1" "$2" >"$PLAN"
+}
+
+@test "unknown rung names the planner's reason in the block (#873)" {
+    loop_invoked
+    unknown_plan "probe timed out after 120s" timeout
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Reason: probe timed out after 120s"* ]]
+}
+
+@test "a persistent unknown rung blocks once, then is announced once, then quiet (#873)" {
+    loop_invoked
+    unknown_plan "probe timed out after 120s" timeout
+    run_guard
+    [ "$status" -eq 2 ]
+    run_guard
+    # 1, never 2: surfaced, but the stop is not blocked.
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"still UNKNOWN"*"probe timed out after 120s"* ]]
+    run_guard
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "a NEW unknown-rung reason re-arms the block (#873)" {
+    loop_invoked
+    unknown_plan "probe timed out after 120s" timeout
+    run_guard
+    [ "$status" -eq 2 ]
+    run_guard
+    [ "$status" -eq 1 ]
+    unknown_plan "probe exited 3: jq missing" exit-3
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"probe exited 3: jq missing"* ]]
+}
+
+@test "an unknown rung blocks again in a DIFFERENT session (#873)" {
+    loop_invoked
+    unknown_plan "probe timed out after 120s" timeout
+    run_guard false session-one
+    [ "$status" -eq 2 ]
+    run_guard false session-two
+    [ "$status" -eq 2 ]
+}
+
 @test "rung none ANNOUNCES and does not block, naming what was not evaluated" {
     # ⚠️ EXPECTATION CORRECTED (was: asserts exit 0, silent pass). The original
     # expectation was provably wrong, not merely different: it conflated "every PR carries

@@ -117,6 +117,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from gh_latch import refuse_if_latched
@@ -181,7 +182,12 @@ _BUSY_RESET_RE = re.compile(r"^BUSY\|until-(\d{2}:\d{2}Z)$")
 # the whole point of #479 — the cache lists what exists, never what this account may call)
 # and can walk several candidates at its own per-probe timeout. A Stop hook is synchronous,
 # so the walk gets one overall deadline; exceeding it is `unknown`, never `none`.
-RUNG_TIMEOUT = int(os.environ.get("REVIEW_FANOUT_RUNG_TIMEOUT", "45"))
+# The default is MEASURED, not a guess (dotfiles-linux-dev#877): with codex and kimi signed in
+# the walk resolved in 59 s wall time, so the old 45 s default made `unknown` the permanent
+# state and the reviewer slot never filled. 120 s is ~2x that measurement; raise it via
+# REVIEW_FANOUT_RUNG_TIMEOUT when more rungs are authenticated.
+RUNG_TIMEOUT_DEFAULT_S = 120
+RUNG_TIMEOUT = int(os.environ.get("REVIEW_FANOUT_RUNG_TIMEOUT", str(RUNG_TIMEOUT_DEFAULT_S)))
 
 # A dispatchable PR (no review on its CURRENT head) older than this goes to the fallback
 # ladder whatever the primary rung's slot reads (dotfiles-linux-dev#616): slot_classify.py read
@@ -460,6 +466,17 @@ def open_prs() -> list[dict]:
 			raise graphql_error from None
 
 
+def _rung_unknown(key: str, reason: str) -> dict:
+	"""Return an ``unknown`` rung that says WHY the probe was blind (dotfiles-linux-dev#873).
+
+	``reason`` is for humans (carries elapsed time, exit code, first stderr line). ``reason_key``
+	is the stable class of failure the guard compares across Stops: a reason that embeds an
+	elapsed time would never repeat, so the guard could not tell "same blindness" from "new".
+	"""
+	one_line = " ".join(reason.split())[:300]
+	return {"status": "unknown", "runtime": "", "model": "", "signal": "", "reason": one_line, "reason_key": key}
+
+
 def resolve_rung() -> dict:
 	"""Return the reviewer rung #479's probe resolves, as ``{"status", "runtime", …}``.
 
@@ -472,19 +489,25 @@ def resolve_rung() -> dict:
 	blindness, and the guard blocks on it: a gate that reports its own blindness as routine
 	silence is this toolchain's own recorded failure mode (#396, #433).
 
+	An ``unknown`` result carries ``reason`` (human text: elapsed time, exit code, first stderr
+	line) and ``reason_key`` (stable class: ``timeout``, ``exit-3``, ``no-ladder``, …).
+
 	``REVIEW_FANOUT_RUNG`` overrides the probe for tests and dry runs — ``unknown``,
 	``none``, or ``runtime|model|signal``. Real tests must never shell out to a live model.
 	"""
 	override = os.environ.get("REVIEW_FANOUT_RUNG")
 	if override is not None:
-		if override in ("unknown", "none"):
+		if override == "unknown":
+			return _rung_unknown("override", "REVIEW_FANOUT_RUNG=unknown override")
+		if override == "none":
 			return {"status": override, "runtime": "", "model": "", "signal": ""}
 		runtime, _, rest = override.partition("|")
 		model, _, signal = rest.partition("|")
 		return {"status": "ok", "runtime": runtime, "model": model, "signal": signal}
 
 	if not REVIEWER_LADDER_SH.is_file():
-		return {"status": "unknown", "runtime": "", "model": "", "signal": ""}
+		return _rung_unknown("no-ladder", f"reviewer ladder not found at {REVIEWER_LADDER_SH}")
+	started = time.monotonic()
 	try:
 		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
 			["bash", "-c", _RUNG_SCRIPT, "review_fanout_plan", str(REVIEWER_LADDER_SH)],
@@ -493,14 +516,21 @@ def resolve_rung() -> dict:
 			timeout=RUNG_TIMEOUT,
 			check=False,
 		)
-	except (OSError, subprocess.TimeoutExpired):
-		return {"status": "unknown", "runtime": "", "model": "", "signal": ""}
+	except subprocess.TimeoutExpired:
+		return _rung_unknown(
+			"timeout",
+			f"probe timed out after {time.monotonic() - started:.0f}s "
+			f"(REVIEW_FANOUT_RUNG_TIMEOUT={RUNG_TIMEOUT}s)",
+		)
+	except OSError as exc:
+		return _rung_unknown("oserror", f"probe could not start: {exc}")
 	if proc.returncode != 0:
-		return {"status": "unknown", "runtime": "", "model": "", "signal": ""}
+		first_err = next((ln.strip() for ln in proc.stderr.splitlines() if ln.strip()), "no stderr")
+		return _rung_unknown(f"exit-{proc.returncode}", f"probe exited {proc.returncode}: {first_err}")
 
 	fields = proc.stdout.strip("\n").split("\t")
 	if len(fields) != 3:
-		return {"status": "unknown", "runtime": "", "model": "", "signal": ""}
+		return _rung_unknown("malformed", "probe printed something other than runtime<TAB>model<TAB>signal")
 	runtime, model, signal = fields
 	if runtime in ("", "none"):
 		return {"status": "none", "runtime": "", "model": "", "signal": ""}
@@ -914,7 +944,8 @@ def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None
 	"""
 	if rung["status"] == "unknown":
 		return (
-			"reviewer rung UNKNOWN (the #479 probe could not be run or timed out) — "
+			"reviewer rung UNKNOWN (the #479 probe could not be run or timed out: "
+			f"{rung.get('reason') or 'no reason recorded'}) — "
 			"not the same as no rung; re-run before reporting the board reviewed"
 		)
 	if rung["status"] == "none":
