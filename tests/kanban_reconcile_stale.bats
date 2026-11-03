@@ -56,12 +56,13 @@ open_issue() {
     jq -nc --argjson n "$1" '{number: $n, state: "open", labels: []}'
 }
 
-# pr STATE MERGED_AT REF BODY -> appended to the open or closed fixture by STATE
+# pr STATE MERGED_AT REF BODY ASSOC -> appended to the open or closed fixture by STATE
 pr() {
     local file="$TEST_TMP/prs-$1.json" merged="$2"
     jq -c --arg ref "$3" --arg body "${4:-}" --arg state "$1" --arg merged "$merged" \
+        --arg assoc "${5:-OWNER}" \
         '. + [{state: $state, merged_at: (if $merged == "" then null else $merged end),
-               head: {ref: $ref}, body: $body}]' "$file" > "$file.new"
+               author_association: $assoc, head: {ref: $ref}, body: $body}]' "$file" > "$file.new"
     mv "$file.new" "$file"
 }
 
@@ -155,6 +156,35 @@ run_reconcile() {
     write_fake_gh
     run_reconcile
     [[ "$output" == *"moved issue #42 to Ready"* ]]
+}
+
+@test "an outsider's closed PR naming the issue does not move the card" {
+    write_issues "$(open_issue 42)"
+    write_items "$(item ITEM_42 "In review" 42)"
+    pr closed "" "fix/42-thing" "Closes #42" NONE
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "a branch outside the type/N- convention does not match, even with the digits" {
+    write_issues "$(open_issue 42)"
+    write_items "$(item ITEM_42 "In review" 42)"
+    pr closed "" "random-42-branch"
+    write_fake_gh
+    run_reconcile
+    refute_gh 'item-edit'
+}
+
+@test "a merged PR blocks the move even beside a closed-unmerged one" {
+    write_issues "$(open_issue 42)"
+    write_items "$(item ITEM_42 "In review" 42)"
+    pr closed "" "fix/42-first"
+    pr closed "2026-01-01T00:00:00Z" "fix/42-second"
+    write_fake_gh
+    run_reconcile
+    refute_gh 'item-edit'
 }
 
 @test "issue 4 is not matched by a PR for 42" {

@@ -44,15 +44,20 @@ _krs_pr_lists() {
 }
 
 # _krs_pr_kind PRS_JSON NUMBER
-# "open" if an open PR names the issue (branch token or Closes/Fixes/Resolves #N), else "unmerged"
-# if a closed-unmerged one does, else "none". An open PR wins over any closed one.
+# "open" if an open PR names the issue, else "merged" if a merged one does (a merge always blocks
+# the move to Ready), else "unmerged" if a closed-unmerged one does, else "none".
+# Only PRs by a trusted author (OWNER/MEMBER/COLLABORATOR) count: anyone can open and close a PR
+# naming #N, and that must not drive a board change. A PR names the issue by the repo branch
+# convention `<type>/N-...` or a Closes/Fixes/Resolves #N in its (trusted) body.
 _krs_pr_kind() {
 	printf '%s' "$1" | jq -r --arg n "$2" '
-		def names: (.head.ref | test("(^|[^0-9])" + $n + "([^0-9]|$)")) or
+		def trusted: .author_association | IN("OWNER", "MEMBER", "COLLABORATOR");
+		def names: (.head.ref | test("^[a-z]+/" + $n + "-")) or
 			((.body // "") | test("(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?):? +#" + $n + "([^0-9]|$)"));
-		[.[] | select(names)] as $m |
+		[.[] | select(trusted and names)] as $m |
 		if any($m[]; .state == "open") then "open"
-		elif any($m[]; .state == "closed" and .merged_at == null) then "unmerged"
+		elif any($m[]; .merged_at != null) then "merged"
+		elif any($m[]; .state == "closed") then "unmerged"
 		else "none" end'
 }
 
