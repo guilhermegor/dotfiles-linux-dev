@@ -1214,3 +1214,9 @@ PLAN_EOF
     [[ "$output" != *"RESCUE case"* ]]
     [[ "$output" != *"Agents in flight"* ]]
 }
+
+@test "default planner timeout exceeds the planner rung budget (#877)" {
+    run bash -c "grep -oP 'REVIEW_FANOUT_PLANNER_TIMEOUT:-\K[0-9]+' '$GUARD'"
+    [ "$status" -eq 0 ]
+    [ "$output" -gt 120 ]
+}

@@ -91,7 +91,9 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/stop_budget.sh
 source "$HOOK_DIR/lib/stop_budget.sh"
 PLANNER="${REVIEW_FANOUT_PLANNER:-$HOOK_DIR/lib/review_fanout_plan.py}"
-PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-90}"
+# Must exceed the planner's RUNG_TIMEOUT (120 s) plus its gh calls, or the planner is killed
+# before the probe can report its own timeout reason (#877).
+PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-180}"
 # A big board takes the planner ~5 min (#696), far past PLANNER_TIMEOUT. A validated plan is
 # cached per repo and reused while younger than CACHE_TTL_MIN minutes (0 disables); on a
 # timeout the planner is re-run detached with REFRESH_TIMEOUT so the next Stop finds it.
@@ -108,6 +110,7 @@ REFRESH_TIMEOUT="${REVIEW_FANOUT_REFRESH_TIMEOUT:-900}"
 # An UNKNOWN rung with the same reason_key blocks this many Stops per session, then is announced
 # once and goes quiet (#873). A different reason_key starts the count over.
 UNKNOWN_BLOCKS_BEFORE_ANNOUNCE="${REVIEW_FANOUT_UNKNOWN_BLOCKS:-1}"
+[[ $UNKNOWN_BLOCKS_BEFORE_ANNOUNCE =~ ^[0-9]+$ ]] || UNKNOWN_BLOCKS_BEFORE_ANNOUNCE=1
 
 # dev_loop_invoked TRANSCRIPT
 # Pure data: did this session's transcript ever run s:dev-loop? MIRRORS
@@ -580,7 +583,8 @@ unknown_rung() {
 		seen_count=0
 		seen_flag=""
 	fi
-	if [ "${seen_count:-0}" -lt "$UNKNOWN_BLOCKS_BEFORE_ANNOUNCE" ]; then
+	[[ ${seen_count:-} =~ ^[0-9]+$ ]] || seen_count=0
+	if [ "$seen_count" -lt "$UNKNOWN_BLOCKS_BEFORE_ANNOUNCE" ]; then
 		printf '%s\n%s\n\n' "$key" "$((seen_count + 1))" >"$state"
 		block_unreadable "reviewer rung UNKNOWN (the #479 probe could not be run or timed out) — not the same as no rung being available. Reason: $reason"
 	fi
