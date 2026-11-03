@@ -418,3 +418,12 @@ EOF
     run bash -c "payload 'gh api repos/{owner}/{repo}/issues -X POST -f title=x -f body=nope' | '$GUARD'"
     [ "$status" -eq 0 ]
 }
+
+@test "coproc and a variable resource segment still block issue writes (#880 review)" {
+    run bash -c "payload 'coproc gh issue create --title x --body nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'for n in 1; do gh api -X POST repos/o/r/\$t/\$n -f title=x; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'for n in 1; do gh api -X POST repos/o/r/pulls/\$n/../../issues -f title=x; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}

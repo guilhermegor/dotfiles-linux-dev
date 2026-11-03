@@ -119,7 +119,7 @@ WRAPPER_VALUE_FLAGS = {
     "xargs": {"-n", "-I", "-L", "-P", "-d", "-E", "-s", "-a", "--max-args", "--max-procs",
               "--delimiter", "--arg-file", "--max-lines", "--max-chars"},
 }
-SHELL_KEYWORDS = {"if", "elif", "while", "until", "do", "then", "else"}  # (#870) `!`, `{`, `(` are stripped by _word
+SHELL_KEYWORDS = {"if", "elif", "while", "until", "do", "then", "else", "coproc"}  # (#870) `!`, `{`, `(` are stripped by _word
 NESTED_ERRORS = []
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 
@@ -147,7 +147,7 @@ def gh_start(argv):
         elif word in WRAPPERS:
             wrapped, wrapper = True, word
         elif word == "" or re.match(r"^\w+=", word) or word in SHELL_KEYWORDS:
-            continue  # `do gh api ...` / `then gh ...`: the keyword is not the command (#870)
+            continue  # `do gh api ...` / `then gh ...`: not the command (#870)
         elif wrapper == "timeout" and re.match(r"^\d+(\.\d+)?[smhd]?$", word):
             continue  # `timeout 5 gh ...`: the duration is timeout's operand, not the command
         elif wrapped and word.startswith("-"):
@@ -342,7 +342,7 @@ def only_repo_segment_is_dynamic(path):
     var_at = [i for i, seg in enumerate(segs) if "$" in seg or "`" in seg]
     if not var_at:
         return False
-    if min(var_at) > 3 and len(segs) > 3 and "issues" not in path:
+    if min(var_at) > 3 and "issues" not in path.lower():
         return True  # literal repos/O/R/<resource>/...: the variable is a loop id (#870)
     verdicts = []
     for width in (1, 2):  # owner/name segments: `$R` (one) or `$O/$N` / `o/$N` (two)
