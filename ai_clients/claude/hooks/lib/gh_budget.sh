@@ -254,6 +254,85 @@ gh_budget_retry_after_ttl() {
 	printf '%s\n' "$default_ttl"
 }
 
+# --- poll-loop budget (dotfiles-linux-dev#875) ------------------------------------------------------------
+# Every session, cron and subagent draws on ONE GraphQL budget (5000 points/h) plus a secondary
+# burst/concurrency limit `rate_limit` cannot see. Polling loops are the main consumers, so they
+# check before starting and wait exponentially, never on a fixed interval.
+
+# gh_budget_backoff_seconds ATTEMPT
+# Exponential wait for the ATTEMPT-th retry (1-based): BASE * 2^(ATTEMPT-1), never above CAP.
+# $GH_BUDGET_BACKOFF_BASE (default 3s) and $GH_BUDGET_BACKOFF_CAP (default 60s) tune it.
+gh_budget_backoff_seconds() {
+	local attempt="${1:-1}" base="${GH_BUDGET_BACKOFF_BASE:-3}" cap="${GH_BUDGET_BACKOFF_CAP:-60}" wait
+	[[ "$attempt" =~ ^[0-9]+$ ]] && [ "$attempt" -ge 1 ] || attempt=1
+	# Past 2^20 the cap has long won; clamping the shift keeps the arithmetic from overflowing.
+	[ "$attempt" -gt 21 ] && attempt=21
+	wait=$((base * (1 << (attempt - 1))))
+	[ "$wait" -gt "$cap" ] && wait="$cap"
+	printf '%s\n' "$wait"
+}
+
+# gh_budget_with_backoff ATTEMPTS CMD [ARG...]
+# Runs CMD; on a GitHub rate-limit failure (primary, secondary, "submitted too quickly") sleeps
+# gh_budget_backoff_seconds and retries, at most ATTEMPTS runs in total. A rate limit that outlasts
+# the retries latches the budget (until the measured reset) and returns 75 with GH_BUDGET_CLASS set,
+# so the caller reports "rate limited", never a generic failure. Any OTHER failure returns CMD's own
+# status immediately - a bad repo or a 404 will not be fixed by waiting. CMD's stdout goes to ours.
+gh_budget_with_backoff() {
+	local attempts="$1" attempt out err_file rc
+	shift
+	for ((attempt = 1; attempt <= attempts; attempt++)); do
+		err_file="$(mktemp)"
+		out="$("$@" 2>"$err_file")"
+		rc=$?
+		if [ "$rc" -eq 0 ]; then
+			rm -f "$err_file"
+			printf '%s' "$out"
+			return 0
+		fi
+		# gh may write the error body to stdout even on a non-zero exit - classify both.
+		gh_budget_classify "$(cat "$err_file" 2>/dev/null) $out"
+		rm -f "$err_file"
+		if ! gh_budget_is_terminal; then
+			printf '%s' "$out"
+			return "$rc"
+		fi
+		[ "$attempt" -lt "$attempts" ] && sleep "$(gh_budget_backoff_seconds "$attempt")"
+	done
+	gh_budget_latch_write "$(gh_budget_reset_ttl)" || true
+	return 75
+}
+
+# gh_budget_poll_allowed [FLOOR]
+# Call BEFORE starting a poll loop. Returns 1 (GH_BUDGET_POLL_REASON says why) while the 403 latch is
+# active or `rate_limit` shows GraphQL under FLOOR (default $GH_POLL_GRAPHQL_FLOOR, else $STOP_GRAPHQL_FLOOR (100, one floor with stop_budget.sh) - well
+# above gh_budget_quota_exhausted's 5, because a loop spends many points per hour, not one call).
+# Returns 0 otherwise, and the reason then carries the standing caveat: a full budget does NOT prove
+# the secondary limit is clear (measured 2026-11-03: rate_limit said 5000/5000 while GraphQL still
+# refused), so the loop must still treat its first real refusal as terminal. An unreadable
+# rate_limit allows the loop - the same fail-open gh_budget_quota_exhausted uses.
+# shellcheck disable=SC2034 # GH_BUDGET_POLL_REASON is read by the caller after this returns
+gh_budget_poll_allowed() {
+	local floor="${1:-${GH_POLL_GRAPHQL_FLOOR:-${STOP_GRAPHQL_FLOOR:-100}}}" json remaining
+	GH_BUDGET_POLL_REASON=""
+	if ! [[ "$floor" =~ ^[0-9]+$ ]]; then
+		GH_BUDGET_POLL_REASON="poll floor '$floor' is not a number - not starting a poll loop"
+		return 1
+	fi
+	if gh_budget_latch_active; then
+		GH_BUDGET_POLL_REASON="403 latch active - GitHub API budget still exhausted, not starting a poll loop"
+		return 1
+	fi
+	json="$(gh api rate_limit 2>/dev/null)" || json=""
+	remaining="$(printf '%s' "$json" | jq -r '.resources.graphql.remaining // empty' 2>/dev/null)"
+	if [[ "$remaining" =~ ^[0-9]+$ ]] && [ "$remaining" -lt "$floor" ]; then
+		GH_BUDGET_POLL_REASON="GraphQL budget $remaining < $floor - not starting a poll loop"
+		return 1
+	fi
+	GH_BUDGET_POLL_REASON="GraphQL ${remaining:-unreadable} remaining; a full budget does not prove the secondary limit is clear"
+	return 0
+}
+
 # NOTE (dotfiles-linux-dev#533, retracted 2026-09-27): a `gh_budget_graphql_probe` predictive probe
 # (`{ viewer { login } }`) was tried here and removed. Measured same day: GitHub's secondary
 # limiter is COST- and TIME-based, not transport-based — a trivial query can pass while a more

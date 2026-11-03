@@ -153,7 +153,9 @@ The only reliable signal was inspecting the worktree and asking the forge for PR
    afford. Measured: four agents resumed by `SendMessage` continued cleanly from where they died.
    Re-claim its surface when you resume it (`claim_files <issue> <paths…>`, idempotent for the same
    issue) so the registry counts it in flight; the Stop guard also counts a `SendMessage` resume
-   for `DISPATCH_CLAIM_TTL`, after which a finished agent no longer counts (#729).
+   for `DISPATCH_CLAIM_TTL`, after which a finished agent no longer counts (#729). A resumed
+   agent's later notifications keep its task id, so a `completed` one drops it from the Stop
+   guard's rescue list at once (#871).
 4. **Brief the resumed agent on what moved underneath it while it was dead** — commits or pushes
    landed on its behalf, files or surfaces another agent has since taken, PRs opened or merged. An
    agent resumes assuming its pre-death world still holds; measured twice that assumption was false
@@ -174,6 +176,18 @@ The only reliable signal was inspecting the worktree and asking the forge for PR
 that only asks that question spends session quota from the very budget that is under limit, which
 can worsen the failure it is meant to catch. The comparison in step 1 above, run at each round
 boundary the loop already has, is the cheaper form of the same check.
+
+### PRUNE — remove worktrees whose work already shipped (dotfiles-linux-dev#882)
+
+Runs after RESCUE, so the one real rescue is not buried under shipped worktrees. Run
+`~/.claude/hooks/lib/worktree_prune.sh <absolute-repo-path>` — a **dry run** by default; report
+its list to the owner. ⚠️ **Never pass `--apply` (or `WORKTREE_PRUNE_APPLY=1`) without the owner's
+explicit go-ahead on that list**: it removes worktrees, local branches and `push origin --delete`s remote
+ones, so an autonomous round stops at the dry-run report. Report one line per pruned worktree plus the
+count kept. It prunes only when the content proves it shipped (`branch_content_shipped`,
+never ancestry), the tree holds nothing beyond build noise (or a staged index equal to an older commit of
+the branch), no PR is OPEN, no live agent touched it, and origin's branch (if any) has the local sha.
+Any read failure keeps the worktree. Never prune by hand what it kept.
 
 ### The stash stack is shared — read it too
 
@@ -969,6 +983,13 @@ this round can do — for the ones missing it.
 Bound concurrency by the real constraint — API budget, session budget — and say which one bound it.
 Both were the actual ceiling that day; **a cap justified by review throughput is not legitimate.**
 
+Weigh the GitHub API budget before fanning out (#875): `cd <absolute-repo-path> &&
+source ai_clients/claude/hooks/lib/gh_budget.sh`, then call
+`gh_budget_poll_allowed`. When it refuses (latch active, or GraphQL under `GH_POLL_GRAPHQL_FLOOR`,
+default `STOP_GRAPHQL_FLOOR` = 100, the same floor the Stop guards use), dispatch fewer agents or none and say the budget bound it — every extra agent draws
+on the same 5000/h plus a secondary limit `rate_limit` cannot see, so a full budget is not a clear
+signal either.
+
 `hooks/round_dispatch_guard.sh` (a `Stop` hook, dotfiles-linux-dev#433) refuses to end a round that
 had dispatchable candidates and started no agent, naming each candidate and its file surface;
 the legitimate zero case is every candidate carrying its own named reason, never an override
@@ -1120,6 +1141,9 @@ claimed and how to verify it without `source`:
 Every brief carries:
 - the claimed surface — "the surface is already claimed for you, do NOT run `claim_files`", plus the
   verify command above;
+- 🔴 **name the Agent `issue-<N>-<slug>`.** The Stop guard reads the one issue a dispatch covers
+  from that name; otherwise it falls back to the claim registered right before the dispatch, then
+  the `#N` on the brief's first line (#872), and reports "NO issue" only when none resolves;
 - 🔴 **qualify the target — always, not just here.** Every repository command starts with
   `cd <absolute-path> &&`; every git command that compares with a base names it explicitly as
   `origin/<base>`, never a bare local branch or an implicit `HEAD`. The harness resets cwd after

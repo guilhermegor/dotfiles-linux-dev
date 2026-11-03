@@ -94,6 +94,62 @@ wrapper takes one positive integer, and derives the pushed epoch from the
 head commit's committer date (a NOW epoch makes the ladder refuse the PR as
 "recently pushed"). The rule only takes effect after `make ai_clients`.
 
+### Merge wrapper: one exact allow rule (dotfiles-linux-dev#868)
+
+On a single-maintainer repo no PR can get a human approval, so the auto-mode
+classifier denies every merge as "Merge Without Review" even with all checks
+green. `hooks/merge_green_pr.sh <pr-number>...` is the stable entry point and
+`permissions.allow` carries exactly `Bash(~/.claude/hooks/merge_green_pr.sh:*)`
+for it, the same precedent as the ladder wrapper above. OWNER/REPO come from the
+cwd's `origin`, so from a shell already in the repo run it **bare**:
+`~/.claude/hooks/merge_green_pr.sh 27 29 30` (no `cd`, so no compound command for
+the allow rule to miss). `cd <absolute-repo-path> && ~/.claude/hooks/merge_green_pr.sh …`
+also works: measured 2026-11-03, the equivalent `cd <worktree> && ~/.claude/hooks/run_ladder_review.sh abc`
+ran under `defaultMode: auto` with the ladder allow rule, no denial and no prompt. That
+is one sample from a classifier, not a proof, hence the bare form is preferred.
+
+**Why a wrapper and not glob rules.** Measured on layouts-cvm: `gh pr merge`
+failed on all 5 PRs with a GraphQL rate limit, so only the REST merge worked, and
+the commands the classifier denied were a bare `gh api -X PUT .../merge`, a `for`
+loop and a scratch script. No glob matches those shapes, and a glob cannot pin
+`merge_method` or forbid trailing flags such as `--admin`.
+
+The wrapper takes positive integers only (no flags, so no `--admin` and no
+merge_method choice), uses REST only, and per PR requires: not a draft,
+`mergeable_state` clean, and every required check-run on the head `success`
+(the base branch's protection contexts plus `Review threads answered`). An
+unreadable protection is UNKNOWN and fails closed. The PUT is
+`merge_method=squash` with the head sha pinned. One line per PR; non-zero exit if
+any was refused.
+
+Two trust checks keep the check gate honest. (1) **Check-run spoofing:** a PR can
+add a workflow that posts a green check named like a required one, so a PR whose
+files (REST, paginated) touch `.github/workflows/` or `.github/actions/` is refused
+("touches CI definitions — merge by hand"), including a rename out of them
+(`previous_filename`); an unreadable file list is UNKNOWN, and so is a list whose
+length differs from the PR's `changed_files` ("file list incomplete", since the
+endpoint caps at 3000).
+The gate is **partial by design**: required checks are matched by NAME only
+(`app_id` is not compared; GitHub enforces it through `mergeable_state`), and it
+cannot see CI code outside `.github/` (a local composite action, `make test`, test
+files), which is the PR author's own code on a single-maintainer repo. Required
+contexts come from classic protection (a 404 "Branch not protected" is an empty
+list; any other read error is UNKNOWN) plus rulesets, and are matched in the Checks
+and the commit Status APIs; `skipped`/`neutral` pass, except for the review gate.
+A commit status is forgeable by any token with repo access (this account's own `gh`
+included; a personal token cannot create a check-run), so the review gate is
+satisfied by a **check-run only**, and any other context accepts a status only when
+`creator.login` is not the authenticated user (case-insensitive). Still open: pinning
+`app_id`/`integration_id` per context (#891).
+The merge PUT is **never retried** (a PUT that succeeded server-side but errored
+client-side would be re-sent into a 405 and misreported): on failure the PR's
+`merged` flag is re-read. Read retries happen once and only for transient errors.
+(2) **Redirected target:** OWNER/REPO come from a remote an agent can rewrite, so
+the derived owner must equal `gh api user --jq .login` (unreadable is UNKNOWN) and
+every PR's author must equal it too; bot and dependabot PRs fall back to the normal
+prompt on purpose. There is deliberately **no** blanket `gh pr merge` or
+`gh api .../merge` allow. Takes effect after `make ai_clients`.
+
 ## Body-template guards: PR and issue
 
 Two `PreToolUse` hooks enforce a repo's own body templates on `gh`, so a

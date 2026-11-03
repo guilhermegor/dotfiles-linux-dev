@@ -120,6 +120,8 @@ install_hooks() {
     copy_hook_file "pr_body_orphan_check.sh" "$hooks_dir"
     # Stable ladder entry point (dotfiles-linux-dev#738): the one path settings.json allows.
     copy_hook_file "run_ladder_review.sh" "$hooks_dir"
+    # Stable green-PR squash-merge entry point (dotfiles-linux-dev#868): the other allowed path.
+    copy_hook_file "merge_green_pr.sh" "$hooks_dir"
 
     invalidate_hook_caches
 }

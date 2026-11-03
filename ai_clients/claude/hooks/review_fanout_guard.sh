@@ -55,7 +55,14 @@
 #             and nothing was judged at all. Passing silently would assert "nothing needed
 #             asking" when the honest statement is "I could not tell"; blocking would make it
 #             impossible to end a turn without signing into a reviewer runtime.
-#   unknown — blindness (the probe could not be run, or timed out). BLOCKS.
+#   unknown — blindness (the probe could not be run, or timed out). BLOCKS, naming the
+#             planner's `rung.reason` (timeout vs exit code vs first stderr line). Blocking on
+#             blindness is right (#480); blocking on blindness already ACKNOWLEDGED is noise
+#             (#873): re-running the planner reproduces the same UNKNOWN, so the session has no
+#             next step. After UNKNOWN_BLOCKS_BEFORE_ANNOUNCE blocks with the same
+#             `rung.reason_key` in one session it is ANNOUNCED ONCE (exit 1, stop not blocked),
+#             then quiet — the way `none` is. A NEW reason_key re-arms the block. The probe
+#             budget is REVIEW_FANOUT_RUNG_TIMEOUT (planner, default 120 s, #877).
 # Collapsing any two of these is the #396 defect verbatim, and the same family as an empty
 # `conclusion` read as "failing" or a `case` with no `*)` arm dropping a status silently.
 #
@@ -84,7 +91,9 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/stop_budget.sh
 source "$HOOK_DIR/lib/stop_budget.sh"
 PLANNER="${REVIEW_FANOUT_PLANNER:-$HOOK_DIR/lib/review_fanout_plan.py}"
-PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-90}"
+# Must exceed the planner's RUNG_TIMEOUT (120 s) plus its gh calls, or the planner is killed
+# before the probe can report its own timeout reason (#877).
+PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-180}"
 # A big board takes the planner ~5 min (#696), far past PLANNER_TIMEOUT. A validated plan is
 # cached per repo and reused while younger than CACHE_TTL_MIN minutes (0 disables); on a
 # timeout the planner is re-run detached with REFRESH_TIMEOUT so the next Stop finds it.
@@ -98,6 +107,10 @@ PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-90}"
 CACHE_DIR="${REVIEW_FANOUT_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/review_fanout}"
 CACHE_TTL_MIN="${REVIEW_FANOUT_CACHE_TTL_MIN:-10}"
 REFRESH_TIMEOUT="${REVIEW_FANOUT_REFRESH_TIMEOUT:-900}"
+# An UNKNOWN rung with the same reason_key blocks this many Stops per session, then is announced
+# once and goes quiet (#873). A different reason_key starts the count over.
+UNKNOWN_BLOCKS_BEFORE_ANNOUNCE="${REVIEW_FANOUT_UNKNOWN_BLOCKS:-1}"
+[[ $UNKNOWN_BLOCKS_BEFORE_ANNOUNCE =~ ^[0-9]+$ ]] || UNKNOWN_BLOCKS_BEFORE_ANNOUNCE=1
 
 # dev_loop_invoked TRANSCRIPT
 # Pure data: did this session's transcript ever run s:dev-loop? MIRRORS
@@ -556,6 +569,36 @@ announce_no_rung() {
 	exit 1
 }
 
+# unknown_rung SESSION_ID REASON_KEY REASON
+# State file per session: line 1 = reason_key, line 2 = blocks so far, line 3 = "announced" once
+# said. Same key + count reached -> announce once (exit 1), then exit 0; new key -> block again.
+unknown_rung() {
+	local session_id="$1" key="$2" reason="$3" state seen_key seen_count seen_flag
+	state="${TMPDIR:-/tmp}/review_fanout_guard.${session_id:-nosession}.unknown"
+	seen_key="" seen_count=0 seen_flag=""
+	if [ -r "$state" ]; then
+		{ read -r seen_key; read -r seen_count; read -r seen_flag; } <"$state"
+	fi
+	if [ "$seen_key" != "$key" ]; then
+		seen_count=0
+		seen_flag=""
+	fi
+	[[ ${seen_count:-} =~ ^[0-9]+$ ]] || seen_count=0
+	if [ "$seen_count" -lt "$UNKNOWN_BLOCKS_BEFORE_ANNOUNCE" ]; then
+		printf '%s\n%s\n\n' "$key" "$((seen_count + 1))" >"$state"
+		block_unreadable "reviewer rung UNKNOWN (the #479 probe could not be run or timed out) — not the same as no rung being available. Reason: $reason"
+	fi
+	[ "$seen_flag" = "announced" ] && exit 0
+	printf '%s\n%s\nannounced\n' "$key" "$seen_count" >"$state"
+	{
+		echo "review_fanout_guard: reviewer rung still UNKNOWN — $reason"
+		echo "The reviewer slot was NOT evaluated this round; not blocking (the same reason already"
+		echo "blocked $seen_count Stop(s) this session). Fix the cause (REVIEW_FANOUT_RUNG_TIMEOUT,"
+		echo "qwen/codex on PATH) to restore step 4b's fan-out. A different reason blocks again."
+	} >&2
+	exit 1
+}
+
 main() {
 	local payload active cwd transcript session_id plan rung_status dispatchable excluded
 
@@ -648,7 +691,9 @@ main() {
 		announce_no_rung "$session_id"
 		;;
 	unknown)
-		block_unreadable "reviewer rung UNKNOWN (the #479 probe could not be run or timed out) — not the same as no rung being available."
+		unknown_rung "$session_id" \
+			"$(printf '%s' "$plan" | jq -r '.rung.reason_key // "unspecified"')" \
+			"$(printf '%s' "$plan" | jq -r '.rung.reason // "no reason recorded"')"
 		;;
 	*)
 		block_unreadable "reviewer rung status '$rung_status' is not one of ok|none|unknown — the planner's contract changed and this hook has not been taught the new value."

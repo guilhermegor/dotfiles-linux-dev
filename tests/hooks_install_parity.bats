@@ -39,6 +39,8 @@ ORPHAN_ALLOWLIST=(
     # Called by dispatched agents (allow rule in permissions, dotfiles-linux-dev#738),
     # never fired by a harness event.
     "run_ladder_review.sh"
+    # Same shape: allow rule in permissions (dotfiles-linux-dev#868), no harness event.
+    "merge_green_pr.sh"
 )
 
 # Every "hooks/<name>.sh" path named in settings.json, deduped.

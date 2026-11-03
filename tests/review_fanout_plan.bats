@@ -610,6 +610,69 @@ EOF
     [ "$(jq -r '.rung.signal' <<<"$output")" = "configured-default" ]
 }
 
+# --- rung probe budget and failure reason (#873, #877) ------------------------------
+
+# probe_rung LADDER_BODY [TIMEOUT] — run resolve_rung() against a stub reviewer_ladder.sh whose
+# resolve_fallback_reviewer is LADDER_BODY, with the probe budget set to TIMEOUT seconds.
+probe_rung() {
+    printf 'resolve_fallback_reviewer() {\n%s\n}\n' "$1" >"$TEST_TMP/ladder_stub.sh"
+    unset REVIEW_FANOUT_RUNG
+    REVIEW_FANOUT_RUNG_TIMEOUT="${2:-}" run python3 -c "
+import os, sys
+sys.path.insert(0, '$(dirname "$PLANNER")')
+if not os.environ['REVIEW_FANOUT_RUNG_TIMEOUT']:
+    del os.environ['REVIEW_FANOUT_RUNG_TIMEOUT']
+import json, pathlib, review_fanout_plan as p
+p.REVIEWER_LADDER_SH = pathlib.Path('$TEST_TMP/ladder_stub.sh')
+print(json.dumps(p.resolve_rung()))
+"
+}
+
+@test "the default rung probe budget covers the measured 59s walk (#877)" {
+    run python3 -c "
+import os, sys
+sys.path.insert(0, '$(dirname "$PLANNER")')
+os.environ.pop('REVIEW_FANOUT_RUNG_TIMEOUT', None)
+import review_fanout_plan as p
+assert p.RUNG_TIMEOUT == p.RUNG_TIMEOUT_DEFAULT_S >= 120, p.RUNG_TIMEOUT
+"
+    [ "$status" -eq 0 ]
+}
+
+@test "a probe slower than the old budget but inside the new one resolves to ok (#877)" {
+    # Scaled down: budget 4s, probe 2s. The old behaviour (budget < probe) is the next test.
+    probe_rung 'sleep 2; LADDER_RUNTIME=qwen; LADDER_MODEL=m; LADDER_SIGNAL=s' 4
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.status' <<<"$output")" = "ok" ]
+}
+
+@test "a probe slower than its budget is unknown, naming elapsed time and the budget (#877, #873)" {
+    probe_rung 'sleep 5' 1
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.status' <<<"$output")" = "unknown" ]
+    [ "$(jq -r '.reason_key' <<<"$output")" = "timeout" ]
+    [[ "$(jq -r '.reason' <<<"$output")" == *"timed out after 1s"*"REVIEW_FANOUT_RUNG_TIMEOUT=1s"* ]]
+}
+
+@test "a probe that exits non-zero is unknown, naming the exit code and first stderr line (#873)" {
+    probe_rung 'echo "codex: not logged in" >&2; echo second >&2; exit 7'
+    [ "$(jq -r '.status' <<<"$output")" = "unknown" ]
+    [ "$(jq -r '.reason_key' <<<"$output")" = "exit-7" ]
+    [[ "$(jq -r '.reason' <<<"$output")" == *"exited 7: codex: not logged in" ]]
+}
+
+@test "the probe's reason reaches the excluded PR's named reason (#873)" {
+    export REVIEW_FANOUT_RUNG=unknown
+    stub_gh_prs <<EOF
+[{"number":609,"headRefOid":"aaaa0003","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa0003","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$(jq -r '.rung.reason_key' <<<"$output")" = "override" ]
+    [[ "$(reason_for 609)" == *"override"* ]]
+}
+
 # --- statusCheckRollup: split running from failing, never resolve by name ----------
 
 @test "two check-runs with the same name and opposite conclusions read as ambiguous" {

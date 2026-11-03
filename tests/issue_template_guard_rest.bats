@@ -127,6 +127,45 @@ BAD_BODY='**Python · PyPI · public repo**\n\nNo definition of done here.'
     [ "$status" -eq 2 ]
 }
 
+@test "REST: a PR-merge loop with a command-substitution read is not an issue write (#870)" {
+    run bash -c "payload 'for n in 27 29; do sha=\$(gh api repos/o/r/pulls/\$n --jq .head.sha); gh api -X PUT repos/o/r/pulls/\$n/merge -f merge_method=squash -f sha=\$sha; done' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'for n in 27 29; do gh api -X PUT repos/o/r/pulls/\$n/merge -f merge_method=squash; done' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api -X PUT repos/o/r/pulls/\$n/merge -f sha=\$sha' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "shell keywords and group openers do not hide an issue write (#870)" {
+    run bash -c "payload 'if gh issue create --title x --body nope; then echo ok; fi' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'while true; do gh api repos/o/r/issues -X POST -f body=nope; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload '{ gh issue create --title x --body nope; }' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload '! gh issue create --title x --body nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'until false; do gh issue create --title x --body nope; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'if true; then :; elif gh issue create --title x --body nope; then :; fi' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'if bash -c \"gh issue create --title x --body nope\"; then :; fi' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'if true; then :; fi' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: a real issues write inside the same loop shape stays blocked (#870)" {
+    run bash -c "payload 'for n in 27 29; do sha=\$(gh api repos/o/r/pulls/\$n --jq .head.sha); gh api repos/o/r/issues -X POST -f title=x -f body=nope; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'for n in 27 29; do gh api repos/o/r/issues -X POST -f title=x -f body=nope; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'for n in 27 29; do gh api repos/o/r/issues/\$n -X PATCH -f body=nope; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'if true; then gh api repos/o/r/issues -X POST -f body=nope; fi' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
 @test "REST: a leading slash is judged like the relative path; a tail that completes an issue path fails closed (#822)" {
     run bash -c "payload 'gh api -X PUT /repos/\$R/pulls/816/merge -f sha=abc' | '$GUARD'"
     [ "$status" -eq 0 ]
@@ -439,4 +478,22 @@ EOF
     [ "$status" -eq 2 ]
     run bash -c "payload 'gh api repos/\$R/issues -X POST -f body=nope' | '$GUARD'"
     [ "$status" -eq 2 ]
+}
+
+@test "coproc and a variable resource segment still block issue writes (#880 review)" {
+    run bash -c "payload 'coproc gh issue create --title x --body nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'for n in 1; do gh api -X POST repos/o/r/\$t/\$n -f title=x; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'for n in 1; do gh api -X POST repos/o/r/pulls/\$n/../../issues -f title=x; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "a dot segment after a literal resource keeps a variable resource fail-closed (#880)" {
+    run bash -c "payload 'gh api -X POST repos/o/r/pulls/../\$resource -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api -X POST repos/o/r/pulls/./\$resource -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api -X PUT repos/o/r/pulls/\$n/merge -f sha=abc' | '$GUARD'"
+    [ "$status" -eq 0 ]
 }
