@@ -119,7 +119,7 @@ WRAPPER_VALUE_FLAGS = {
     "xargs": {"-n", "-I", "-L", "-P", "-d", "-E", "-s", "-a", "--max-args", "--max-procs",
               "--delimiter", "--arg-file", "--max-lines", "--max-chars"},
 }
-LOOP_KEYWORDS = {"do", "then", "else"}
+SHELL_KEYWORDS = {"if", "elif", "while", "until", "do", "then", "else"}  # (#870) `!`, `{`, `(` are stripped by _word
 NESTED_ERRORS = []
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 
@@ -146,7 +146,7 @@ def gh_start(argv):
             skip_next = False
         elif word in WRAPPERS:
             wrapped, wrapper = True, word
-        elif word == "" or re.match(r"^\w+=", word) or word in LOOP_KEYWORDS:
+        elif word == "" or re.match(r"^\w+=", word) or word in SHELL_KEYWORDS:
             continue  # `do gh api ...` / `then gh ...`: the keyword is not the command (#870)
         elif wrapper == "timeout" and re.match(r"^\d+(\.\d+)?[smhd]?$", word):
             continue  # `timeout 5 gh ...`: the duration is timeout's operand, not the command
@@ -205,7 +205,8 @@ def iter_argvs(segments, depth=0):
             if base == "eval":
                 inner = " ".join(argv[i + 1:])
                 break
-            if w not in WRAPPERS and not re.match(r"^\w+=", w) and w != "":
+            if (w not in WRAPPERS and w not in SHELL_KEYWORDS
+                    and not re.match(r"^\w+=", w) and w != ""):
                 break
         if inner:
             try:

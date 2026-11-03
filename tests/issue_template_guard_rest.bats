@@ -136,6 +136,25 @@ BAD_BODY='**Python · PyPI · public repo**\n\nNo definition of done here.'
     [ "$status" -eq 0 ]
 }
 
+@test "shell keywords and group openers do not hide an issue write (#870)" {
+    run bash -c "payload 'if gh issue create --title x --body nope; then echo ok; fi' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'while true; do gh api repos/o/r/issues -X POST -f body=nope; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload '{ gh issue create --title x --body nope; }' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload '! gh issue create --title x --body nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'until false; do gh issue create --title x --body nope; done' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'if true; then :; elif gh issue create --title x --body nope; then :; fi' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'if bash -c \"gh issue create --title x --body nope\"; then :; fi' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'if true; then :; fi' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
 @test "REST: a real issues write inside the same loop shape stays blocked (#870)" {
     run bash -c "payload 'for n in 27 29; do sha=\$(gh api repos/o/r/pulls/\$n --jq .head.sha); gh api repos/o/r/issues -X POST -f title=x -f body=nope; done' | '$GUARD'"
     [ "$status" -eq 2 ]
