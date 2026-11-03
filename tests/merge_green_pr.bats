@@ -14,7 +14,16 @@ setup() {
 #!/bin/bash
 echo "$*" >> "$GH_LOG"
 args="$*"
+if [[ "$args" == "api user"* ]]; then
+    [ -n "${USER_FAIL:-}" ] && exit 1
+    echo "${ME:-acme}"; exit 0
+fi
 if [[ "$args" == *"-X PUT"* ]]; then exit 0; fi
+if [[ "$args" == *"/files"* ]]; then
+    [ -n "${FILES_FAIL:-}" ] && exit 1
+    n="${args#*pulls/}"; n="${n%%/*}"
+    f="FILES_$n"; echo "${!f:-src/app.sh}"; exit 0
+fi
 if [[ "$args" == *"/protection"* ]]; then
     [ -n "${PROT_FAIL:-}" ] && exit 1
     echo "build"; exit 0
@@ -30,7 +39,8 @@ fi
 if [[ "$args" == *"/pulls/"* ]]; then
     n="${args#*pulls/}"; n="${n%% *}"
     s="STATE_$n"; s="${!s:-clean}"
-    printf 'sha%s\t%s\tfalse\tmaster\n' "$n" "$s"
+    a="AUTHOR_$n"; a="${!a:-acme}"
+    printf 'sha%s\t%s\tfalse\tmaster\t%s\n' "$n" "$s" "$a"
     exit 0
 fi
 exit 1
@@ -99,6 +109,44 @@ refute_log() {
     [[ "$output" == *"#8 REFUSED"* ]]
     [[ "$output" == *"#9 MERGED"* ]]
     refute_log "pulls/8/merge"
+}
+
+@test "refuses a PR touching .github/workflows or .github/actions" {
+    FILES_7=$'src/a.sh\n.github/workflows/ci.yml' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"touches CI definitions"* ]]
+    FILES_8=".github/actions/x/action.yml" run bash "$SCRIPT" 8
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "files read failure is UNKNOWN and does not merge" {
+    FILES_FAIL=1 run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses a repo whose owner is not the authenticated user" {
+    ME=someone-else run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"repo owner"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses a PR authored by someone else" {
+    AUTHOR_8=dependabot run bash "$SCRIPT" 7 8
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
+    [[ "$output" == *"#8 REFUSED: author"* ]]
+    refute_log "pulls/8/merge"
+}
+
+@test "fails closed when the authenticated user cannot be read" {
+    USER_FAIL=1 run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    refute_log "PUT"
 }
 
 @test "makes no GraphQL call" {

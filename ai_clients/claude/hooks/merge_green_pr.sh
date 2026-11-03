@@ -45,15 +45,25 @@ GATE_CHECK="Review threads answered"
 gh_retry() { gh "$@" 2>/dev/null || { sleep "${MERGE_GREEN_RETRY_SLEEP:-2}"; gh "$@" 2>/dev/null; }; }
 
 merge_one() {
-	local pr="$1" info head state draft base prot required checks bad name
+	local pr="$1" info head state draft base author prot required checks bad name files
 
 	info="$(gh_retry api "repos/$owner/$repo/pulls/$pr" \
-		--jq '[.head.sha, .mergeable_state, (.draft|tostring), .base.ref] | @tsv')" && [ -n "$info" ] ||
+		--jq '[.head.sha, .mergeable_state, (.draft|tostring), .base.ref, .user.login] | @tsv')" && [ -n "$info" ] ||
 		{ echo "#$pr UNKNOWN: cannot read the PR"; return 1; }
-	IFS=$'\t' read -r head state draft base <<<"$info"
-	[ -n "$head" ] && [ -n "$base" ] || { echo "#$pr UNKNOWN: malformed PR read"; return 1; }
+	IFS=$'\t' read -r head state draft base author <<<"$info"
+	[ -n "$head" ] && [ -n "$base" ] && [ -n "$author" ] || { echo "#$pr UNKNOWN: malformed PR read"; return 1; }
+	[ "$author" = "$me" ] || { echo "#$pr REFUSED: author '$author' is not '$me' — merge by hand"; return 1; }
 	[ "$draft" = "false" ] || { echo "#$pr REFUSED: draft"; return 1; }
 	[ "$state" = "clean" ] || { echo "#$pr REFUSED: mergeable_state is '$state', not clean"; return 1; }
+
+	# A PR can add a workflow that posts a green check with a required name, so the
+	# check gate below is only trustworthy for a PR that cannot change CI definitions.
+	files="$(gh_retry api --paginate "repos/$owner/$repo/pulls/$pr/files?per_page=100" --jq '.[].filename')" ||
+		{ echo "#$pr UNKNOWN: cannot read the PR's files"; return 1; }
+	if grep -q -E '^\.github/(workflows|actions)/' <<<"$files"; then
+		echo "#$pr REFUSED: touches CI definitions — merge by hand"
+		return 1
+	fi
 
 	prot="$(gh_retry api "repos/$owner/$repo/branches/$base/protection" \
 		--jq '[(.required_status_checks.contexts // [])[], (.required_status_checks.checks // [])[].context] | unique | .[]')" ||
@@ -84,6 +94,14 @@ merge_one() {
 
 main() {
 	local pr rc=0
+	# The remote is writable by an agent, so the target is trusted only if its owner is
+	# the authenticated user; each PR's author must be that user too (bots go to a prompt).
+	me="$(gh_retry api user --jq .login)" && [ -n "$me" ] ||
+		{ echo "UNKNOWN: cannot read the authenticated user"; return 1; }
+	if [ "$owner" != "$me" ]; then
+		echo "REFUSED: repo owner '$owner' is not '$me' — merge by hand"
+		return 1
+	fi
 	for pr in "$@"; do
 		merge_one "$pr" || rc=1
 	done

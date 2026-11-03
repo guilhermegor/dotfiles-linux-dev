@@ -115,7 +115,16 @@ merge_method choice), uses REST only, and per PR requires: not a draft,
 (the base branch's protection contexts plus `Review threads answered`). An
 unreadable protection is UNKNOWN and fails closed. The PUT is
 `merge_method=squash` with the head sha pinned. One line per PR; non-zero exit if
-any was refused. There is deliberately **no** blanket `gh pr merge` or
+any was refused.
+
+Two trust checks keep the check gate honest. (1) **Check-run spoofing:** a PR can
+add a workflow that posts a green check named like a required one, so a PR whose
+files (REST, paginated) touch `.github/workflows/` or `.github/actions/` is refused
+("touches CI definitions — merge by hand"); an unreadable file list is UNKNOWN.
+(2) **Redirected target:** OWNER/REPO come from a remote an agent can rewrite, so
+the derived owner must equal `gh api user --jq .login` (unreadable is UNKNOWN) and
+every PR's author must equal it too; bot and dependabot PRs fall back to the normal
+prompt on purpose. There is deliberately **no** blanket `gh pr merge` or
 `gh api .../merge` allow. Takes effect after `make ai_clients`.
 
 ## Body-template guards: PR and issue
