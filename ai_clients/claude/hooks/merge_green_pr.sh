@@ -16,7 +16,10 @@
 # protection contexts PLUS "Review threads answered") concluded `success`; an unreadable
 # protection is UNKNOWN and fails closed. The merge PUT pins the head sha, so a push after
 # the checks were read is refused by GitHub. Prints one line per PR; exits 1 if any was
-# refused. Run it as `cd <absolute-repo-path> && …`: OWNER/REPO come from the cwd's origin.
+# refused. OWNER/REPO come from the cwd's origin: from a shell already in the repo run it
+# bare (`~/.claude/hooks/merge_green_pr.sh 27 29`, no `cd`); `cd <absolute-repo-path> && …`
+# works too. The gate is by check NAME only (app_id is not compared; GitHub enforces it
+# through mergeable_state) and cannot see CI code that is not under .github/.
 set -u
 
 if [ "$#" -lt 1 ]; then
@@ -40,21 +43,72 @@ fi
 
 GATE_CHECK="Review threads answered"
 
-# ponytail: one plain retry; swap for gh_budget_with_backoff once it exists on master
-# (gh_budget.sh only classifies today).
-gh_retry() { gh "$@" 2>/dev/null || { sleep "${MERGE_GREEN_RETRY_SLEEP:-2}"; gh "$@" 2>/dev/null; }; }
+# READ-ONLY calls only (never the merge PUT). One retry, and only for a transient error:
+# a deterministic 4xx (404/405/409/422) is final. Each attempt's output is held apart, so a
+# paginated read that fails midway cannot leave partial rows in front of the retry's rows.
+# ponytail: swap for gh_budget_with_backoff once it exists on master (gh_budget.sh only
+# classifies today).
+gh_retry() {
+	local out err
+	err="$(mktemp)" || return 1
+	if out="$(gh "$@" 2>"$err")"; then
+		rm -f "$err"
+		printf '%s\n' "$out"
+		return 0
+	fi
+	if grep -q -E 'HTTP (404|405|409|422)' "$err"; then
+		rm -f "$err"
+		return 1
+	fi
+	sleep "${MERGE_GREEN_RETRY_SLEEP:-2}"
+	rm -f "$err"
+	out="$(gh "$@" 2>/dev/null)" || return 1
+	printf '%s\n' "$out"
+}
+
+# Prints the base branch's required contexts: classic protection plus rulesets, one per line.
+# "Branch not protected" (404) is an empty list; any other read failure fails the call.
+required_contexts() {
+	local base="$1" err classic rules
+	err="$(mktemp)" || return 1
+	if ! classic="$(gh api "repos/$owner/$repo/branches/$base/protection" \
+		--jq '[(.required_status_checks.contexts // [])[], (.required_status_checks.checks // [])[].context] | .[]' 2>"$err")"; then
+		if grep -q 'Branch not protected' "$err"; then
+			classic=""
+		else
+			rm -f "$err"
+			return 1
+		fi
+	fi
+	rm -f "$err"
+	rules="$(gh_retry api --paginate "repos/$owner/$repo/rules/branches/$base" \
+		--jq '.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context')" || return 1
+	printf '%s\n%s\n' "$classic" "$rules" | sed '/^$/d'
+}
 
 merge_one() {
-	local pr="$1" info head state draft base author prot required checks bad name files
+	local pr="$1" info head state draft base author changed try
+	local required checks statuses bad name files
 
-	info="$(gh_retry api "repos/$owner/$repo/pulls/$pr" \
-		--jq '[.head.sha, .mergeable_state, (.draft|tostring), .base.ref, .user.login, (.changed_files|tostring)] | @tsv')" && [ -n "$info" ] ||
-		{ echo "#$pr UNKNOWN: cannot read the PR"; return 1; }
-	IFS=$'\t' read -r head state draft base author changed <<<"$info"
-	[ -n "$head" ] && [ -n "$base" ] && [ -n "$author" ] && [[ "$changed" =~ ^[0-9]+$ ]] || { echo "#$pr UNKNOWN: malformed PR read"; return 1; }
-	[ "$author" = "$me" ] || { echo "#$pr REFUSED: author '$author' is not '$me' — merge by hand"; return 1; }
+	# mergeable_state is computed lazily: poll while GitHub still says unknown/null.
+	for try in 1 2 3; do
+		info="$(gh_retry api "repos/$owner/$repo/pulls/$pr" \
+			--jq '[(.head.sha // "-"), (.mergeable_state // "unknown"), ((.draft // false)|tostring), (.base.ref // "-"), (.user.login // "-"), ((.changed_files // "-")|tostring)] | @tsv')" && [ -n "$info" ] ||
+			{ echo "#$pr UNKNOWN: cannot read the PR"; return 1; }
+		# "-" placeholders keep every field non-empty: tab is IFS whitespace and would
+		# otherwise collapse an empty field and shift the columns.
+		IFS=$'\t' read -r head state draft base author changed <<<"$info"
+		[ "$state" = "unknown" ] || break
+		[ "$try" -lt 3 ] && sleep "${MERGE_GREEN_RETRY_SLEEP:-2}"
+	done
+	{ [ "$head" != "-" ] && [ "$base" != "-" ] && [ "$author" != "-" ] && [[ "$changed" =~ ^[0-9]+$ ]]; } ||
+		{ echo "#$pr UNKNOWN: malformed PR read"; return 1; }
+	# GitHub logins are case-insensitive.
+	[ "${author,,}" = "${me,,}" ] || { echo "#$pr REFUSED: author '$author' is not '$me' — merge by hand"; return 1; }
 	[ "$draft" = "false" ] || { echo "#$pr REFUSED: draft"; return 1; }
-	[ "$state" = "clean" ] || { echo "#$pr REFUSED: mergeable_state is '$state', not clean"; return 1; }
+	# has_hooks is clean with pre-receive hooks; both are mergeable.
+	[[ "$state" == "clean" || "$state" == "has_hooks" ]] ||
+		{ echo "#$pr REFUSED: mergeable_state is '$state', not clean"; return 1; }
 
 	# A PR can add a workflow that posts a green check with a required name, so the
 	# check gate below is only trustworthy for a PR that cannot change CI definitions.
@@ -71,27 +125,39 @@ merge_one() {
 		return 1
 	fi
 
-	prot="$(gh_retry api "repos/$owner/$repo/branches/$base/protection" \
-		--jq '[(.required_status_checks.contexts // [])[], (.required_status_checks.checks // [])[].context] | unique | .[]')" ||
-		{ echo "#$pr UNKNOWN: cannot read branch protection of $base"; return 1; }
-	required="$(printf '%s\n%s\n' "$prot" "$GATE_CHECK" | sed '/^$/d' | sort -u)"
+	required="$(required_contexts "$base")" ||
+		{ echo "#$pr UNKNOWN: cannot read the required checks of $base"; return 1; }
+	required="$(printf '%s\n%s\n' "$required" "$GATE_CHECK" | sed '/^$/d' | sort -u)"
 
+	# Checks API plus the commit Status API (a required context may be posted via either).
+	# State is normalised to "success"; GitHub counts skipped/neutral as passing, so they
+	# are accepted too, except for the review gate itself (strict success).
 	checks="$(gh_retry api --paginate "repos/$owner/$repo/commits/$head/check-runs?per_page=100" \
 		--jq '.check_runs[] | [.name, (.conclusion // "pending")] | @tsv')" ||
 		{ echo "#$pr UNKNOWN: cannot read check-runs of $head"; return 1; }
+	statuses="$(gh_retry api "repos/$owner/$repo/commits/$head/status" \
+		--jq '.statuses[] | [.context, .state] | @tsv')" ||
+		{ echo "#$pr UNKNOWN: cannot read commit statuses of $head"; return 1; }
+	checks="$(printf '%s\n%s\n' "$checks" "$statuses")"
 
 	bad=""
 	while IFS= read -r name; do
-		# Every run with this name must be success; a missing or mixed name is not green.
-		if ! awk -F'\t' -v n="$name" '$1==n {seen=1; if ($2!="success") fail=1} END {exit !(seen && !fail)}' <<<"$checks"; then
+		# Every run with this name must pass; a missing or mixed name is not green.
+		if ! awk -F'\t' -v n="$name" -v gate="$GATE_CHECK" '
+			$1==n {seen=1; ok=($2=="success" || (n!=gate && ($2=="skipped" || $2=="neutral"))); if (!ok) fail=1}
+			END {exit !(seen && !fail)}' <<<"$checks"; then
 			bad="$bad [$name]"
 		fi
 	done <<<"$required"
 	[ -z "$bad" ] || { echo "#$pr REFUSED: required check not green:$bad"; return 1; }
 
-	if gh_retry api -X PUT "repos/$owner/$repo/pulls/$pr/merge" \
-		-f merge_method=squash -f sha="$head" >/dev/null; then
+	# The PUT is never retried: a call that succeeded server-side but errored client-side
+	# would be re-sent into a 405/409 and misreported. On failure, ask whether it merged.
+	if gh api -X PUT "repos/$owner/$repo/pulls/$pr/merge" \
+		-f merge_method=squash -f sha="$head" >/dev/null 2>&1; then
 		echo "#$pr MERGED squash at ${head:0:12}"
+	elif [ "$(gh_retry api "repos/$owner/$repo/pulls/$pr" --jq .merged 2>/dev/null)" = "true" ]; then
+		echo "#$pr MERGED squash at ${head:0:12} (PUT errored, PR is merged)"
 	else
 		echo "#$pr REFUSED: merge PUT failed (head moved, or branch protection blocks it)"
 		return 1
@@ -104,7 +170,9 @@ main() {
 	# the authenticated user; each PR's author must be that user too (bots go to a prompt).
 	me="$(gh_retry api user --jq .login)" && [ -n "$me" ] ||
 		{ echo "UNKNOWN: cannot read the authenticated user"; return 1; }
-	if [ "$owner" != "$me" ]; then
+	# Case-insensitive; an org-owned repo never equals a user login, so it is refused on
+	# purpose (merge those by hand).
+	if [ "${owner,,}" != "${me,,}" ]; then
 		echo "REFUSED: repo owner '$owner' is not '$me' — merge by hand"
 		return 1
 	fi

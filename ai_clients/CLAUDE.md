@@ -100,8 +100,13 @@ On a single-maintainer repo no PR can get a human approval, so the auto-mode
 classifier denies every merge as "Merge Without Review" even with all checks
 green. `hooks/merge_green_pr.sh <pr-number>...` is the stable entry point and
 `permissions.allow` carries exactly `Bash(~/.claude/hooks/merge_green_pr.sh:*)`
-for it, the same precedent as the ladder wrapper above. Run it as
-`cd <absolute-repo-path> && ~/.claude/hooks/merge_green_pr.sh 27 29 30`.
+for it, the same precedent as the ladder wrapper above. OWNER/REPO come from the
+cwd's `origin`, so from a shell already in the repo run it **bare**:
+`~/.claude/hooks/merge_green_pr.sh 27 29 30` (no `cd`, so no compound command for
+the allow rule to miss). `cd <absolute-repo-path> && ~/.claude/hooks/merge_green_pr.sh …`
+also works: measured 2026-11-03, the equivalent `cd <worktree> && ~/.claude/hooks/run_ladder_review.sh abc`
+ran under `defaultMode: auto` with the ladder allow rule, no denial and no prompt. That
+is one sample from a classifier, not a proof, hence the bare form is preferred.
 
 **Why a wrapper and not glob rules.** Measured on layouts-cvm: `gh pr merge`
 failed on all 5 PRs with a GraphQL rate limit, so only the REST merge worked, and
@@ -124,6 +129,16 @@ files (REST, paginated) touch `.github/workflows/` or `.github/actions/` is refu
 (`previous_filename`); an unreadable file list is UNKNOWN, and so is a list whose
 length differs from the PR's `changed_files` ("file list incomplete", since the
 endpoint caps at 3000).
+The gate is **partial by design**: required checks are matched by NAME only
+(`app_id` is not compared; GitHub enforces it through `mergeable_state`), and it
+cannot see CI code outside `.github/` (a local composite action, `make test`, test
+files), which is the PR author's own code on a single-maintainer repo. Required
+contexts come from classic protection (a 404 "Branch not protected" is an empty
+list; any other read error is UNKNOWN) plus rulesets, and are matched in the Checks
+and the commit Status APIs; `skipped`/`neutral` pass, except for the review gate.
+The merge PUT is **never retried** (a PUT that succeeded server-side but errored
+client-side would be re-sent into a 405 and misreported): on failure the PR's
+`merged` flag is re-read. Read retries happen once and only for transient errors.
 (2) **Redirected target:** OWNER/REPO come from a remote an agent can rewrite, so
 the derived owner must equal `gh api user --jq .login` (unreadable is UNKNOWN) and
 every PR's author must equal it too; bot and dependabot PRs fall back to the normal
