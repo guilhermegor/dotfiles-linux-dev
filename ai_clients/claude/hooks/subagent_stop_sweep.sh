@@ -216,6 +216,12 @@ sweep_review_gate() {
 		echo "    no open PRs"
 		return
 	fi
+	# One thread query per open PR is the sweep's GraphQL fan-out (#875): refuse to start it on a
+	# thin budget, and say UNKNOWN - a skipped gate is never "clean".
+	if ! gh_budget_poll_allowed; then
+		echo "    UNKNOWN — $GH_BUDGET_POLL_REASON"
+		return
+	fi
 	local n
 	while read -r n; do
 		[ -n "$n" ] || continue
