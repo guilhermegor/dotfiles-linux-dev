@@ -185,8 +185,9 @@ _gate_page_channels() {
 			cursor="$(printf '%s' "$json" | jq -r --arg c "$channel" \
 				".data.repository.pullRequest[\$c] | ($cursor_path) // empty" 2>/dev/null)"
 			[ -n "$cursor" ] || break
-			page="$(gh api graphql -f query="$(_gate_page_query "$channel")" \
-				-F owner="$owner" -F repo="$repo" -F number="$number" -f cursor="$cursor" 2>/dev/null)" || break
+			# Backs off (and latches) on a rate limit instead of silently truncating the read (#875).
+			page="$(gh_budget_with_backoff 3 gh api graphql -f query="$(_gate_page_query "$channel")" \
+				-F owner="$owner" -F repo="$repo" -F number="$number" -f cursor="$cursor")" || break
 			# A 200 with a GraphQL `errors` array is partial data, and a cursor that did not
 			# advance is a repeated page: merging either could fake a complete read.
 			printf '%s' "$page" | jq -e --arg c "$channel" --arg old "$cursor" "(.errors | not)
@@ -565,7 +566,9 @@ gate_pr_thread_state() {
 			GATE_DETAIL="review threads unreadable: GitHub API budget exhausted ($GH_BUDGET_CLASS) — $(printf '%s' "$refusal" | tr '\n' ' ' | cut -c1-300)"
 			return 0
 		fi
-		[ "$attempt" -lt "$attempts" ] && sleep $((attempt * 3))
+		# Exponential and bounded (#875), not a fixed or linear interval: a non-terminal refusal can
+		# still be the start of a burst limit, and hammering it on a steady beat prolongs it.
+		[ "$attempt" -lt "$attempts" ] && sleep "$(gh_budget_backoff_seconds "$attempt")"
 	done
 	if [ -z "$threads" ]; then
 		GATE_STATUS="unreadable"

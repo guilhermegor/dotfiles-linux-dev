@@ -969,6 +969,13 @@ this round can do — for the ones missing it.
 Bound concurrency by the real constraint — API budget, session budget — and say which one bound it.
 Both were the actual ceiling that day; **a cap justified by review throughput is not legitimate.**
 
+Weigh the GitHub API budget before fanning out (#875): `cd <absolute-repo-path> &&
+source ai_clients/claude/hooks/lib/gh_budget.sh`, then call
+`gh_budget_poll_allowed`. When it refuses (latch active, or GraphQL under `GH_POLL_GRAPHQL_FLOOR`,
+default `STOP_GRAPHQL_FLOOR` = 100, the same floor the Stop guards use), dispatch fewer agents or none and say the budget bound it — every extra agent draws
+on the same 5000/h plus a secondary limit `rate_limit` cannot see, so a full budget is not a clear
+signal either.
+
 `hooks/round_dispatch_guard.sh` (a `Stop` hook, dotfiles-linux-dev#433) refuses to end a round that
 had dispatchable candidates and started no agent, naming each candidate and its file surface;
 the legitimate zero case is every candidate carrying its own named reason, never an override
