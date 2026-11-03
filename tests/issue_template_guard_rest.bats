@@ -392,8 +392,29 @@ EOF
 }
 
 @test "REST: an --input file mentioning issues does not make a PR reply an issue write (#874)" {
-    echo '{"body": "see the issues"}' > "$REPO/reply.json"
-    run bash -c "payload 'gh api repos/o/r/pulls/52/comments/123/replies --input $REPO/reply.json' | '$GUARD'"
+    echo '{"body": "see the issues"}' > "$REPO/issues-reply.json"
+    run bash -c "payload 'gh api repos/o/r/pulls/52/comments/123/replies --input $REPO/issues-reply.json' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: a repo whose name contains 'issues' still lets PR replies through (#874)" {
+    run bash -c "payload 'gh api repos/o/my-issues/pulls/52/comments/123/replies -f body=x' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: issue writes stay blocked with value flags before the endpoint (#874)" {
+    run bash -c "payload 'gh api -X POST repos/o/r/issues -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api --hostname h.example.com repos/o/r/issues -X POST' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api --method=POST repos/o/r/issues' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api -XPOST -H \"Accept: x\" -- repos/o/r/issues' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: graphql queries mentioning issues are not issue writes (#874)" {
+    run bash -c "payload 'gh api graphql -f query=\"{ repository { issues { totalCount } } }\"' | '$GUARD'"
     [ "$status" -eq 0 ]
 }
 

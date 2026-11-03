@@ -414,7 +414,11 @@ def api_issue_match(segments):
         # Endpoint path only: a `-f body=...issues...` value or an --input file never decides
         # (dotfiles-linux-dev#874). PR review-comment endpoints (pulls/N/comments[/ID/replies],
         # pulls/comments/ID, pulls/N/reviews) carry no `issues` segment, so they fall through.
-        mentions = "issues" in path
+        # Whole path segment, so a repo named `my-issues` does not turn its PR replies into issue
+        # writes. The decision rests on `endpoint` above: a value flag missing from
+        # API_VALUE_FLAGS/API_OTHER_VALUE_FLAGS lets its value be mistaken for the endpoint, so a
+        # new `gh api` flag that takes a value must be added there.
+        mentions = "issues" in path.split("/")
         # Understood as NOT an issue write only when the endpoint is a literal that either does
         # not mention `issues` at all or is a known issue sub-resource (comments, labels, ...).
         # Anything else that mentions `issues` is judged as a write (unknown never means allowed).
