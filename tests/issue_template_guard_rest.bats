@@ -379,3 +379,29 @@ EOF
     run bash -c "payload 'gh api repos/{owner}/{repo}/issues -X POST -f title=x -f body=nope' | '$GUARD'"
     [ "$status" -eq 0 ]
 }
+
+@test "REST: PR review-comment writes are not issue writes, whatever the body says (#874)" {
+    run bash -c "payload 'gh api repos/o/r/pulls/52/comments/123/replies -f body=\"see the open writer issues\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api repos/o/r/pulls/52/comments -f body=\"issues\" -f path=a -f commit_id=b' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api -X PATCH repos/o/r/pulls/comments/123 -f body=\"fixes issues\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api repos/o/r/pulls/52/reviews -f body=issues -f event=COMMENT' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: an --input file mentioning issues does not make a PR reply an issue write (#874)" {
+    echo '{"body": "see the issues"}' > "$REPO/reply.json"
+    run bash -c "payload 'gh api repos/o/r/pulls/52/comments/123/replies --input $REPO/reply.json' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: real issue writes stay blocked after the path-only mention test (#874)" {
+    run bash -c "payload 'gh api repos/o/r/issues -X POST -f title=x -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api repos/o/r/issues/5 -X PATCH -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api repos/\$R/issues -X POST -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}

@@ -411,7 +411,10 @@ def api_issue_match(segments):
         if dynamic and endpoint and only_repo_segment_is_dynamic(path):
             dynamic = False  # judged by its literal resource, like the unparameterised twin
         m = API_ISSUE_ENDPOINT.match(path)
-        mentions = any("issues" in t for t in rest)
+        # Endpoint path only: a `-f body=...issues...` value or an --input file never decides
+        # (dotfiles-linux-dev#874). PR review-comment endpoints (pulls/N/comments[/ID/replies],
+        # pulls/comments/ID, pulls/N/reviews) carry no `issues` segment, so they fall through.
+        mentions = "issues" in path
         # Understood as NOT an issue write only when the endpoint is a literal that either does
         # not mention `issues` at all or is a known issue sub-resource (comments, labels, ...).
         # Anything else that mentions `issues` is judged as a write (unknown never means allowed).
