@@ -521,3 +521,126 @@ assert_rest_call_moves_nothing() {
 @test "gh api pulls head with leading zeros resolves to the plain issue number" {
     assert_rest_pr_moves_card "gh api repos/acme/widgets/pulls -f head=fix/0564-other"
 }
+
+# --- #865: a FAILED PR-open must not move the card ----------------------------------------------
+
+# payload with a tool_response; $1 command, $2 tool_response JSON
+run_hook_resp() {
+    jq -nc --arg cmd "$1" --argjson r "$2" \
+        '{tool_name: "Bash", tool_input: {command: $cmd}, tool_response: $r}' | "$HOOK"
+}
+
+@test "gh pr create with a PR URL in stdout still moves the card" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "gh pr create --title x" '{"stdout":"https://github.com/o/r/pull/9\n","stderr":""}'
+    [[ "$output" == *"moved issue"* ]]
+}
+
+@test "gh pr create that exited non-zero moves nothing" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "gh pr create --title x" '{"stdout":"","stderr":"boom","exit_code":1}'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create with no PR URL in stdout moves nothing" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "gh pr create --title x" '{"stdout":"a pull request already exists","stderr":""}'
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "gh pr create with redirected (empty) stdout still moves the card" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "gh pr create --title x >/dev/null" '{"stdout":"","stderr":""}'
+    [[ "$output" == *"moved issue"* ]]
+}
+
+@test "gh pr create with the PR URL only in stderr still moves the card" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "gh pr create --title x" '{"stdout":"Creating pull request","stderr":"https://github.com/o/r/pull/9"}'
+    [[ "$output" == *"moved issue"* ]]
+}
+
+@test "a string 'Error' tool_response moves nothing" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "gh pr create --title x" '"Error: Exit code 1"'
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "REST POST pulls with an HTTP 422 in stderr moves nothing" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "gh api repos/guilhermegor/dotfiles-dev/pulls -f head=feat/131-fix -f base=main" \
+        '{"stdout":"{\"message\":\"Validation Failed\"}","stderr":"gh: Validation Failed (HTTP 422)"}'
+    [[ "$output" != *"moved issue"* ]]
+}
+
+@test "REST POST pulls that succeeded still moves the card" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "gh api repos/guilhermegor/dotfiles-dev/pulls -f head=feat/131-fix -f base=main" \
+        '{"stdout":"{\"html_url\":\"https://github.com/o/r/pull/9\"}","stderr":""}'
+    [[ "$output" == *"moved issue"* ]]
+}
+
+# --- #865: board_config tells "no board" (silent) from a gh error (warns), no second gh call ----
+
+@test "no kanban board: silent, and gh project list is called exactly once" {
+    write_fake_gh "OPEN"
+    sed -i 's|"project list")|"project list") echo x >> "'"$TEST_TMP"'/list.calls"|; s|echo .{"projects".*|echo '"'"'{"projects":[]}'"'"'|' "$FAKE_BIN/gh"
+    run run_hook "gh pr create --title x"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ "$(wc -l < "$TEST_TMP/list.calls")" -eq 1 ]
+}
+
+@test "gh project list failure: warns that the board was not read" {
+    write_fake_gh "OPEN"
+    sed -i 's|echo .{"projects".*|exit 1|' "$FAKE_BIN/gh"
+    run run_hook "gh pr create --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"could NOT read the board"* ]]
+}
+
+@test "board without a Status field: silent, no 'could NOT read the board' warning" {
+    write_fake_gh "OPEN"
+    mv "$FAKE_BIN/gh" "$FAKE_BIN/gh.real"
+    printf '%s\n' '#!/bin/bash' \
+        '[[ "$1 $2" == "project field-list" ]] && { echo "{\"fields\":[]}"; exit 0; }' \
+        'exec "$(dirname "$0")/gh.real" "$@"' > "$FAKE_BIN/gh"
+    chmod +x "$FAKE_BIN/gh"
+    run run_hook "gh pr create --title x"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "gh project list returning unparseable JSON warns instead of reading as no board" {
+    write_fake_gh "OPEN"
+    sed -i 's|echo .{"projects".*|echo not-json|' "$FAKE_BIN/gh"
+    run run_hook "gh pr create --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"could NOT read the board"* ]]
+}
+
+@test "warm cache missing the target column: silent, no read-the-board warning" {
+    write_fake_gh "OPEN"
+    run run_hook "gh pr create --title x"   # primes the cache via the happy path
+    [[ "$output" == *"moved issue"* ]]
+    local cache; cache="$(find "$CLAUDE_CONFIG_DIR" -name '*.json' | head -n1)"
+    [ -n "$cache" ]
+    jq 'del(.options["In review"])' "$cache" > "$cache.t" && mv "$cache.t" "$cache"
+    sed -i '/"In review"/d' "$FAKE_BIN/gh"   # the board really has no such column now
+    run run_hook "gh pr create --title x"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "a string exit_code of \"0\" is not a failure" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "gh pr create --title x" '{"stdout":"https://github.com/o/r/pull/9","stderr":"","exit_code":"0"}'
+    [[ "$output" == *"moved issue"* ]]
+}
+
+@test "rtk-condensed gh pr create output (PR #N, no URL) still moves the card" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "rtk gh pr create --title x" '{"stdout":"ok created PR #9","stderr":""}'
+    [[ "$output" == *"moved issue"* ]]
+}

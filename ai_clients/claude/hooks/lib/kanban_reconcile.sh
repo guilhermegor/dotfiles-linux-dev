@@ -68,15 +68,18 @@ cache_file() {
 
 discover_board() {
 	# Find the `<repo> kanban` project, resolve its Status field + option ids, cache the result, and
-	# echo it as one JSON object. Returns: 0 + config on success, 1 when no such board exists, and
-	# 2 when MORE THAN ONE board carries that title (refuse to guess — the caller surfaces this).
+	# echo it as one JSON object. Returns: 0 + config on success, 1 on a gh/parse failure, 2 when
+	# MORE THAN ONE board carries that title (refuse to guess — the caller surfaces this), and
+	# 3 when NO `<repo> kanban` board exists or it has no usable Status field (#865: told apart from a
+	# gh error without a re-query).
 	local owner="$1" repo="$2" projects matches count num node fields field_id options config
 	projects="$(gh project list --owner "$owner" --format json 2>/dev/null)" || return 1
 
 	matches="$(printf '%s' "$projects" \
-		| jq -r --arg t "$repo kanban" '.projects[] | select(.title==$t) | "\(.number) \(.id)"')"
+		| jq -r --arg t "$repo kanban" '.projects[] | select(.title==$t) | "\(.number) \(.id)"')" \
+		|| return 1   # unparseable list is a gh-side failure, not "no board"
 	count="$(printf '%s\n' "$matches" | grep -c .)"
-	(( count == 0 )) && return 1
+	(( count == 0 )) && return 3
 	if (( count > 1 )); then
 		# A silent head -n1 pick here would move a random board's card. Refuse instead — issue.md
 		# now prevents duplicate-titled boards, so this is the safety net for one already out there.
@@ -88,10 +91,10 @@ discover_board() {
 
 	fields="$(gh project field-list "$num" --owner "$owner" --format json 2>/dev/null)" || return 1
 	field_id="$(printf '%s' "$fields" | jq -r '.fields[] | select(.name=="Status") | .id' | head -n1)"
-	[[ -n "$field_id" ]] || return 1
+	[[ -n "$field_id" ]] || return 3   # board exists but has no Status field: config, not a gh error
 	options="$(printf '%s' "$fields" \
 		| jq -c '[.fields[] | select(.name=="Status") | .options[]] | map({(.name): .id}) | add')"
-	[[ -n "$options" && "$options" != "null" ]] || return 1
+	[[ -n "$options" && "$options" != "null" ]] || return 3
 
 	config="$(jq -n --argjson num "$num" --arg node "$node" --arg field "$field_id" \
 		--argjson options "$options" \
@@ -103,8 +106,9 @@ discover_board() {
 
 board_config() {
 	# Emit "<project_number> <project_node> <status_field_id> <option_id_for_target>". Reads the
-	# per-repo cache, discovering + writing it on a miss. Returns 1 if there is no `<repo> kanban`
-	# board or the target column does not exist.
+	# per-repo cache, discovering + writing it on a miss. Returns 0 on success (or AMBIGUOUS), 3 when
+	# there is no `<repo> kanban` board or it lacks the target column (a legitimate no-op), and 1
+	# on a gh failure (#865). Callers that only test `||` treat both non-zero codes alike.
 	local owner="$1" repo="$2" target="$3" file line num node field opt
 	file="$(cache_file "$owner" "$repo")"
 
@@ -124,9 +128,9 @@ board_config() {
 	local rc
 	line="$(discover_board "$owner" "$repo")"; rc=$?   # writes the cache as a side effect
 	(( rc == 2 )) && { printf 'AMBIGUOUS\n'; return 0; }   # >1 same-named board — let the caller warn
-	(( rc == 0 )) || return 1
+	(( rc == 0 )) || return "$rc"
 	opt="$(printf '%s' "$line" | jq -r --arg t "$target" '.options[$t] // empty' 2>/dev/null)"
-	[[ -n "$opt" ]] || return 1
+	[[ -n "$opt" ]] || return 3
 	printf '%s %s %s %s\n' \
 		"$(printf '%s' "$line" | jq -r '.project_number')" \
 		"$(printf '%s' "$line" | jq -r '.project_node_id')" \
