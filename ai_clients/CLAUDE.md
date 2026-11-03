@@ -94,15 +94,19 @@ wrapper takes one positive integer, and derives the pushed epoch from the
 head commit's committer date (a NOW epoch makes the ladder refuse the PR as
 "recently pushed"). The rule only takes effect after `make ai_clients`.
 
-### Sha-pinned squash merge: two narrow allow rules (dotfiles-linux-dev#868)
+### Sha-pinned squash merge: one allow rule (dotfiles-linux-dev#868)
 
 On a single-maintainer repo no PR can get a human approval, so the auto-mode
 classifier denied every merge as "Merge Without Review" even with all checks
 green. `permissions.allow` carries exactly
-`Bash(rtk gh pr merge * --squash --auto --match-head-commit *)` and
-`Bash(rtk proxy gh api -X PUT repos/*/pulls/*/merge * sha=*)` (the REST
-fallback while GraphQL is rate-limited). Both require the sha pin, so a merge
-without it, or with `--admin`, still goes through the classifier. There is
+`Bash(rtk gh pr merge * --squash --auto --match-head-commit *)`, so a merge
+without the sha pin goes through the classifier. A glob cannot forbid extra
+trailing flags, so `--admin` after the sha is not excluded by the pattern; the
+guards below are the boundary there. There is deliberately **no** REST
+`gh api .../merge` allow: a glob cannot fix `merge_method` or the field set, and
+`pr_merge_threads_guard.sh` only matches `gh pr merge`, so the REST path would
+skip it. If a REST form is ever needed, use a validating wrapper script and
+extend that guard first. There is
 deliberately **no** blanket `gh pr merge` allow: `pr_merge_threads_guard.sh`,
 branch protection's required checks (which `--auto` cannot bypass) and the sha
 pin refusing a moved head are the boundary. Takes effect after `make ai_clients`.

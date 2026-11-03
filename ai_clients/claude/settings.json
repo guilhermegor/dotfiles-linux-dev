@@ -65,7 +65,6 @@
       "Bash(rtk --version)",
       "Bash(~/.claude/hooks/run_ladder_review.sh:*)",
       "Bash(rtk gh pr merge * --squash --auto --match-head-commit *)",
-      "Bash(rtk proxy gh api -X PUT repos/*/pulls/*/merge * sha=*)",
       "Bash(diff:*)",
       "Bash(cut:*)",
       "Bash(tr:*)",
