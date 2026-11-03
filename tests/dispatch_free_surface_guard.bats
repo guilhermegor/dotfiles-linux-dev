@@ -779,13 +779,118 @@ transcript_dev_loop_agent_citing() {
     [[ "$output" == *"declaring NO issue"* ]]
 }
 
+# --- #872: an undeclared name is attributed from the claim registry, then the prompt -------------
+
+# transcript_named_dispatch NAME PROMPT TS_EPOCH — an unresolved dispatch with that name/prompt,
+# stamped at TS_EPOCH.
+transcript_named_dispatch() {
+    local f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        jq -nc --arg n "$1" --arg p "$2" --arg ts "$(date -u -d "@$3" +%Y-%m-%dT%H:%M:%S.123Z)" \
+            '{type:"assistant",timestamp:$ts,message:{content:[{type:"tool_use",id:"agent1",name:"Agent",input:{name:$n,prompt:$p}}]}}'
+    } >"$f"
+    printf '%s\n' "$f"
+}
+
+# claim_issue_at ISSUE EPOCH — a claim registered at EPOCH.
+claim_issue_at() {
+    printf '%s\t%s\t%s\n' "$2" "$1" "held.sh" >>"$TEST_TMP/.git/dispatch-claims.tsv"
+}
+
+@test "a claim made right before a dispatch named foo-44 covers #44" {
+    plan_of "44 5"
+    local now
+    now="$(date +%s)"
+    claim_issue_at 44 "$((now - 5))"
+    run run_guard "$(transcript_named_dispatch foo-44 'do the work' "$now")"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#5"* ]]
+    [[ ! "$output" == *"declaring NO issue"* ]]
+}
+
+@test "a claim made AFTER the dispatch is not that dispatch's claim" {
+    plan_of "44 5"
+    local now
+    now="$(date +%s)"
+    claim_issue_at 44 "$((now + 30))"
+    run run_guard "$(transcript_named_dispatch foo-44 'do the work' "$now")"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"declaring NO issue"* ]]
+}
+
+@test "a claim older than the adopt window is not that dispatch's claim" {
+    plan_of "44 5"
+    local now
+    now="$(date +%s)"
+    claim_issue_at 44 "$((now - 3000))"
+    run run_guard "$(transcript_named_dispatch foo-44 'do the work' "$now")"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"declaring NO issue"* ]]
+}
+
+@test "the #N on the first line of the prompt covers that issue; a later line does not" {
+    plan_of "44 5"
+    local now
+    now="$(date +%s)"
+    run run_guard "$(transcript_named_dispatch foo 'Implement #44 now' "$now")"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#5"* ]]
+    [[ ! "$output" == *"#44"* ]]
+    [[ ! "$output" == *"declaring NO issue"* ]]
+    plan_of "5"
+    run run_guard "$(transcript_named_dispatch foo "Implement it
+see #5" "$now")"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"declaring NO issue"* ]]
+}
+
+# --- #871: a resumed agent that finished leaves the rescue list ------------------------------------
+# A SendMessage resume keeps the agent's <task-id>; its later notifications carry the SendMessage's
+# own <tool-use-id> (measured on real transcripts), never the original dispatch's.
+
+# transcript_resumed_then STATUS — dispatch fails (task T), is SendMessage'd, and T then reports STATUS
+# under the SendMessage's tool-use-id.
+transcript_resumed_then() {
+    local f
+    f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"issue-4-bg-agent","prompt":"work"}}]}}'
+        echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent1","content":[{"type":"text","text":"Async agent launched successfully."}]}]}}'
+        echo '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>T9</task-id>\n<tool-use-id>agent1</tool-use-id>\n<status>failed</status>\n</task-notification>"}'
+        jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.123Z)" \
+            '{type:"assistant",timestamp:$ts,message:{content:[{type:"tool_use",id:"sm1",name:"SendMessage",input:{to:"issue-4-bg-agent",message:"resume"}}]}}'
+        jq -nc --arg s "$1" \
+            '{type:"queue-operation",operation:"enqueue",content:("<task-notification>\n<task-id>T9</task-id>\n<tool-use-id>sm1</tool-use-id>\n<status>"+$s+"</status>\n</task-notification>")}'
+    } >"$f"
+    printf '%s\n' "$f"
+}
+
+@test "fail -> SendMessage resume -> completed: the agent is not listed and not in flight" {
+    plan_of "4"
+    run run_guard "$(transcript_resumed_then completed)"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#4"* ]]
+    [[ ! "$output" == *"RESCUE"* ]]
+    [[ ! "$output" == *"bg-agent"* ]]
+}
+
+@test "fail -> SendMessage resume -> failed again: the agent is listed again" {
+    plan_of "4"
+    run run_guard "$(transcript_resumed_then failed)"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE"* ]]
+    [[ "$output" == *"issue-4-bg-agent"* ]]
+}
+
 # transcript_dev_loop_background_agent_undeclared — an unresolved dispatch with a name that
 # carries no issue number at all.
 transcript_dev_loop_background_agent_undeclared() {
     local f="$TEST_TMP/transcript.jsonl"
     {
         echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
-        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"explore-something","prompt":"look at #4"}}]}}'
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"explore-something","prompt":"look around the repo"}}]}}'
     } >"$f"
     printf '%s\n' "$f"
 }

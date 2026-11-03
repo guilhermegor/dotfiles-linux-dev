@@ -153,7 +153,9 @@ The only reliable signal was inspecting the worktree and asking the forge for PR
    afford. Measured: four agents resumed by `SendMessage` continued cleanly from where they died.
    Re-claim its surface when you resume it (`claim_files <issue> <paths…>`, idempotent for the same
    issue) so the registry counts it in flight; the Stop guard also counts a `SendMessage` resume
-   for `DISPATCH_CLAIM_TTL`, after which a finished agent no longer counts (#729).
+   for `DISPATCH_CLAIM_TTL`, after which a finished agent no longer counts (#729). A resumed
+   agent's later notifications keep its task id, so a `completed` one drops it from the Stop
+   guard's rescue list at once (#871).
 4. **Brief the resumed agent on what moved underneath it while it was dead** — commits or pushes
    landed on its behalf, files or surfaces another agent has since taken, PRs opened or merged. An
    agent resumes assuming its pre-death world still holds; measured twice that assumption was false
@@ -1120,6 +1122,9 @@ claimed and how to verify it without `source`:
 Every brief carries:
 - the claimed surface — "the surface is already claimed for you, do NOT run `claim_files`", plus the
   verify command above;
+- 🔴 **name the Agent `issue-<N>-<slug>`.** The Stop guard reads the one issue a dispatch covers
+  from that name; otherwise it falls back to the claim registered right before the dispatch, then
+  the `#N` on the brief's first line (#872), and reports "NO issue" only when none resolves;
 - 🔴 **qualify the target — always, not just here.** Every repository command starts with
   `cd <absolute-path> &&`; every git command that compares with a base names it explicitly as
   `origin/<base>`, never a bare local branch or an implicit `HEAD`. The harness resets cwd after

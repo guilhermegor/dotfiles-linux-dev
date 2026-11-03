@@ -38,6 +38,16 @@
 #
 # The message lists the missing issue NUMBERS, never a count.
 #
+# An agent whose NAME is not `issue-<N>-<slug>` still covers its issue when the registry or the
+# brief says so (#872): the claim registered most recently before its dispatch (within
+# DISPATCH_CLAIM_ADOPT_WINDOW, default 300s), else the `#N` on the first line of its prompt.
+# "declaring NO issue" is reported only when neither resolves.
+#
+# A FAILED agent leaves the rescue list once it finishes (#871): a SendMessage resume keeps the
+# agent's <task-id> but its later notifications carry the SendMessage's own <tool-use-id>, so the
+# notification status is read per TASK ID — a `completed` after the failure settles it, a second
+# failure after the resume re-lists it.
+#
 # ⚠️ UNKNOWN is reported loudly, never as routine silence. A gate that fails
 # closed (#395) is the right behaviour for the gate; a caller that swallows
 # that failure and falls through quiet turns it back into a disabled feature
@@ -69,6 +79,8 @@ source "$HOOK_DIR/lib/dispatch_claims.sh"
 # shellcheck source=lib/stop_budget.sh
 source "$HOOK_DIR/lib/stop_budget.sh"
 
+# How far before a dispatch a claim may sit and still be read as that dispatch's own (#872).
+DISPATCH_CLAIM_ADOPT_WINDOW="${DISPATCH_CLAIM_ADOPT_WINDOW:-300}"
 PLANNER="${DISPATCH_GUARD_PLANNER:-$HOOK_DIR/lib/dispatch_plan.py}"
 # 60s, not 30: dispatch_plan.py measured 39s on 2026-10-03 15:40Z under a GitHub
 # burst (every Stop read UNREADABLE) and 17s at 21:15Z after #605/#576 cut its
@@ -142,8 +154,28 @@ _agent_result_text() {
 		  end' "$transcript" 2>/dev/null
 }
 
+# _notification_needle TRANSCRIPT ID
+# The string that finds EVERY <task-notification> of the agent dispatched as tool_use ID. A SendMessage
+# resume keeps the agent's <task-id>, but its later notifications carry the SendMessage's own
+# <tool-use-id>, never the original dispatch's (measured on real transcripts, dotfiles-linux-dev#871).
+# Keying on the tool-use-id alone therefore never sees the completion that follows a resume, and the
+# finished agent stays on the rescue list forever. The task id is read from the notification that names
+# ID; with none (no <task-id> element) it falls back to the tool-use-id needle.
+_notification_needle() {
+	local task
+	task="$(jq -r --arg n "<tool-use-id>${2}</tool-use-id>" '
+		.. | strings | select(contains($n))
+		| (split($n)[0] | try capture("<task-id>(?<t>[^<]+)</task-id>\\s*$") catch empty) | .t
+	' "$1" 2>/dev/null | head -1)"
+	if [ -n "$task" ]; then
+		printf '<task-id>%s</task-id>\n' "$task"
+	else
+		printf '<tool-use-id>%s</tool-use-id>\n' "$2"
+	fi
+}
+
 # _task_notification_status TRANSCRIPT ID
-# The last completed|failed <status> of a <task-notification> naming this tool-use-id,
+# The last completed|failed <status> of a <task-notification> naming this agent (task id, else tool-use-id),
 # scanned across every JSON record in the transcript regardless of which field carries the
 # text — measured on real transcripts, the identical <task-notification> blob shows up under
 # `.content` (a `queue-operation` record, both on enqueue AND on removal), under `.prompt`
@@ -153,7 +185,7 @@ _agent_result_text() {
 # blinded dev_loop_invoked.
 _task_notification_status() {
 	local transcript="$1" id="$2"
-	jq -r --arg needle "<tool-use-id>${id}</tool-use-id>" '
+	jq -r --arg needle "$(_notification_needle "$transcript" "$id")" '
 		.. | strings
 		| select(contains($needle))
 		| capture("<status>(?<s>completed|failed)</status>").s
@@ -193,6 +225,35 @@ _agent_dispatch_issue() {
 	printf '%s\n' "${BASH_REMATCH[1]}"
 }
 
+# _agent_attributed_issue TRANSCRIPT ID CWD
+# For a dispatch whose NAME declares no issue: the issue it demonstrably covers, or nothing
+# (dotfiles-linux-dev#872). The claim registry already ties an agent to its issue, and requiring the
+# `issue-<N>-<slug>` shape duplicates it (derive, never restate). Two signals, in this order:
+#   1. the live claim registered most recently BEFORE the dispatch, within DISPATCH_CLAIM_ADOPT_WINDOW
+#      seconds (the orchestrator runs `claim_files` in the Bash call right before the Agent call). A
+#      dispatch with no parsable timestamp can never match: fail closed to "undeclared".
+#   2. the `#N` in the FIRST line of the dispatch prompt (later lines legitimately cite blockers).
+_agent_attributed_issue() {
+	local transcript="$1" id="$2" cwd="$3" rec ts first claims at issue
+	rec="$(jq -r --arg id "$id" 'select(.message.content != null) | . as $r | .message.content[]?
+		| select(.type == "tool_use" and .name == "Agent" and .id == $id)
+		| [($r.timestamp // ""), ((.input.prompt // "") | split("\n")[0])] | join("\u0001")' \
+		"$transcript" 2>/dev/null | head -1)"
+	ts="${rec%%$'\001'*}"
+	first="${rec#*$'\001'}"
+
+	if [ -n "$ts" ] && at="$(date -d "$ts" +%s 2>/dev/null)" && claims="$(dispatch_claims_file "$cwd")"; then
+		issue="$(_dispatch_live_claims "$claims" | awk -F'\t' -v at="$at" -v w="$DISPATCH_CLAIM_ADOPT_WINDOW" \
+			'$1 <= at && $1 >= at - w && $1 >= best { best = $1; issue = $2 } END { if (issue != "") print issue }')"
+		if [ -n "$issue" ]; then
+			printf '%s\n' "$issue"
+			return 0
+		fi
+	fi
+	[[ "$first" =~ \#([0-9]+) ]] || return 1
+	printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
 # _sendmessage_resumed TRANSCRIPT ID NAME
 # True when a SendMessage tool_use addresses this agent's name AFTER this dispatch's own failure
 # notification for tool_use ID — the model already picked THIS failure back up, so it is
@@ -214,7 +275,7 @@ _sendmessage_resumed() {
 	local transcript="$1" id="$2" name="$3" max_age="${4:-}"
 	[ -n "$name" ] || return 1
 	local fail_line
-	fail_line="$(jq -r --arg needle "<tool-use-id>${id}</tool-use-id>" '
+	fail_line="$(jq -r --arg needle "$(_notification_needle "$transcript" "$id")" '
 		select(.. | strings | contains($needle))
 		| select(.. | strings | contains("<status>failed</status>"))
 		| input_line_number
@@ -277,7 +338,7 @@ _sendmessage_delivery_failed() {
 #
 # Anything else (a synchronous call's real result already landed) is resolved, plainly.
 inflight_dispatch_issues() {
-	local transcript="$1"
+	local transcript="$1" cwd="${2:-$PWD}"
 	IN_FLIGHT_ISSUES=""
 	FAILED_BACKGROUND_AGENTS=""
 	UNDECLARED_IN_FLIGHT=""
@@ -334,7 +395,8 @@ inflight_dispatch_issues() {
 		# counts separate is the whole point: conflating them is what let one agent both
 		# excuse six issues and eat six slots.
 		IN_FLIGHT_AGENTS=$((IN_FLIGHT_AGENTS + 1))
-		if issue="$(_agent_dispatch_issue "$transcript" "$id")"; then
+		if issue="$(_agent_dispatch_issue "$transcript" "$id")" ||
+			issue="$(_agent_attributed_issue "$transcript" "$id" "$cwd")"; then
 			IN_FLIGHT_ISSUES="$(printf '%s\n%s' "$IN_FLIGHT_ISSUES" "$issue")"
 		else
 			# Reported, never silently dropped: a dispatch whose name does not declare its
@@ -453,7 +515,7 @@ main() {
 	$GIT -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
 	dev_loop_invoked "$transcript" || exit 0
-	inflight_dispatch_issues "$transcript"
+	inflight_dispatch_issues "$transcript" "$cwd"
 
 	# One planner result per repo per TTL window, shared with round_dispatch_guard.sh; a cache
 	# miss spends GitHub budget, so the gate runs first and PASSES when it is low (#814).
