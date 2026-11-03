@@ -8,6 +8,7 @@ setup() {
     source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
     export WORKTREE_PRUNE_MIN_AGE=0
     PR_STATE=merged
+    GATE_OK=1
     stub_forge
 
     bare="$BATS_TEST_TMPDIR/origin.git"
@@ -23,7 +24,16 @@ setup() {
     git -C "$work" remote set-head origin -a >/dev/null
 }
 
+stub_gate() {
+    gate_live_agent_surface() {
+        if [ "$GATE_OK" = 1 ]; then LIVE_AGENT_STATUS=ok; LIVE_AGENT_PATHS=""; return 0; fi
+        LIVE_AGENT_STATUS=unknown
+        return 1
+    }
+}
+
 stub_forge() {
+    stub_gate
     prune_pr_state() {
         [ "$PR_STATE" = unreadable ] && return 1
         echo "$PR_STATE"
@@ -139,6 +149,7 @@ run_prune() { run prune_worktrees "$work" "${1:-0}"; }
 
 @test "the real forge reader fails closed on a non-GitHub origin" {
     source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
+    stub_gate
     make_branch b6 f6.txt
     land_on_master f6.txt
     run_prune 1
@@ -183,6 +194,76 @@ run_prune() { run prune_worktrees "$work" "${1:-0}"; }
     land_on_master f1.txt
     WORKTREE_PRUNE_APPLY=1 run main "$work"
     [ ! -d "$BATS_TEST_TMPDIR/wt-b1" ]
+}
+
+@test "an UNKNOWN live-agent surface keeps every worktree and fails" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    GATE_OK=0
+    run_prune 1
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"live-agent surface UNKNOWN"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-b1" ]
+}
+
+@test "a fresh branch at origin tip with no commits is kept" {
+    git -C "$work" worktree add --quiet -b fresh "$BATS_TEST_TMPDIR/wt-fresh" origin/master
+    run_prune 1
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-fresh: no commits beyond merge-base"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-fresh" ]
+}
+
+@test "a locked worktree is kept" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    git -C "$work" worktree lock "$BATS_TEST_TMPDIR/wt-b1"
+    run_prune 1
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-b1: locked"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-b1" ]
+}
+
+@test "an ignored .env is kept but an ignored build dir is not" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    printf '.env\nbuild/\n' >>"$work/.git/info/exclude"
+    mkdir "$BATS_TEST_TMPDIR/wt-b1/build"
+    echo x >"$BATS_TEST_TMPDIR/wt-b1/build/o"
+    run_prune 0
+    [[ "$output" == *"WOULD-PRUNE $BATS_TEST_TMPDIR/wt-b1"* ]]
+    echo SECRET >"$BATS_TEST_TMPDIR/wt-b1/.env"
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-b1: ignored file .env (secret-shaped)"* ]]
+}
+
+@test "a worktree reached through a symlinked path is still recognised as self" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    ln -s "$BATS_TEST_TMPDIR/wt-b1" "$BATS_TEST_TMPDIR/link"
+    run prune_worktrees "$BATS_TEST_TMPDIR/link" 1
+    [ -d "$BATS_TEST_TMPDIR/wt-b1" ]
+}
+
+@test "a branch name with special characters is URL-encoded" {
+    enc="$(jq -rn --arg b 'me:feat/a&b#c+d' '$b|@uri')"
+    [[ "$enc" == "me%3Afeat%2Fa%26b%23c%2Bd" ]]
+}
+
+@test "the remote delete is refused when origin moved after classification" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    local other="$BATS_TEST_TMPDIR/other"
+    git clone --quiet "$bare" "$other" 2>/dev/null
+    git -C "$other" config user.email t@e.com
+    git -C "$other" config user.name t
+    git -C "$other" checkout --quiet b1
+    echo extra >"$other/extra.txt"
+    git -C "$other" add extra.txt
+    git -C "$other" commit --quiet -m 'feat: extra'
+    git -C "$other" push --quiet origin b1 2>/dev/null
+    run prune_apply_one "$work" "$BATS_TEST_TMPDIR/wt-b1" b1
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"push --delete failed"* ]]
+    [ -n "$(git -C "$work" ls-remote origin refs/heads/b1)" ]
 }
 
 @test "a worktree whose directory is gone is dropped by git worktree prune on apply" {

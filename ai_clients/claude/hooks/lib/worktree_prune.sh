@@ -13,9 +13,9 @@
 #      within WORKTREE_PRUNE_MIN_AGE seconds (default 900) — a live agent keeps writing;
 #   3. content shipped: branch_content_shipped (worktree_fanout.sh, #837/#840) — every path the
 #      branch changed is byte-identical on origin/<default>. Never ancestry: a squash is no ancestor;
-#   4. nothing beyond build noise: ignored files (git's own rules) are invisible; untracked
-#      __pycache__/ .venv/ *.pyc .pytest_cache/ node_modules/ are noise; any other untracked or
-#      modified file means KEEP. A staged-only index counts as stale only when `git write-tree`
+#   4. nothing beyond build noise: untracked __pycache__/ .venv/ *.pyc .pytest_cache/
+#      node_modules/ are noise; any other untracked or modified file means KEEP. Git-ignored
+#      files (which `worktree remove` also deletes) pass unless secret-shaped (.env*, keys, *.local). A staged-only index counts as stale only when `git write-tree`
 #      equals the tree of an existing commit on the branch's history;
 #   5. the forge reports no OPEN PR for the branch (merged, closed or none); a failed read keeps;
 #   6. the remote branch, if present, has exactly the local sha — otherwise KEEP everything.
@@ -43,6 +43,14 @@ prune_is_noise_path() {
 	return 1
 }
 
+# Names a human keeps on purpose even when git ignores them: env files, keys, local overrides.
+prune_is_secret_shaped() {
+	case "${1%/}" in
+	*.env | *.env.* | .env* | */.env* | *.local | *.pem | *.key | *secret* | *credential* | *token*) return 0 ;;
+	esac
+	return 1
+}
+
 # True when the staged tree equals the tree of an existing commit on HEAD's history.
 prune_index_is_stale() {
 	local path="$1" tree
@@ -54,7 +62,7 @@ prune_index_is_stale() {
 # 0 = nothing beyond build noise / a stale index. Prints a reason on stdout when dirty (rc 1).
 prune_tree_is_noise_only() {
 	local path="$1" line xy f staged=0 st
-	st="$(git -C "$path" status --porcelain=v1 --untracked-files=normal 2>/dev/null)" \
+	st="$(git -C "$path" status --porcelain=v1 --untracked-files=normal --ignored=traditional 2>/dev/null)" \
 		|| { printf 'status unreadable'; return 1; }
 	while IFS= read -r line; do
 		[ -n "$line" ] || continue
@@ -62,6 +70,13 @@ prune_tree_is_noise_only() {
 		f="${line:3}"
 		if [ "$xy" = "??" ]; then
 			prune_is_noise_path "$f" || { printf 'untracked %s' "$f"; return 1; }
+			continue
+		fi
+		if [ "$xy" = "!!" ]; then
+			# worktree remove deletes ignored files too: only noise, or git-ignored files that
+			# are not secret-shaped (.env, keys, *.local), may go.
+			prune_is_noise_path "$f" && continue
+			prune_is_secret_shaped "$f" && { printf 'ignored file %s (secret-shaped)' "$f"; return 1; }
 			continue
 		fi
 		[ "${xy:1:1}" = " " ] || { printf 'unstaged change %s' "$f"; return 1; }
@@ -76,7 +91,9 @@ prune_pr_state() {
 	local cwd="$1" branch="$2" slug owner out
 	slug="$(fanout_repo_slug "$cwd")" || return 1
 	owner="${slug%%/*}"
-	out="$(gh api "repos/$slug/pulls?state=all&per_page=100&head=$owner:$branch" \
+	local enc
+	enc="$(jq -rn --arg b "$owner:$branch" '$b|@uri')" || return 1
+	out="$(gh api "repos/$slug/pulls?state=all&per_page=100&head=$enc" \
 		--jq 'map(if .state=="open" then "open" elif .merged_at then "merged" else "closed" end) | unique | join(" ")' 2>/dev/null)" || return 1
 	case " $out " in
 	*" open "*) echo open ;;
@@ -87,20 +104,31 @@ prune_pr_state() {
 }
 
 prune_recently_touched() {
-	local path="$1" min_age="$2" now m newest=0 gd
+	local path="$1" min_age="$2" now m newest=0 gd f hit
 	now="$(date +%s)"
 	gd="$(git -C "$path" rev-parse --absolute-git-dir 2>/dev/null)"
+	[ -n "$gd" ] || return 0
 	for f in "$path" "$gd/index" "$gd/HEAD"; do
 		m="$(stat -c %Y "$f" 2>/dev/null)" || continue
 		[ "$m" -gt "$newest" ] && newest="$m"
 	done
-	[ $((now - newest)) -lt "$min_age" ]
+	# Unreadable timestamps are "recent", never "old": fail closed.
+	[ "$newest" -gt 0 ] || return 0
+	[ $((now - newest)) -lt "$min_age" ] && return 0
+	# An edit below the top level does not move the directory mtime: look at every file.
+	hit="$(find "$path" \( -name .git -o -name .venv -o -name node_modules -o -name __pycache__ \) -prune \
+		-o -type f -mmin "-$(( (min_age + 59) / 60 ))" -print -quit 2>/dev/null)" || return 0
+	[ -n "$hit" ]
 }
 
 # Prints "PRUNE|KEEP<TAB>reason" for one worktree; rc 0 = prunable.
 prune_classify() {
-	local cwd="$1" path="$2" branch="$3" db="$4" min_age="$5" why state remote local_sha
+	local cwd="$1" path="$2" branch="$3" db="$4" min_age="$5" why state remote local_sha base
 	if prune_recently_touched "$path" "$min_age"; then echo "touched within ${min_age}s (live agent?)"; return 1; fi
+	# branch_content_shipped is vacuously true for a fresh branch at origin tip (empty path list
+	# makes it compare whole trees, which are equal): demand real work to have shipped.
+	base="$(git -C "$path" merge-base "origin/$db" HEAD 2>/dev/null)" || { echo "no merge-base"; return 1; }
+	if git -C "$path" diff --quiet "$base" HEAD 2>/dev/null; then echo "no commits beyond merge-base (fresh branch?)"; return 1; fi
 	branch_content_shipped "$path" "$db" || { echo "content not on origin/$db (or undecidable)"; return 1; }
 	why="$(prune_tree_is_noise_only "$path")" || { echo "$why"; return 1; }
 	if [ -n "$branch" ]; then
@@ -133,22 +161,27 @@ prune_default_branch() {
 
 # Removes worktree, local branch, then origin branch; each step only if the one before succeeded.
 prune_apply_one() {
-	local cwd="$1" path="$2" branch="$3"
+	local cwd="$1" path="$2" branch="$3" sha
+	# --force is needed for the untracked noise; ignored/secret-shaped files were screened out.
+	[ -z "$branch" ] || sha="$(git -C "$cwd" rev-parse "refs/heads/$branch" 2>/dev/null)" || { echo "branch unreadable"; return 1; }
 	git -C "$cwd" worktree remove --force "$path" 2>/dev/null || { echo "worktree remove failed"; return 1; }
 	[ -n "$branch" ] || return 0
 	git -C "$cwd" branch -D "$branch" >/dev/null 2>&1 || { echo "branch -D failed"; return 1; }
 	if [ -n "$(git -C "$cwd" ls-remote origin "refs/heads/$branch" 2>/dev/null)" ]; then
-		git -C "$cwd" push origin --delete "$branch" >/dev/null 2>&1 || { echo "push --delete failed"; return 1; }
+		# Lease on the sha classify verified: a push landing since then makes the delete fail.
+		git -C "$cwd" push --force-with-lease="refs/heads/$branch:$sha" origin --delete "$branch" >/dev/null 2>&1 \
+			|| { echo "push --delete failed (remote moved?)"; return 1; }
 	fi
 }
 
 prune_worktrees() {
-	local cwd="$1" apply="$2" db self main="" path="" branch="" line why
+	local cwd="$1" apply="$2" db self main="" path="" branch="" line why locked=0 failed=0 rpath rmain
 	local min_age="${WORKTREE_PRUNE_MIN_AGE:-900}" pruned=0 kept=0 verb="WOULD-PRUNE"
 	[ "$apply" = 1 ] && verb="PRUNED"
 
 	db="$(prune_default_branch "$cwd")" || { echo "[prune] no origin default branch — nothing pruned"; return 1; }
 	self="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || { echo "[prune] not a git repo"; return 1; }
+	self="$(realpath "$self")" || return 1
 	if ! gate_live_agent_surface "$cwd" || [ "$LIVE_AGENT_STATUS" != ok ]; then
 		echo "[prune] live-agent surface UNKNOWN — keeping every worktree"
 		return 1
@@ -156,18 +189,25 @@ prune_worktrees() {
 
 	while IFS= read -r line; do
 		case "$line" in
-		"worktree "*) path="${line#worktree }"; branch=""; [ -n "$main" ] || main="$path" ;;
+		"worktree "*) path="${line#worktree }"; branch=""; locked=0; [ -n "$main" ] || main="$path" ;;
 		"branch "*) branch="${line#branch refs/heads/}" ;;
+		"locked"*) locked=1 ;;
 		"")
 			if [ -n "$path" ]; then
-				if [ "$path" = "$main" ] || [ "$path" = "$self" ] || [ "$branch" = "$db" ]; then
+				rpath="$(realpath "$path" 2>/dev/null)" || rpath="$path"
+				rmain="$(realpath "$main" 2>/dev/null)" || rmain="$main"
+				if [ "$rpath" = "$rmain" ] || [ "$rpath" = "$self" ] || [ "$branch" = "$db" ]; then
 					:
 				elif [ ! -d "$path" ]; then
 					:
+				elif [ "$locked" = 1 ]; then
+					printf 'KEEP %s: locked\n' "$path"
+					kept=$((kept + 1))
 				elif why="$(prune_classify "$cwd" "$path" "$branch" "$db" "$min_age")"; then
 					if [ "$apply" = 1 ] && ! why="$(prune_apply_one "$cwd" "$path" "$branch")"; then
-						printf 'KEEP %s: %s\n' "$path" "$why"
-						kept=$((kept + 1))
+						# Past the first step the worktree may already be gone: say so, never "KEEP".
+						printf 'PARTIAL %s: %s\n' "$path" "$why"
+						failed=$((failed + 1))
 					else
 						printf '%s %s [%s]\n' "$verb" "$path" "${branch:-detached}"
 						pruned=$((pruned + 1))
@@ -189,8 +229,9 @@ prune_worktrees() {
 	else
 		git -C "$cwd" worktree prune --dry-run -v 2>&1 | sed 's/^/WOULD-PRUNE-ENTRY /'
 	fi
-	printf '[prune] %s: %d prunable, %d kept%s\n' "$verb" "$pruned" "$kept" \
+	printf '[prune] %s: %d prunable, %d kept, %d partial%s\n' "$verb" "$pruned" "$kept" "$failed" \
 		"$([ "$apply" = 1 ] || echo ' (dry-run; re-run with --apply)')"
+	[ "$failed" = 0 ]
 }
 
 main() {
