@@ -148,6 +148,16 @@ setup() {
     [ "$output" -eq 8 ]
 }
 
+# --- merge wrapper allow rule (dotfiles-linux-dev#868) -----------------------
+
+@test "allow carries the exact merge-wrapper rule and no glob gh merge rule" {
+    local settings="$BATS_TEST_DIRNAME/../ai_clients/claude/settings.json"
+    run jq -r '.permissions.allow[] | select(test("merge_green_pr"))' "$settings"
+    [ "$output" = 'Bash(~/.claude/hooks/merge_green_pr.sh:*)' ]
+    run jq -e '.permissions.allow | any(test("gh pr merge") or test("pulls/.*/merge"))' "$settings"
+    [ "$status" -ne 0 ]
+}
+
 # --- ladder wrapper allow rule (dotfiles-linux-dev#738) ----------------------
 
 @test "allow carries the exact narrow ladder-wrapper rule and no blanket gh write" {
