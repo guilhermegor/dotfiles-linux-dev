@@ -70,7 +70,8 @@ discover_board() {
 	# Find the `<repo> kanban` project, resolve its Status field + option ids, cache the result, and
 	# echo it as one JSON object. Returns: 0 + config on success, 1 on a gh/parse failure, 2 when
 	# MORE THAN ONE board carries that title (refuse to guess — the caller surfaces this), and
-	# 3 when NO `<repo> kanban` board exists (#865: told apart from a gh error without a re-query).
+	# 3 when NO `<repo> kanban` board exists or it has no usable Status field (#865: told apart from a
+	# gh error without a re-query).
 	local owner="$1" repo="$2" projects matches count num node fields field_id options config
 	projects="$(gh project list --owner "$owner" --format json 2>/dev/null)" || return 1
 
@@ -89,10 +90,10 @@ discover_board() {
 
 	fields="$(gh project field-list "$num" --owner "$owner" --format json 2>/dev/null)" || return 1
 	field_id="$(printf '%s' "$fields" | jq -r '.fields[] | select(.name=="Status") | .id' | head -n1)"
-	[[ -n "$field_id" ]] || return 1
+	[[ -n "$field_id" ]] || return 3   # board exists but has no Status field: config, not a gh error
 	options="$(printf '%s' "$fields" \
 		| jq -c '[.fields[] | select(.name=="Status") | .options[]] | map({(.name): .id}) | add')"
-	[[ -n "$options" && "$options" != "null" ]] || return 1
+	[[ -n "$options" && "$options" != "null" ]] || return 3
 
 	config="$(jq -n --argjson num "$num" --arg node "$node" --arg field "$field_id" \
 		--argjson options "$options" \

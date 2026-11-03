@@ -281,7 +281,7 @@ warn_failed() {
 }
 
 resolve_board() {
-    # Sets project_number/project_node/status_field/option_id (caller's locals) from board_config.
+    # Sets project_number/project_node/status_field/option_id (main's globals) from board_config.
     # Returns 1 on no board (silent) or a gh failure (warns); board_config's own status tells the
     # two apart (#865): 3 = no board, anything else non-zero = gh error.
     local out rc=0
@@ -297,7 +297,8 @@ tool_response_failed() {
     # True when the PostToolUse payload ($1) shows the command FAILED (#865). Missing/unknown
     # shape fails open (not failed). Signals: non-zero exit code, is_error, a string response
     # starting "Error", an HTTP 4xx/5xx in stderr (gh api), or — for `gh pr create` ($2=1) —
-    # stdout present but without a pull URL.
+    # NON-EMPTY stdout with no pull URL in stdout or stderr. Empty stdout (redirected, `--web`)
+    # fails open: the URL is simply not observable.
     printf '%s' "$1" | jq -e --argjson pr "$2" '
         .tool_response as $r
         | if $r == null then false
@@ -307,7 +308,8 @@ tool_response_failed() {
             (($r.exit_code // $r.exitCode // $r.returncode // 0) != 0)
             or ($r.is_error == true) or ($r.isError == true)
             or (($r.stderr // "") | test("\\(HTTP [45][0-9][0-9]\\)"))
-            or ($pr == 1 and ($r.stdout | type) == "string" and ($r.stdout | test("/pull/[0-9]+") | not))
+            or ($pr == 1 and ($r.stdout | type) == "string" and ($r.stdout | test("\\S"))
+                and ((($r.stdout + " " + ($r.stderr // "")) | test("/pull/[0-9]+")) | not))
           end' >/dev/null 2>&1
 }
 

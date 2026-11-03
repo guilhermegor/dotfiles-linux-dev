@@ -549,6 +549,18 @@ run_hook_resp() {
     [[ "$output" != *"moved issue"* ]]
 }
 
+@test "gh pr create with redirected (empty) stdout still moves the card" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "gh pr create --title x >/dev/null" '{"stdout":"","stderr":""}'
+    [[ "$output" == *"moved issue"* ]]
+}
+
+@test "gh pr create with the PR URL only in stderr still moves the card" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "gh pr create --title x" '{"stdout":"Creating pull request","stderr":"https://github.com/o/r/pull/9"}'
+    [[ "$output" == *"moved issue"* ]]
+}
+
 @test "a string 'Error' tool_response moves nothing" {
     write_fake_gh "OPEN"
     run run_hook_resp "gh pr create --title x" '"Error: Exit code 1"'
@@ -586,4 +598,16 @@ run_hook_resp() {
     run run_hook "gh pr create --title x"
     [ "$status" -eq 0 ]
     [[ "$output" == *"could NOT read the board"* ]]
+}
+
+@test "board without a Status field: silent, no 'could NOT read the board' warning" {
+    write_fake_gh "OPEN"
+    mv "$FAKE_BIN/gh" "$FAKE_BIN/gh.real"
+    printf '%s\n' '#!/bin/bash' \
+        '[[ "$1 $2" == "project field-list" ]] && { echo "{\"fields\":[]}"; exit 0; }' \
+        'exec "$(dirname "$0")/gh.real" "$@"' > "$FAKE_BIN/gh"
+    chmod +x "$FAKE_BIN/gh"
+    run run_hook "gh pr create --title x"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
 }
