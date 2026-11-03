@@ -877,6 +877,7 @@
 <h2 id="unreleased">Unreleased<a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
 <h3 id="feat">Feat<a class="headerlink" href="#feat" title="Permanent link">&para;</a></h3>
 <ul>
+<li><strong>dev-loop</strong>: prune worktrees whose work already shipped, by content (#885)</li>
 <li><strong>issue</strong>: link new issues as blockers of the open Cut 1.0.0 issue (#864)</li>
 <li>install f3-qt GUI for F3 flash-fraud tester (#862)</li>
 <li><strong>coding</strong>: install snapcraft in the coding setup (#860)</li>
@@ -1220,6 +1221,8 @@
 </ul>
 <h3 id="fix">Fix<a class="headerlink" href="#fix" title="Permanent link">&para;</a></h3>
 <ul>
+<li><strong>hooks</strong>: drop finished resumed agents, attribute by claim (#883)</li>
+<li><strong>hooks</strong>: back off and gate polling on the GitHub API budget (#881)</li>
 <li><strong>hooks</strong>: issue_template_guard passes a PR-merge loop (#870) (#880)</li>
 <li><strong>ladder</strong>: per-run fetch ref so concurrent runs stop racing on FETCH_HEAD (#863)</li>
 <li><strong>hooks</strong>: kanban_lifecycle handles REST PRs, warns on failure (#861)</li>
