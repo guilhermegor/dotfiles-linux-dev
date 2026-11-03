@@ -32,6 +32,7 @@ setup() {
     cp "$(dirname "$SWEEP_SRC")/lib/free_surface.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile_done.sh" "$REPO/lib/"
+cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile_stale.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/dispatch_claims.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/gh_budget.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/roadmap_unblock.sh" "$REPO/lib/"
