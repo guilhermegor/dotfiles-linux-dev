@@ -611,3 +611,36 @@ run_hook_resp() {
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
+
+@test "gh project list returning unparseable JSON warns instead of reading as no board" {
+    write_fake_gh "OPEN"
+    sed -i 's|echo .{"projects".*|echo not-json|' "$FAKE_BIN/gh"
+    run run_hook "gh pr create --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"could NOT read the board"* ]]
+}
+
+@test "warm cache missing the target column: silent, no read-the-board warning" {
+    write_fake_gh "OPEN"
+    run run_hook "gh pr create --title x"   # primes the cache via the happy path
+    [[ "$output" == *"moved issue"* ]]
+    local cache; cache="$(find "$CLAUDE_CONFIG_DIR" -name '*.json' | head -n1)"
+    [ -n "$cache" ]
+    jq 'del(.options["In review"])' "$cache" > "$cache.t" && mv "$cache.t" "$cache"
+    sed -i '/"In review"/d' "$FAKE_BIN/gh"   # the board really has no such column now
+    run run_hook "gh pr create --title x"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "a string exit_code of \"0\" is not a failure" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "gh pr create --title x" '{"stdout":"https://github.com/o/r/pull/9","stderr":"","exit_code":"0"}'
+    [[ "$output" == *"moved issue"* ]]
+}
+
+@test "rtk-condensed gh pr create output (PR #N, no URL) still moves the card" {
+    write_fake_gh "OPEN"
+    run run_hook_resp "rtk gh pr create --title x" '{"stdout":"ok created PR #9","stderr":""}'
+    [[ "$output" == *"moved issue"* ]]
+}

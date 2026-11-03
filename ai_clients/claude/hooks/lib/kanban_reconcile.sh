@@ -76,7 +76,8 @@ discover_board() {
 	projects="$(gh project list --owner "$owner" --format json 2>/dev/null)" || return 1
 
 	matches="$(printf '%s' "$projects" \
-		| jq -r --arg t "$repo kanban" '.projects[] | select(.title==$t) | "\(.number) \(.id)"')"
+		| jq -r --arg t "$repo kanban" '.projects[] | select(.title==$t) | "\(.number) \(.id)"')" \
+		|| return 1   # unparseable list is a gh-side failure, not "no board"
 	count="$(printf '%s\n' "$matches" | grep -c .)"
 	(( count == 0 )) && return 3
 	if (( count > 1 )); then

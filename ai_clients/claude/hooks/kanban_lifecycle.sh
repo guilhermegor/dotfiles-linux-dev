@@ -305,11 +305,11 @@ tool_response_failed() {
           elif ($r | type) == "string" then ($r | test("^Error"))
           elif ($r | type) != "object" then false
           else
-            (($r.exit_code // $r.exitCode // $r.returncode // 0) != 0)
+            ((($r.exit_code // $r.exitCode // $r.returncode // 0) | tostring) != "0")
             or ($r.is_error == true) or ($r.isError == true)
             or (($r.stderr // "") | test("\\(HTTP [45][0-9][0-9]\\)"))
             or ($pr == 1 and ($r.stdout | type) == "string" and ($r.stdout | test("\\S"))
-                and ((($r.stdout + " " + ($r.stderr // "")) | test("/pull/[0-9]+")) | not))
+                and ((($r.stdout + " " + ($r.stderr // "")) | test("/pull/[0-9]+|PR #[0-9]+")) | not))
           end' >/dev/null 2>&1
 }
 
