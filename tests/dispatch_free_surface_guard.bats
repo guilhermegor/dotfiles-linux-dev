@@ -823,7 +823,7 @@ claim_issue_at() {
     plan_of "44 5"
     local now
     now="$(date +%s)"
-    claim_issue_at 44 "$((now - 3000))"
+    claim_issue_at 44 "$((now - 600))"
     run run_guard "$(transcript_named_dispatch foo-44 'do the work' "$now")"
     [ "$status" -eq 2 ]
     [[ "$output" == *"declaring NO issue"* ]]
@@ -857,8 +857,8 @@ see #5" "$now")"
     {
         echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
         for i in 1 2 3; do
-            jq -nc --arg ts "$ts" --arg id "agent$i" \
-                '{type:"assistant",timestamp:$ts,message:{content:[{type:"tool_use",id:$id,name:"Agent",input:{name:("w"+$id),prompt:"work"}}]}}'
+            jq -nc --arg ts "$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%S.${i}00Z)" --arg id "agent$i" \
+                '{type:"assistant",timestamp:$ts,message:{id:"msg1",content:[{type:"tool_use",id:$id,name:"Agent",input:{name:("w"+$id),prompt:"work"}}]}}'
         done
     } >"$f"
     run run_guard "$f"
@@ -867,6 +867,31 @@ see #5" "$now")"
     [[ ! "$output" == *"#41"* ]]
     [[ ! "$output" == *"#42"* ]]
     [[ ! "$output" == *"#43"* ]]
+}
+
+@test "an unnamed agent in a LATER message does not re-adopt a spent claim" {
+    plan_of "41 5"
+    local now f
+    now="$(date +%s)"
+    claim_issue_at 41 "$((now - 90))"
+    f="$TEST_TMP/transcript.jsonl"
+    {
+        echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"skill1","name":"Skill","input":{"skill":"dev-loop"}}]}}'
+        jq -nc --arg ts "$(date -u -d "@$((now - 60))" +%Y-%m-%dT%H:%M:%S.100Z)" \
+            '{type:"assistant",timestamp:$ts,message:{id:"m1",content:[{type:"tool_use",id:"agent1",name:"Agent",input:{name:"wa",prompt:"work"}}]}}'
+        jq -nc --arg ts "$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%S.100Z)" \
+            '{type:"assistant",timestamp:$ts,message:{id:"m2",content:[{type:"tool_use",id:"agent2",name:"Agent",input:{name:"explore",prompt:"look around"}}]}}'
+    } >"$f"
+    run run_guard "$f"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"declaring NO issue"* ]]
+}
+
+@test "a bare issue mention on the first line is not ownership" {
+    plan_of "880"
+    run run_guard "$(transcript_named_dispatch foo 'Review PR #880 for style' "$(date +%s)")"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"declaring NO issue"* ]]
 }
 
 @test "a cross-repo ref like blueprintx#97 on the first line is not local #97" {

@@ -39,7 +39,7 @@
 # The message lists the missing issue NUMBERS, never a count.
 #
 # An agent whose NAME is not `issue-<N>-<slug>` still covers its issue when the registry or the
-# brief says so (#872): the claim registered most recently before its dispatch (within
+# brief says so (#872): the newest unspent claim before its dispatch (k-th newest for the k-th agent of one message) (within
 # DISPATCH_CLAIM_ADOPT_WINDOW, default 300s), else the `#N` on the first line of its prompt.
 # "declaring NO issue" is reported only when neither resolves.
 #
@@ -231,35 +231,42 @@ _agent_dispatch_issue() {
 # `issue-<N>-<slug>` shape duplicates it (derive, never restate). Two signals, in this order:
 #   1. the live claim registered most recently BEFORE the dispatch, within DISPATCH_CLAIM_ADOPT_WINDOW
 #      seconds (the orchestrator runs `claim_files` in the Bash call right before the Agent call). Claims
-#      are matched one-to-one: issues a named `issue-<N>-*` dispatch owns are skipped, and the k-th
-#      unnamed dispatch of one message takes the k-th newest claim. No parsable timestamp skips this signal.
-#   2. the `#N` in the FIRST line of the dispatch prompt (later lines legitimately cite blockers).
+#      are matched one-to-one: issues a named dispatch owns are skipped, claims at or before an earlier
+#      message's unnamed dispatch are spent, and the k-th unnamed dispatch of one message (by
+#      message.id) takes the k-th newest remaining claim. No parsable timestamp skips this signal.
+#   2. an ownership phrase (`Implement|Fix|Close(s)|Resolve|Work on|issue #N`) leading the FIRST line of
+#      the prompt; a bare mention ("Review PR #880") never counts. Later lines legitimately cite blockers.
 _agent_attributed_issue() {
-	local transcript="$1" id="$2" cwd="$3" rec ts k declared first claims at issue
+	local transcript="$1" id="$2" cwd="$3" rec ts k declared prev first claims at issue floor
 	# One record: ts, k (unnamed dispatches earlier in the SAME message, so a fan-out of N agents
 	# takes N DIFFERENT claims, newest first), the issues named dispatches already own, line 1.
 	rec="$(jq -rs --arg id "$id" '
 		[.[] | select(.message.content != null) | . as $r | .message.content[]?
 			| select(.type == "tool_use" and .name == "Agent")
-			| {id, ts: ($r.timestamp // ""), name: (.input.name // ""), first: ((.input.prompt // "") | split("\n")[0])}] as $all
+			| {id, ts: ($r.timestamp // ""), mid: ($r.message.id // $r.timestamp // ""),
+			   name: (.input.name // ""), first: ((.input.prompt // "") | split("\n")[0])}] as $all
 		| ($all | map(.id) | index($id)) as $i
 		| select($i != null) | $all[$i] as $me
+		| ($all[:$i] | map(select(.name | test("^issue-[0-9]+(-|$)") | not))) as $unnamed
 		| [$me.ts,
-		   ([$all[:$i][] | select(.ts == $me.ts and (.name | test("^issue-[0-9]+(-|$)") | not))] | length),
+		   ([$unnamed[] | select(.mid == $me.mid)] | length),
 		   ([$all[] | .name | capture("^issue-(?<n>[0-9]+)(-|$)").n?] | join(" ")),
+		   ([$unnamed[] | select(.mid != $me.mid) | .ts] | max // ""),
 		   $me.first] | map(tostring) | join("\u0001")' "$transcript" 2>/dev/null | head -1)"
-	IFS=$'\001' read -r ts k declared first <<<"$rec"
+	IFS=$'\001' read -r ts k declared prev first <<<"$rec"
 
+	floor=0
+	[ -n "$prev" ] && floor="$(date -d "$prev" +%s 2>/dev/null || echo 0)"
 	if [ -n "$ts" ] && at="$(date -d "$ts" +%s 2>/dev/null)" && claims="$(dispatch_claims_file "$cwd")"; then
-		issue="$(_dispatch_live_claims "$claims" | awk -F'\t' -v at="$at" -v w="$DISPATCH_CLAIM_ADOPT_WINDOW" -v k="${k:-0}" -v d=" $declared " \
-			'$1 <= at && $1 >= at - w && index(d, " " $2 " ") == 0 { print $1 "\t" $2 }' |
+		issue="$(_dispatch_live_claims "$claims" | awk -F'\t' -v at="$at" -v w="$DISPATCH_CLAIM_ADOPT_WINDOW" -v f="$floor" -v d=" $declared " \
+			'$1 <= at && $1 >= at - w && $1 > f && index(d, " " $2 " ") == 0 { print $1 "\t" $2 }' |
 			sort -k1,1nr -k2,2nr | sed -n "$((${k:-0} + 1))p" | cut -f2)"
 		if [ -n "$issue" ]; then
 			printf '%s\n' "$issue"
 			return 0
 		fi
 	fi
-	[[ "$first" =~ (^|[^[:alnum:]_/#-])\#([0-9]+) ]] || return 1
+	[[ "$first" =~ ^[[:space:]]*(Implement|Fix|Close|Closes|Resolve|Work[[:space:]]+on|[Ii]ssue)[[:space:]]+\#([0-9]+) ]] || return 1
 	printf '%s\n' "${BASH_REMATCH[2]}"
 }
 
