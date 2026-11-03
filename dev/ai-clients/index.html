@@ -411,6 +411,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#merge-wrapper-one-exact-allow-rule-dotfiles-linux-dev868" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Merge wrapper: one exact allow rule (dotfiles-linux-dev#868)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1232,6 +1243,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#merge-wrapper-one-exact-allow-rule-dotfiles-linux-dev868" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Merge wrapper: one exact allow rule (dotfiles-linux-dev#868)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1771,6 +1793,57 @@ from the cwd's <code>origin</code>. The
 wrapper takes one positive integer, and derives the pushed epoch from the
 head commit's committer date (a NOW epoch makes the ladder refuse the PR as
 "recently pushed"). The rule only takes effect after <code>make ai_clients</code>.</p>
+<h3 id="merge-wrapper-one-exact-allow-rule-dotfiles-linux-dev868">Merge wrapper: one exact allow rule (dotfiles-linux-dev#868)<a class="headerlink" href="#merge-wrapper-one-exact-allow-rule-dotfiles-linux-dev868" title="Permanent link">&para;</a></h3>
+<p>On a single-maintainer repo no PR can get a human approval, so the auto-mode
+classifier denies every merge as "Merge Without Review" even with all checks
+green. <code>hooks/merge_green_pr.sh &lt;pr-number&gt;...</code> is the stable entry point and
+<code>permissions.allow</code> carries exactly <code>Bash(~/.claude/hooks/merge_green_pr.sh:*)</code>
+for it, the same precedent as the ladder wrapper above. OWNER/REPO come from the
+cwd's <code>origin</code>, so from a shell already in the repo run it <strong>bare</strong>:
+<code>~/.claude/hooks/merge_green_pr.sh 27 29 30</code> (no <code>cd</code>, so no compound command for
+the allow rule to miss). <code>cd &lt;absolute-repo-path&gt; &amp;&amp; ~/.claude/hooks/merge_green_pr.sh …</code>
+also works: measured 2026-11-03, the equivalent <code>cd &lt;worktree&gt; &amp;&amp; ~/.claude/hooks/run_ladder_review.sh abc</code>
+ran under <code>defaultMode: auto</code> with the ladder allow rule, no denial and no prompt. That
+is one sample from a classifier, not a proof, hence the bare form is preferred.</p>
+<p><strong>Why a wrapper and not glob rules.</strong> Measured on layouts-cvm: <code>gh pr merge</code>
+failed on all 5 PRs with a GraphQL rate limit, so only the REST merge worked, and
+the commands the classifier denied were a bare <code>gh api -X PUT .../merge</code>, a <code>for</code>
+loop and a scratch script. No glob matches those shapes, and a glob cannot pin
+<code>merge_method</code> or forbid trailing flags such as <code>--admin</code>.</p>
+<p>The wrapper takes positive integers only (no flags, so no <code>--admin</code> and no
+merge_method choice), uses REST only, and per PR requires: not a draft,
+<code>mergeable_state</code> clean, and every required check-run on the head <code>success</code>
+(the base branch's protection contexts plus <code>Review threads answered</code>). An
+unreadable protection is UNKNOWN and fails closed. The PUT is
+<code>merge_method=squash</code> with the head sha pinned. One line per PR; non-zero exit if
+any was refused.</p>
+<p>Two trust checks keep the check gate honest. (1) <strong>Check-run spoofing:</strong> a PR can
+add a workflow that posts a green check named like a required one, so a PR whose
+files (REST, paginated) touch <code>.github/workflows/</code> or <code>.github/actions/</code> is refused
+("touches CI definitions — merge by hand"), including a rename out of them
+(<code>previous_filename</code>); an unreadable file list is UNKNOWN, and so is a list whose
+length differs from the PR's <code>changed_files</code> ("file list incomplete", since the
+endpoint caps at 3000).
+The gate is <strong>partial by design</strong>: required checks are matched by NAME only
+(<code>app_id</code> is not compared; GitHub enforces it through <code>mergeable_state</code>), and it
+cannot see CI code outside <code>.github/</code> (a local composite action, <code>make test</code>, test
+files), which is the PR author's own code on a single-maintainer repo. Required
+contexts come from classic protection (a 404 "Branch not protected" is an empty
+list; any other read error is UNKNOWN) plus rulesets, and are matched in the Checks
+and the commit Status APIs; <code>skipped</code>/<code>neutral</code> pass, except for the review gate.
+A commit status is forgeable by any token with repo access (this account's own <code>gh</code>
+included; a personal token cannot create a check-run), so the review gate is
+satisfied by a <strong>check-run only</strong>, and any other context accepts a status only when
+<code>creator.login</code> is not the authenticated user (case-insensitive). Still open: pinning
+<code>app_id</code>/<code>integration_id</code> per context (#891).
+The merge PUT is <strong>never retried</strong> (a PUT that succeeded server-side but errored
+client-side would be re-sent into a 405 and misreported): on failure the PR's
+<code>merged</code> flag is re-read. Read retries happen once and only for transient errors.
+(2) <strong>Redirected target:</strong> OWNER/REPO come from a remote an agent can rewrite, so
+the derived owner must equal <code>gh api user --jq .login</code> (unreadable is UNKNOWN) and
+every PR's author must equal it too; bot and dependabot PRs fall back to the normal
+prompt on purpose. There is deliberately <strong>no</strong> blanket <code>gh pr merge</code> or
+<code>gh api .../merge</code> allow. Takes effect after <code>make ai_clients</code>.</p>
 <h2 id="body-template-guards-pr-and-issue">Body-template guards: PR and issue<a class="headerlink" href="#body-template-guards-pr-and-issue" title="Permanent link">&para;</a></h2>
 <p>Two <code>PreToolUse</code> hooks enforce a repo's own body templates on <code>gh</code>, so a
 non-compliant PR/issue body is blocked (exit 2) with the template fed back,
