@@ -405,7 +405,7 @@ def api_issue_match(segments):
             else:
                 endpoint = endpoint or tok
                 i += 1
-        path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", (endpoint or "").split("?", 1)[0])
+        path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", 1)[0])
         path = path.rstrip("/")
         dynamic = "$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
         if dynamic and endpoint and only_repo_segment_is_dynamic(path):

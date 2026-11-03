@@ -413,6 +413,13 @@ EOF
     [ "$status" -eq 2 ]
 }
 
+@test "REST: a query string or fragment on the issues endpoint does not hide the write (#874)" {
+    run bash -c "payload 'gh api repos/o/r/issues?a=b -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api repos/o/r/issues#frag -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
 @test "REST: graphql queries mentioning issues are not issue writes (#874)" {
     run bash -c "payload 'gh api graphql -f query=\"{ repository { issues { totalCount } } }\"' | '$GUARD'"
     [ "$status" -eq 0 ]
