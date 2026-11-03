@@ -342,7 +342,7 @@ def only_repo_segment_is_dynamic(path):
     var_at = [i for i, seg in enumerate(segs) if "$" in seg or "`" in seg]
     if not var_at:
         return False
-    if min(var_at) > 3 and "issues" not in path.lower():
+    if min(var_at) > 3 and "issues" not in path.lower() and not {".", ".."} & set(segs):
         return True  # literal repos/O/R/<resource>/...: the variable is a loop id (#870)
     verdicts = []
     for width in (1, 2):  # owner/name segments: `$R` (one) or `$O/$N` / `o/$N` (two)

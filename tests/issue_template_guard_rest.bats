@@ -427,3 +427,12 @@ EOF
     run bash -c "payload 'for n in 1; do gh api -X POST repos/o/r/pulls/\$n/../../issues -f title=x; done' | '$GUARD'"
     [ "$status" -eq 2 ]
 }
+
+@test "a dot segment after a literal resource keeps a variable resource fail-closed (#880)" {
+    run bash -c "payload 'gh api -X POST repos/o/r/pulls/../\$resource -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api -X POST repos/o/r/pulls/./\$resource -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api -X PUT repos/o/r/pulls/\$n/merge -f sha=abc' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
