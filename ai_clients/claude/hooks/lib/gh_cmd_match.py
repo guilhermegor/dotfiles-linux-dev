@@ -368,6 +368,21 @@ GRAPHQL_BODY_VAR = re.compile(r"\bbody\s*:\s*\$\s*(\w+)")
 GRAPHQL_INPUT_VAR = re.compile(r"\binput\s*:\s*\$\s*(\w+)")
 
 
+def graphql_call_args(query, start):
+    """Return the balanced `( ... )` argument text of the call whose `(` ends just before `start`.
+
+    A sibling field after the mutation (`addComment(input:{body:...})`) is not this call's body
+    (#906 review); an unbalanced list runs to the end, which only widens what is judged.
+    """
+    depth = 0
+    masked = GRAPHQL_STRING.sub(lambda m: " " * len(m.group(0)), query)
+    for i in range(start, len(masked)):
+        depth += {"(": 1, ")": -1}.get(masked[i], 0)
+        if depth < 0:
+            return query[start:i]
+    return query[start:]
+
+
 def graphql_issue_write(fields, input_file):
     """Return the match dict for a `gh api graphql` createIssue/updateIssue mutation, or None.
 
@@ -388,8 +403,8 @@ def graphql_issue_write(fields, input_file):
             try:
                 with open(val[1:]) as fh:
                     val = fh.read()
-            except OSError:
-                return blind  # unreadable / stdin: the value is unseen, judge blind
+            except (OSError, ValueError):
+                return blind  # unreadable / binary / stdin: the value is unseen, judge blind
         if key == "query":
             query = val
         else:
@@ -402,7 +417,7 @@ def graphql_issue_write(fields, input_file):
                 data = json.load(fh)
             query = str(data.get("query", ""))
             variables = data.get("variables") or {}
-            values = {**values, **{k: v for k, v in variables.items() if isinstance(v, str)}}
+            values = {k: v for k, v in variables.items() if isinstance(v, str)}  # -f is query-string
             values.update({k + "[body]": v["body"] for k, v in variables.items()
                            if isinstance(v, dict) and isinstance(v.get("body"), str)})
         except (OSError, ValueError, AttributeError):
@@ -413,7 +428,7 @@ def graphql_issue_write(fields, input_file):
     if not muts:
         return None
     body = None  # only the mutation's own body source counts: a stray `-f body=` is never GitHub's
-    seg = query[muts[0].start():muts[1].start() if len(muts) > 1 else len(query)]
+    seg = graphql_call_args(query, muts[0].end())
     refs = GRAPHQL_BODY_VAR.findall(seg)  # `body: $name`: the variable may be named anything
     inp = GRAPHQL_INPUT_VAR.search(seg)  # `input: $name`: gh's `name[body]=` or a JSON value
     lits = GRAPHQL_BODY.findall(seg)

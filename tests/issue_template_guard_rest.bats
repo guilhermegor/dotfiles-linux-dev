@@ -616,3 +616,33 @@ EOF
     run bash -c "payload 'gh api graphql --input $REPO/in.json' | '$GUARD'"
     [ "$status" -eq 2 ]
 }
+
+@test "GraphQL: a compliant body on a sibling field AFTER the mutation is not judged (#906 ladder)" {
+    f="$BATS_TEST_TMPDIR/sib.json"
+    jq -nc --arg b "$COMPLIANT_BODY" '{query: ("mutation($i:CreateIssueInput!){createIssue(input:$i){a} x: addComment(input:{subjectId:\"S\",body:" + ($b|tojson) + "}){a}}"), variables: {i: {body: "nope"}}}' > "$f"
+    run bash -c "payload 'gh api graphql --input $f' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL --input: a -f field is query-string, never a variable (#906 ladder)" {
+    f="$BATS_TEST_TMPDIR/qs.json"
+    jq -nc '{query: "mutation($b:String){createIssue(input:{title:\"t\",body:$b})}"}' > "$f"
+    run bash -c "payload 'gh api graphql --input $f -f b=\"$COMPLIANT_BODY\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a binary -F @file is judged blind, not a crash (#906 ladder)" {
+    printf '\xff\xfe\x00' > "$BATS_TEST_TMPDIR/bin.dat"
+    run bash -c "payload 'gh api graphql -f query=\"mutation{createIssue(input:{title:\\\"t\\\"})}\" -F x=@$BATS_TEST_TMPDIR/bin.dat' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL --input: a bad variables.input.body is blocked, a compliant one allowed (#906 CodeRabbit)" {
+    f="$BATS_TEST_TMPDIR/vi.json"
+    jq -nc '{query: "mutation($input:UpdateIssueInput!){updateIssue(input:$input){a}}", variables: {input: {id: "I", body: "no dod"}}}' > "$f"
+    run bash -c "payload 'gh api graphql --input $f' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    jq -nc --arg b "$(printf "$COMPLIANT_BODY")" '{query: "mutation($input:UpdateIssueInput!){updateIssue(input:$input){a}}", variables: {input: {id: "I", body: $b}}}' > "$f"
+    run bash -c "payload 'gh api graphql --input $f' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
