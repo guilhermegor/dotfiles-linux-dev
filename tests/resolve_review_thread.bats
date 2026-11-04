@@ -59,7 +59,7 @@ thread() {
     thread false Bot
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no human reply"* ]]
+    [[ "$output" == *"no non-bot reply"* ]]
     run grep -q resolveReviewThread "$GH_LOG"
     [ "$status" -ne 0 ]
 }
@@ -68,7 +68,7 @@ thread() {
     thread false Bot Bot
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no human reply"* ]]
+    [[ "$output" == *"no non-bot reply"* ]]
     run grep -q resolveReviewThread "$GH_LOG"
     [ "$status" -ne 0 ]
 }
@@ -77,6 +77,7 @@ thread() {
     thread false User
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 1 ]
+    [[ "$output" == *"no non-bot reply"* ]]
     run grep -q resolveReviewThread "$GH_LOG"
     [ "$status" -ne 0 ]
 }
@@ -110,4 +111,28 @@ thread() {
     MUT="null" run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 1 ]
     [[ "$output" == *"FAILED"* ]]
+}
+
+@test "a bot re-opening after a human reply is refused" {
+    thread false Bot User Bot
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no non-bot reply"* ]]
+    run grep -q resolveReviewThread "$GH_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "a missing node (wrong type or deleted id) fails closed" {
+    READ_JSON='{"data":{"node":null}}' run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    run grep -q resolveReviewThread "$GH_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "a bad id among valid ones does not stop the rest, and rc stays 1" {
+    thread false Bot User
+    run bash "$SCRIPT" --admin PRRT_abc123
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"PRRT_abc123: resolved"* ]]
 }
