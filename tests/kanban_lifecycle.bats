@@ -750,9 +750,9 @@ write_pr_json() {
     git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
     git checkout -q -b feat/999-other
     run run_hook "cd $TEST_TMP/wt || gh pr create --title x --body y"
-    [[ "$output" != *"131"* ]]
+    [ -z "$output" ]
     run run_hook "cd $TEST_TMP/wt | gh pr create --title x --body y"
-    [[ "$output" != *"131"* ]]
+    [ -z "$output" ]
 }
 
 @test "pushd and builtin cd stop the scan rather than resolve the wrong card" {
@@ -760,9 +760,9 @@ write_pr_json() {
     git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
     git checkout -q -b feat/999-other
     run run_hook "pushd $TEST_TMP/wt && gh pr create --title x --body y"
-    [[ "$output" != *"131"* ]]
+    [ -z "$output" ]
     run run_hook "builtin cd $TEST_TMP/wt && gh pr create --title x --body y"
-    [[ "$output" != *"131"* ]]
+    [ -z "$output" ]
 }
 
 @test "the first verb wins: checkout -b then pr create lands In progress" {
@@ -776,14 +776,34 @@ write_pr_json() {
     git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
     git checkout -q -b feat/999-other
     run run_hook "cd $TEST_TMP/wt & gh pr create --title x --body y"
-    [[ "$output" != *"131"* ]]
+    [ -z "$output" ]
     run run_hook "command cd $TEST_TMP/wt && gh pr create --title x --body y"
-    [[ "$output" != *"131"* ]]
+    [ -z "$output" ]
 }
 
 @test "a REST PR whose --input file vanished does not fall back to HEAD's issue" {
     write_fake_gh "OPEN"
     git checkout -q -b feat/131-head
     run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/gone.json"
+    [ -z "$output" ]
+}
+
+@test "a cd followed by other work then a lone & or || does not carry the path" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "cd $TEST_TMP/wt && git status & gh pr create --title x --body y"
+    [ -z "$output" ]
+    run run_hook "cd $TEST_TMP/wt && git status || gh pr create --title x --body y"
+    [ -z "$output" ]
+}
+
+@test "a cd hidden behind if, time, ! or an assignment stops the scan" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "if true; then cd $TEST_TMP/wt; fi; gh pr create --title x --body y"
+    [ -z "$output" ]
+    run run_hook "time cd $TEST_TMP/wt; gh pr create --title x --body y"
     [ -z "$output" ]
 }
