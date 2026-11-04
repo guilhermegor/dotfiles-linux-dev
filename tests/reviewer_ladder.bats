@@ -1647,12 +1647,16 @@ SH
     grep -q "diff truncated at 120000 of" "$BATS_TEST_TMPDIR/claude.prompt"
 }
 
-@test "the claude rung prompt says it has no tools, so it never emits a tool call (#916)" {
+@test "the claude rung prompt says it has no tools and ends on the Verdict ask (#916)" {
     _fake_claude_review
-    _partial_repo small
+    _partial_repo big
     run _run_runtime_review claude default "" 7 "$BATS_TEST_TMPDIR/wd"
     [ "$status" -eq 0 ]
-    grep -qF "You have no tools and cannot read files or run commands. Review only from the diff below, state anything you could not verify, and still end with '## Verdict'." "$BATS_TEST_TMPDIR/claude.prompt"
+    local prompt
+    prompt="$(cat "$BATS_TEST_TMPDIR/claude.prompt")"
+    [[ "$prompt" == *"You have no tools and cannot read files"* ]]
+    [ "$(grep -o "## Verdict" <<<"$prompt" | wc -l)" -eq 1 ]
+    [[ "$prompt" == *"NOTE: diff truncated"*"End with a '## Verdict' section"*"Diff:"* ]]
 }
 
 @test "a diff under the cap carries no partial-review notice (#636)" {
