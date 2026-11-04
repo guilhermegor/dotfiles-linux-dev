@@ -646,3 +646,19 @@ EOF
     run bash -c "payload 'gh api graphql --input $f' | '$GUARD'"
     [ "$status" -eq 0 ]
 }
+
+@test "GraphQL shell-built queries, string decoys, devices and body-less --input are judged (#906 ladder)" {
+    run bash -c "payload 'gh api graphql -f query=\"\$Q\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"\$(cat q.graphql)\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -F query=@/dev/stdin' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation(\$b:String){createIssue(input:{repositoryId:\\\"R\\\",title:\\\"body: \$b\\\"}){a}}\" -f b=compliant' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    printf '%s' '{"query":"mutation($i:UpdateIssueInput!){updateIssue(input:$i){issue{id}}}","variables":{"i":{"id":"I","state":"CLOSED"}}}' > "$REPO/close.json"
+    run bash -c "payload 'gh api graphql --input $REPO/close.json' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation{addComment(input:{body:\\\"call createIssue(x)\\\"}){a}}\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}

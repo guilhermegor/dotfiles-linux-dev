@@ -28,6 +28,7 @@ unterminated heredoc) — the caller MUST treat this as "unknown" and fail OPEN,
 command found", per this repo's hook contract (a verdict from unparseable input is a guess).
 """
 import json
+import os
 import re
 import shlex
 import sys
@@ -359,11 +360,12 @@ def only_repo_segment_is_dynamic(path):
 
 
 GRAPHQL_ISSUE_MUTATION = re.compile(r"\b(createIssue|updateIssue)\s*\(")
-GRAPHQL_BODY = re.compile(r'\bbody\s*:\s*("""(?:[^"\\]|\\.|"(?!""))*"""|"(?:[^"\\]|\\.)*")')
-
-
-GRAPHQL_IGNORED = re.compile(r'("""(?:[^"\\]|\\.|"(?!""))*"""|"(?:[^"\\]|\\.)*")|#[^\n]*|[,\ufeff]')
-GRAPHQL_STRING = re.compile(r'"""(?:[^"\\]|\\.|"(?!""))*"""|"(?:[^"\\]|\\.)*"')
+GRAPHQL_STR = r'"""(?:[^"\\]|\\[\s\S]|"(?!""))*"""|"(?:[^"\\]|\\[\s\S])*"'
+GRAPHQL_BODY_KEY = re.compile(r"\bbody\s*:")
+GRAPHQL_LEADING_STRING = re.compile(r"\s*(" + GRAPHQL_STR + ")")
+GRAPHQL_IGNORED = re.compile("(" + GRAPHQL_STR + r")|#[^\n]*|[,\ufeff]")
+GRAPHQL_STRING = re.compile(GRAPHQL_STR)
+GRAPHQL_SHELL_BUILT = re.compile(r"\$\(|\$\{|`|^\s*\$")
 GRAPHQL_BODY_VAR = re.compile(r"\bbody\s*:\s*\$\s*(\w+)")
 GRAPHQL_INPUT_VAR = re.compile(r"\binput\s*:\s*\$\s*(\w+)")
 
@@ -383,13 +385,31 @@ def graphql_call_args(query, start):
     return query[start:]
 
 
-def graphql_issue_write(fields, input_file):
+def mask_graphql_strings(text):
+    """Blank every string literal, keeping offsets, so keywords inside a literal never match."""
+    return GRAPHQL_STRING.sub(lambda m: " " * len(m.group(0)), text)
+
+
+def read_graphql_file(path, shifted):
+    """Return a regular file's text (capped), or None when it cannot be judged statically.
+
+    A pipe, tty or device (`/dev/stdin`, `/dev/zero`) is never the file the shell will feed gh,
+    and a relative path after a `cd` or a redirect may name a different file than the hook sees.
+    """
+    if (shifted and not os.path.isabs(path)) or not os.path.isfile(path):
+        return None
+    with open(path) as fh:
+        return fh.read(1 << 20)
+
+
+def graphql_issue_write(fields, input_file, shifted=False):
     """Return the match dict for a `gh api graphql` createIssue/updateIssue mutation, or None.
 
     The GraphQL twin of the REST issue write (dotfiles-linux-dev#903): the mutation text comes
     from a `query=` field (or the `query` member of an --input JSON file); its body is a
     `body=` variables field, a `variables.body`/`variables.input.body` member, or an inline
-    `body: "..."` literal. Reads (no such mutation) return None and stay allowed.
+    `body: "..."` literal. Reads (no such mutation) return None and stay allowed; an input the hook cannot see (stdin,
+    `--input -`, an unreadable file, a shell-built query) is judged blind, which blocks.
     """
     blind = {"matched": True, "repo": None, "head": None, "has_body": False, "body": None,
              "has_body_file": True, "body_file": input_file or "-", "body_json": True,
@@ -401,10 +421,11 @@ def graphql_issue_write(fields, input_file):
             if val == "@-":
                 return blind  # stdin is never visible to the hook
             try:
-                with open(val[1:]) as fh:
-                    val = fh.read()
+                val = read_graphql_file(val[1:], shifted)
             except (OSError, ValueError):
-                return blind  # unreadable / binary / stdin: the value is unseen, judge blind
+                val = None
+            if val is None:
+                return blind  # unreadable / binary / stdin / device: the value is unseen
         if key == "query":
             query = val
         else:
@@ -413,25 +434,31 @@ def graphql_issue_write(fields, input_file):
         return blind
     if input_file:
         try:
-            with open(input_file) as fh:
-                data = json.load(fh)
+            raw = read_graphql_file(input_file, shifted)
+            if raw is None:
+                return blind
+            data = json.loads(raw)
             query = str(data.get("query", ""))
             variables = data.get("variables") or {}
             values = {k: v for k, v in variables.items() if isinstance(v, str)}  # -f is query-string
             values.update({k + "[body]": v["body"] for k, v in variables.items()
                            if isinstance(v, dict) and isinstance(v.get("body"), str)})
+            values.update({k + "[]": "" for k, v in variables.items()
+                           if isinstance(v, dict) and "body" not in v})  # object, no body: left alone
         except (OSError, ValueError, AttributeError):
             return blind  # unreadable / stdin / not an object: the mutation is unseen
     # GraphQL treats `,` and `#...` comments as whitespace; blank them outside strings (#906 review)
     query = GRAPHQL_IGNORED.sub(lambda m: m.group(1) or " ", query)
-    muts = list(GRAPHQL_ISSUE_MUTATION.finditer(query))
+    muts = list(GRAPHQL_ISSUE_MUTATION.finditer(mask_graphql_strings(query)))
     if not muts:
-        return None
+        return blind if GRAPHQL_SHELL_BUILT.search(query) else None
     body = None  # only the mutation's own body source counts: a stray `-f body=` is never GitHub's
     seg = graphql_call_args(query, muts[0].end())
-    refs = GRAPHQL_BODY_VAR.findall(seg)  # `body: $name`: the variable may be named anything
-    inp = GRAPHQL_INPUT_VAR.search(seg)  # `input: $name`: gh's `name[body]=` or a JSON value
-    lits = GRAPHQL_BODY.findall(seg)
+    masked = mask_graphql_strings(seg)  # keywords inside a string literal are not syntax
+    refs = GRAPHQL_BODY_VAR.findall(masked)  # `body: $name`: the variable may be named anything
+    inp = GRAPHQL_INPUT_VAR.search(masked)  # `input: $name`: gh's `name[body]=` or a JSON value
+    lits = [m.group(1) for k in GRAPHQL_BODY_KEY.finditer(masked)
+            if (m := GRAPHQL_LEADING_STRING.match(seg, k.end()))]
     if lits:  # the literal in the mutation itself is what GitHub stores: judge it first
         lit = lits[0]
         if lit.startswith('"""'):
@@ -465,6 +492,13 @@ def graphql_issue_write(fields, input_file):
             "labels": [], "auto": False, "method": "POST" if creating else "PATCH"}
 
 
+def chain_moves_files(segments):
+    """True when the chain has a `cd`/`pushd` or a redirect/`tee`, so a relative path is unreliable."""
+    return any(a[:1] in (["cd"], ["pushd"], ["tee"])
+               or any(t.lstrip("0123456789").startswith(">") for t in a)
+               for a in iter_argvs(segments))
+
+
 def api_issue_match(segments):
     """Return the match dict for `[rtk] gh api repos/O/R/issues[/N]` writes, or None.
 
@@ -474,6 +508,7 @@ def api_issue_match(segments):
     by it. Body is read from a `body=` field (`-f`/`-F`/`--raw-field`/`--field`); `-F body=@f`
     and `--input f` are file-valued (`body_json` marks that the file is a JSON payload).
     """
+    shifted = chain_moves_files(segments)
     for argv in iter_argvs(segments):
         # Same command-word rule as the `gh issue` path: gh must be the command itself (after
         # wrappers), so printed text like `echo gh api ...` is not a write. The fail-closed part
@@ -527,7 +562,7 @@ def api_issue_match(segments):
         path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0])
         path = path.rstrip("/")
         if path.strip("/").lower() in ("graphql", "api/graphql"):
-            gql = graphql_issue_write(fields, input_file)
+            gql = graphql_issue_write(fields, input_file, shifted)
             if gql:
                 return gql
             continue
