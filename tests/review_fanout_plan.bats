@@ -654,6 +654,19 @@ assert p.RUNG_TIMEOUT == p.RUNG_TIMEOUT_DEFAULT_S >= 120, p.RUNG_TIMEOUT
     [[ "$(jq -r '.reason' <<<"$output")" == *"timed out after 1s"*"REVIEW_FANOUT_RUNG_TIMEOUT=1s"* ]]
 }
 
+@test "a timed-out probe's grandchild is killed, not orphaned (#884)" {
+    # The grandchild holds the probe's stdout and sleeps far past the budget (a hung codex/kimi).
+    probe_rung 'sleep 60 & echo $! >"'"$TEST_TMP"'/gc.pid"; wait' 1
+    [ "$(jq -r '.reason_key' <<<"$output")" = "timeout" ]
+    ! kill -0 "$(cat "$TEST_TMP/gc.pid")" 2>/dev/null
+}
+
+@test "a TERM-ignoring grandchild is SIGKILLed after the grace period (#884)" {
+    probe_rung 'trap "" TERM; (trap "" TERM; sleep 60) & echo $! >"'"$TEST_TMP"'/gc.pid"; wait' 1
+    [ "$(jq -r '.reason_key' <<<"$output")" = "timeout" ]
+    ! kill -0 "$(cat "$TEST_TMP/gc.pid")" 2>/dev/null
+}
+
 @test "a probe that exits non-zero is unknown, naming the exit code and first stderr line (#873)" {
     probe_rung 'echo "codex: not logged in" >&2; echo second >&2; exit 7'
     [ "$(jq -r '.status' <<<"$output")" = "unknown" ]

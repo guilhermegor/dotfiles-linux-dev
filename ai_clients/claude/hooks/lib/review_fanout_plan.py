@@ -110,11 +110,13 @@ into a guess just because the read moved to a different endpoint.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import functools
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -477,6 +479,39 @@ def _rung_unknown(key: str, reason: str) -> dict:
 	return {"status": "unknown", "runtime": "", "model": "", "signal": "", "reason": one_line, "reason_key": key}
 
 
+KILL_GRACE_S = 2
+
+
+def _run_in_own_group(cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
+	"""Run ``cmd`` in its own session; on timeout kill the WHOLE process group, then re-raise.
+
+	``subprocess.run(timeout=)`` kills only the direct child. The ladder's ``codex``/``kimi``/
+	``qwen`` grandchildren survive it, orphaned and still holding the pipes and making live
+	model calls (dotfiles-linux-dev#884). SIGTERM the group, SIGKILL it after ``KILL_GRACE_S``,
+	then collect the output so nothing is left to block on.
+	"""
+	with subprocess.Popen(  # noqa: S603 - fixed argv, script is a module constant
+		cmd,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+		text=True,
+		start_new_session=True,
+	) as proc:
+		try:
+			out, err = proc.communicate(timeout=timeout)
+		except subprocess.TimeoutExpired:
+			for sig in (signal.SIGTERM, signal.SIGKILL):
+				with contextlib.suppress(ProcessLookupError):
+					os.killpg(proc.pid, sig)
+				try:
+					proc.communicate(timeout=KILL_GRACE_S)
+					break
+				except subprocess.TimeoutExpired:
+					continue
+			raise
+		return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 def resolve_rung() -> dict:
 	"""Return the reviewer rung #479's probe resolves, as ``{"status", "runtime", …}``.
 
@@ -509,12 +544,8 @@ def resolve_rung() -> dict:
 		return _rung_unknown("no-ladder", f"reviewer ladder not found at {REVIEWER_LADDER_SH}")
 	started = time.monotonic()
 	try:
-		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
-			["bash", "-c", _RUNG_SCRIPT, "review_fanout_plan", str(REVIEWER_LADDER_SH)],
-			capture_output=True,
-			text=True,
-			timeout=RUNG_TIMEOUT,
-			check=False,
+		proc = _run_in_own_group(
+			["bash", "-c", _RUNG_SCRIPT, "review_fanout_plan", str(REVIEWER_LADDER_SH)], RUNG_TIMEOUT
 		)
 	except subprocess.TimeoutExpired:
 		return _rung_unknown(
