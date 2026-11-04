@@ -742,6 +742,19 @@ STUB_IN_REVIEW='reconcile_kanban() {
     refute_gh 'item-edit'
 }
 
+@test "boards: a stale cached project number is refreshed once, then the board is swept" {
+    write_board_cache
+    jq '.project_number = 5' "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json" > "$TEST_TMP/c.json"
+    mv "$TEST_TMP/c.json" "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_fake_gh
+    run_boards in_review "$TEST_TMP" "owner|1|repo" -- "source '$LIB'"
+    [[ "$output" == *"board owner/1 (repo): ok — 1 moved"* ]]
+    [ "$(jq -r .project_number "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json")" = 1 ]
+}
+
 @test "boards: a matching declared project number is swept, read from the cache without a gh call" {
     write_board_cache
     write_prs 10

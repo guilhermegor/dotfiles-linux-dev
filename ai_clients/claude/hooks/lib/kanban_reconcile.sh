@@ -572,6 +572,10 @@ reconcile_kanban_boards() {
 			continue
 		fi
 		if [[ "$num" != "$project" ]]; then
+			rm -f "$(cache_file "$owner" "$repo")"
+			num="$(_kb_board_number "$owner" "$repo")" || num="?"
+		fi
+		if [[ "$num" != "$project" ]]; then
 			status=1
 			lines+="board $owner/$project ($repo): UNKNOWN — declared project $project but the board named '$repo kanban' is project $num"$'\n'
 			continue
