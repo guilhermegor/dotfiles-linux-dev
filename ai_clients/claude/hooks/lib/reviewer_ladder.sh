@@ -810,7 +810,7 @@ _run_runtime_review() {
 			notice="diff truncated at 120000 of $total bytes; this review covers only the first part"
 		fi
 		prompt="Review PR #$pr_number. Report concrete bugs and risks as a markdown list with file:line."
-		[ "$runtime" = "claude" ] && prompt+=" End with a '## Verdict' section giving the overall result."
+		[ "$runtime" = "claude" ] && prompt+=" End with a '## Verdict' section giving the overall result. You have no tools and cannot read files or run commands. Review only from the diff below, state anything you could not verify, and still end with '## Verdict'."
 		[ -z "$notice" ] || prompt+=" NOTE: $notice; say so in the review."
 		prompt+=" Diff:"$'\n'"$diff"
 		if [ "$runtime" = "kimi" ]; then
