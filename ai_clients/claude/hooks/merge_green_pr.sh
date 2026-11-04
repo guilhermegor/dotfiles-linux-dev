@@ -73,7 +73,7 @@ required_contexts() {
 	local base="$1" err classic rules
 	err="$(mktemp)" || return 1
 	if ! classic="$(gh api "repos/$owner/$repo/branches/$base/protection" \
-		--jq '[(.required_status_checks.contexts // [])[] | [., "-1"], ((.required_status_checks.checks // [])[] | [.context, ((.app_id // -1)|tostring)])] | .[] | @tsv' 2>"$err")"; then
+		--jq '[((.required_status_checks.contexts // [])[] | [., "-1"]), ((.required_status_checks.checks // [])[] | [.context, ((.app_id // -1)|tostring)])] | .[] | @tsv' 2>"$err")"; then
 		if grep -q 'Branch not protected' "$err"; then
 			classic=""
 		else
