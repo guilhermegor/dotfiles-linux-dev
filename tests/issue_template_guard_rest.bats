@@ -459,6 +459,22 @@ EOF
     done
 }
 
+@test "REST: an unrecognised flag before the endpoint fails closed (#874)" {
+    run bash -c "payload 'gh api --foo v repos/o/r/issues -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api -X POST -- v repos/o/r/issues -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api --foo v repos/o/r/pulls/52/comments/1/replies -f body=issues' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: shell-built endpoints carrying issues inside a segment stay blocked (#874)" {
+    run bash -c "payload 'gh api repos/o/r/issues\$N -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api \"repos/o/r/\$(echo issues)\" -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
 @test "REST: a query string or fragment on the issues endpoint does not hide the write (#874)" {
     run bash -c "payload 'gh api repos/o/r/issues?a=b -X POST -f title=x' | '$GUARD'"
     [ "$status" -eq 2 ]
