@@ -644,3 +644,103 @@ run_hook_resp() {
     run run_hook_resp "rtk gh pr create --title x" '{"stdout":"ok created PR #9","stderr":""}'
     [[ "$output" == *"moved issue"* ]]
 }
+
+# --- #900: `--input` REST PRs and compound commands ---------------------------------------------
+
+write_pr_json() {
+    local json='{"head":"fix/131-rest","base":"main"}'
+    printf '%s' "${2:-$json}" > "$1"
+}
+
+@test "gh api pulls --input moves the card named by head in the file" {
+    write_fake_gh "OPEN"
+    write_pr_json "$TEST_TMP/pr.json"
+    git checkout -q -b feat/999-other
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/pr.json"
+    [[ "$output" == *"moved issue"*"131"* ]]
+}
+
+@test "gh api pulls --input with an owner:branch head strips the owner" {
+    write_fake_gh "OPEN"
+    write_pr_json "$TEST_TMP/pr.json" '{"head":"guilhermegor:fix/131-rest"}'
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/pr.json"
+    [[ "$output" == *"moved issue"* ]]
+}
+
+@test "gh api pulls --input moves nothing for a missing file, bad JSON, or no head" {
+    write_fake_gh "OPEN"
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/nope.json"
+    [ -z "$output" ]
+    write_pr_json "$TEST_TMP/bad.json" 'not json'
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/bad.json"
+    [ -z "$output" ]
+    write_pr_json "$TEST_TMP/nohead.json" '{"base":"main"}'
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/nohead.json"
+    [ -z "$output" ]
+    write_pr_json "$TEST_TMP/list.json" '["fix/131-rest"]'
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/list.json"
+    [ -z "$output" ]
+}
+
+@test "gh api pulls --input with a shell-built path or stdin moves nothing" {
+    write_fake_gh "OPEN"
+    write_pr_json "$TEST_TMP/pr.json"
+    run run_hook 'gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input "$F"'
+    [ -z "$output" ]
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input -"
+    [ -z "$output" ]
+}
+
+@test "a relative --input resolves from the cd path" {
+    write_fake_gh "OPEN"
+    mkdir "$TEST_TMP/sub"
+    write_pr_json "$TEST_TMP/sub/pr.json"
+    run run_hook "cd $TEST_TMP/sub && gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input pr.json"
+    [[ "$output" == *"moved issue"* ]]
+}
+
+@test "cd <worktree> && gh pr create uses that worktree's branch" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "cd $TEST_TMP/wt && gh pr create --title x --body y"
+    [[ "$output" == *"moved issue"*"131"* ]]
+}
+
+@test "cd <worktree> && git checkout -b moves the card to In progress" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "cd $TEST_TMP/wt && git checkout -b feat/131-next"
+    [[ "$output" == *"moved issue"*"In progress"* ]]
+}
+
+@test "a verb after another command in a chain still counts, with no cd" {
+    write_fake_gh "OPEN"
+    run run_hook "git push -u origin HEAD && gh pr create --title x --body y"
+    [[ "$output" == *"moved issue"* ]]
+}
+
+@test "a cd the hook cannot resolve moves nothing" {
+    write_fake_gh "OPEN"
+    run run_hook 'cd "$WT" && gh pr create --title x --body y'
+    [ -z "$output" ]
+    run run_hook 'cd && gh pr create --title x --body y'
+    [ -z "$output" ]
+    run run_hook "cd $TEST_TMP/missing && gh pr create --title x --body y"
+    [ -z "$output" ]
+}
+
+@test "a verb inside a quoted argument or an echo does not count" {
+    write_fake_gh "OPEN"
+    run run_hook 'echo "git checkout -b feat/131-x && gh pr create"'
+    [ -z "$output" ]
+    run run_hook 'git commit -m "gh pr create" && echo gh pr create'
+    [ -z "$output" ]
+}
+
+@test "a verb on a later line of a quoted argument does not count" {
+    write_fake_gh "OPEN"
+    run run_hook "$(printf 'echo "first line\ngit checkout -b feat/131-x\ngh pr create"')"
+    [ -z "$output" ]
+}

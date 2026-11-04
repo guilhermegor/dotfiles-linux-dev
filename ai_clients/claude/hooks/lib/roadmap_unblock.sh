@@ -437,6 +437,7 @@ reconcile_roadmap_unblock() {
 # why here. `repo` is the board's own repo, used only to label its report line.
 # shellcheck disable=SC2034 # read by reconcile_roadmap_boards below and by its callers' tests
 ROADMAP_BOARDS=(
+	"guilhermegor|21|layouts-cvm"
 	"guilhermegor|17|greenfield"
 	"guilhermegor|16|wwdates"
 	"guilhermegor|15|filings-b3"
