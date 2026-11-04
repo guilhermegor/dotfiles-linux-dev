@@ -822,6 +822,18 @@ STUB
 
 # --- dotfiles-linux-dev#887: items [7]/[9]/[11] reconcile every declared board ----------------------
 
+# The project number the board lookup resolves (#907): by default the one the registry row declares,
+# so these tests stay off gh. The check itself is tested in kanban_reconcile.bats.
+declared_board_numbers() {
+    _kb_board_number() {
+        local e
+        for e in "${ROADMAP_BOARDS[@]}"; do
+            [[ "$e" == "$1|"*"|$2" ]] && { e="${e#*|}"; echo "${e%%|*}"; return 0; }
+        done
+        return 1
+    }
+}
+
 @test "sweep_kanban_boards: sweeps every declared board and says nothing extra for a declared repo" {
     export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
     reconcile_kanban() {
@@ -829,6 +841,7 @@ STUB
         [ "$2" != "broken" ] || { RECONCILE_KANBAN_REPORT="UNKNOWN: no board"; return 1; }
     }
     ROADMAP_BOARDS=("o|13|here" "o|9|elsewhere" "o|8|broken")
+    declared_board_numbers
     run sweep_kanban_boards in_review "$REPO" "o/here"
     [ "$status" -eq 0 ]
     [[ "$output" == *"board o/13 (here): ok — nothing to change"* ]]
@@ -841,6 +854,7 @@ STUB
     export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
     reconcile_kanban() { RECONCILE_KANBAN_REPORT=""; }
     ROADMAP_BOARDS=("o|13|declared")
+    declared_board_numbers
     run sweep_kanban_boards in_review "$REPO" "o/undeclared"
     [[ "$output" == *"board o/13 (declared): ok — nothing to change"* ]]
     [[ "$output" == *"note: o/undeclared has no ROADMAP_BOARDS entry"* ]]
