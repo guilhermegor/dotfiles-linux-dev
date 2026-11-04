@@ -362,6 +362,7 @@ GRAPHQL_ISSUE_MUTATION = re.compile(r"\b(createIssue|updateIssue)\s*\(")
 GRAPHQL_BODY = re.compile(r'\bbody\s*:\s*("""(?:[^"\\]|\\.|"(?!""))*"""|"(?:[^"\\]|\\.)*")')
 
 
+GRAPHQL_IGNORED = re.compile(r'("""(?:[^"\\]|\\.|"(?!""))*"""|"(?:[^"\\]|\\.)*")|#[^\n]*|,')
 GRAPHQL_BODY_VAR = re.compile(r"\bbody\s*:\s*\$(\w+)")
 GRAPHQL_INPUT_VAR = re.compile(r"\binput\s*:\s*\$(\w+)")
 
@@ -402,10 +403,12 @@ def graphql_issue_write(fields, input_file):
                            if isinstance(v, dict) and isinstance(v.get("body"), str)})
         except (OSError, ValueError, AttributeError):
             return blind  # unreadable / stdin / not an object: the mutation is unseen
+    # GraphQL treats `,` and `#...` comments as whitespace; blank them outside strings (#906 review)
+    query = GRAPHQL_IGNORED.sub(lambda m: m.group(1) or " ", query)
     muts = list(GRAPHQL_ISSUE_MUTATION.finditer(query))
     if not muts:
         return None
-    body = values.get("body")
+    body = None  # only the mutation's own body source counts: a stray `-f body=` is never GitHub's
     seg = query[muts[0].start():muts[1].start() if len(muts) > 1 else len(query)]
     refs = GRAPHQL_BODY_VAR.findall(seg)  # `body: $name`: the variable may be named anything
     inp = GRAPHQL_INPUT_VAR.search(seg)  # `input: $name`: gh's `name[body]=` or a JSON value
@@ -420,7 +423,7 @@ def graphql_issue_write(fields, input_file):
             except ValueError:
                 body = lit[1:-1]
     elif refs:
-        body = values.get(refs[0], body)
+        body = values.get(refs[0])
     elif inp:
         name = inp.group(1)
         body = values.get(name + "[body]")

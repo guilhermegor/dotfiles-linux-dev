@@ -590,3 +590,12 @@ EOF
     run bash -c "payload 'gh api graphql -f query=\"mutation(\$body:String!){c: addComment(input:{body:\$body}){a} i: createIssue(input:{title:\\\"t\\\",body:\\\"nope\\\"}){a}}\" -f body=compliant' | '$GUARD'"
     [ "$status" -eq 2 ]
 }
+
+@test "GraphQL commas, comments and a stray -f body= cannot hide a bad body (#906 ladder)" {
+    run bash -c "payload 'gh api graphql -f query=\"mutation{createIssue,(input:{body:\\\"nope\\\"}){a}}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation{createIssue(input:{body,:\\\"nope\\\"}){a}}\" -f body=compliant' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation(\$b:String){createIssue(input:{body:\$b})}\" -f body=compliant' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
