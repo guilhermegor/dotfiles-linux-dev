@@ -565,3 +565,156 @@ run_reconcile() {
     [[ "$output" == *"STATUS=unknown"* ]]
     refute_gh 'item-edit'
 }
+
+# --- dotfiles-linux-dev#887: reconcile_kanban_boards, every declared board ------------------------
+
+# run_boards KIND CWD BOARD... [-- SHELL-SNIPPET]
+# Sources the lib, sets ROADMAP_BOARDS to the BOARD entries (none = an empty registry), runs the
+# snippet (stub definitions), then prints rc and the per-board report.
+run_boards() {
+    local kind="$1" cwd="$2" snippet="" boards=()
+    shift 2
+    while (($#)); do
+        if [ "$1" = "--" ]; then snippet="$2"; break; fi
+        boards+=("$1"); shift
+    done
+    run env KANBAN_CHECKOUT_ROOT="$TEST_TMP/checkouts" bash -c "source '$LIB'; \
+        ROADMAP_BOARDS=(\"\$@\"); ${snippet:-:}; \
+        reconcile_kanban_boards '$kind' '$cwd'; echo \"rc=\$?\"; \
+        printf '%s\n' \"\$KANBAN_BOARDS_REPORT\"" _ "${boards[@]}"
+}
+
+# Stub reconcile_kanban per repo name: "clean" -> ok, empty report; "busy" -> ok, one move;
+# anything else -> failure. Every call is logged to $TEST_TMP/calls.
+STUB_IN_REVIEW='reconcile_kanban() {
+    echo "in_review $1/$2" >> "$TEST_TMP/calls"
+    RECONCILE_KANBAN_REPORT=""
+    case "$2" in
+    clean) return 0 ;;
+    busy) RECONCILE_KANBAN_REPORT="moved issue #7 to In review (was: none, via PR #9)"; return 0 ;;
+    *) RECONCILE_KANBAN_REPORT="UNKNOWN: could not resolve board for $1/$2"; return 1 ;;
+    esac
+}'
+
+@test "boards: every declared board gets exactly one line, in registry order, whatever the cwd" {
+    export TEST_TMP
+    run_boards in_review "$TEST_TMP" "owner|17|clean" "owner|13|busy" "owner|8|broken" -- "$STUB_IN_REVIEW"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"board owner/17 (clean): ok — nothing to change"* ]]
+    [[ "$output" == *"board owner/13 (busy): ok — 1 moved"* ]]
+    [[ "$output" == *"  moved issue #7 to In review"* ]]
+    [[ "$output" == *"board owner/8 (broken): UNKNOWN — UNKNOWN: could not resolve board for owner/broken"* ]]
+    [ "$(grep -c . "$TEST_TMP/calls")" -eq 3 ]
+    [ "$(sed -n 1p "$TEST_TMP/calls")" = "in_review owner/clean" ]
+    [ "$(sed -n 3p "$TEST_TMP/calls")" = "in_review owner/broken" ]
+}
+
+@test "boards: all boards clean returns 0 and still reports every one" {
+    export TEST_TMP
+    run_boards in_review "$TEST_TMP" "owner|17|clean" "owner|16|clean" -- "$STUB_IN_REVIEW"
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"board owner/17 (clean): ok — nothing to change"* ]]
+    [[ "$output" == *"board owner/16 (clean): ok — nothing to change"* ]]
+}
+
+@test "boards: success path returns a usable per-board answer from real reconcile_kanban" {
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_fake_gh
+    run_boards in_review "$TEST_TMP" "owner|1|repo"
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"board owner/1 (repo): ok — 1 moved"* ]]
+    [[ "$output" == *"  moved issue #42 to In review"* ]]
+    grep -q -- '--id ITEM_42 --field-id FIELD_1 --single-select-option-id OPT_REVIEW' "$GH_LOG"
+}
+
+@test "boards: a failing read is that board's UNKNOWN, rc=1, and nothing is moved" {
+    printf '#!/bin/bash\nexit 1\n' > "$FAKE_BIN/gh"
+    chmod +x "$FAKE_BIN/gh"
+    run_boards in_review "$TEST_TMP" "owner|1|repo" "owner|2|other"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"board owner/1 (repo): UNKNOWN"* ]]
+    [[ "$output" == *"board owner/2 (other): UNKNOWN"* ]]
+    [[ "$output" != *"ok —"* ]]
+}
+
+@test "boards: an active latch reports every board UNKNOWN (latched) and calls nothing" {
+    export TEST_TMP
+    run_boards in_review "$TEST_TMP" "owner|17|clean" "owner|13|busy" \
+        -- "gh_budget_latch_active() { return 0; }; $STUB_IN_REVIEW"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"board owner/17 (clean): UNKNOWN (latched)"* ]]
+    [[ "$output" == *"board owner/13 (busy): UNKNOWN (latched)"* ]]
+    [ ! -e "$TEST_TMP/calls" ]
+}
+
+@test "boards: a latch that trips mid-round latches only the boards after it" {
+    export TEST_TMP
+    run_boards in_review "$TEST_TMP" "owner|17|clean" "owner|13|busy" \
+        -- "gh_budget_latch_active() { [ -e \"\$TEST_TMP/calls\" ]; }; $STUB_IN_REVIEW"
+    [[ "$output" == *"board owner/17 (clean): ok — nothing to change"* ]]
+    [[ "$output" == *"board owner/13 (busy): UNKNOWN (latched)"* ]]
+    [ "$(grep -c . "$TEST_TMP/calls")" -eq 1 ]
+}
+
+@test "boards: an empty or missing registry is UNKNOWN, never a clean sweep" {
+    run_boards in_review "$TEST_TMP"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"UNKNOWN: ROADMAP_BOARDS is empty"* ]]
+}
+
+@test "boards: a malformed registry entry is UNKNOWN and the next board is still swept" {
+    export TEST_TMP
+    run_boards in_review "$TEST_TMP" "owner|17|clean|" "owner|16|clean" -- "$STUB_IN_REVIEW"
+    [[ "$output" == *"malformed registry entry"* ]]
+    [[ "$output" == *"board owner/16 (clean): ok — nothing to change"* ]]
+}
+
+@test "boards: done runs against the board repo's own checkout, not the cwd's" {
+    export TEST_TMP
+    mkdir -p "$TEST_TMP/checkouts/repo" "$TEST_TMP/elsewhere"
+    git init -q "$TEST_TMP/checkouts/repo"
+    git -C "$TEST_TMP/checkouts/repo" remote add origin https://github.com/owner/repo.git
+    git init -q "$TEST_TMP/elsewhere"
+    git -C "$TEST_TMP/elsewhere" remote add origin git@github.com:owner/layouts-cvm.git
+    run_boards closed "$TEST_TMP/elsewhere" "owner|13|repo" -- 'reconcile_kanban_done() {
+        echo "$3" > "$TEST_TMP/done_cwd"; RECONCILE_DONE_REPORT=""; return 0; }'
+    [[ "$output" == *"board owner/13 (repo): ok — nothing to change"* ]]
+    [ "$(cat "$TEST_TMP/done_cwd")" = "$TEST_TMP/checkouts/repo" ]
+}
+
+@test "boards: stale uses the cwd itself when its origin names the board repo" {
+    export TEST_TMP
+    mkdir -p "$TEST_TMP/here"
+    git init -q "$TEST_TMP/here"
+    git -C "$TEST_TMP/here" remote add origin git@github.com:Owner/Repo.git
+    run_boards stale "$TEST_TMP/here" "owner|13|repo" -- 'reconcile_kanban_stale() {
+        echo "$3" > "$TEST_TMP/stale_cwd"
+        RECONCILE_STALE_REPORT="STALE issue #3: In progress, no commit for 9 days on fix/3-x (report only)"
+        return 0; }'
+    [[ "$output" == *"board owner/13 (repo): ok — nothing to change"* ]]
+    [[ "$output" == *"  STALE issue #3"* ]]
+    [ "$(cat "$TEST_TMP/stale_cwd")" = "$TEST_TMP/here" ]
+}
+
+@test "boards: done with no checkout of the board repo is UNKNOWN, the reconcile never runs" {
+    export TEST_TMP
+    mkdir -p "$TEST_TMP/elsewhere"
+    git init -q "$TEST_TMP/elsewhere"
+    git -C "$TEST_TMP/elsewhere" remote add origin git@github.com:owner/layouts-cvm.git
+    run_boards closed "$TEST_TMP/elsewhere" "owner|13|repo" -- 'reconcile_kanban_done() {
+        echo ran > "$TEST_TMP/done_ran"; RECONCILE_DONE_REPORT=""; return 0; }'
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"board owner/13 (repo): UNKNOWN — no local checkout of owner/repo"* ]]
+    [ ! -e "$TEST_TMP/done_ran" ]
+}
+
+@test "boards: kanban_boards_unknown names every declared board without touching one" {
+    export TEST_TMP
+    run bash -c "source '$LIB'; ROADMAP_BOARDS=(\"owner|17|a\" \"owner|13|b\"); \
+        $STUB_IN_REVIEW; kanban_boards_unknown 'latched — test'; printf '%s\n' \"\$KANBAN_BOARDS_REPORT\""
+    [[ "$output" == *"board owner/17 (a): UNKNOWN — latched — test"* ]]
+    [[ "$output" == *"board owner/13 (b): UNKNOWN — latched — test"* ]]
+    [ ! -e "$TEST_TMP/calls" ]
+}

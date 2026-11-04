@@ -429,3 +429,140 @@ reconcile_kanban() {
 	RECONCILE_KANBAN_REPORT="$(printf '%s\n' "$report" | sed '/^$/d')"
 	return 0
 }
+
+# dotfiles-linux-dev#887: the three reconciles act on ONE repo's board, and the sweep used to hand
+# them only the repo it was started in — so a board of another declared repo went stale for as long
+# as the loop ran elsewhere (measured 2026-11-03: board 13, 7 stale cards, loop in layouts-cvm).
+#
+# The board set is ROADMAP_BOARDS (lib/roadmap_unblock.sh), REUSED rather than mirrored by a second
+# list: a roadmap board and a "<repo> kanban" board are the same project for every repo the operator
+# tracks, so two lists would only add a way to disagree. The registry is not derived from the cwd.
+#
+# reconcile_kanban_boards KIND CWD     KIND = in_review | closed | stale
+#   Sets KANBAN_BOARDS_REPORT: one "board OWNER/N (repo): ..." line per declared board, ALWAYS,
+#   with that board's own lines indented beneath it. "ok — nothing to change", "ok — N moved" and
+#   "UNKNOWN — <why>" are the only verdicts, so a board swept clean never looks like one nobody
+#   swept. Returns 1 when any board (or the registry) is UNKNOWN.
+#
+#   Fail closed PER BOARD, like reconcile_roadmap_boards: one unreadable board never cancels the
+#   rest. An active GraphQL budget latch (#445/#875) is checked before EVERY board, so a round
+#   that latches midway reports the remaining boards "UNKNOWN (latched)" instead of spending the
+#   budget or skipping them silently.
+#
+#   `done` and `stale` read git branches and the dispatch-claim registry of a checkout, so they
+#   need the board repo's OWN checkout: CWD when its origin names that repo, else
+#   $KANBAN_CHECKOUT_ROOT/<repo> (default ~/github). Running them against the cwd of another repo
+#   would place a card on that repo's branches. No checkout is that board's UNKNOWN, not a guess.
+_KB_GIT=/usr/bin/git
+
+_kb_origin_slug() {
+	local url
+	url="$($_KB_GIT -C "$1" remote get-url origin 2>/dev/null)" || return 1
+	url="${url%/}"
+	url="${url%.git}"
+	printf '%s' "$url" | sed -nE 's#^([a-z+]+://)?([^@/]+@)?github\.com[:/]([^/:]+/[^/:]+)$#\3#p'
+}
+
+# _kb_checkout OWNER REPO CWD — prints the checkout path of OWNER/REPO, or returns 1.
+_kb_checkout() {
+	local owner="$1" repo="$2" dir slug
+	for dir in "$3" "${KANBAN_CHECKOUT_ROOT:-$HOME/github}/$repo"; do
+		[[ -d "$dir" ]] || continue
+		slug="$(_kb_origin_slug "$dir")" || continue
+		if [[ "${slug,,}" == "${owner,,}/${repo,,}" ]]; then
+			printf '%s\n' "$dir"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# _kb_run_kind KIND OWNER REPO CWD — runs one reconcile; leaves its report in _KB_REPORT.
+_kb_run_kind() {
+	local kind="$1" owner="$2" repo="$3" cwd="$4" dir rc=0
+	_KB_REPORT=""
+	case "$kind" in
+	in_review)
+		reconcile_kanban "$owner" "$repo" || rc=$?
+		_KB_REPORT="$RECONCILE_KANBAN_REPORT"
+		return "$rc"
+		;;
+	closed | stale)
+		if ! dir="$(_kb_checkout "$owner" "$repo" "$cwd")"; then
+			_KB_REPORT="no local checkout of $owner/$repo (cwd's origin differs; none under ${KANBAN_CHECKOUT_ROOT:-$HOME/github}/$repo)"
+			return 1
+		fi
+		if [[ "$kind" == "closed" ]]; then
+			reconcile_kanban_done "$owner" "$repo" "$dir" || rc=$?
+			_KB_REPORT="$RECONCILE_DONE_REPORT"
+		else
+			reconcile_kanban_stale "$owner" "$repo" "$dir" || rc=$?
+			_KB_REPORT="$RECONCILE_STALE_REPORT"
+		fi
+		return "$rc"
+		;;
+	esac
+	_KB_REPORT="unknown reconcile kind '$kind'"
+	return 1
+}
+
+# kanban_boards_unknown REASON — one UNKNOWN line per declared board, touching no board. The sweep
+# uses it when it stops before reconciling (budget gate), so the boards still show up in the report.
+kanban_boards_unknown() {
+	local entry owner project repo lines=""
+	KANBAN_BOARDS_REPORT=""
+	if ! declare -p ROADMAP_BOARDS >/dev/null 2>&1 || ((${#ROADMAP_BOARDS[@]} == 0)); then
+		KANBAN_BOARDS_REPORT="UNKNOWN: ROADMAP_BOARDS is empty or not loaded — no board was swept"
+		return 0
+	fi
+	for entry in "${ROADMAP_BOARDS[@]}"; do
+		IFS='|' read -r owner project repo <<<"$entry"
+		lines+="board $owner/$project ($repo): UNKNOWN — $1"$'\n'
+	done
+	# shellcheck disable=SC2034 # read by callers
+	KANBAN_BOARDS_REPORT="$(printf '%s' "$lines" | sed '/^$/d')"
+}
+
+reconcile_kanban_boards() {
+	local kind="$1" cwd="${2:-.}" lines="" status=0 entry owner project repo rc moved detail
+	local entry_shape='^[^|]+\|[0-9]+\|[^|]+$'
+	KANBAN_BOARDS_REPORT=""
+	if ! declare -p ROADMAP_BOARDS >/dev/null 2>&1 || ((${#ROADMAP_BOARDS[@]} == 0)); then
+		KANBAN_BOARDS_REPORT="UNKNOWN: ROADMAP_BOARDS is empty or not loaded — no board was swept"
+		return 1
+	fi
+	for entry in "${ROADMAP_BOARDS[@]}"; do
+		if [[ ! "$entry" =~ $entry_shape ]]; then
+			status=1
+			lines+="board ${entry:-<empty>}: UNKNOWN — malformed registry entry (want owner|project|repo)"$'\n'
+			continue
+		fi
+		IFS='|' read -r owner project repo <<<"$entry"
+		if command -v gh_budget_latch_active >/dev/null 2>&1 && gh_budget_latch_active; then
+			status=1
+			lines+="board $owner/$project ($repo): UNKNOWN (latched) — GitHub API budget latch active, board not swept"$'\n'
+			continue
+		fi
+		rc=0
+		_kb_run_kind "$kind" "$owner" "$repo" "$cwd" || rc=$?
+		if ((rc != 0)); then
+			status=1
+			lines+="board $owner/$project ($repo): UNKNOWN — $_KB_REPORT"$'\n'
+			continue
+		fi
+		moved="$(printf '%s\n' "$_KB_REPORT" | grep -c '^moved' || true)"
+		if ((moved > 0)); then
+			lines+="board $owner/$project ($repo): ok — $moved moved"$'\n'
+		elif printf '%s\n' "$_KB_REPORT" | grep -qE '^(FAILED|UNKNOWN)'; then
+			lines+="board $owner/$project ($repo): ok — nothing moved, items below need a look"$'\n'
+		else
+			lines+="board $owner/$project ($repo): ok — nothing to change"$'\n'
+		fi
+		while IFS= read -r detail; do
+			[[ -n "$detail" ]] && lines+="  $detail"$'\n'
+		done <<<"$_KB_REPORT"
+	done
+	# shellcheck disable=SC2034 # read by callers
+	KANBAN_BOARDS_REPORT="$(printf '%s' "$lines" | sed '/^$/d')"
+	return "$status"
+}
