@@ -359,7 +359,7 @@ def only_repo_segment_is_dynamic(path):
 
 
 GRAPHQL_ISSUE_MUTATION = re.compile(r"\b(createIssue|updateIssue)\s*\(")
-GRAPHQL_BODY = re.compile(r'\bbody\s*:\s*("(?:[^"\\]|\\.)*")')
+GRAPHQL_BODY = re.compile(r'\bbody\s*:\s*("""(?:[^"\\]|\\.|"(?!""))*"""|"(?:[^"\\]|\\.)*")')
 
 
 GRAPHQL_BODY_VAR = re.compile(r"\bbody\s*:\s*\$(\w+)")
@@ -407,11 +407,20 @@ def graphql_issue_write(fields, input_file):
         return None
     body = values.get("body")
     seg = query[muts[0].start():muts[1].start() if len(muts) > 1 else len(query)]
-    ref = GRAPHQL_BODY_VAR.search(seg)  # `body: $name`: the variable may be named anything
+    refs = GRAPHQL_BODY_VAR.findall(seg)  # `body: $name`: the variable may be named anything
     inp = GRAPHQL_INPUT_VAR.search(seg)  # `input: $name`: gh's `name[body]=` or a JSON value
     lits = GRAPHQL_BODY.findall(seg)
-    if ref:
-        body = values.get(ref.group(1), body)
+    if lits:  # the literal in the mutation itself is what GitHub stores: judge it first
+        lit = lits[0]
+        if lit.startswith('"""'):
+            body = lit[3:-3]
+        else:
+            try:
+                body = json.loads(lit)
+            except ValueError:
+                body = lit[1:-1]
+    elif refs:
+        body = values.get(refs[0], body)
     elif inp:
         name = inp.group(1)
         body = values.get(name + "[body]")
@@ -420,12 +429,7 @@ def graphql_issue_write(fields, input_file):
                 body = json.loads(values.get(name, "")).get("body")
             except (ValueError, AttributeError):
                 body = ""  # input object unresolved: fail closed, body unknown
-    elif lits and body is None:
-        try:
-            body = json.loads(lits[0])
-        except ValueError:
-            body = lits[0][1:-1]
-    if len(muts) > 1 or len(lits) > 1:
+    if len(muts) > 1 or len(lits) + len(refs) > 1:
         body = ""  # several mutations / decoy `body:` literals: ambiguous, fail closed
     creating = muts[0].group(1) == "createIssue" or len(muts) > 1
     has_body = body is not None or creating  # a create with no body IS an empty body

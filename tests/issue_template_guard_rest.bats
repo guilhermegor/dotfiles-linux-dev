@@ -581,3 +581,12 @@ EOF
     run bash -c "payload 'gh api graphql -f query=\"mutation{createIssue(input:{title:\\\"body: x\\\",body:\\\"nope\\\"}){a} createIssue(input:{body:\\\"nope2\\\"}){a}}\"' | '$GUARD'"
     [ "$status" -eq 2 ]
 }
+
+@test "GraphQL block-string body is parsed whole and a literal beats a compliant -f body (#906 review)" {
+    M="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/gh_cmd_match.py"
+    cmd='gh api graphql -f query='"'"'mutation{createIssue(input:{body: """hello"""}){a}}'"'"
+    run bash -c "printf '%s' \"\$1\" | python3 '$M' api-issue" _ "$cmd"
+    [[ "$output" == *'"body": "hello"'* ]]
+    run bash -c "payload 'gh api graphql -f query=\"mutation(\$body:String!){c: addComment(input:{body:\$body}){a} i: createIssue(input:{title:\\\"t\\\",body:\\\"nope\\\"}){a}}\" -f body=compliant' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
