@@ -654,19 +654,72 @@ assert p.RUNG_TIMEOUT == p.RUNG_TIMEOUT_DEFAULT_S >= 120, p.RUNG_TIMEOUT
     [[ "$(jq -r '.reason' <<<"$output")" == *"timed out after 1s"*"REVIEW_FANOUT_RUNG_TIMEOUT=1s"* ]]
 }
 
+# True once PID has exited. A killed orphan stays a zombie until its reaper runs, and `kill -0`
+# still succeeds on a zombie, so read the state and poll.
+process_gone() {
+    local state
+    [ -n "$1" ] || return 1
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        state="$(awk '{print $3}' "/proc/$1/stat" 2>/dev/null || true)"
+        if [ -z "$state" ] || [ "$state" = "Z" ]; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
 @test "a timed-out probe's grandchild is killed, not orphaned (#884)" {
     # The grandchild holds the probe's stdout and sleeps far past the budget (a hung codex/kimi).
     probe_rung 'sleep 60 & echo $! >"'"$TEST_TMP"'/gc.pid"; wait' 1
     [ "$(jq -r '.reason_key' <<<"$output")" = "timeout" ]
-    run kill -0 "$(cat "$TEST_TMP/gc.pid")"
-    [ "$status" -ne 0 ]
+    [ -s "$TEST_TMP/gc.pid" ]
+    process_gone "$(cat "$TEST_TMP/gc.pid")"
 }
 
 @test "a TERM-ignoring grandchild is SIGKILLed after the grace period (#884)" {
     probe_rung 'trap "" TERM; (trap "" TERM; sleep 60) & echo $! >"'"$TEST_TMP"'/gc.pid"; wait' 1
     [ "$(jq -r '.reason_key' <<<"$output")" = "timeout" ]
-    run kill -0 "$(cat "$TEST_TMP/gc.pid")"
-    [ "$status" -ne 0 ]
+    [ -s "$TEST_TMP/gc.pid" ]
+    process_gone "$(cat "$TEST_TMP/gc.pid")"
+}
+
+@test "a TERM-ignoring grandchild holding no pipe is still SIGKILLed (#897 review)" {
+    # The leader dies on SIGTERM and the pipes close, so communicate() returns at once.
+    probe_rung '(trap "" TERM; sleep 60) >/dev/null 2>&1 & echo $! >"'"$TEST_TMP"'/gc.pid"; wait' 1
+    [ "$(jq -r '.reason_key' <<<"$output")" = "timeout" ]
+    [ -s "$TEST_TMP/gc.pid" ]
+    process_gone "$(cat "$TEST_TMP/gc.pid")"
+}
+
+@test "a probe child wrapped in GNU timeout is killed despite leaving the group (#897 review)" {
+    # Real shape of the ladder's rungs: timeout calls setpgid, so killpg alone misses it.
+    probe_rung 'timeout 60 sleep 60 & echo $! >"'"$TEST_TMP"'/gc.pid"; wait' 1
+    [ "$(jq -r '.reason_key' <<<"$output")" = "timeout" ]
+    [ -s "$TEST_TMP/gc.pid" ]
+    process_gone "$(cat "$TEST_TMP/gc.pid")"
+}
+
+@test "a SIGTERMed planner takes its probe down with it (#897 review)" {
+    printf 'resolve_fallback_reviewer() {\nsleep 60 & echo $! >"%s/gc.pid"; wait\n}\n' \
+        "$TEST_TMP" >"$TEST_TMP/ladder_stub.sh"
+    unset REVIEW_FANOUT_RUNG
+    REVIEW_FANOUT_RUNG_TIMEOUT=30 python3 -c "
+import pathlib, sys
+sys.path.insert(0, '$(dirname "$PLANNER")')
+import review_fanout_plan as p
+p.REVIEWER_LADDER_SH = pathlib.Path('$TEST_TMP/ladder_stub.sh')
+p.resolve_rung()
+" &
+    local planner=$!
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        [ -s "$TEST_TMP/gc.pid" ] && break
+        sleep 0.1
+    done
+    [ -s "$TEST_TMP/gc.pid" ]
+    kill -TERM "$planner"
+    wait "$planner" || true
+    process_gone "$(cat "$TEST_TMP/gc.pid")"
 }
 
 @test "a probe that exits non-zero is unknown, naming the exit code and first stderr line (#873)" {
