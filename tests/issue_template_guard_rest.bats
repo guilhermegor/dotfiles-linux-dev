@@ -547,3 +547,37 @@ EOF
     run bash -c "payload 'gh api -X PUT repos/o/r/pulls/\$n/merge -f sha=abc' | '$GUARD'"
     [ "$status" -eq 0 ]
 }
+
+@test "GraphQL aliased, variable-body and multi-operation mutations are judged (#903)" {
+    run bash -c "payload 'gh api graphql -f query=\"mutation{a: createIssue(input:{repositoryId:\\\"x\\\",title:\\\"t\\\",body:\\\"nope\\\"}){issue{id}}}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation(\$b:String!){createIssue(input:{title:\\\"t\\\",body:\$b}){issue{id}}}\" -F b=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"query{viewer{login}} mutation{createIssue(input:{title:\\\"t\\\"}){issue{id}}}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"query{viewer{login}}\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL mutation hidden in a -F query=@file, -f 'input[body]=' or stdin is still judged (#906 review)" {
+    printf '%s' 'mutation{createIssue(input:{title:"t",body:"nope"}){issue{id}}}' > "$REPO/q.graphql"
+    run bash -c "payload 'gh api graphql -F query=@$REPO/q.graphql' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation(\$i:CreateIssueInput!){createIssue(input:\$i){issue{id}}}\" -f \"i[body]=nope\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'echo {} | gh api graphql --input -' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL endpoint spellings, input variable names and decoy bodies cannot dodge the guard (#906 review)" {
+    run bash -c "payload 'gh api /graphql -f query=\"mutation{createIssue(input:{title:\\\"t\\\",body:\\\"nope\\\"}){a}}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api GraphQL -f query=\"mutation{createIssue(input:{title:\\\"t\\\",body:\\\"nope\\\"}){a}}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation(\$x:CreateIssueInput!){createIssue(input:\$x){a}}\" -f \"x[body]=nope\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation(\$x:CreateIssueInput!){createIssue(input:\$x){a}}\" -F x=@-' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation{createIssue(input:{title:\\\"body: x\\\",body:\\\"nope\\\"}){a} createIssue(input:{body:\\\"nope2\\\"}){a}}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}

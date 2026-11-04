@@ -363,6 +363,7 @@ GRAPHQL_BODY = re.compile(r'\bbody\s*:\s*("(?:[^"\\]|\\.)*")')
 
 
 GRAPHQL_BODY_VAR = re.compile(r"\bbody\s*:\s*\$(\w+)")
+GRAPHQL_INPUT_VAR = re.compile(r"\binput\s*:\s*\$(\w+)")
 
 
 def graphql_issue_write(fields, input_file):
@@ -373,9 +374,18 @@ def graphql_issue_write(fields, input_file):
     `body=` variables field, a `variables.body`/`variables.input.body` member, or an inline
     `body: "..."` literal. Reads (no such mutation) return None and stay allowed.
     """
+    blind = {"matched": True, "repo": None, "head": None, "has_body": False, "body": None,
+             "has_body_file": True, "body_file": input_file or "-", "body_json": True,
+             "labels": [], "auto": False, "method": "POST"}
     query, values = "", {}
-    for _typed, field in fields:
+    for typed, field in fields:
         key, _, val = field.partition("=")
+        if typed and val.startswith("@"):  # -F key=@file: gh reads the value from the file
+            try:
+                with open(val[1:]) as fh:
+                    val = fh.read()
+            except OSError:
+                return blind  # unreadable / stdin: the value is unseen, judge blind
         if key == "query":
             query = val
         else:
@@ -388,26 +398,36 @@ def graphql_issue_write(fields, input_file):
             variables = data.get("variables") or {}
             values = {**values, **{k: v for k, v in variables.items() if isinstance(v, str)}}
             values["body"] = (variables.get("input") or {}).get("body", values.get("body"))
+            values.update({k + "[body]": v["body"] for k, v in variables.items()
+                           if isinstance(v, dict) and isinstance(v.get("body"), str)})
         except (OSError, ValueError, AttributeError):
-            # unreadable / stdin / not an object: the mutation is unseen, judge the file blind
-            return {"matched": True, "repo": None, "head": None, "has_body": False, "body": None,
-                    "has_body_file": True, "body_file": input_file, "body_json": True,
-                    "labels": [], "auto": False, "method": "POST"}
-    mut = GRAPHQL_ISSUE_MUTATION.search(query)
-    if not mut:
+            return blind  # unreadable / stdin / not an object: the mutation is unseen
+    muts = list(GRAPHQL_ISSUE_MUTATION.finditer(query))
+    if not muts:
         return None
     body = values.get("body")
-    ref = GRAPHQL_BODY_VAR.search(query)  # `body: $name`: the variable may be named anything
+    seg = query[muts[0].start():muts[1].start() if len(muts) > 1 else len(query)]
+    ref = GRAPHQL_BODY_VAR.search(seg)  # `body: $name`: the variable may be named anything
+    inp = GRAPHQL_INPUT_VAR.search(seg)  # `input: $name`: gh's `name[body]=` or a JSON value
+    lits = GRAPHQL_BODY.findall(seg)
     if ref:
         body = values.get(ref.group(1), body)
-    elif body is None:
-        lit = GRAPHQL_BODY.search(query)
-        if lit:
+    elif inp:
+        name = inp.group(1)
+        body = values.get(name + "[body]")
+        if body is None:
             try:
-                body = json.loads(lit.group(1))
-            except ValueError:
-                body = lit.group(1)[1:-1]
-    creating = mut.group(1) == "createIssue"
+                body = json.loads(values.get(name, "")).get("body")
+            except (ValueError, AttributeError):
+                body = ""  # input object unresolved: fail closed, body unknown
+    elif lits and body is None:
+        try:
+            body = json.loads(lits[0])
+        except ValueError:
+            body = lits[0][1:-1]
+    if len(muts) > 1 or len(lits) > 1:
+        body = ""  # several mutations / decoy `body:` literals: ambiguous, fail closed
+    creating = muts[0].group(1) == "createIssue" or len(muts) > 1
     has_body = body is not None or creating  # a create with no body IS an empty body
     return {"matched": True, "repo": None, "head": None, "has_body": has_body,
             "body": body if body is not None else ("" if creating else None),
@@ -476,7 +496,7 @@ def api_issue_match(segments):
                 i += 1
         path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0])
         path = path.rstrip("/")
-        if path == "graphql":
+        if path.strip("/").lower() in ("graphql", "api/graphql"):
             gql = graphql_issue_write(fields, input_file)
             if gql:
                 return gql
