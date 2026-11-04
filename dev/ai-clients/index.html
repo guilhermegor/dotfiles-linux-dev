@@ -517,6 +517,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#kanban-reconcile-reaches-every-declared-board-dotfiles-linux-dev887" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kanban reconcile reaches every declared board (dotfiles-linux-dev#887)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#stop-guard-budget-and-plan-cache-dotfiles-linux-dev814" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1342,6 +1353,17 @@
     <span class="md-ellipsis">
       
         Review fan-out: "needs a review?" is about the HEAD, not a count (dotfiles-linux-dev#480)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#kanban-reconcile-reaches-every-declared-board-dotfiles-linux-dev887" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kanban reconcile reaches every declared board (dotfiles-linux-dev#887)
       
     </span>
   </a>
@@ -2285,6 +2307,19 @@ author-checked, so a quoted attribution line could spoof them). Fail closed: no 
 red/running/ambiguous check, an empty rollup or any other merge state is not merge-ready.
 Checked before the rung, so they need no reviewer. The guard lists them but never blocks
 on them; <code>dev-loop</code> step 4c-fast is the procedure.</p>
+<h2 id="kanban-reconcile-reaches-every-declared-board-dotfiles-linux-dev887">Kanban reconcile reaches every declared board (dotfiles-linux-dev#887)<a class="headerlink" href="#kanban-reconcile-reaches-every-declared-board-dotfiles-linux-dev887" title="Permanent link">&para;</a></h2>
+<p><code>subagent_stop_sweep.sh</code> items <code>[7]</code>/<code>[9]</code>/<code>[11]</code> used to reconcile only the repo the sweep ran in,
+so board 13 sat stale for a day while the loop ran in layouts-cvm. They now call
+<code>reconcile_kanban_boards in_review|closed|stale CWD</code> (<code>hooks/lib/kanban_reconcile.sh</code>) over
+<code>ROADMAP_BOARDS</code> (<code>lib/roadmap_unblock.sh</code>), never a list derived from the cwd. <strong>The roadmap list
+is reused, not mirrored:</strong> a roadmap board and a repo's <code>&lt;repo&gt; kanban</code> board are the same project,
+and two lists could only disagree. Contract: one line per board, <code>ok — nothing to change</code>,
+<code>ok — N moved</code> or <code>UNKNOWN — &lt;why&gt;</code>; fail closed per board; the #445 latch is checked before every
+board and reports <code>UNKNOWN (latched)</code> (also on the sweep's early budget stop, via
+<code>kanban_boards_unknown</code>), never a silent skip. <code>closed</code> and <code>stale</code> read branches and the claim
+registry, so they run against the board repo's own checkout (cwd when its origin matches, else
+<code>$KANBAN_CHECKOUT_ROOT</code>/<code>~/github</code>/<code>&lt;repo&gt;</code>); no checkout is that board's UNKNOWN. A swept repo with no
+registry entry gets a <code>note:</code> line. Tests: <code>tests/kanban_reconcile.bats</code>, <code>tests/subagent_stop_sweep.bats</code>.</p>
 <h2 id="stop-guard-budget-and-plan-cache-dotfiles-linux-dev814">Stop-guard budget and plan cache (dotfiles-linux-dev#814)<a class="headerlink" href="#stop-guard-budget-and-plan-cache-dotfiles-linux-dev814" title="Permanent link">&para;</a></h2>
 <p><code>Stop</code> runs after every main-session turn, so the three Stop guards
 (<code>dispatch_free_surface_guard.sh</code>, <code>round_dispatch_guard.sh</code>, <code>review_fanout_guard.sh</code>) used to
