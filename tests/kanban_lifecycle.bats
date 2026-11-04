@@ -664,7 +664,7 @@ write_pr_json() {
     write_fake_gh "OPEN"
     write_pr_json "$TEST_TMP/pr.json" '{"head":"guilhermegor:fix/131-rest"}'
     run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/pr.json"
-    [[ "$output" == *"moved issue"* ]]
+    [[ "$output" == *"moved issue"*"131"* ]]
 }
 
 @test "gh api pulls --input moves nothing for a missing file, bad JSON, or no head" {
@@ -743,4 +743,30 @@ write_pr_json() {
     write_fake_gh "OPEN"
     run run_hook "$(printf 'echo "first line\ngit checkout -b feat/131-x\ngh pr create"')"
     [ -z "$output" ]
+}
+
+@test "a cd that does not carry to the verb (|| or |) moves nothing from the cd path" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "cd $TEST_TMP/wt || gh pr create --title x --body y"
+    [[ "$output" != *"131"* ]]
+    run run_hook "cd $TEST_TMP/wt | gh pr create --title x --body y"
+    [[ "$output" != *"131"* ]]
+}
+
+@test "pushd and builtin cd stop the scan rather than resolve the wrong card" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "pushd $TEST_TMP/wt && gh pr create --title x --body y"
+    [[ "$output" != *"131"* ]]
+    run run_hook "builtin cd $TEST_TMP/wt && gh pr create --title x --body y"
+    [[ "$output" != *"131"* ]]
+}
+
+@test "the first verb wins: checkout -b then pr create lands In progress" {
+    write_fake_gh "OPEN"
+    run run_hook "git checkout -b feat/131-x && gh pr create --title x --body y"
+    [[ "$output" == *"In progress"* ]]
 }

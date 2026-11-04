@@ -146,16 +146,28 @@ sys.path.insert(0, sys.argv[1])
 import gh_cmd_match as g
 
 try:
-    segments = g.split_segments(os.environ["KANBAN_CMD"])
-    path = ""
-    for segment in segments:
+    command = os.environ["KANBAN_CMD"]
+    path, out, pos, cd_end = "", [], 0, None
+    for segment in g.split_segments(command):
+        start = command.find(segment, pos)
+        pos = start + len(segment) if start >= 0 else pos
+        # A `cd` only carries to the next segment across `&&`, `;` or a newline: after `||` the
+        # verb runs when the cd failed, and each side of a `|` is its own subshell.
+        if cd_end is not None and start >= 0 and "|" in command[cd_end:start]:
+            break
+        cd_end = None
         argv = shlex.split(segment)
         if argv[:1] == ["cd"]:
             if len(argv) != 2 or argv[1].startswith("-") or re.search(r"[$`{}]", argv[1]):
                 break
             path = os.path.join(path, os.path.expanduser(argv[1]))
+            cd_end = pos
             continue
-        sys.stdout.write(f"{path}\x1f{segment}\0")
+        # Other ways to change directory cannot be followed, so stop rather than guess.
+        if argv[:1] and (argv[0] in ("pushd", "popd", "builtin") or argv[0][:1] in "({"):
+            break
+        out.append(f"{path}\x1f{segment}\0")
+    sys.stdout.write("".join(out))  # only once every segment parsed, so the fallback never mixes
 except ValueError:
     sys.exit(1)
 PY
