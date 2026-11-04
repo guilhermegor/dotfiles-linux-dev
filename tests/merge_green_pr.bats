@@ -40,6 +40,11 @@ fi
 if [[ "$args" == *"/protection"* ]]; then
     [ -n "${PROT_FAIL:-}" ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }
     [ -n "${PROT_404:-}" ] && { echo "gh: Branch not protected (HTTP 404)" >&2; exit 1; }
+    if [ -n "${PROT_JSON:-}" ]; then
+        # Run the script's own --jq filter for real, so a broken filter fails here (#898).
+        prev=""; for a in "$@"; do [ "$prev" = --jq ] && f="$a"; prev="$a"; done
+        printf '%s' "$PROT_JSON" | jq -r "$f"; exit
+    fi
     printf 'build\t%s\n' "${PROT_APP:--1}"; exit 0
 fi
 if [[ "$args" == *"/rules/branches/"* ]]; then
@@ -177,6 +182,20 @@ refute_log() {
     APP_ID=424242 PROT_APP=-1 RULE_CTX=$'build\t-1' run bash "$SCRIPT" 7
     [ "$status" -eq 0 ]
     [[ "$output" == *"#7 MERGED"* ]]
+}
+
+@test "protection listing contexts AND checks (GitHub's real shape) parses (#898)" {
+    PROT_JSON='{"required_status_checks":{"contexts":["build","Review threads answered"],"checks":[{"context":"build","app_id":15368},{"context":"Review threads answered","app_id":null}]}}' \
+        run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
+}
+
+@test "real protection filter still pins app_id from checks[] (#898)" {
+    APP_ID=424242 PROT_JSON='{"required_status_checks":{"contexts":["build"],"checks":[{"context":"build","app_id":15368}]}}' \
+        run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
 }
 
 @test "refuses a missing required check" {
