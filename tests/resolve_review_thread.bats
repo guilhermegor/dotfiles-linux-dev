@@ -43,20 +43,23 @@ STUB
     READ="false 1" run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 1 ]
     [[ "$output" == *"no reply"* ]]
-    ! grep -q resolveReviewThread "$GH_LOG"
+    run grep -q resolveReviewThread "$GH_LOG"
+    [ "$status" -ne 0 ]
 }
 
 @test "an already-resolved thread is skipped" {
     READ="true 3" run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 0 ]
-    ! grep -q resolveReviewThread "$GH_LOG"
+    run grep -q resolveReviewThread "$GH_LOG"
+    [ "$status" -ne 0 ]
 }
 
 @test "a failed read fails closed" {
     READ_FAIL=1 run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 1 ]
     [[ "$output" == *"UNKNOWN"* ]]
-    ! grep -q resolveReviewThread "$GH_LOG"
+    run grep -q resolveReviewThread "$GH_LOG"
+    [ "$status" -ne 0 ]
 }
 
 @test "a mutation that does not report resolved is a failure" {
