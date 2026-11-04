@@ -40,7 +40,7 @@ fi
 if [[ "$args" == *"/protection"* ]]; then
     [ -n "${PROT_FAIL:-}" ] && { echo "gh: Forbidden (HTTP 403)" >&2; exit 1; }
     [ -n "${PROT_404:-}" ] && { echo "gh: Branch not protected (HTTP 404)" >&2; exit 1; }
-    echo "build"; exit 0
+    printf 'build\t%s\n' "${PROT_APP:--1}"; exit 0
 fi
 if [[ "$args" == *"/rules/branches/"* ]]; then
     [ -n "${RULE_CTX:-}" ] && echo "$RULE_CTX"
@@ -50,8 +50,8 @@ if [[ "$args" == *"/check-runs"* ]]; then
     n="${args#*commits/sha}"; n="${n%%/*}"
     c="CHECK_$n"; c="${!c:-success}"
     [ "$c" = missing ] && exit 0
-    printf 'build\t%s\t::check::\n' "$c"
-    printf 'Review threads answered\t%s\t::check::\n' "$c"
+    printf 'build\t%s\t::check::\t%s\n' "$c" "${APP_ID:-15368}"
+    printf 'Review threads answered\t%s\t::check::\t%s\n' "$c" "${APP_ID:-15368}"
     exit 0
 fi
 if [[ "$args" == *"/status"* ]]; then
@@ -145,6 +145,38 @@ refute_log() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"ci/missing"* ]]
     refute_log "PUT"
+}
+
+@test "a required check pinned to an app is refused when the check-run is from another app" {
+    PROT_APP=999 run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"[build]"* ]]
+    refute_log "PUT"
+}
+
+@test "a required check pinned to an app passes when the check-run is from that app" {
+    PROT_APP=15368 run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
+}
+
+@test "a ruleset integration_id is compared too" {
+    RULE_CTX=$'ci/extra\t999' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"ci/extra"* ]]
+    refute_log "PUT"
+}
+
+@test "a commit status never satisfies an app-pinned requirement" {
+    STATUS_7=$'ci/extra\tsuccess\tci-bot\t-' RULE_CTX=$'ci/extra\t15368' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "an unpinned required check (-1 or no app_id) matches by name from any app" {
+    APP_ID=424242 PROT_APP=-1 RULE_CTX=$'build\t-1' run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
 }
 
 @test "refuses a missing required check" {
