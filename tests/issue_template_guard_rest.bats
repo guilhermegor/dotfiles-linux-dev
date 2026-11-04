@@ -419,6 +419,95 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+@test "REST: PR review-comment writes are not issue writes, whatever the body says (#874)" {
+    run bash -c "payload 'gh api repos/o/r/pulls/52/comments/123/replies -f body=\"see the open writer issues\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api repos/o/r/pulls/52/comments -f body=\"issues\" -f path=a -f commit_id=b' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api -X PATCH repos/o/r/pulls/comments/123 -f body=\"fixes issues\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api repos/o/r/pulls/52/reviews -f body=issues -f event=COMMENT' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: an --input file mentioning issues does not make a PR reply an issue write (#874)" {
+    echo '{"body": "see the issues"}' > "$REPO/issues-reply.json"
+    run bash -c "payload 'gh api repos/o/r/pulls/52/comments/123/replies --input $REPO/issues-reply.json' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: a repo whose name contains 'issues' still lets PR replies through (#874)" {
+    run bash -c "payload 'gh api repos/o/my-issues/pulls/52/comments/123/replies -f body=x' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: issue writes stay blocked with value flags before the endpoint (#874)" {
+    run bash -c "payload 'gh api -X POST repos/o/r/issues -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api --hostname h.example.com repos/o/r/issues -X POST' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api --method=POST repos/o/r/issues' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api -XPOST -H \"Accept: x\" -- repos/o/r/issues' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: every value flag before the endpoint still leaves the issue write blocked (#874)" {
+    for flags in "--cache 1h" "-p x" "--preview x" "-q .id" "--jq .id" "-t y" "--template y" "-H Accept:x" "-q .id --cache 1h -t y"; do
+        run bash -c "payload 'gh api $flags repos/o/r/issues -X POST -f title=x' | '$GUARD'"
+        [ "$status" -eq 2 ]
+    done
+}
+
+@test "REST: an unrecognised flag before the endpoint fails closed (#874)" {
+    run bash -c "payload 'gh api --foo v repos/o/r/issues -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api -X POST -- v repos/o/r/issues -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api --foo v repos/o/r/pulls/52/comments/1/replies -f body=issues' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: shell-built endpoints carrying issues inside a segment stay blocked (#874)" {
+    run bash -c "payload 'gh api repos/o/r/issues\$N -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api \"repos/o/r/\$(echo issues)\" -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: a query string or fragment on the issues endpoint does not hide the write (#874)" {
+    run bash -c "payload 'gh api repos/o/r/issues?a=b -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api repos/o/r/issues#frag -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: graphql queries mentioning issues are not issue writes (#874)" {
+    run bash -c "payload 'gh api graphql -f query=\"{ repository { issues { totalCount } } }\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: a shell-built stray positional behind an unknown flag stays blocked (#874)" {
+    run bash -c "payload 'gh api --foo v repos/o/r/issues\$N -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api --foo v \"repos/o/r/\$(echo issues)\" -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: a loop of PR review-comment replies is not an issue write (#874, #895)" {
+    run bash -c "payload 'for n in 1 2; do gh api repos/o/r/pulls/52/comments/\$n/replies -f body=\"see the writer issues\"; done' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: real issue writes stay blocked after the path-only mention test (#874)" {
+    run bash -c "payload 'gh api repos/o/r/issues -X POST -f title=x -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api repos/o/r/issues/5 -X PATCH -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api repos/\$R/issues -X POST -f body=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
 @test "coproc and a variable resource segment still block issue writes (#880 review)" {
     run bash -c "payload 'coproc gh issue create --title x --body nope' | '$GUARD'"
     [ "$status" -eq 2 ]

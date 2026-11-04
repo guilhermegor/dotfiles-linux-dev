@@ -820,8 +820,72 @@ STUB
     [[ "$output" == *"sweep_roadmap_boards"* ]]
 }
 
+# --- dotfiles-linux-dev#887: items [7]/[9]/[11] reconcile every declared board ----------------------
+
+@test "sweep_kanban_boards: sweeps every declared board and says nothing extra for a declared repo" {
+    export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
+    reconcile_kanban() {
+        RECONCILE_KANBAN_REPORT=""
+        [ "$2" != "broken" ] || { RECONCILE_KANBAN_REPORT="UNKNOWN: no board"; return 1; }
+    }
+    ROADMAP_BOARDS=("o|13|here" "o|9|elsewhere" "o|8|broken")
+    run sweep_kanban_boards in_review "$REPO" "o/here"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"board o/13 (here): ok — nothing to change"* ]]
+    [[ "$output" == *"board o/9 (elsewhere): ok — nothing to change"* ]]
+    [[ "$output" == *"board o/8 (broken): UNKNOWN"* ]]
+    [[ "$output" != *"note:"* ]]
+}
+
+@test "sweep_kanban_boards: a repo missing from the registry is named, not swept out of existence" {
+    export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
+    reconcile_kanban() { RECONCILE_KANBAN_REPORT=""; }
+    ROADMAP_BOARDS=("o|13|declared")
+    run sweep_kanban_boards in_review "$REPO" "o/undeclared"
+    [[ "$output" == *"board o/13 (declared): ok — nothing to change"* ]]
+    [[ "$output" == *"note: o/undeclared has no ROADMAP_BOARDS entry"* ]]
+}
+
+@test "sweep_kanban_boards: an active latch reports every board UNKNOWN (latched), no gh call" {
+    export GH_BUDGET_LATCH_FILE="$REPO/latch"
+    printf '%s\n' "$(($(date +%s) + 600))" > "$GH_BUDGET_LATCH_FILE"
+    stub_gh_present_only
+    ROADMAP_BOARDS=("o|13|a" "o|9|b")
+    run sweep_kanban_boards closed "$REPO" "o/a"
+    [[ "$output" == *"board o/13 (a): UNKNOWN (latched)"* ]]
+    [[ "$output" == *"board o/9 (b): UNKNOWN (latched)"* ]]
+}
+
+@test "main(): a budget stop still names every declared board as UNKNOWN, not silence" {
+    export GH_BUDGET_LATCH_FILE="$REPO/latch"
+    printf '%s\n' "$(($(date +%s) + 600))" > "$GH_BUDGET_LATCH_FILE"
+    git remote set-url origin https://github.com/o/r.git
+    stub_gh_present_only
+    run bash "$SWEEP_SRC" <<<"{\"cwd\":\"$REPO\"}"
+    [ "$status" -eq 1 ]
+    ctx="$(jq -r '.hookSpecificOutput.additionalContext' <<<"$output")"
+    boards="$(bash -c "source '$REPO/lib/roadmap_unblock.sh'; printf '%s\n' \"\${ROADMAP_BOARDS[@]}\"" | wc -l)"
+    [ "$boards" -gt 0 ]
+    [ "$(grep -c '^board .*: UNKNOWN — latched' <<<"$ctx")" -eq "$boards" ]
+}
+
+@test "main() wires items [7], [9], [11] through sweep_kanban_boards, not a single-repo reconcile" {
+    run grep -cE '^\s+sweep_kanban_boards (in_review|closed|stale) "\$cwd" "\$repo"' "$SWEEP_SRC"
+    [ "$output" = "3" ]
+    run grep -nE 'if reconcile_kanban(_done|_stale)? ' "$SWEEP_SRC"
+    [ "$status" -ne 0 ]
+}
+
 # kanban_reconcile_done.sh's _krd_claimed_issue is silently false when dispatch_claimed_issues is
 # undefined, so a claimed No-Status issue reads as Ready. Unsourced, nothing else would notice.
 @test "sweep sources the dispatch claims registry kanban_reconcile_done depends on" {
     declare -F dispatch_claimed_issues >/dev/null
+}
+
+@test "sweep_kanban_boards: a same-named repo under another owner is still undeclared" {
+    export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
+    reconcile_kanban() { RECONCILE_KANBAN_REPORT=""; }
+    ROADMAP_BOARDS=("o|13|greenfield")
+    run sweep_kanban_boards in_review "$REPO" "other/greenfield"
+    [[ "$output" == *"note: other/greenfield has no ROADMAP_BOARDS entry"* ]]
 }

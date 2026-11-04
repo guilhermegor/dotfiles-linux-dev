@@ -110,14 +110,15 @@ into a guess just because the read moved to a different endpoint.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import functools
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from gh_latch import refuse_if_latched
@@ -477,6 +478,71 @@ def _rung_unknown(key: str, reason: str) -> dict:
 	return {"status": "unknown", "runtime": "", "model": "", "signal": "", "reason": one_line, "reason_key": key}
 
 
+KILL_GRACE_S = 2
+
+
+def _signal_session(session_id: int, sig: signal.Signals) -> None:
+	"""Send ``sig`` to every process of a session, not just one process group.
+
+	The ladder wraps each CLI in GNU ``timeout``, which calls ``setpgid`` and leaves the probe's
+	group, so ``killpg`` alone never reaches ``codex``/``kimi``/``qwen`` (#897 review, measured).
+	``pkill -s`` follows the session, which ``timeout`` keeps. ``killpg`` stays for the leader: a
+	host with no ``pkill`` must still lose it, or ``Popen.__exit__`` would wait on it forever.
+	"""
+	with contextlib.suppress(ProcessLookupError):
+		os.killpg(session_id, sig)
+	with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+		subprocess.run(  # noqa: S603, S607 - fixed argv, integers only
+			["pkill", f"-{int(sig)}", "-s", str(session_id)],
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+			timeout=KILL_GRACE_S,
+			check=False,
+		)
+
+
+def _kill_session(proc: subprocess.Popen) -> None:
+	"""SIGTERM the probe's session, then always SIGKILL it.
+
+	SIGKILL is never skipped: ``communicate()`` returning only proves the pipes closed, and a
+	TERM-ignoring grandchild with redirected output holds no pipe.
+	"""
+	for sig in (signal.SIGTERM, signal.SIGKILL):
+		_signal_session(proc.pid, sig)
+		with contextlib.suppress(subprocess.TimeoutExpired):
+			proc.communicate(timeout=KILL_GRACE_S)
+
+
+def _exit_on_sigterm(signum: int, _frame: object) -> None:
+	"""Turn SIGTERM into ``SystemExit``: the default action skips all cleanup."""
+	sys.exit(128 + signum)
+
+
+def _run_in_own_session(cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
+	"""Run ``cmd`` in its own session; on any way out but success, kill that whole session.
+
+	``subprocess.run(timeout=)`` kills only the direct child. The ladder's ``codex``/``kimi``/
+	``qwen`` grandchildren survive it, orphaned and still holding the pipes and making live
+	model calls (dotfiles-linux-dev#884). A new session also stops a terminal's SIGINT or an
+	outer group kill from reaching the probe, so an interrupted planner must kill it too.
+	A SIGKILLed planner still orphans the probe; the ladder's own ``timeout`` bounds that.
+	"""
+	signal.signal(signal.SIGTERM, _exit_on_sigterm)
+	with subprocess.Popen(  # noqa: S603 - fixed argv, script is a module constant
+		cmd,
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+		text=True,
+		start_new_session=True,
+	) as proc:
+		try:
+			out, err = proc.communicate(timeout=timeout)
+		except BaseException:
+			_kill_session(proc)
+			raise
+		return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 def resolve_rung() -> dict:
 	"""Return the reviewer rung #479's probe resolves, as ``{"status", "runtime", …}``.
 
@@ -507,19 +573,15 @@ def resolve_rung() -> dict:
 
 	if not REVIEWER_LADDER_SH.is_file():
 		return _rung_unknown("no-ladder", f"reviewer ladder not found at {REVIEWER_LADDER_SH}")
-	started = time.monotonic()
 	try:
-		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
-			["bash", "-c", _RUNG_SCRIPT, "review_fanout_plan", str(REVIEWER_LADDER_SH)],
-			capture_output=True,
-			text=True,
-			timeout=RUNG_TIMEOUT,
-			check=False,
+		proc = _run_in_own_session(
+			["bash", "-c", _RUNG_SCRIPT, "review_fanout_plan", str(REVIEWER_LADDER_SH)], RUNG_TIMEOUT
 		)
-	except subprocess.TimeoutExpired:
+	except subprocess.TimeoutExpired as exc:
+		# exc.timeout, not a clock read here: killing the session takes seconds under load.
 		return _rung_unknown(
 			"timeout",
-			f"probe timed out after {time.monotonic() - started:.0f}s "
+			f"probe timed out after {exc.timeout:.0f}s "
 			f"(REVIEW_FANOUT_RUNG_TIMEOUT={RUNG_TIMEOUT}s)",
 		)
 	except OSError as exc:

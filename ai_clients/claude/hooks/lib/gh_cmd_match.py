@@ -379,11 +379,16 @@ def api_issue_match(segments):
             continue
         rest = argv[sub + 1:]
         endpoint, method, fields, input_file = None, None, [], None
+        stray = []  # 2nd+ positionals: gh takes one, so these are a flag value we misparsed
         i = 0
         while i < len(rest):
             tok = rest[i]
             if tok == "--":  # end of options: the rest are positionals
-                endpoint = endpoint or (rest[i + 1] if i + 1 < len(rest) else None)
+                tail = rest[i + 1:]
+                if endpoint:
+                    stray += tail
+                else:
+                    endpoint, stray = (tail[0] if tail else None), stray + tail[1:]
                 break
             name, _, inline = tok.partition("=") if tok.startswith("--") else (tok, "", "")
             if tok.startswith("-") and tok[1:2] != "-" and len(tok) > 2 and tok[:2] in API_VALUE_FLAGS:
@@ -408,15 +413,28 @@ def api_issue_match(segments):
             elif tok.startswith("-"):
                 i += 1
             else:
+                if endpoint:
+                    stray.append(tok)
                 endpoint = endpoint or tok
                 i += 1
-        path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", (endpoint or "").split("?", 1)[0])
+        path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0])
         path = path.rstrip("/")
-        dynamic = "$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
+        dynamic = ("$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
+                   or any("$" in t or "`" in t for t in stray))  # stray may be the real endpoint
         if dynamic and endpoint and only_repo_segment_is_dynamic(path):
             dynamic = False  # judged by its literal resource, like the unparameterised twin
         m = API_ISSUE_ENDPOINT.match(path)
-        mentions = any("issues" in t for t in rest)
+        # Endpoint path only: a `-f body=...issues...` value or an --input file never decides
+        # (dotfiles-linux-dev#874). PR review-comment endpoints (pulls/N/comments[/ID/replies],
+        # pulls/comments/ID, pulls/N/reviews) carry no `issues` segment, so they fall through.
+        # Whole path segment, so a repo named `my-issues` does not turn its PR replies into issue
+        # writes. The decision rests on `endpoint` above: a value flag missing from
+        # API_VALUE_FLAGS/API_OTHER_VALUE_FLAGS lets its value be mistaken for the endpoint, so a
+        # new `gh api` flag that takes a value must be added there.
+        # A stray positional with an `issues` segment is the same hazard from the other side: the
+        # parser took a flag value for the endpoint, so the real one is left over here.
+        mentions = any("issues" in re.split(r"[?#]", p, maxsplit=1)[0].split("/")
+                       for p in (path, *stray))
         # Understood as NOT an issue write only when the endpoint is a literal that either does
         # not mention `issues` at all or is a known issue sub-resource (comments, labels, ...).
         # Anything else that mentions `issues` is judged as a write (unknown never means allowed).
