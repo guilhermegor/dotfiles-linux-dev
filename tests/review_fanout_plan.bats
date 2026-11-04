@@ -658,13 +658,15 @@ assert p.RUNG_TIMEOUT == p.RUNG_TIMEOUT_DEFAULT_S >= 120, p.RUNG_TIMEOUT
     # The grandchild holds the probe's stdout and sleeps far past the budget (a hung codex/kimi).
     probe_rung 'sleep 60 & echo $! >"'"$TEST_TMP"'/gc.pid"; wait' 1
     [ "$(jq -r '.reason_key' <<<"$output")" = "timeout" ]
-    ! kill -0 "$(cat "$TEST_TMP/gc.pid")" 2>/dev/null
+    run kill -0 "$(cat "$TEST_TMP/gc.pid")"
+    [ "$status" -ne 0 ]
 }
 
 @test "a TERM-ignoring grandchild is SIGKILLed after the grace period (#884)" {
     probe_rung 'trap "" TERM; (trap "" TERM; sleep 60) & echo $! >"'"$TEST_TMP"'/gc.pid"; wait' 1
     [ "$(jq -r '.reason_key' <<<"$output")" = "timeout" ]
-    ! kill -0 "$(cat "$TEST_TMP/gc.pid")" 2>/dev/null
+    run kill -0 "$(cat "$TEST_TMP/gc.pid")"
+    [ "$status" -ne 0 ]
 }
 
 @test "a probe that exits non-zero is unknown, naming the exit code and first stderr line (#873)" {
