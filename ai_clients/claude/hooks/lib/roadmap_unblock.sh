@@ -434,7 +434,9 @@ reconcile_roadmap_unblock() {
 #
 # A board is absent BY DECLARATION, never by omission: stpstone (project 2) is excluded because
 # its repo is no longer maintained. To add a board, add a row; to drop one, delete the row and say
-# why here. `repo` is the board's own repo, used only to label its report line.
+# why here. `repo` is the board's own repo: it labels the report line and, for
+# reconcile_kanban_boards (lib/kanban_reconcile.sh, #887), names the "<repo> kanban" board. The
+# kanban reconcile sweeps this same list; do not add a second one.
 # shellcheck disable=SC2034 # read by reconcile_roadmap_boards below and by its callers' tests
 ROADMAP_BOARDS=(
 	"guilhermegor|17|greenfield"

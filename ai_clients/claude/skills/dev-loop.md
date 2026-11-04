@@ -254,6 +254,18 @@ nothing, UNKNOWN). The reconcile runs both ways (dotfiles-linux-dev#812): beyond
 prototype and grilling cards wait there on purpose). A board that reconciled clean and a board nobody swept must never look the same. Add or
 drop a board by editing `ROADMAP_BOARDS`, not this prose.
 
+**The kanban reconcile covers the same boards (dotfiles-linux-dev#887).** The sweep's items `[7]`
+(open PR -> In review), `[9]` (closed -> Done, No Status -> placed) and `[11]` (closed-unmerged PR ->
+Ready, idle In progress) run over every `ROADMAP_BOARDS` entry, never only the repo the loop was
+started in (board 13 once went stale for a whole day while the loop ran in another repo). The list is
+reused rather than mirrored: a roadmap board and a repo's kanban board are the same project. Each
+board gets one line per item: `ok — nothing to change`, `ok — N moved`, or `UNKNOWN — <why>`; an
+active GraphQL latch (#445) reports every board `UNKNOWN (latched)`, also on the sweep's early
+budget stop. `[9]`/`[11]` read git branches, so they use the board repo's own checkout (the cwd when
+its origin matches, else `~/github/<repo>`); none found is that board's UNKNOWN. A swept repo with
+no `ROADMAP_BOARDS` entry gets a `note:` line. Standalone:
+`reconcile_kanban_boards in_review|closed|stale "$PWD"`, report in `$KANBAN_BOARDS_REPORT`.
+
 Every determinate line also carries a `[blocker-kind: internal|external|decision]` tag
 (dotfiles-linux-dev#528) — `internal` (same repo as the item), `external` (a different repo, which can
 only ever be recorded as prose, never GitHub's native relationship), or `decision` (never

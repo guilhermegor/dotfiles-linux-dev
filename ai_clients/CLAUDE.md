@@ -557,6 +557,21 @@ red/running/ambiguous check, an empty rollup or any other merge state is not mer
 Checked before the rung, so they need no reviewer. The guard lists them but never blocks
 on them; `dev-loop` step 4c-fast is the procedure.
 
+## Kanban reconcile reaches every declared board (dotfiles-linux-dev#887)
+
+`subagent_stop_sweep.sh` items `[7]`/`[9]`/`[11]` used to reconcile only the repo the sweep ran in,
+so board 13 sat stale for a day while the loop ran in layouts-cvm. They now call
+`reconcile_kanban_boards in_review|closed|stale CWD` (`hooks/lib/kanban_reconcile.sh`) over
+`ROADMAP_BOARDS` (`lib/roadmap_unblock.sh`), never a list derived from the cwd. **The roadmap list
+is reused, not mirrored:** a roadmap board and a repo's `<repo> kanban` board are the same project,
+and two lists could only disagree. Contract: one line per board, `ok — nothing to change`,
+`ok — N moved` or `UNKNOWN — <why>`; fail closed per board; the #445 latch is checked before every
+board and reports `UNKNOWN (latched)` (also on the sweep's early budget stop, via
+`kanban_boards_unknown`), never a silent skip. `closed` and `stale` read branches and the claim
+registry, so they run against the board repo's own checkout (cwd when its origin matches, else
+`$KANBAN_CHECKOUT_ROOT`/`~/github`/`<repo>`); no checkout is that board's UNKNOWN. A swept repo with no
+registry entry gets a `note:` line. Tests: `tests/kanban_reconcile.bats`, `tests/subagent_stop_sweep.bats`.
+
 ## Stop-guard budget and plan cache (dotfiles-linux-dev#814)
 
 `Stop` runs after every main-session turn, so the three Stop guards
