@@ -533,6 +533,20 @@ sweep_roadmap_boards() {
 	fi
 }
 
+# sweep_kanban_boards KIND CWD REPO
+# Prints reconcile_kanban_boards' per-board report for KIND (in_review|closed|stale): every declared
+# board, never only the repo the sweep runs in (dotfiles-linux-dev#887). A repo absent from the
+# registry is named, not swept silently out of existence.
+sweep_kanban_boards() {
+	local kind="$1" cwd="$2" repo="$3" entry
+	reconcile_kanban_boards "$kind" "$cwd" || true
+	printf '%s\n' "$KANBAN_BOARDS_REPORT"
+	for entry in "${ROADMAP_BOARDS[@]}"; do
+		[[ "${entry%%|*}/${entry##*|}" == "$repo" ]] && return 0
+	done
+	echo "note: $repo has no ROADMAP_BOARDS entry — its kanban board was not swept"
+}
+
 # sweep_issue_hygiene REPO — report-only backstop for issue_template_guard.sh (#714): open issues
 # with no ```surface block or no milestone, whatever route created them (a hook cannot see every
 # spelling of a REST write). Read over REST; an unreadable list is UNKNOWN, never "all clean".
@@ -581,8 +595,13 @@ dispatch: free surface empty"
 	$GIT -C "$cwd" fetch origin --quiet 2>/dev/null || true
 
 	if ! gh_budget_gate "$repo"; then
+		# The boards are still named, each UNKNOWN: a sweep that stopped must not read like one
+		# that found every declared board clean (dotfiles-linux-dev#887).
+		kanban_boards_unknown "latched — $BUDGET_GATE_REASON, board not swept"
 		emit "── sweep $(date -u '+%H:%M UTC') — $repo ──
 $BUDGET_GATE_REASON (dotfiles-linux-dev#445) — skipping this sweep, no further gh calls.
+kanban boards (declared: ROADMAP_BOARDS), none swept:
+$KANBAN_BOARDS_REPORT
 dispatch: UNKNOWN — $BUDGET_GATE_REASON"
 		exit 1
 	fi
@@ -602,36 +621,16 @@ dispatch: UNKNOWN — $BUDGET_GATE_REASON"
 		echo "[6] PR-unclaimed issues (narrower than dispatch_plan.py — see its own [d]/[x])"
 		free="$(free_dispatch_surface "$repo")"
 		format_free_surface_report "$free"
-		echo "[7] kanban reconcile (open PRs -> In review)"
-		if reconcile_kanban "$owner" "$name"; then
-			if [ -n "$RECONCILE_KANBAN_REPORT" ]; then
-				printf '%s\n' "$RECONCILE_KANBAN_REPORT"
-			else
-				echo "no kanban cards changed"
-			fi
-		else
-			echo "kanban reconcile: UNKNOWN — $RECONCILE_KANBAN_REPORT"
-		fi
+		echo "[7] kanban reconcile, every declared board (open PRs -> In review)"
+		sweep_kanban_boards in_review "$cwd" "$repo"
 		echo "[8] roadmap boards (declared registry: ROADMAP_BOARDS in lib/roadmap_unblock.sh)"
 		sweep_roadmap_boards
-		echo "[9] kanban reconcile (closed issues -> Done, No Status -> placed)"
-		if reconcile_kanban_done "$owner" "$name" "$cwd"; then
-			if [ -n "$RECONCILE_DONE_REPORT" ]; then
-				printf '%s\n' "$RECONCILE_DONE_REPORT"
-			else
-				echo "no kanban cards changed"
-			fi
-		else
-			echo "kanban reconcile (Done/No Status): UNKNOWN — $RECONCILE_DONE_REPORT"
-		fi
+		echo "[9] kanban reconcile, every declared board (closed issues -> Done, No Status -> placed)"
+		sweep_kanban_boards closed "$cwd" "$repo"
 		echo "[10] issue hygiene (surface block + milestone, report only)"
 		sweep_issue_hygiene "$repo"
-		echo "[11] kanban reconcile (closed-unmerged PR -> Ready; idle In progress, report only)"
-		if reconcile_kanban_stale "$owner" "$name" "$cwd"; then
-			printf '%s\n' "$RECONCILE_STALE_REPORT"
-		else
-			echo "kanban reconcile (stale): UNKNOWN — $RECONCILE_STALE_REPORT"
-		fi
+		echo "[11] kanban reconcile, every declared board (closed-unmerged PR -> Ready; idle In progress, report only)"
+		sweep_kanban_boards stale "$cwd" "$repo"
 	)"
 
 	emit "$report"
