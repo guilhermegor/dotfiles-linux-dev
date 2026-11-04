@@ -487,6 +487,18 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+@test "REST: a shell-built stray positional behind an unknown flag stays blocked (#874)" {
+    run bash -c "payload 'gh api --foo v repos/o/r/issues\$N -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api --foo v \"repos/o/r/\$(echo issues)\" -X POST -f title=x' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: a loop of PR review-comment replies is not an issue write (#874, #895)" {
+    run bash -c "payload 'for n in 1 2; do gh api repos/o/r/pulls/52/comments/\$n/replies -f body=\"see the writer issues\"; done' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
 @test "REST: real issue writes stay blocked after the path-only mention test (#874)" {
     run bash -c "payload 'gh api repos/o/r/issues -X POST -f title=x -f body=nope' | '$GUARD'"
     [ "$status" -eq 2 ]

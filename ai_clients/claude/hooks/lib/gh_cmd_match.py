@@ -419,7 +419,8 @@ def api_issue_match(segments):
                 i += 1
         path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0])
         path = path.rstrip("/")
-        dynamic = "$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
+        dynamic = ("$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
+                   or any("$" in t or "`" in t for t in stray))  # stray may be the real endpoint
         if dynamic and endpoint and only_repo_segment_is_dynamic(path):
             dynamic = False  # judged by its literal resource, like the unparameterised twin
         m = API_ISSUE_ENDPOINT.match(path)
