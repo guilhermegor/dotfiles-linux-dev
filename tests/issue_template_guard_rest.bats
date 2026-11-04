@@ -599,3 +599,20 @@ EOF
     run bash -c "payload 'gh api graphql -f query=\"mutation(\$b:String){createIssue(input:{body:\$b})}\" -f body=compliant' | '$GUARD'"
     [ "$status" -eq 2 ]
 }
+
+@test "GraphQL updateIssue cannot dodge via '$ b', a variable default or a BOM; closing stays allowed (#906 ladder)" {
+    run bash -c "payload 'gh api graphql -f query=\"mutation{updateIssue(input:{id:\\\"I\\\",body: \$ b}){a}}\" -f b=nope' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation(\$b:String=\\\"nope\\\"){updateIssue(input:{id:\\\"I\\\",body:\$b}){a}}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation{updateIssue(input:{id:\\\"I\\\",body"$'\xef\xbb\xbf'":\\\"nope\\\"}){a}}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation(\$i:UpdateIssueInput!){updateIssue(input:\$i){a}}\" -f \"i[id]=I\" -f \"i[state]=CLOSED\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL --input: variables.input.body never shadows a real \$body (#906 ladder)" {
+    printf '%s' '{"query":"mutation($body:String){createIssue(input:{title:\"t\",body:$body}){a}}","variables":{"body":"nope","input":{"body":"ok"}}}' > "$REPO/in.json"
+    run bash -c "payload 'gh api graphql --input $REPO/in.json' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}

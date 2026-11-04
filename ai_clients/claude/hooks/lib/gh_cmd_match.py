@@ -362,9 +362,10 @@ GRAPHQL_ISSUE_MUTATION = re.compile(r"\b(createIssue|updateIssue)\s*\(")
 GRAPHQL_BODY = re.compile(r'\bbody\s*:\s*("""(?:[^"\\]|\\.|"(?!""))*"""|"(?:[^"\\]|\\.)*")')
 
 
-GRAPHQL_IGNORED = re.compile(r'("""(?:[^"\\]|\\.|"(?!""))*"""|"(?:[^"\\]|\\.)*")|#[^\n]*|,')
-GRAPHQL_BODY_VAR = re.compile(r"\bbody\s*:\s*\$(\w+)")
-GRAPHQL_INPUT_VAR = re.compile(r"\binput\s*:\s*\$(\w+)")
+GRAPHQL_IGNORED = re.compile(r'("""(?:[^"\\]|\\.|"(?!""))*"""|"(?:[^"\\]|\\.)*")|#[^\n]*|[,\ufeff]')
+GRAPHQL_STRING = re.compile(r'"""(?:[^"\\]|\\.|"(?!""))*"""|"(?:[^"\\]|\\.)*"')
+GRAPHQL_BODY_VAR = re.compile(r"\bbody\s*:\s*\$\s*(\w+)")
+GRAPHQL_INPUT_VAR = re.compile(r"\binput\s*:\s*\$\s*(\w+)")
 
 
 def graphql_issue_write(fields, input_file):
@@ -382,6 +383,8 @@ def graphql_issue_write(fields, input_file):
     for typed, field in fields:
         key, _, val = field.partition("=")
         if typed and val.startswith("@"):  # -F key=@file: gh reads the value from the file
+            if val == "@-":
+                return blind  # stdin is never visible to the hook
             try:
                 with open(val[1:]) as fh:
                     val = fh.read()
@@ -391,6 +394,8 @@ def graphql_issue_write(fields, input_file):
             query = val
         else:
             values[key] = val
+    if input_file == "-":
+        return blind
     if input_file:
         try:
             with open(input_file) as fh:
@@ -398,7 +403,6 @@ def graphql_issue_write(fields, input_file):
             query = str(data.get("query", ""))
             variables = data.get("variables") or {}
             values = {**values, **{k: v for k, v in variables.items() if isinstance(v, str)}}
-            values["body"] = (variables.get("input") or {}).get("body", values.get("body"))
             values.update({k + "[body]": v["body"] for k, v in variables.items()
                            if isinstance(v, dict) and isinstance(v.get("body"), str)})
         except (OSError, ValueError, AttributeError):
@@ -423,15 +427,19 @@ def graphql_issue_write(fields, input_file):
             except ValueError:
                 body = lit[1:-1]
     elif refs:
-        body = values.get(refs[0])
+        body = values.get(refs[0], "")  # unsupplied (a default may apply): fail closed
     elif inp:
         name = inp.group(1)
         body = values.get(name + "[body]")
-        if body is None:
+        if body is None and any(k.startswith(name + "[") for k in values):
+            body = None  # gh `name[k]=` fields without a body: the update leaves it alone
+        elif body is None:
             try:
                 body = json.loads(values.get(name, "")).get("body")
             except (ValueError, AttributeError):
                 body = ""  # input object unresolved: fail closed, body unknown
+    if body is None and re.search(r"\bbody\b", GRAPHQL_STRING.sub('""', seg)):
+        body = ""  # a `body` token no branch resolved (`body: $ b` spellings): fail closed
     if len(muts) > 1 or len(lits) + len(refs) > 1:
         body = ""  # several mutations / decoy `body:` literals: ambiguous, fail closed
     creating = muts[0].group(1) == "createIssue" or len(muts) > 1
