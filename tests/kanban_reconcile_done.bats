@@ -343,6 +343,25 @@ run_reconcile() {
     refute_gh 'item-edit'
 }
 
+# --- dotfiles-linux-dev#886: read only non-Done items ------------------------------------------
+
+@test "project items read: the call filters out Done server-side" {
+    write_issues "$(issue 1 closed)"
+    write_items "$(item ITEM_1 "In review" 1)"
+    write_fake_gh
+    run_reconcile
+    grep -qF -- 'project item-list 1 --owner owner --format json --limit 500 --query -status:Done' "$GH_LOG"
+}
+
+@test "project items read: item-list failing is unknown, not a partial ok" {
+    write_issues "$(issue 1 closed)"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run_reconcile
+    [[ "$output" == *"STATUS=unknown"* ]]
+    refute_gh 'item-edit'
+}
+
 # --- item-list cap: truncated read is unknown, never a partial ok -----------------------------
 
 @test "project item list hitting its cap: STATUS=unknown, nothing touched" {
