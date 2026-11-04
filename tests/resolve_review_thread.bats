@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# resolve_review_thread.sh: resolve only threads a human answered, by node id.
+# resolve_review_thread.sh: resolve only threads a non-bot answered, by node id.
 # `gh` is stubbed on PATH; no network. The stub applies the script's real --jq filter to
 # the thread JSON in $READ_JSON (build it with `thread`), so the bot filter is exercised.
 # READ_RAW prints verbatim instead, READ_FAIL fails the read, and the mutation prints
@@ -47,6 +47,12 @@ thread() {
     [ ! -s "$GH_LOG" ]
 }
 
+@test "near-miss ids are refused without calling gh" {
+    run bash "$SCRIPT" PR_kwDOabc "PRRT_abc;x" PRRT_
+    [ "$status" -eq 1 ]
+    [ ! -s "$GH_LOG" ]
+}
+
 @test "a thread a human answered is resolved" {
     thread false Bot User
     run bash "$SCRIPT" PRRT_abc123
@@ -86,6 +92,7 @@ thread() {
     thread true Bot User
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 0 ]
+    [[ "$output" == *"already resolved"* ]]
     run grep -q resolveReviewThread "$GH_LOG"
     [ "$status" -ne 0 ]
 }

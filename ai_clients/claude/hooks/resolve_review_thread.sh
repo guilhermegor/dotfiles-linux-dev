@@ -12,7 +12,9 @@
 # whose LAST comment is not from a non-bot (User) account: a bot reply answers nothing, and
 # a bot re-opening after a reply must block. Agents post as the owner, so this proves
 # "someone non-bot replied last", not that a person looked; a machine user on a PAT also
-# reports as User. Resolving is the second half of "reply, then resolve", never a way to make an
+# reports as User. A human reviewer's own follow-up on their thread also counts; the wrapper
+# cannot tell them from the owner. A comment landing between the read and the mutation is not
+# caught. gh stderr is passed through, never parsed. Resolving is the second half of "reply, then resolve", never a way to make an
 # unanswered finding disappear. Any read it cannot parse fails closed.
 set -uo pipefail
 
@@ -27,7 +29,7 @@ for id in "$@"; do
     ... on PullRequestReviewThread{isResolved
       comments(last:100){nodes{author{__typename}}}}}}' \
     --jq '.data.node | .comments.nodes as $n | "\(.isResolved) \(
-      if ($n | length) > 1 and $n[-1].author.__typename == "User" then 1 else 0 end)"' 2>&1) || {
+      if ($n | length) > 1 and $n[-1].author.__typename == "User" then 1 else 0 end)"') || {
     echo "$id: UNKNOWN — read failed: $state" >&2; rc=1; continue; }
   read -r resolved replies <<<"$state"
   if ! [[ "$resolved" =~ ^(true|false)$ && "$replies" =~ ^[0-9]+$ ]]; then
@@ -39,7 +41,7 @@ for id in "$@"; do
   fi
   out=$(gh api graphql -f id="$id" -f query='mutation($id:ID!){
     resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' \
-    --jq '.data.resolveReviewThread.thread.isResolved' 2>&1)
+    --jq '.data.resolveReviewThread.thread.isResolved')
   if [ "$out" = "true" ]; then echo "$id: resolved"; else echo "$id: FAILED — $out" >&2; rc=1; fi
 done
 exit "$rc"
