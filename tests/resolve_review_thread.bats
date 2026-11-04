@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# resolve_review_thread.sh: resolve only threads a non-bot answered, by node id.
+# resolve_review_thread.sh: resolve only threads the viewer answered, by node id.
 # `gh` is stubbed on PATH; no network. The stub applies the script's real --jq filter to
 # the thread JSON in $READ_JSON (build it with `thread`), so the bot filter is exercised.
 # READ_RAW prints verbatim instead, READ_FAIL fails the read, and the mutation prints
@@ -14,7 +14,10 @@ setup() {
     cat > "$BIN/gh" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$GH_LOG"
-if [[ "$*" == *resolveReviewThread* ]]; then echo "${MUT:-true}"; exit 0; fi
+if [[ "$*" == *resolveReviewThread* ]]; then
+[ -n "${MUT_FAIL:-}" ] && { echo "boom" >&2; exit 1; }
+echo "${MUT:-true}"; exit 0
+fi
 [ -n "${READ_FAIL:-}" ] && { echo "rate limited" >&2; exit 1; }
 [ -n "${READ_RAW:-}" ] && { echo "$READ_RAW"; exit 0; }
 while [ "$#" -gt 0 ]; do
@@ -61,7 +64,7 @@ thread() {
     [ ! -s "$GH_LOG" ]
 }
 
-@test "a thread a human answered is resolved" {
+@test "a thread the viewer answered is resolved" {
     thread false Bot User
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 0 ]
@@ -182,4 +185,17 @@ thread() {
     [ "$status" -eq 1 ]
     run grep -q resolveReviewThread "$GH_LOG"
     [ "$status" -ne 0 ]
+}
+
+@test "a mutation that exits non-zero is a failure" {
+    thread false Bot User
+    MUT_FAIL=1 run bash "$SCRIPT"  PRRT_abc123
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"FAILED"* ]]
+}
+
+@test "a viewer-started thread with a viewer reply is resolved" {
+    thread false User User
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 0 ]
 }
