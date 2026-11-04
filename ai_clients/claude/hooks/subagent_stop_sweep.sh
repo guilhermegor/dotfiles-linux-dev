@@ -542,7 +542,7 @@ sweep_kanban_boards() {
 	reconcile_kanban_boards "$kind" "$cwd" || true
 	printf '%s\n' "$KANBAN_BOARDS_REPORT"
 	for entry in "${ROADMAP_BOARDS[@]}"; do
-		[[ "${entry##*|}" == "${repo##*/}" ]] && return 0
+		[[ "${entry%%|*}/${entry##*|}" == "$repo" ]] && return 0
 	done
 	echo "note: $repo has no ROADMAP_BOARDS entry — its kanban board was not swept"
 }

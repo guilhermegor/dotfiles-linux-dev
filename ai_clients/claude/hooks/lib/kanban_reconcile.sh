@@ -553,7 +553,7 @@ reconcile_kanban_boards() {
 		moved="$(printf '%s\n' "$_KB_REPORT" | grep -c '^moved' || true)"
 		if ((moved > 0)); then
 			lines+="board $owner/$project ($repo): ok — $moved moved"$'\n'
-		elif printf '%s\n' "$_KB_REPORT" | grep -qE '^(FAILED|UNKNOWN)'; then
+		elif printf '%s\n' "$_KB_REPORT" | grep -qvE '^(moved|$)'; then
 			lines+="board $owner/$project ($repo): ok — nothing moved, items below need a look"$'\n'
 		else
 			lines+="board $owner/$project ($repo): ok — nothing to change"$'\n'

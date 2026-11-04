@@ -881,3 +881,11 @@ STUB
 @test "sweep sources the dispatch claims registry kanban_reconcile_done depends on" {
     declare -F dispatch_claimed_issues >/dev/null
 }
+
+@test "sweep_kanban_boards: a same-named repo under another owner is still undeclared" {
+    export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
+    reconcile_kanban() { RECONCILE_KANBAN_REPORT=""; }
+    ROADMAP_BOARDS=("o|13|greenfield")
+    run sweep_kanban_boards in_review "$REPO" "other/greenfield"
+    [[ "$output" == *"note: other/greenfield has no ROADMAP_BOARDS entry"* ]]
+}

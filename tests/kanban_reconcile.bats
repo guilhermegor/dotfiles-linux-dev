@@ -693,7 +693,8 @@ STUB_IN_REVIEW='reconcile_kanban() {
         echo "$3" > "$TEST_TMP/stale_cwd"
         RECONCILE_STALE_REPORT="STALE issue #3: In progress, no commit for 9 days on fix/3-x (report only)"
         return 0; }'
-    [[ "$output" == *"board owner/13 (repo): ok — nothing to change"* ]]
+    [[ "$output" == *"board owner/13 (repo): ok — nothing moved, items below need a look"* ]]
+    [[ "$output" != *"nothing to change"* ]]
     [[ "$output" == *"  STALE issue #3"* ]]
     [ "$(cat "$TEST_TMP/stale_cwd")" = "$TEST_TMP/here" ]
 }
