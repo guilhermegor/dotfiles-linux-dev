@@ -129,18 +129,19 @@ files (REST, paginated) touch `.github/workflows/` or `.github/actions/` is refu
 (`previous_filename`); an unreadable file list is UNKNOWN, and so is a list whose
 length differs from the PR's `changed_files` ("file list incomplete", since the
 endpoint caps at 3000).
-The gate is **partial by design**: required checks are matched by NAME only
-(`app_id` is not compared; GitHub enforces it through `mergeable_state`), and it
-cannot see CI code outside `.github/` (a local composite action, `make test`, test
-files), which is the PR author's own code on a single-maintainer repo. Required
+The gate is **partial by design**: it cannot see CI code outside `.github/` (a local
+composite action, `make test`, test files), which is the PR author's own code on a
+single-maintainer repo. A required check pinned to an app (protection `checks[].app_id`,
+ruleset `required_status_checks[].integration_id`) must come from a check-run whose
+`app.id` equals it; an unpinned one (null or -1) is matched by name from any app, and a
+commit status (no app) never meets a pinned requirement (#891). Required
 contexts come from classic protection (a 404 "Branch not protected" is an empty
 list; any other read error is UNKNOWN) plus rulesets, and are matched in the Checks
 and the commit Status APIs; `skipped`/`neutral` pass, except for the review gate.
 A commit status is forgeable by any token with repo access (this account's own `gh`
 included; a personal token cannot create a check-run), so the review gate is
 satisfied by a **check-run only**, and any other context accepts a status only when
-`creator.login` is not the authenticated user (case-insensitive). Still open: pinning
-`app_id`/`integration_id` per context (#891).
+`creator.login` is not the authenticated user (case-insensitive).
 The merge PUT is **never retried** (a PUT that succeeded server-side but errored
 client-side would be re-sent into a 405 and misreported): on failure the PR's
 `merged` flag is re-read. Read retries happen once and only for transient errors.
