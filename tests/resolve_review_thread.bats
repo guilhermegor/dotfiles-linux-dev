@@ -27,11 +27,19 @@ STUB
     export PATH="$BIN:$PATH" GH_LOG
 }
 
-# thread <isResolved> <author typename>...: the first author is the thread's root comment.
+# thread <isResolved> <kind>...: the first kind is the thread's root comment. Kinds: Bot,
+# User (the viewer, "me"), Other (another human), Null (deleted account),
+# Pending (viewer, unsubmitted).
 thread() {
     local resolved="$1"; shift
-    READ_JSON=$(printf '%s\n' "$@" | jq -R '{author:{__typename:.}}' | jq -s \
-        --argjson r "$resolved" '{data:{node:{isResolved:$r,comments:{nodes:.}}}}')
+    READ_JSON=$(printf '%s\n' "$@" | jq -R '
+        {state:(if .=="Pending" then "PENDING" else "SUBMITTED" end),
+         author:(if .=="Null" then null
+                 elif .=="Bot" then {__typename:"Bot",login:"bot"}
+                 elif .=="Other" then {__typename:"User",login:"other"}
+                 else {__typename:"User",login:"me"} end)}' | jq -s \
+        --argjson r "$resolved" \
+        '{data:{viewer:{login:"me"},node:{isResolved:$r,comments:{nodes:.}}}}')
     export READ_JSON
 }
 
@@ -65,7 +73,7 @@ thread() {
     thread false Bot
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no non-bot reply"* ]]
+    [[ "$output" == *"not your submitted reply"* ]]
     run grep -q resolveReviewThread "$GH_LOG"
     [ "$status" -ne 0 ]
 }
@@ -74,7 +82,7 @@ thread() {
     thread false Bot Bot
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no non-bot reply"* ]]
+    [[ "$output" == *"not your submitted reply"* ]]
     run grep -q resolveReviewThread "$GH_LOG"
     [ "$status" -ne 0 ]
 }
@@ -83,7 +91,7 @@ thread() {
     thread false User
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no non-bot reply"* ]]
+    [[ "$output" == *"not your submitted reply"* ]]
     run grep -q resolveReviewThread "$GH_LOG"
     [ "$status" -ne 0 ]
 }
@@ -124,7 +132,7 @@ thread() {
     thread false Bot User Bot
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no non-bot reply"* ]]
+    [[ "$output" == *"not your submitted reply"* ]]
     run grep -q resolveReviewThread "$GH_LOG"
     [ "$status" -ne 0 ]
 }
@@ -142,4 +150,36 @@ thread() {
     run bash "$SCRIPT" --admin PRRT_abc123
     [ "$status" -eq 1 ]
     [[ "$output" == *"PRRT_abc123: resolved"* ]]
+}
+
+@test "a human reviewer's follow-up after the agent reply is refused" {
+    thread false Other User Other
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    run grep -q resolveReviewThread "$GH_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "a reply by another human is refused" {
+    thread false Bot Other
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    run grep -q resolveReviewThread "$GH_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "an unsubmitted pending reply is refused" {
+    thread false Bot Pending
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    run grep -q resolveReviewThread "$GH_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "a deleted-account last comment fails closed" {
+    thread false Bot Null
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    run grep -q resolveReviewThread "$GH_LOG"
+    [ "$status" -ne 0 ]
 }
