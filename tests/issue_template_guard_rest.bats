@@ -487,6 +487,28 @@ EOF
     [ "$status" -eq 0 ]
 }
 
+@test "GraphQL: createIssue mutation with a bad inline body is blocked (#903)" {
+    run bash -c "payload 'gh api graphql -f query=\"mutation { createIssue(input:{repositoryId:\\\"R\\\", title:\\\"t\\\", body:\\\"no dod\\\"}) { clientMutationId } }\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: createIssue with no body is blocked (#903)" {
+    run bash -c "payload 'gh api graphql -f query=\"mutation { createIssue(input:{}) { clientMutationId } }\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: createIssue with a compliant body variable is allowed (#903)" {
+    run bash -c "payload 'gh api graphql -f query=\"mutation(\$body:String!){ createIssue(input:{body:\$body}) { clientMutationId } }\" -f body=\"$COMPLIANT_BODY\"' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: updateIssue via --input JSON with a bad body is blocked (#903)" {
+    f="$BATS_TEST_TMPDIR/q.json"
+    jq -nc '{query: "mutation($b:String!){ updateIssue(input:{id:\"I\", body:$b}) { clientMutationId } }", variables: {b: "no dod"}}' > "$f"
+    run bash -c "payload 'gh api graphql --input $f' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
 @test "REST: a shell-built stray positional behind an unknown flag stays blocked (#874)" {
     run bash -c "payload 'gh api --foo v repos/o/r/issues\$N -X POST -f title=x' | '$GUARD'"
     [ "$status" -eq 2 ]
