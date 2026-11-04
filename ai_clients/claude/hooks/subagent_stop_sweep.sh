@@ -76,6 +76,8 @@ source "$HOOK_DIR/lib/kanban_reconcile.sh"
 source "$HOOK_DIR/lib/dispatch_claims.sh"
 # shellcheck source=lib/kanban_reconcile_done.sh
 source "$HOOK_DIR/lib/kanban_reconcile_done.sh"
+# shellcheck source=lib/kanban_reconcile_stale.sh
+source "$HOOK_DIR/lib/kanban_reconcile_stale.sh"
 # shellcheck source=lib/gh_budget.sh
 source "$HOOK_DIR/lib/gh_budget.sh"
 # shellcheck source=lib/roadmap_unblock.sh
@@ -624,6 +626,12 @@ dispatch: UNKNOWN — $BUDGET_GATE_REASON"
 		fi
 		echo "[10] issue hygiene (surface block + milestone, report only)"
 		sweep_issue_hygiene "$repo"
+		echo "[11] kanban reconcile (closed-unmerged PR -> Ready; idle In progress, report only)"
+		if reconcile_kanban_stale "$owner" "$name" "$cwd"; then
+			printf '%s\n' "$RECONCILE_STALE_REPORT"
+		else
+			echo "kanban reconcile (stale): UNKNOWN — $RECONCILE_STALE_REPORT"
+		fi
 	)"
 
 	emit "$report"

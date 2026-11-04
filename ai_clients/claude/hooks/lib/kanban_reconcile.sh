@@ -68,15 +68,18 @@ cache_file() {
 
 discover_board() {
 	# Find the `<repo> kanban` project, resolve its Status field + option ids, cache the result, and
-	# echo it as one JSON object. Returns: 0 + config on success, 1 when no such board exists, and
-	# 2 when MORE THAN ONE board carries that title (refuse to guess — the caller surfaces this).
+	# echo it as one JSON object. Returns: 0 + config on success, 1 on a gh/parse failure, 2 when
+	# MORE THAN ONE board carries that title (refuse to guess — the caller surfaces this), and
+	# 3 when NO `<repo> kanban` board exists or it has no usable Status field (#865: told apart from a
+	# gh error without a re-query).
 	local owner="$1" repo="$2" projects matches count num node fields field_id options config
 	projects="$(gh project list --owner "$owner" --format json 2>/dev/null)" || return 1
 
 	matches="$(printf '%s' "$projects" \
-		| jq -r --arg t "$repo kanban" '.projects[] | select(.title==$t) | "\(.number) \(.id)"')"
+		| jq -r --arg t "$repo kanban" '.projects[] | select(.title==$t) | "\(.number) \(.id)"')" \
+		|| return 1   # unparseable list is a gh-side failure, not "no board"
 	count="$(printf '%s\n' "$matches" | grep -c .)"
-	(( count == 0 )) && return 1
+	(( count == 0 )) && return 3
 	if (( count > 1 )); then
 		# A silent head -n1 pick here would move a random board's card. Refuse instead — issue.md
 		# now prevents duplicate-titled boards, so this is the safety net for one already out there.
@@ -88,10 +91,10 @@ discover_board() {
 
 	fields="$(gh project field-list "$num" --owner "$owner" --format json 2>/dev/null)" || return 1
 	field_id="$(printf '%s' "$fields" | jq -r '.fields[] | select(.name=="Status") | .id' | head -n1)"
-	[[ -n "$field_id" ]] || return 1
+	[[ -n "$field_id" ]] || return 3   # board exists but has no Status field: config, not a gh error
 	options="$(printf '%s' "$fields" \
 		| jq -c '[.fields[] | select(.name=="Status") | .options[]] | map({(.name): .id}) | add')"
-	[[ -n "$options" && "$options" != "null" ]] || return 1
+	[[ -n "$options" && "$options" != "null" ]] || return 3
 
 	config="$(jq -n --argjson num "$num" --arg node "$node" --arg field "$field_id" \
 		--argjson options "$options" \
@@ -103,8 +106,9 @@ discover_board() {
 
 board_config() {
 	# Emit "<project_number> <project_node> <status_field_id> <option_id_for_target>". Reads the
-	# per-repo cache, discovering + writing it on a miss. Returns 1 if there is no `<repo> kanban`
-	# board or the target column does not exist.
+	# per-repo cache, discovering + writing it on a miss. Returns 0 on success (or AMBIGUOUS), 3 when
+	# there is no `<repo> kanban` board or it lacks the target column (a legitimate no-op), and 1
+	# on a gh failure (#865). Callers that only test `||` treat both non-zero codes alike.
 	local owner="$1" repo="$2" target="$3" file line num node field opt
 	file="$(cache_file "$owner" "$repo")"
 
@@ -124,9 +128,9 @@ board_config() {
 	local rc
 	line="$(discover_board "$owner" "$repo")"; rc=$?   # writes the cache as a side effect
 	(( rc == 2 )) && { printf 'AMBIGUOUS\n'; return 0; }   # >1 same-named board — let the caller warn
-	(( rc == 0 )) || return 1
+	(( rc == 0 )) || return "$rc"
 	opt="$(printf '%s' "$line" | jq -r --arg t "$target" '.options[$t] // empty' 2>/dev/null)"
-	[[ -n "$opt" ]] || return 1
+	[[ -n "$opt" ]] || return 3
 	printf '%s %s %s %s\n' \
 		"$(printf '%s' "$line" | jq -r '.project_number')" \
 		"$(printf '%s' "$line" | jq -r '.project_node_id')" \
@@ -168,7 +172,7 @@ _board_throttled() {
 # silently partial list — add real pagination if a board ever grows past either.
 _board_item_list_graphql() {
 	local owner="$1" project="$2" query result
-	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){items(first:100){pageInfo{hasNextPage}nodes{id content{__typename ... on Issue{number url body repository{nameWithOwner}}}fieldValues(first:100){pageInfo{hasNextPage}nodes{__typename ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}}'
+	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){items(first:100,query:"-status:Done"){pageInfo{hasNextPage}nodes{id content{__typename ... on Issue{number url body repository{nameWithOwner}} ... on PullRequest{number url body repository{nameWithOwner}}}fieldValues(first:100){pageInfo{hasNextPage}nodes{__typename ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}}'
 	result="$(gh api graphql -f query="$query" -f login="$owner" -F num="$project" 2>/dev/null)" || return 1
 	printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
 	printf '%s' "$result" \
@@ -187,8 +191,8 @@ _board_item_list_graphql() {
 			items: [.[] | {
 				id: .id,
 				content: (
-					if .content.__typename == "Issue" then {
-						type: "Issue", number: .content.number, url: .content.url,
+					if .content.__typename == "Issue" or .content.__typename == "PullRequest" then {
+						type: .content.__typename, number: .content.number, url: .content.url,
 						body: .content.body, repository: .content.repository.nameWithOwner
 					} else { type: .content.__typename }
 					end
@@ -208,11 +212,21 @@ _board_item_list_graphql() {
 # loop.
 # Returns 0 with JSON on stdout (either channel), 2 with nothing on stdout when throttling is
 # CONFIRMED (report this distinctly — "try next round", not "the board is misconfigured"), or 1
-# with nothing on stdout when neither channel can read the board.
+# with nothing on stdout when neither channel can read the board, or 3 with nothing on stdout when
+# the porcelain read came back with exactly `limit` items (possibly truncated: fail closed).
+#
+# Both channels read only `-status:Done` items (dotfiles-linux-dev#886): no consumer needs a Done
+# card, and on a mature board Done is most of it (431 items, 18 not Done), so the unfiltered read
+# overflowed the GraphQL fallback's one page and would soon overflow the porcelain `--limit`.
 _board_item_list() {
-	local owner="$1" project="$2" limit="$3" json
-	json="$(gh project item-list "$project" --owner "$owner" --format json --limit "$limit" 2>/dev/null)" \
-		&& { printf '%s' "$json"; return 0; }
+	local owner="$1" project="$2" limit="$3" json count
+	if json="$(gh project item-list "$project" --owner "$owner" --format json --limit "$limit" \
+		--query "-status:Done" 2>/dev/null)"; then
+		count="$(printf '%s' "$json" | jq '.items | length' 2>/dev/null)"
+		[[ "$count" =~ ^[0-9]+$ ]] && (( count >= limit )) && return 3
+		printf '%s' "$json"
+		return 0
+	fi
 
 	_board_throttled && return 2
 
@@ -330,11 +344,13 @@ reconcile_kanban() {
 		return 1
 	fi
 
-	local items_json item_count
+	local items_json
 	items_json="$(_board_item_list "$owner" "$project_number" "$item_limit")"; rc=$?
 	if (( rc != 0 )); then
 		if (( rc == 2 )); then
 			RECONCILE_KANBAN_REPORT="UNKNOWN (throttled): GitHub GraphQL rate limit — retry next round"
+		elif (( rc == 3 )); then
+			RECONCILE_KANBAN_REPORT="UNKNOWN: project item list hit the $item_limit cap for $owner/$repo — result may be truncated"
 		else
 			RECONCILE_KANBAN_REPORT="UNKNOWN (board unreadable): could not read project items for $owner/$repo"
 		fi
@@ -348,11 +364,6 @@ reconcile_kanban() {
 		RECONCILE_KANBAN_REPORT="UNKNOWN (board unreadable): could not parse project items for $owner/$repo"
 		return 1
 	}
-	item_count="$(printf '%s' "$items_json" | jq '.items | length' 2>/dev/null)"
-	if [[ -n "$item_count" ]] && (( item_count >= item_limit )); then
-		RECONCILE_KANBAN_REPORT="UNKNOWN: project item list hit the $item_limit cap for $owner/$repo — result may be truncated"
-		return 1
-	fi
 
 	local report="" n processed=""
 	while IFS= read -r n; do

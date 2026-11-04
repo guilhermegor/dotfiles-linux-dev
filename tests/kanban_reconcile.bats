@@ -522,6 +522,38 @@ run_reconcile() {
     refute_gh 'item-edit'
 }
 
+@test "project items read: the porcelain call filters out Done server-side (#886)" {
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_fake_gh
+    run_reconcile
+    grep -qF -- 'project item-list 1 --owner owner --format json --limit 500 --query -status:Done' "$GH_LOG"
+}
+
+@test "project items read: the GraphQL fallback filters out Done server-side (#886)" {
+    write_board_cache
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_item_list_graphql "$(graphql_node ITEM_42 42 owner/repo Backlog)"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run_reconcile
+    grep -qF -- 'items(first:100,query:"-status:Done")' "$GH_LOG"
+}
+
+@test "project items read: the GraphQL fallback keeps number and repository of a PullRequest card (#886)" {
+    jq -nc '{data: {repositoryOwner: {projectV2: {items: {pageInfo: {hasNextPage: false}, nodes: [
+        {id: "ITEM_P", content: {__typename: "PullRequest", number: 7, url: "u", body: "",
+            repository: {nameWithOwner: "owner/repo"}},
+         fieldValues: {pageInfo: {hasNextPage: false}, nodes: [{__typename: "ProjectV2ItemFieldSingleSelectValue",
+            name: "In review", field: {name: "Status"}}]}}]}}}}}' > "$TEST_TMP/item-fallback.json"
+    write_fake_gh
+    run bash -c "source '$LIB'; _board_item_list_graphql owner 1 \
+        | jq -r '.items[0] | \"\(.content.type) \(.content.number) \(.content.repository)\"'"
+    [ "$output" = "PullRequest 7 owner/repo" ]
+}
+
 @test "project items read: a truncated GraphQL fallback page is unreadable, never a partial read" {
     write_board_cache
     write_prs 10
