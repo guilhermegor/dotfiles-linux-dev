@@ -770,3 +770,20 @@ write_pr_json() {
     run run_hook "git checkout -b feat/131-x && gh pr create --title x --body y"
     [[ "$output" == *"In progress"* ]]
 }
+
+@test "a lone & or command cd does not carry the cd path" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "cd $TEST_TMP/wt & gh pr create --title x --body y"
+    [[ "$output" != *"131"* ]]
+    run run_hook "command cd $TEST_TMP/wt && gh pr create --title x --body y"
+    [[ "$output" != *"131"* ]]
+}
+
+@test "a REST PR whose --input file vanished does not fall back to HEAD's issue" {
+    write_fake_gh "OPEN"
+    git checkout -q -b feat/131-head
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/gone.json"
+    [ -z "$output" ]
+}

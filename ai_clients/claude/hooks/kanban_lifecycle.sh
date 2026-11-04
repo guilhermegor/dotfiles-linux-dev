@@ -81,6 +81,8 @@ main() {
     if [[ "$target" == "In review" ]] && rest="$(rest_pr_from_command "$command")"; then
         read -r owner repo rest_head <<<"$rest"
         issue="$(branch_issue "$rest_head")" || exit 0
+    elif [[ "$target" == "In review" ]] && ! printf '%s' "$command" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+create'; then
+        exit 0     # a REST PR whose head can no longer be read (--input file gone) must not fall back to HEAD
     else
         read -r owner repo < <(owner_repo) || exit 0
         [[ -n "$owner" && -n "$repo" ]] || exit 0
@@ -153,7 +155,7 @@ try:
         pos = start + len(segment) if start >= 0 else pos
         # A `cd` only carries to the next segment across `&&`, `;` or a newline: after `||` the
         # verb runs when the cd failed, and each side of a `|` is its own subshell.
-        if cd_end is not None and start >= 0 and "|" in command[cd_end:start]:
+        if cd_end is not None and start >= 0 and re.search(r"\||(?<!&)&(?!&)", command[cd_end:start]):
             break
         cd_end = None
         argv = shlex.split(segment)
@@ -164,7 +166,7 @@ try:
             cd_end = pos
             continue
         # Other ways to change directory cannot be followed, so stop rather than guess.
-        if argv[:1] and (argv[0] in ("pushd", "popd", "builtin") or argv[0][:1] in "({"):
+        if argv[:1] and (argv[0] in ("pushd", "popd", "builtin", "command") or argv[0][:1] in "({"):
             break
         out.append(f"{path}\x1f{segment}\0")
     sys.stdout.write("".join(out))  # only once every segment parsed, so the fallback never mixes
