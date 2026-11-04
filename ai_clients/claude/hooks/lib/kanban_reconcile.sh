@@ -172,7 +172,7 @@ _board_throttled() {
 # silently partial list — add real pagination if a board ever grows past either.
 _board_item_list_graphql() {
 	local owner="$1" project="$2" query result
-	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){items(first:100){pageInfo{hasNextPage}nodes{id content{__typename ... on Issue{number url body repository{nameWithOwner}}}fieldValues(first:100){pageInfo{hasNextPage}nodes{__typename ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}}'
+	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){items(first:100,query:"-status:Done"){pageInfo{hasNextPage}nodes{id content{__typename ... on Issue{number url body repository{nameWithOwner}}}fieldValues(first:100){pageInfo{hasNextPage}nodes{__typename ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}}'
 	result="$(gh api graphql -f query="$query" -f login="$owner" -F num="$project" 2>/dev/null)" || return 1
 	printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
 	printf '%s' "$result" \
@@ -212,11 +212,21 @@ _board_item_list_graphql() {
 # loop.
 # Returns 0 with JSON on stdout (either channel), 2 with nothing on stdout when throttling is
 # CONFIRMED (report this distinctly — "try next round", not "the board is misconfigured"), or 1
-# with nothing on stdout when neither channel can read the board.
+# with nothing on stdout when neither channel can read the board, or 3 with nothing on stdout when
+# the porcelain read came back with exactly `limit` items (possibly truncated: fail closed).
+#
+# Both channels read only `-status:Done` items (dotfiles-linux-dev#886): no consumer needs a Done
+# card, and on a mature board Done is most of it (431 items, 18 not Done), so the unfiltered read
+# overflowed the GraphQL fallback's one page and would soon overflow the porcelain `--limit`.
 _board_item_list() {
-	local owner="$1" project="$2" limit="$3" json
-	json="$(gh project item-list "$project" --owner "$owner" --format json --limit "$limit" 2>/dev/null)" \
-		&& { printf '%s' "$json"; return 0; }
+	local owner="$1" project="$2" limit="$3" json count
+	if json="$(gh project item-list "$project" --owner "$owner" --format json --limit "$limit" \
+		--query "-status:Done" 2>/dev/null)"; then
+		count="$(printf '%s' "$json" | jq '.items | length' 2>/dev/null)"
+		[[ "$count" =~ ^[0-9]+$ ]] && (( count >= limit )) && return 3
+		printf '%s' "$json"
+		return 0
+	fi
 
 	_board_throttled && return 2
 
@@ -334,11 +344,13 @@ reconcile_kanban() {
 		return 1
 	fi
 
-	local items_json item_count
+	local items_json
 	items_json="$(_board_item_list "$owner" "$project_number" "$item_limit")"; rc=$?
 	if (( rc != 0 )); then
 		if (( rc == 2 )); then
 			RECONCILE_KANBAN_REPORT="UNKNOWN (throttled): GitHub GraphQL rate limit — retry next round"
+		elif (( rc == 3 )); then
+			RECONCILE_KANBAN_REPORT="UNKNOWN: project item list hit the $item_limit cap for $owner/$repo — result may be truncated"
 		else
 			RECONCILE_KANBAN_REPORT="UNKNOWN (board unreadable): could not read project items for $owner/$repo"
 		fi
@@ -352,11 +364,6 @@ reconcile_kanban() {
 		RECONCILE_KANBAN_REPORT="UNKNOWN (board unreadable): could not parse project items for $owner/$repo"
 		return 1
 	}
-	item_count="$(printf '%s' "$items_json" | jq '.items | length' 2>/dev/null)"
-	if [[ -n "$item_count" ]] && (( item_count >= item_limit )); then
-		RECONCILE_KANBAN_REPORT="UNKNOWN: project item list hit the $item_limit cap for $owner/$repo — result may be truncated"
-		return 1
-	fi
 
 	local report="" n processed=""
 	while IFS= read -r n; do
