@@ -195,7 +195,22 @@ refute_log() {
     APP_ID=424242 PROT_JSON='{"required_status_checks":{"contexts":["build"],"checks":[{"context":"build","app_id":15368}]}}' \
         run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]
+    [[ "$output" == *"required check not green"* ]]
     refute_log "PUT"
+}
+
+@test "empty contexts with checks[] still enforces the pin (old fail-open, #898)" {
+    APP_ID=424242 PROT_JSON='{"required_status_checks":{"contexts":[],"checks":[{"context":"build","app_id":15368}]}}' \
+        run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"required check not green"* ]]
+    refute_log "PUT"
+}
+
+@test "legacy contexts with no checks key matches by name (#898)" {
+    PROT_JSON='{"required_status_checks":{"contexts":["build"]}}' run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
 }
 
 @test "refuses a missing required check" {
