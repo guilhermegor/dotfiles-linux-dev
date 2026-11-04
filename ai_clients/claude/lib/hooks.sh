@@ -122,6 +122,8 @@ install_hooks() {
     copy_hook_file "run_ladder_review.sh" "$hooks_dir"
     # Stable green-PR squash-merge entry point (dotfiles-linux-dev#868): the other allowed path.
     copy_hook_file "merge_green_pr.sh" "$hooks_dir"
+    # Resolve-an-answered-review-thread entry point: the classifier denies a bare mutation.
+    copy_hook_file "resolve_review_thread.sh" "$hooks_dir"
 
     invalidate_hook_caches
 }
