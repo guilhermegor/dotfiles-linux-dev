@@ -172,7 +172,7 @@ _board_throttled() {
 # silently partial list — add real pagination if a board ever grows past either.
 _board_item_list_graphql() {
 	local owner="$1" project="$2" query result
-	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){items(first:100,query:"-status:Done"){pageInfo{hasNextPage}nodes{id content{__typename ... on Issue{number url body repository{nameWithOwner}}}fieldValues(first:100){pageInfo{hasNextPage}nodes{__typename ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}}'
+	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){items(first:100,query:"-status:Done"){pageInfo{hasNextPage}nodes{id content{__typename ... on Issue{number url body repository{nameWithOwner}} ... on PullRequest{number url body repository{nameWithOwner}}}fieldValues(first:100){pageInfo{hasNextPage}nodes{__typename ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}}'
 	result="$(gh api graphql -f query="$query" -f login="$owner" -F num="$project" 2>/dev/null)" || return 1
 	printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
 	printf '%s' "$result" \
@@ -191,8 +191,8 @@ _board_item_list_graphql() {
 			items: [.[] | {
 				id: .id,
 				content: (
-					if .content.__typename == "Issue" then {
-						type: "Issue", number: .content.number, url: .content.url,
+					if .content.__typename == "Issue" or .content.__typename == "PullRequest" then {
+						type: .content.__typename, number: .content.number, url: .content.url,
 						body: .content.body, repository: .content.repository.nameWithOwner
 					} else { type: .content.__typename }
 					end

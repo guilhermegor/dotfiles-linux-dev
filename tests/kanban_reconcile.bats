@@ -542,6 +542,18 @@ run_reconcile() {
     grep -qF -- 'items(first:100,query:"-status:Done")' "$GH_LOG"
 }
 
+@test "project items read: the GraphQL fallback keeps number and repository of a PullRequest card (#886)" {
+    jq -nc '{data: {repositoryOwner: {projectV2: {items: {pageInfo: {hasNextPage: false}, nodes: [
+        {id: "ITEM_P", content: {__typename: "PullRequest", number: 7, url: "u", body: "",
+            repository: {nameWithOwner: "owner/repo"}},
+         fieldValues: {pageInfo: {hasNextPage: false}, nodes: [{__typename: "ProjectV2ItemFieldSingleSelectValue",
+            name: "In review", field: {name: "Status"}}]}}]}}}}}' > "$TEST_TMP/item-fallback.json"
+    write_fake_gh
+    run bash -c "source '$LIB'; _board_item_list_graphql owner 1 \
+        | jq -r '.items[0] | \"\(.content.type) \(.content.number) \(.content.repository)\"'"
+    [ "$output" = "PullRequest 7 owner/repo" ]
+}
+
 @test "project items read: a truncated GraphQL fallback page is unreadable, never a partial read" {
     write_board_cache
     write_prs 10
