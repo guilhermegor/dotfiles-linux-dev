@@ -1824,18 +1824,19 @@ files (REST, paginated) touch <code>.github/workflows/</code> or <code>.github/a
 (<code>previous_filename</code>); an unreadable file list is UNKNOWN, and so is a list whose
 length differs from the PR's <code>changed_files</code> ("file list incomplete", since the
 endpoint caps at 3000).
-The gate is <strong>partial by design</strong>: required checks are matched by NAME only
-(<code>app_id</code> is not compared; GitHub enforces it through <code>mergeable_state</code>), and it
-cannot see CI code outside <code>.github/</code> (a local composite action, <code>make test</code>, test
-files), which is the PR author's own code on a single-maintainer repo. Required
+The gate is <strong>partial by design</strong>: it cannot see CI code outside <code>.github/</code> (a local
+composite action, <code>make test</code>, test files), which is the PR author's own code on a
+single-maintainer repo. A required check pinned to an app (protection <code>checks[].app_id</code>,
+ruleset <code>required_status_checks[].integration_id</code>) must come from a check-run whose
+<code>app.id</code> equals it; an unpinned one (null or -1) is matched by name from any app, and a
+commit status (no app) never meets a pinned requirement (#891). Required
 contexts come from classic protection (a 404 "Branch not protected" is an empty
 list; any other read error is UNKNOWN) plus rulesets, and are matched in the Checks
 and the commit Status APIs; <code>skipped</code>/<code>neutral</code> pass, except for the review gate.
 A commit status is forgeable by any token with repo access (this account's own <code>gh</code>
 included; a personal token cannot create a check-run), so the review gate is
 satisfied by a <strong>check-run only</strong>, and any other context accepts a status only when
-<code>creator.login</code> is not the authenticated user (case-insensitive). Still open: pinning
-<code>app_id</code>/<code>integration_id</code> per context (#891).
+<code>creator.login</code> is not the authenticated user (case-insensitive).
 The merge PUT is <strong>never retried</strong> (a PUT that succeeded server-side but errored
 client-side would be re-sent into a 405 and misreported): on failure the PR's
 <code>merged</code> flag is re-read. Read retries happen once and only for transient errors.
