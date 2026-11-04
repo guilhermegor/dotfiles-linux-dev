@@ -383,7 +383,9 @@ For each PR with an unanswered thread:
    lands first lets it merge the old head and strand the fix on a branch with no PR (#821: merged
    on `eab87f41`, fix `2f6a0001` pushed a minute later, recovered as #824). A finding that does
    not hold needs no commit or push: reply with why and resolve.
-4. **Resolve.** Both halves; neither implies the other.
+4. **Resolve.** Both halves; neither implies the other. Resolve with
+   `~/.claude/hooks/resolve_review_thread.sh <PRRT_id>...` (the allowlisted wrapper; a bare
+   GraphQL mutation is denied).
 
 If the finding does not hold, say why and resolve anyway. ⚠️ A finding you deferred with *"known
 limitation, follow-up issue"* is not answered — a gate with a documented hole is still a gate with a
