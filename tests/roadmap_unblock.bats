@@ -570,6 +570,27 @@ run_reconcile() {
     [[ "$output" != *"blocker-kind"* ]]
 }
 
+# --- dotfiles-linux-dev#886: filtered read, and a read at the cap is unknown --------------------
+
+@test "project items read: the porcelain call filters out Done server-side" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    grep -qF -- 'project item-list 17 --owner owner --format json --limit 500 --query -status:Done' "$GH_LOG"
+}
+
+@test "project items read: a porcelain read AT the --limit cap is unknown, never a partial ok" {
+    local many=() i
+    for (( i = 1; i <= 500; i++ )); do many+=("$(item "owner/repo" "$i" "Blocked" "" "")"); done
+    write_items "${many[@]}"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"truncated"* ]]
+    refute_gh 'issue edit'
+}
+
 # --- dotfiles-linux-dev#567: gh project throttle vs a genuinely unreadable board ------------------------
 
 @test "project items read: item-list fails but GraphQL is healthy, falls back and succeeds" {

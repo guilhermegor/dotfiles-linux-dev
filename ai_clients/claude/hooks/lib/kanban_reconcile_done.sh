@@ -178,22 +178,23 @@ reconcile_kanban_done() {
 
 	# Capped the same way reconcile_kanban() caps its own item-list read: a HIT cap means the
 	# answer may be partial, and a partial reconcile reported as ok is the failure this guards.
+	# Routed through kanban_reconcile.sh's `_board_item_list` (dotfiles-linux-dev#886): it reads only
+	# non-Done items (this function skips Done in every branch anyway) and fails closed at the cap.
 	local item_limit=500
-	local items_json item_count
-	items_json="$(gh project item-list "$project_number" --owner "$owner" --format json --limit "$item_limit" 2>/dev/null)" || {
+	local items_json rc
+	items_json="$(_board_item_list "$owner" "$project_number" "$item_limit")"; rc=$?
+	if (( rc == 3 )); then
+		RECONCILE_DONE_REPORT="UNKNOWN: project item list hit the $item_limit cap for $owner/$repo — result may be truncated"
+		return 1
+	elif (( rc != 0 )); then
 		RECONCILE_DONE_REPORT="UNKNOWN: could not read project items for $owner/$repo"
 		return 1
-	}
+	fi
 	printf '%s' "$items_json" | jq -e 'type=="object" and (.items | type == "array")' \
 		>/dev/null 2>&1 || {
 		RECONCILE_DONE_REPORT="UNKNOWN: could not parse project items for $owner/$repo"
 		return 1
 	}
-	item_count="$(printf '%s' "$items_json" | jq '.items | length' 2>/dev/null)"
-	if [[ -n "$item_count" ]] && ((item_count >= item_limit)); then
-		RECONCILE_DONE_REPORT="UNKNOWN: project item list hit the $item_limit cap for $owner/$repo — result may be truncated"
-		return 1
-	fi
 
 	local open_facts
 	open_facts="$(_krd_open_issue_facts "$owner" "$repo")" || {

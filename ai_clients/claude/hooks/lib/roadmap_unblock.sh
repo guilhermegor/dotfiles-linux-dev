@@ -384,6 +384,8 @@ reconcile_roadmap_unblock() {
 	if (( rc != 0 )); then
 		if (( rc == 2 )); then
 			RECONCILE_REPORT="UNKNOWN (throttled): GitHub GraphQL rate limit — retry next round"
+		elif (( rc == 3 )); then
+			RECONCILE_REPORT="UNKNOWN: project item list hit the 500 cap for $owner/$project — result may be truncated"
 		else
 			RECONCILE_REPORT="UNKNOWN (board unreadable): could not read project $owner/$project"
 		fi
