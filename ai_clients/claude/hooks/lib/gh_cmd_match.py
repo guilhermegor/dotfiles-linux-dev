@@ -365,7 +365,9 @@ GRAPHQL_BODY_KEY = re.compile(r"\bbody\s*:")
 GRAPHQL_LEADING_STRING = re.compile(r"\s*(" + GRAPHQL_STR + ")")
 GRAPHQL_IGNORED = re.compile("(" + GRAPHQL_STR + r")|#[^\n]*|[,\ufeff]")
 GRAPHQL_STRING = re.compile(GRAPHQL_STR)
-GRAPHQL_SHELL_BUILT = re.compile(r"\$\(|\$\{|`|^\s*\$")
+GRAPHQL_SHELL_BUILT = re.compile(r"\$\(|\$\{|`")
+GRAPHQL_VAR_DECL = re.compile(r"\$(\w+)\s*:")
+GRAPHQL_VAR_USE = re.compile(r"\$(\w+)")
 GRAPHQL_BODY_VAR = re.compile(r"\bbody\s*:\s*\$\s*(\w+)")
 GRAPHQL_INPUT_VAR = re.compile(r"\binput\s*:\s*\$\s*(\w+)")
 
@@ -396,13 +398,17 @@ def read_graphql_file(path, shifted):
     A pipe, tty or device (`/dev/stdin`, `/dev/zero`) is never the file the shell will feed gh,
     and a relative path after a `cd` or a redirect may name a different file than the hook sees.
     """
-    if (shifted and not os.path.isabs(path)) or not os.path.isfile(path):
+    moved, written = shifted
+    if (moved and not os.path.isabs(path)) or os.path.normpath(path) in written:
         return None
-    with open(path) as fh:
-        return fh.read(1 << 20)
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read((1 << 20) + 1)
+    return text if len(text) <= 1 << 20 else None  # over the cap: the tail is unseen
 
 
-def graphql_issue_write(fields, input_file, shifted=False):
+def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
     """Return the match dict for a `gh api graphql` createIssue/updateIssue mutation, or None.
 
     The GraphQL twin of the REST issue write (dotfiles-linux-dev#903): the mutation text comes
@@ -412,7 +418,7 @@ def graphql_issue_write(fields, input_file, shifted=False):
     `--input -`, an unreadable file, a shell-built query) is judged blind, which blocks.
     """
     blind = {"matched": True, "repo": None, "head": None, "has_body": False, "body": None,
-             "has_body_file": True, "body_file": input_file or "-", "body_json": True,
+             "has_body_file": True, "body_file": "-", "body_json": True,
              "labels": [], "auto": False, "method": "POST"}
     query, values = "", {}
     for typed, field in fields:
@@ -449,9 +455,13 @@ def graphql_issue_write(fields, input_file, shifted=False):
             return blind  # unreadable / stdin / not an object: the mutation is unseen
     # GraphQL treats `,` and `#...` comments as whitespace; blank them outside strings (#906 review)
     query = GRAPHQL_IGNORED.sub(lambda m: m.group(1) or " ", query)
+    shell_text = mask_graphql_strings(query) if input_file else query
+    undeclared = set(GRAPHQL_VAR_USE.findall(shell_text)) - set(GRAPHQL_VAR_DECL.findall(shell_text))
+    if undeclared or GRAPHQL_SHELL_BUILT.search(query):
+        return blind  # `$M` / `$(...)` the shell expands: the real query is unseen
     muts = list(GRAPHQL_ISSUE_MUTATION.finditer(mask_graphql_strings(query)))
     if not muts:
-        return blind if GRAPHQL_SHELL_BUILT.search(query) else None
+        return None
     body = None  # only the mutation's own body source counts: a stray `-f body=` is never GitHub's
     seg = graphql_call_args(query, muts[0].end())
     masked = mask_graphql_strings(seg)  # keywords inside a string literal are not syntax
@@ -478,6 +488,7 @@ def graphql_issue_write(fields, input_file, shifted=False):
         elif body is None:
             try:
                 body = json.loads(values.get(name, "")).get("body")
+                body = body if body is None or isinstance(body, str) else ""
             except (ValueError, AttributeError):
                 body = ""  # input object unresolved: fail closed, body unknown
     if body is None and re.search(r"\bbody\b", GRAPHQL_STRING.sub('""', seg)):
@@ -493,10 +504,18 @@ def graphql_issue_write(fields, input_file, shifted=False):
 
 
 def chain_moves_files(segments):
-    """True when the chain has a `cd`/`pushd` or a redirect/`tee`, so a relative path is unreliable."""
-    return any(a[:1] in (["cd"], ["pushd"], ["tee"])
-               or any(t.lstrip("0123456789").startswith(">") for t in a)
-               for a in iter_argvs(segments))
+    """Return (cd seen, paths the chain writes via `>`/`>>`/`tee`): files a hook read may predate."""
+    moved, written = False, set()
+    for argv in iter_argvs(segments):
+        moved = moved or argv[:1] in (["cd"], ["pushd"])
+        if argv[:1] == ["tee"]:
+            written.update(os.path.normpath(t) for t in argv[1:] if not t.startswith("-"))
+        for i, tok in enumerate(argv):
+            m = re.match(r"^[0-9&]*>>?(.*)$", tok)
+            target = m and (m.group(1) or (argv[i + 1] if i + 1 < len(argv) else ""))
+            if target:
+                written.add(os.path.normpath(target))
+    return moved, written
 
 
 def api_issue_match(segments):

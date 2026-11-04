@@ -642,7 +642,7 @@ EOF
     jq -nc '{query: "mutation($input:UpdateIssueInput!){updateIssue(input:$input){a}}", variables: {input: {id: "I", body: "no dod"}}}' > "$f"
     run bash -c "payload 'gh api graphql --input $f' | '$GUARD'"
     [ "$status" -eq 2 ]
-    jq -nc --arg b "$(printf "$COMPLIANT_BODY")" '{query: "mutation($input:UpdateIssueInput!){updateIssue(input:$input){a}}", variables: {input: {id: "I", body: $b}}}' > "$f"
+    jq -nc --arg b "$(printf %b "$COMPLIANT_BODY")" '{query: "mutation($input:UpdateIssueInput!){updateIssue(input:$input){a}}", variables: {input: {id: "I", body: $b}}}' > "$f"
     run bash -c "payload 'gh api graphql --input $f' | '$GUARD'"
     [ "$status" -eq 0 ]
 }
@@ -661,4 +661,17 @@ EOF
     [ "$status" -eq 0 ]
     run bash -c "payload 'gh api graphql -f query=\"mutation{addComment(input:{body:\\\"call createIssue(x)\\\"}){a}}\"' | '$GUARD'"
     [ "$status" -eq 0 ]
+}
+
+@test "GraphQL mid-query shell variable, rewritten absolute file and oversize file are blind (#906 ladder 2)" {
+    run bash -c "payload 'gh api graphql -f query=\"mutation{\$M}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    printf '%s' '{viewer{login}}' > "$REPO/benign.graphql"
+    run bash -c "payload 'printf x > $REPO/benign.graphql && gh api graphql -F query=@$REPO/benign.graphql' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -F query=@$REPO/benign.graphql > $REPO/out.json' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    { printf '#%.0s' $(seq 1 1100000); printf '\nmutation{createIssue(input:{body:"nope"}){a}}'; } > "$REPO/big.graphql"
+    run bash -c "payload 'gh api graphql -F query=@$REPO/big.graphql' | '$GUARD'"
+    [ "$status" -eq 2 ]
 }
