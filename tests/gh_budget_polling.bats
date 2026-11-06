@@ -152,6 +152,7 @@ STUB
     source "$DIR/funcs.sh"
     run sweep_review_gate o r o/r /dev/null
     [[ "$output" == *"UNKNOWN"*"GraphQL budget 10 < 100"* ]]
-    run grep -c graphql "$DIR/gh.log"
+    # The only graphql call allowed is the free rateLimit probe (#918); no thread query.
+    run grep -c 'graphql.*reviewThreads' "$DIR/gh.log"
     [ "$output" = 0 ]
 }

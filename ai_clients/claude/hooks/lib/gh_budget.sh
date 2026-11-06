@@ -285,6 +285,8 @@ gh_budget_with_backoff() {
 		err_file="$(mktemp)"
 		out="$("$@" 2>"$err_file")"
 		rc=$?
+		# Spend log: `rateLimit{cost}` when the caller's query asked for it, else 0 (still one call).
+		gh_budget_log_spend "$(printf '%s' "$out" | jq -r '.data.rateLimit.cost // 0' 2>/dev/null)"
 		if [ "$rc" -eq 0 ]; then
 			rm -f "$err_file"
 			printf '%s' "$out"
@@ -303,9 +305,104 @@ gh_budget_with_backoff() {
 	return 75
 }
 
+# gh_budget_graphql_read [FLOOR]
+# Reads the GraphQL quota from GraphQL ITSELF, then from `gh api rate_limit`, and trusts the LOWER
+# (dotfiles-linux-dev#918): `rate_limit` has been measured reporting 2842-3455 remaining while GraphQL
+# answered 0 or refused outright, so it can only ever confirm a budget is LOW, never that it is clear.
+# Sets, always:
+#   GH_BUDGET_GQL_REMAINING - the lower reading, "" when neither source was readable
+#   GH_BUDGET_GQL_RESET     - epoch of GraphQL's own `resetAt`; "" when unknown. A refusal carries no
+#                             resetAt, and rate_limit's reset is the figure that printed 20:56Z for a
+#                             real 21:25Z reset, so it is used ONLY when GraphQL itself was unreadable
+#   GH_BUDGET_GQL_NOTE      - "rate_limit says N, GraphQL says M" when the two sources disagree about
+#                             being under FLOOR (default 100), else ""
+# A RATE_LIMIT refusal of the probe is the strongest signal there is: it counts as remaining 0, never
+# as an unreadable read that falls through to the REST figure. Returns 1 only with no reading at all.
+# shellcheck disable=SC2034 # the GH_BUDGET_GQL_* results are read by the caller
+gh_budget_graphql_read() {
+	local floor="${1:-${STOP_GRAPHQL_FLOOR:-100}}" out gql gql_reset="" rest rest_reset rest_json at
+	GH_BUDGET_GQL_REMAINING="" GH_BUDGET_GQL_RESET="" GH_BUDGET_GQL_NOTE=""
+	out="$(gh api graphql -f query='{rateLimit{remaining resetAt}}' 2>&1)"
+	gql="$(printf '%s' "$out" | jq -r '.data.rateLimit.remaining // empty' 2>/dev/null)"
+	if [[ "$gql" =~ ^[0-9]+$ ]]; then
+		at="$(printf '%s' "$out" | jq -r '.data.rateLimit.resetAt // empty' 2>/dev/null)"
+		[ -n "$at" ] && gql_reset="$(date -d "$at" +%s 2>/dev/null)"
+	else
+		gql=""
+		gh_budget_classify "$out"
+		if gh_budget_is_terminal || [[ "$out" == *RATE_LIMIT* ]]; then
+			gql=0 # refused: no resetAt exists to read, and none is invented
+		fi
+	fi
+	rest_json="$(gh api rate_limit 2>/dev/null)" || rest_json=""
+	rest="$(printf '%s' "$rest_json" | jq -r '.resources.graphql.remaining // empty' 2>/dev/null)"
+	rest_reset="$(printf '%s' "$rest_json" | jq -r '.resources.graphql.reset // empty' 2>/dev/null)"
+	[[ "$rest" =~ ^[0-9]+$ ]] || rest=""
+	if [ -z "$gql" ] && [ -z "$rest" ]; then
+		return 1
+	fi
+	if [ -n "$gql" ] && [ -n "$rest" ]; then
+		if [ "$gql" -lt "$rest" ]; then GH_BUDGET_GQL_REMAINING="$gql"; else GH_BUDGET_GQL_REMAINING="$rest"; fi
+		if [ "$gql" -lt "$floor" ] && [ "$rest" -ge "$floor" ]; then
+			GH_BUDGET_GQL_NOTE="rate_limit says $rest, GraphQL says $gql - trusting GraphQL"
+		fi
+	else
+		GH_BUDGET_GQL_REMAINING="${gql:-$rest}"
+	fi
+	if [ -n "$gql" ]; then
+		GH_BUDGET_GQL_RESET="$gql_reset"
+	elif [[ "$rest_reset" =~ ^[0-9]+$ ]]; then
+		GH_BUDGET_GQL_RESET="$rest_reset"
+	fi
+	return 0
+}
+
+# --- GraphQL spend log (dotfiles-linux-dev#918) -------------------------------------------------------
+# Nothing used to record WHO spends the shared budget, so an outage could not be attributed. One TSV
+# per account (the budget is account-wide): "<epoch> <caller> <points>", tab-separated. `gh` does not
+# expose a call's cost, so points are recorded where a response carries `rateLimit{cost}`; a call
+# whose cost is unknown logs 0 and still counts as a call in the summary.
+
+# gh_budget_spend_log_path - $GH_BUDGET_SPEND_LOG overrides it (tests).
+gh_budget_spend_log_path() {
+	printf '%s\n' "${GH_BUDGET_SPEND_LOG:-$(gh_budget_latch_default_dir)/dotfiles-dev-graphql-spend.tsv}"
+}
+
+# gh_budget_log_spend POINTS [CALLER]
+# Appends one line. CALLER defaults to $GH_BUDGET_CALLER (set it to a subagent name when known),
+# else the top-level script's basename. Past $GH_BUDGET_SPEND_LOG_MAX lines (default 2000) it keeps
+# the newest half. Never fails the caller: logging is best-effort.
+gh_budget_log_spend() {
+	local points="${1:-0}" caller="${2:-${GH_BUDGET_CALLER:-$(basename "${BASH_SOURCE[${#BASH_SOURCE[@]}-1]}")}}"
+	local log max="${GH_BUDGET_SPEND_LOG_MAX:-2000}"
+	[[ "$points" =~ ^[0-9]+$ ]] || points=0
+	log="$(gh_budget_spend_log_path)"
+	printf '%s\t%s\t%s\n' "$(date +%s)" "${caller//[$'\t\n']/ }" "$points" >>"$log" 2>/dev/null || return 0
+	if [ "$(wc -l <"$log" 2>/dev/null || echo 0)" -gt "$max" ]; then
+		tail -n "$((max / 2))" "$log" >"$log.tmp.$$" 2>/dev/null && mv -f "$log.tmp.$$" "$log" 2>/dev/null
+	fi
+	return 0
+}
+
+# gh_budget_spend_summary [WINDOW_SECONDS] [TOP_N]
+# Top callers over the last WINDOW (default 3600s, the budget's own window) by points, then calls.
+gh_budget_spend_summary() {
+	local window="${1:-3600}" top="${2:-3}" log
+	log="$(gh_budget_spend_log_path)"
+	[ -r "$log" ] || {
+		echo "no GraphQL spend recorded ($log)"
+		return 0
+	}
+	awk -F'\t' -v since="$(($(date +%s) - window))" '
+		$1 >= since { pts[$2] += $3; calls[$2]++ }
+		END { for (c in pts) printf "%d\t%d\t%s\n", pts[c], calls[c], c }' "$log" |
+		sort -t$'\t' -k1,1nr -k2,2nr | head -n "$top" |
+		awk -F'\t' '{ printf "%s: %s points, %s calls\n", $3, $1, $2 }'
+}
+
 # gh_budget_poll_allowed [FLOOR]
 # Call BEFORE starting a poll loop. Returns 1 (GH_BUDGET_POLL_REASON says why) while the 403 latch is
-# active or `rate_limit` shows GraphQL under FLOOR (default $GH_POLL_GRAPHQL_FLOOR, else $STOP_GRAPHQL_FLOOR (100, one floor with stop_budget.sh) - well
+# active or the lower of GraphQL's own `rateLimit` and `rate_limit` is under FLOOR (gh_budget_graphql_read) (default $GH_POLL_GRAPHQL_FLOOR, else $STOP_GRAPHQL_FLOOR (100, one floor with stop_budget.sh) - well
 # above gh_budget_quota_exhausted's 5, because a loop spends many points per hour, not one call).
 # Returns 0 otherwise, and the reason then carries the standing caveat: a full budget does NOT prove
 # the secondary limit is clear (measured 2026-11-03: rate_limit said 5000/5000 while GraphQL still
@@ -313,7 +410,7 @@ gh_budget_with_backoff() {
 # rate_limit allows the loop - the same fail-open gh_budget_quota_exhausted uses.
 # shellcheck disable=SC2034 # GH_BUDGET_POLL_REASON is read by the caller after this returns
 gh_budget_poll_allowed() {
-	local floor="${1:-${GH_POLL_GRAPHQL_FLOOR:-${STOP_GRAPHQL_FLOOR:-100}}}" json remaining
+	local floor="${1:-${GH_POLL_GRAPHQL_FLOOR:-${STOP_GRAPHQL_FLOOR:-100}}}" remaining
 	GH_BUDGET_POLL_REASON=""
 	if ! [[ "$floor" =~ ^[0-9]+$ ]]; then
 		GH_BUDGET_POLL_REASON="poll floor '$floor' is not a number - not starting a poll loop"
@@ -323,10 +420,10 @@ gh_budget_poll_allowed() {
 		GH_BUDGET_POLL_REASON="403 latch active - GitHub API budget still exhausted, not starting a poll loop"
 		return 1
 	fi
-	json="$(gh api rate_limit 2>/dev/null)" || json=""
-	remaining="$(printf '%s' "$json" | jq -r '.resources.graphql.remaining // empty' 2>/dev/null)"
+	gh_budget_graphql_read "$floor" || true # no reading at all: fail open, like before
+	remaining="$GH_BUDGET_GQL_REMAINING"
 	if [[ "$remaining" =~ ^[0-9]+$ ]] && [ "$remaining" -lt "$floor" ]; then
-		GH_BUDGET_POLL_REASON="GraphQL budget $remaining < $floor - not starting a poll loop"
+		GH_BUDGET_POLL_REASON="GraphQL budget $remaining < $floor - not starting a poll loop${GH_BUDGET_GQL_NOTE:+ ($GH_BUDGET_GQL_NOTE)}"
 		return 1
 	fi
 	GH_BUDGET_POLL_REASON="GraphQL ${remaining:-unreadable} remaining; a full budget does not prove the secondary limit is clear"
@@ -341,6 +438,8 @@ gh_budget_poll_allowed() {
 # carries no information about the call about to run, so a predictive probe is the same defect as
 # `/rate_limit` one layer down: cheap, healthy-looking, and wrong. The design that survives is
 # "latch on the first REAL refusal" — gh_budget_classify (above) plus gh_budget_is_terminal is
-# that whole mechanism; no separate probe belongs in this file. See
+# that whole mechanism. gh_budget_graphql_read (#918) does not reintroduce the retracted idea: it
+# only ever LOWERS the figure (a refusal or a low reading means LOW), and a passing probe still
+# proves nothing about the call about to run - the poll caveat above stands. See
 # ~/.claude/memory/lessons-claude-toolchain/rate-limit-endpoint-cannot-see-the-secondary-limit.md
 # for the full measurement trail before reintroducing anything probe-shaped here.

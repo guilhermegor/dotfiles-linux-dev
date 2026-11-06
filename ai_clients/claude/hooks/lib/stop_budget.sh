@@ -6,7 +6,8 @@
 # long /dev-loop session drained the shared 5000/h GraphQL bucket in minutes — leaving none for
 # `gh pr merge --auto`, the review-thread gate, or closingIssuesReferences.
 #
-#   stop_budget_gate    — latch active, or GraphQL under a floor => print BUDGET-LOW once, return 1.
+#   stop_budget_gate    — latch active, or GraphQL under a floor (the lower of GraphQL's own rateLimit
+#                         and `rate_limit`, #918) => print BUDGET-LOW once, return 1.
 #                         The caller PASSES (exit 0): never block a turn on a blind board.
 #   stop_plan_cache_*   — one planner result per repo, reused until a TTL lapses or the transcript
 #                         shows something that changes the board (push, PR open/merge, Agent dispatch).
@@ -21,25 +22,39 @@ fi
 source "$(dirname "${BASH_SOURCE[0]}")/gh_budget.sh"
 
 # stop_budget_gate
-# Order matters: the latch is a file read (no gh); only an unlatched call spends one FREE
-# `gh api rate_limit` read, and a floor breach writes the latch so later Stops skip even that.
+# Order matters: the latch is a file read (no gh); only an unlatched call spends the two reads
+# (GraphQL's `rateLimit` probe + `gh api rate_limit`), and a floor breach writes the latch so later
+# Stops skip even those.
 stop_budget_gate() {
-	local floor="${STOP_GRAPHQL_FLOOR:-100}" json remaining reset now until
+	local floor="${STOP_GRAPHQL_FLOOR:-100}" reset now until ttl note=""
 	if ! gh_budget_latch_active; then
-		json="$(gh api rate_limit 2>/dev/null)" || return 0 # unreadable => not proven low
-		remaining="$(printf '%s' "$json" | jq -r '.resources.graphql.remaining // empty' 2>/dev/null)"
-		reset="$(printf '%s' "$json" | jq -r '.resources.graphql.reset // empty' 2>/dev/null)"
-		[[ "$remaining" =~ ^[0-9]+$ ]] && [[ "$reset" =~ ^[0-9]+$ ]] || return 0
-		[ "$remaining" -lt "$floor" ] || return 0
+		# The lower of GraphQL's own rateLimit and `rate_limit` (#918); a refusal counts as 0.
+		gh_budget_graphql_read "$floor" || return 0 # no reading => not proven low
+		[[ "$GH_BUDGET_GQL_REMAINING" =~ ^[0-9]+$ ]] && [ "$GH_BUDGET_GQL_REMAINING" -lt "$floor" ] || return 0
+		note="${GH_BUDGET_GQL_NOTE:+ [$GH_BUDGET_GQL_NOTE]}"
 		now="$(date +%s)"
-		gh_budget_latch_write "$((reset > now ? reset - now : 45))" || true
+		reset="$GH_BUDGET_GQL_RESET"
+		if [[ "$reset" =~ ^[0-9]+$ ]] && [ "$reset" -gt "$now" ]; then
+			ttl=$((reset - now))
+			rm -f "$(gh_budget_latch_path).guess" 2>/dev/null
+		else
+			# No resetAt to read (a refused probe has none): recheck soon, and say the time is a guess.
+			ttl="${GH_BUDGET_UNKNOWN_RESET_TTL:-120}"
+			printf '%s\n' "$((now + ttl))" >"$(gh_budget_latch_path).guess" 2>/dev/null || true
+		fi
+		gh_budget_latch_write "$ttl" || true
 	fi
 	until="$(cat "$(gh_budget_latch_path)" 2>/dev/null)"
 	# Once per latch window: the marker remembers which reset was already announced.
 	if [ "$(cat "$(gh_budget_latch_path).noticed" 2>/dev/null)" != "$until" ]; then
 		local when="soon"
 		[[ "$until" =~ ^[0-9]+$ ]] && when="$(date -u -d "@$until" +%H:%MZ 2>/dev/null)"
-		echo "BUDGET-LOW (resets $when) — Stop guard skipped, not blocking (dotfiles-linux-dev#814)." >&2
+		if [ "$(cat "$(gh_budget_latch_path).guess" 2>/dev/null)" = "$until" ]; then
+			when="reset unknown, rechecking after $when"
+		else
+			when="resets $when"
+		fi
+		echo "BUDGET-LOW ($when)$note — Stop guard skipped, not blocking (dotfiles-linux-dev#814)." >&2
 		printf '%s\n' "$until" >"$(gh_budget_latch_path).noticed" 2>/dev/null || true
 	fi
 	return 1

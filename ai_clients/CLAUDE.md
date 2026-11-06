@@ -579,10 +579,25 @@ registry entry gets a `note:` line. Tests: `tests/kanban_reconcile.bats`, `tests
 re-plan from scratch each time and never consulted the #445 latch; a long `/dev-loop` session
 drained the shared GraphQL bucket in minutes. `hooks/lib/stop_budget.sh` is the one fix:
 
-- `stop_budget_gate`: while the latch is active, or `gh api rate_limit` (free) shows GraphQL under
+- `stop_budget_gate`: while the latch is active, or the **lower** of GraphQL's own
+  `{rateLimit{remaining resetAt}}` and `gh api rate_limit` shows GraphQL under
   `STOP_GRAPHQL_FLOOR` (default 100), it writes the latch until the reset, prints
   `BUDGET-LOW (resets HH:MMZ)` once per window, and the guard **passes** (exit 0). It never blocks
-  a turn on a board it cannot read, and never spends the remainder.
+  a turn on a board it cannot read, and never spends the remainder. (#918:) `rate_limit` was
+  measured saying 2842-3455 while GraphQL said 0 or refused, so it can only confirm LOW. A
+  `RATE_LIMIT` refusal of the probe counts as 0, not as an unreadable read; a refusal carries no
+  `resetAt`, so the latch is a 120 s guess (`GH_BUDGET_UNKNOWN_RESET_TTL`) and the message says
+  `reset unknown, rechecking after HH:MMZ` rather than printing `rate_limit`'s reset, which
+  printed 20:56Z for a real 21:25Z. When the sources disagree about being under the floor the
+  message says so. `gh_budget_poll_allowed` shares the same reader (`gh_budget_graphql_read`).
+  A passing probe still proves nothing about the call about to run (#533): it only ever lowers.
+- GraphQL spend log (#918): `gh_budget_log_spend POINTS [CALLER]` appends `epoch caller points` to
+  one per-account TSV (`GH_BUDGET_SPEND_LOG`, capped at `GH_BUDGET_SPEND_LOG_MAX` lines);
+  `hooks/lib/gh_spend_summary.sh [WINDOW_S] [TOP_N]` prints the top callers. Only
+  `gh_budget_with_backoff` calls (the thread gate) log today, with `rateLimit{cost}` when the
+  response carries it, else 0 points and one call. The CLI does not expose a call's cost, so
+  `gh pr list`-style call sites stay unlogged until they ask for `rateLimit{cost}`. Set
+  `GH_BUDGET_CALLER` to attribute a subagent.
 - `stop_plan_cache_*`: the dispatch planner's result is cached per repo in
   `<git-common-dir>/stop-plan-cache/` (shared by both dispatch guards) for `STOP_PLAN_CACHE_TTL`
   seconds (default 180). A push, `gh pr create|merge` or `Agent` dispatch appearing in the

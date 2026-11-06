@@ -50,5 +50,11 @@ def refuse_if_latched(prog: str) -> bool:
 	if until is None:
 		return False
 	reset = datetime.fromtimestamp(until, tz=timezone.utc).strftime("%H:%MZ")
-	print(f"{prog}: BUDGET-LOW (resets {reset}) -- not calling gh", file=sys.stderr)
+	when = f"resets {reset}"
+	try:  # stop_budget_gate marks a latch whose end it had to guess (a refused probe has no resetAt)
+		if int(Path(f"{latch_path()}.guess").read_text().strip()) == until:
+			when = f"reset unknown, rechecking after {reset}"
+	except (OSError, ValueError):
+		pass
+	print(f"{prog}: BUDGET-LOW ({when}) -- not calling gh", file=sys.stderr)
 	return True
