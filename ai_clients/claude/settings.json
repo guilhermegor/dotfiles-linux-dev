@@ -65,6 +65,7 @@
       "Bash(rtk --version)",
       "Bash(~/.claude/hooks/run_ladder_review.sh:*)",
       "Bash(~/.claude/hooks/merge_green_pr.sh:*)",
+      "Bash(~/.claude/hooks/resolve_review_thread.sh:*)",
       "Bash(diff:*)",
       "Bash(cut:*)",
       "Bash(tr:*)",
