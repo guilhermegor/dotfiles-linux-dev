@@ -763,7 +763,7 @@ STUB_IN_REVIEW='reconcile_kanban() {
     write_fake_gh
     run_boards in_review "$TEST_TMP" "owner|1|repo" -- "source '$LIB'"
     [[ "$output" == *"board owner/1 (repo): ok — 1 moved"* ]]
-    ! grep -q '^project list' "$GH_LOG"
+    refute_gh '^project list'
 }
 
 @test "boards: an unresolvable board is UNKNOWN before any reconcile runs" {
