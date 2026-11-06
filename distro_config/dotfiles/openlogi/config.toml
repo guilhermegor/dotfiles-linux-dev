@@ -6,6 +6,12 @@ display_name = "K850"
 codename = "K850 Performance Wireless Keyboard"
 kind = "keyboard"
 
+[devices."camera:046d:082d:serial:f66ea92f".camera_controls]
+zoom = 100
+pan = 0
+focus_auto = 0
+focus = 0
+
 [app_settings]
 launch_at_login = true
 check_for_updates = true

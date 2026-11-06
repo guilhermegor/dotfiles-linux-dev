@@ -810,8 +810,9 @@ _run_runtime_review() {
 			notice="diff truncated at 120000 of $total bytes; this review covers only the first part"
 		fi
 		prompt="Review PR #$pr_number. Report concrete bugs and risks as a markdown list with file:line."
-		[ "$runtime" = "claude" ] && prompt+=" End with a '## Verdict' section giving the overall result."
+		[ "$runtime" = "claude" ] && prompt+=" You have no tools and cannot read files or run commands. Review only from the diff below and state anything you could not verify."
 		[ -z "$notice" ] || prompt+=" NOTE: $notice; say so in the review."
+		[ "$runtime" = "claude" ] && prompt+=" End with a '## Verdict' section giving the overall result."
 		prompt+=" Diff:"$'\n'"$diff"
 		if [ "$runtime" = "kimi" ]; then
 			out="$(timeout "${REVIEWER_LADDER_RUN_TIMEOUT:-900}" kimi -p "$prompt" </dev/null)" || return 1
