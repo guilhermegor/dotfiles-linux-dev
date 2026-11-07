@@ -345,6 +345,18 @@ JSON
     [[ "$enc" == "me%3Afeat%2Fa%26b%23c%2Bd" ]]
 }
 
+@test "an unreadable origin is a failure that prunes nothing" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    git -C "$work" remote set-url origin "$BATS_TEST_TMPDIR/gone.git"
+    run prune_apply_one "$work" "$BATS_TEST_TMPDIR/wt-b1" b1 "$(git -C "$BATS_TEST_TMPDIR/wt-b1" rev-parse HEAD)"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"remote unreadable"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-b1" ]
+    [ -n "$(git -C "$work" rev-parse --verify --quiet refs/heads/b1)" ]
+    [ -n "$(git -C "$bare" rev-parse --verify --quiet refs/heads/b1)" ]
+}
+
 @test "the remote delete is refused when origin moved after classification" {
     make_branch b1 f1.txt
     land_on_master f1.txt
@@ -357,9 +369,11 @@ JSON
     git -C "$other" add extra.txt
     git -C "$other" commit --quiet -m 'feat: extra'
     git -C "$other" push --quiet origin b1 2>/dev/null
-    run prune_apply_one "$work" "$BATS_TEST_TMPDIR/wt-b1" b1
+    run prune_apply_one "$work" "$BATS_TEST_TMPDIR/wt-b1" b1 "$(git -C "$BATS_TEST_TMPDIR/wt-b1" rev-parse HEAD)"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"push --delete failed"* ]]
+    [[ "$output" == *"remote moved, nothing pruned"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-b1" ]
+    [ -n "$(git -C "$work" rev-parse --verify --quiet refs/heads/b1)" ]
     [ -n "$(git -C "$work" ls-remote origin refs/heads/b1)" ]
 }
 
@@ -371,4 +385,145 @@ JSON
     [[ "$output" == *"WOULD-PRUNE-ENTRY"* ]]
     run_prune 1
     [ -z "$(git -C "$work" worktree list --porcelain | grep wt-b1)" ]
+}
+
+@test "a commit landing after classification prunes nothing" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    local wt="$BATS_TEST_TMPDIR/wt-b1" classified
+    classified="$(git -C "$wt" rev-parse HEAD)"
+    git -C "$wt" commit --quiet --allow-empty -m 'feat: unshipped'
+    run prune_apply_one "$work" "$wt" b1 "$classified"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"HEAD moved since classification, nothing pruned"* ]]
+    [ -d "$wt" ]
+    [ -n "$(git -C "$bare" rev-parse --verify --quiet refs/heads/b1)" ]
+}
+
+@test "an edit landing after classification prunes nothing" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    local wt="$BATS_TEST_TMPDIR/wt-b1"
+    echo late >"$wt/late.txt"
+    run prune_apply_one "$work" "$wt" b1 "$(git -C "$wt" rev-parse HEAD)"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nothing pruned"* ]]
+    [ -f "$wt/late.txt" ]
+}
+
+# Real git against an ssh:// URL, with ssh itself replaced by a script that names who called it.
+fake_ssh_setup() {
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    printf '#!/bin/bash\necho "FAKE-SSH $*" >&2\nexit 1\n' >"$BATS_TEST_TMPDIR/bin/ssh"
+    chmod +x "$BATS_TEST_TMPDIR/bin/ssh"
+    PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+    unset GIT_SSH GIT_SSH_COMMAND
+}
+
+@test "the batch default is used when no ssh setting exists" {
+    fake_ssh_setup
+    run prune_git_remote "$work" ls-remote ssh://host/repo
+    [[ "$output" == *"FAKE-SSH -oBatchMode=yes "* ]]
+}
+
+@test "a configured core.sshCommand is not overridden by the batch default" {
+    fake_ssh_setup
+    git -C "$work" config core.sshCommand 'echo CONFIG-SSH >&2; false'
+    run prune_git_remote "$work" ls-remote ssh://host/repo
+    [[ "$output" == *"CONFIG-SSH"* ]]
+    [[ "$output" != *"FAKE-SSH"* ]]
+}
+
+@test "an exported empty GIT_SSH_COMMAND does not mask core.sshCommand" {
+    fake_ssh_setup
+    git -C "$work" config core.sshCommand 'echo CONFIG-SSH >&2; false'
+    export GIT_SSH_COMMAND=""
+    run prune_git_remote "$work" ls-remote ssh://host/repo
+    [[ "$output" == *"CONFIG-SSH"* ]]
+    [[ "$output" != *"cannot run"* ]]
+    # the caller's own environment is left as it was
+    [ "${GIT_SSH_COMMAND-UNSET}" = "" ]
+}
+
+@test "a configured GIT_SSH wrapper is not replaced by the batch default" {
+    fake_ssh_setup
+    printf '#!/bin/bash\necho "WRAPPER $*" >&2\nexit 1\n' >"$BATS_TEST_TMPDIR/wrapper"
+    chmod +x "$BATS_TEST_TMPDIR/wrapper"
+    export GIT_SSH="$BATS_TEST_TMPDIR/wrapper"
+    run prune_git_remote "$work" ls-remote ssh://host/repo
+    [[ "$output" == *"WRAPPER"* ]]
+    [[ "$output" != *"FAKE-SSH"* ]]
+}
+
+@test "a probe killed with no stderr still names its exit code" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    local wt="$BATS_TEST_TMPDIR/wt-b1"
+    prune_git_remote() { return 124; }
+    run prune_apply_one "$work" "$wt" b1 "$(git -C "$wt" rev-parse HEAD)"
+    [ "$status" -ne 0 ]
+    [ "$output" = "remote unreadable (exit 124), nothing pruned" ]
+}
+
+@test "a refusal that pruned nothing is reported KEEP, never PARTIAL" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    prune_apply_one() { echo "remote moved, nothing pruned"; return 1; }
+    run prune_worktrees "$work" 1
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-b1: remote moved, nothing pruned"* ]]
+    [[ "$output" != *PARTIAL* ]]
+}
+
+@test "the lease refuses a push landing after the probe and keeps origin" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    local other="$BATS_TEST_TMPDIR/other" wt="$BATS_TEST_TMPDIR/wt-b1" head moved
+    head="$(git -C "$wt" rev-parse HEAD)"
+    git clone --quiet "$bare" "$other" 2>/dev/null
+    git -C "$other" config user.email t@e.com
+    git -C "$other" config user.name t
+    git -C "$other" checkout --quiet b1
+    git -C "$other" commit --quiet --allow-empty -m 'feat: raced'
+    moved="$(git -C "$other" rev-parse HEAD)"
+    # pre-push runs after the probe, so origin moves exactly inside the window the lease guards.
+    # A global core.hooksPath would bypass the repo's own hooks dir: pin it to the one written below.
+    git -C "$work" config core.hooksPath "$work/.git/hooks"
+    printf '#!/bin/bash\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ngit -C "%s" push --quiet origin b1\n' "$other" \
+        >"$work/.git/hooks/pre-push"
+    chmod +x "$work/.git/hooks/pre-push"
+    run prune_apply_one "$work" "$wt" b1 "$head"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"origin/b1 state unconfirmed; deleted local branch was at $head"* ]]
+    [ "$(git -C "$bare" rev-parse refs/heads/b1)" = "$moved" ]
+}
+
+@test "the probe ignores a branch that only tail-matches the name" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    local wt="$BATS_TEST_TMPDIR/wt-b1" head
+    head="$(git -C "$wt" rev-parse HEAD)"
+    git -C "$wt" push --quiet origin --delete b1 2>/dev/null
+    git -C "$work" push --quiet origin "master:refs/heads/x/refs/heads/b1" 2>/dev/null
+    run prune_apply_one "$work" "$wt" b1 "$head"
+    [ "$status" -eq 0 ]
+    [ ! -d "$wt" ]
+    [ -n "$(git -C "$bare" rev-parse --verify --quiet refs/heads/x/refs/heads/b1)" ]
+}
+
+@test "a detached worktree is removed without any remote call" {
+    local wt="$BATS_TEST_TMPDIR/wt-det"
+    git -C "$work" worktree add --quiet --detach "$wt" origin/master
+    git -C "$work" remote set-url origin "$BATS_TEST_TMPDIR/gone.git"
+    run prune_apply_one "$work" "$wt" "" "$(git -C "$wt" rev-parse HEAD)"
+    [ "$status" -eq 0 ]
+    [ ! -d "$wt" ]
+}
+
+@test "a branch never pushed is pruned locally with no remote delete" {
+    local wt="$BATS_TEST_TMPDIR/wt-lo"
+    git -C "$work" worktree add --quiet -b lo "$wt" origin/master
+    run prune_apply_one "$work" "$wt" lo "$(git -C "$wt" rev-parse HEAD)"
+    [ "$status" -eq 0 ]
+    [ ! -d "$wt" ]
+    [ -z "$(git -C "$work" rev-parse --verify --quiet refs/heads/lo)" ]
 }
