@@ -765,10 +765,54 @@ write_pr_json() {
     [ -z "$output" ]
 }
 
-@test "the first verb wins: checkout -b then pr create lands In progress" {
+# Changed from "the first verb wins" (#902 review): the hook runs only after the WHOLE command
+# succeeded, so the last verb describes where the card ended up; first-verb left a card with an
+# open PR in In progress.
+@test "the last verb wins: checkout -b then push then pr create lands In review" {
     write_fake_gh "OPEN"
-    run run_hook "git checkout -b feat/131-x && gh pr create --title x --body y"
+    run run_hook "git checkout -b feat/131-x && git push -u origin HEAD && gh pr create --title x --body y"
+    [[ "$output" == *"In review"* ]]
+    run run_hook "gh pr create --title x --body y && git checkout -b feat/131-y"
     [[ "$output" == *"In progress"* ]]
+}
+
+@test "a branch name containing -b or -c is not a branch creation" {
+    write_fake_gh "OPEN"
+    run run_hook "git fetch && git checkout fix/131-bar"
+    [ -z "$output" ]
+    run run_hook "git switch feat/12-config"
+    [ -z "$output" ]
+    run run_hook "git checkout -b feat/131-x"
+    [[ "$output" == *"In progress"* ]]
+}
+
+@test "eval, source and exec stop the scan rather than resolve the original cwd" {
+    write_fake_gh "OPEN"
+    run run_hook "eval \"cd $TEST_TMP\" && gh pr create --title x --body y"
+    [ -z "$output" ]
+    run run_hook "source ./env.sh && gh pr create --title x --body y"
+    [ -z "$output" ]
+}
+
+@test "a relative cd resolves from the payload cwd, not the hook's" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    mkdir "$TEST_TMP/elsewhere"
+    cd "$TEST_TMP/elsewhere"
+    run bash -c 'jq -nc --arg c "$1" --arg d "$2" "{tool_name:\"Bash\",cwd:\$d,tool_input:{command:\$c}}" | "$3"' \
+        _ "cd wt && gh pr create --title x --body y" "$TEST_TMP" "$HOOK"
+    [[ "$output" == *"moved issue"*"131"* ]]
+}
+
+@test "redirects and a heredoc body do not break the scan" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "cd $TEST_TMP/wt 2>&1 && gh pr create --title x --body y"
+    [[ "$output" == *"moved issue"*"131"* ]]
+    run run_hook "$(printf "cat > pr.txt <<EOF\ndon't cd /nowhere\nEOF\ngh pr create --title x --body y")"
+    [[ "$output" == *"moved issue"* ]]
 }
 
 @test "a lone & or command cd does not carry the cd path" {

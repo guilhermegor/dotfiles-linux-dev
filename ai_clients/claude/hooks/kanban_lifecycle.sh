@@ -60,7 +60,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HOOK_DIR/lib/kanban_reconcile.sh"
 
 main() {
-    local payload tool command segment cd_path target owner repo issue rest rest_head
+    local payload payload_cwd tool command segment cd_path target owner repo issue rest rest_head
     local project_number project_node status_field option_id item_id
 
     payload="$(cat)"
@@ -69,6 +69,11 @@ main() {
 
     command="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
     [[ -n "$command" ]] || exit 0
+
+    # The hook's own cwd is not the Bash tool's: a relative `cd` or `--input` must resolve from the
+    # payload's (#902 review). A payload without one keeps the hook's cwd.
+    payload_cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
+    if [[ -n "$payload_cwd" ]]; then cd "$payload_cwd" 2>/dev/null || exit 0; fi
 
     select_lifecycle_segment "$command" || exit 0      # no lifecycle verb → nothing to do
     command="$segment"
@@ -82,7 +87,9 @@ main() {
         read -r owner repo rest_head <<<"$rest"
         issue="$(branch_issue "$rest_head")" || exit 0
     elif [[ "$target" == "In review" ]] && ! printf '%s' "$command" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+create'; then
-        exit 0     # a REST PR whose head can no longer be read (--input file gone) must not fall back to HEAD
+        # A REST PR whose head can no longer be read must not fall back to HEAD. The --input file is
+        # read after the command ended, so `--input f && rm f` lands here: known gap, tracked in #910.
+        exit 0
     else
         read -r owner repo < <(owner_repo) || exit 0
         [[ -n "$owner" && -n "$repo" ]] || exit 0
@@ -123,20 +130,20 @@ main() {
 }
 
 select_lifecycle_segment() {
-    # Set target, segment and cd_path from the first segment of command $1 holding a lifecycle verb,
-    # or return 1. The substring gate keeps python off the path of every other Bash call.
+    # Set target, segment and cd_path from the LAST segment of command $1 holding a lifecycle verb,
+    # or return 1. This runs only after the whole command succeeded, so the last verb is the card's
+    # final state: `checkout -b x && git push && gh pr create` ends In review, not In progress. The substring gate keeps python off the path of every other Bash call.
     printf '%s' "$1" | grep -Eq 'checkout|switch|pr[[:space:]]+create|api[[:space:]].*pulls' || return 1
-    local record path seg column
+    local record path seg column found=1
     while IFS= read -r -d '' record; do
         path="${record%%$'\x1f'*}"
         seg="${record#*$'\x1f'}"
         # In a subshell at that path, so a relative `--input <file>` resolves where the command ran.
         column="$(if [[ -n "$path" ]]; then cd "$path" 2>/dev/null || exit 1; fi; target_column "$seg")" \
             || continue
-        target="$column" segment="$seg" cd_path="$path"
-        return 0
+        target="$column" segment="$seg" cd_path="$path" found=0
     done < <(command_segments "$1")
-    return 1
+    return "$found"
 }
 
 command_segments() {
@@ -147,6 +154,8 @@ import os, re, shlex, sys
 sys.path.insert(0, sys.argv[1])
 import gh_cmd_match as g
 
+SAFE = {"git", "gh", "rtk", "echo", "printf", "cat", "mkdir", "rm", "touch", "ls", "true", "false",
+        "test", "[", "jq", "sleep", "make", "mktemp", "cp", "mv", "grep", "python3", "curl", "bats"}
 try:
     command = os.environ["KANBAN_CMD"]
     path, out, pos = "", [], 0
@@ -164,8 +173,11 @@ try:
                 break
             path = os.path.join(path, os.path.expanduser(argv[1]))
             continue
-        # Other ways to change directory cannot be followed, so stop rather than guess.
-        if "cd" in argv[1:] or argv[:1] and (argv[0] in ("pushd", "popd", "builtin", "command") or argv[0][:1] in "({"):
+        # Allowlist, not denylist: only a known external command cannot change this shell's directory.
+        # `eval`, `source`, `exec`, functions, `pushd`, `if`, `(`... all stop the scan, not guess.
+        assign = re.compile(r"[A-Za-z_]\w*=")
+        words = [w for w in argv if not assign.match(w)] if argv[:1] and assign.match(argv[0]) else argv
+        if not words or words[0] not in SAFE:
             break
         out.append(f"{path}\x1f{segment}\0")
     sys.stdout.write("".join(out))  # only once every segment parsed, so the fallback never mixes
@@ -179,7 +191,7 @@ target_column() {
     # Map the Bash verb to its target column, or return 1 when it is neither lifecycle verb.
     local cmd="$1"
     if printf '%s' "$cmd" \
-        | grep -Ezq '^[[:space:]]*(rtk[[:space:]]+)?git[[:space:]]+(checkout[[:space:]]+.*-b|switch[[:space:]]+.*-c)'; then
+        | grep -Ezq '^[[:space:]]*(rtk[[:space:]]+)?git[[:space:]]+(checkout[[:space:]]+(.*[[:space:]])?-b|switch[[:space:]]+(.*[[:space:]])?-c)([[:space:]]|$)'; then
         printf 'In progress'; return 0
     fi
     if printf '%s' "$cmd" \
