@@ -133,7 +133,7 @@ the documented default):
 | asked key | spec key |
 |---|---|
 | `name` / `description` / `root` | `project_name` / `project_description` / `project_root` (see below: the PARENT dir) |
-| `repo_visibility` / `protect_branch` | `repo_visibility` / `protect_branch` |
+| `human_reviewers_gate_merges` | `human_reviewers` (`y`/`n`) |
 | `language`, `skeleton`, `license`, `github_username` | same name |
 | `logging_helper` / `docker_compose` / `db_backend` | `logs` / `docker_compose` / `docker_db_backend` |
 | `schemaless_storage` | `storage` |
@@ -168,7 +168,7 @@ protect_branch=<y|n>
   `public` or `private`. The greenfield board is private, so write `private`.
 - `kanban=y` because `tracking` is always `github-projects`; `kanban_visibility` is read only
   then.
-- `protect_branch` is the step-2 answer as `y`/`n`.
+- `protect_branch` is the step-2 answer as `y`/`n`; these two keys are written only in this block.
 
 For a `lib-minimal` with `repo_visibility: private`, write `publish_pypi=n` and
 `publish_test_pypi=n` (git-only). Services carry no publish keys.
