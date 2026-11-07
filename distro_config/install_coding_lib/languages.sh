@@ -1231,11 +1231,6 @@ install_blueprintx() {
                 return 1
             fi
             ;;
-        4)
-            print_status "warning" "Snap package for blueprintx is not yet published — check back later"
-            print_status "info" "Once available: sudo snap install blueprintx"
-            return 0
-            ;;
         *)
             print_status "warning" "Invalid choice — aborting"
             return 1
