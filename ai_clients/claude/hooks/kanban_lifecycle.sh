@@ -84,11 +84,15 @@ main() {
     # Only for the PR-open verb, so a `checkout -b ; gh api …/pulls` compound never pairs one
     # command's column with the other's issue.
     if [[ "$target" == "In review" ]] && rest="$(rest_pr_from_command "$command")"; then
+        # The created PR echoed on stdout is what was sent; the --input file is re-read only after the
+        # whole command ended, and a later command may have rewritten it (#902 review).
+        local sent
+        if sent="$(response_pr_head "$payload")"; then rest="$sent"; fi
         read -r owner repo rest_head <<<"$rest"
         issue="$(branch_issue "$rest_head")" || exit 0
     elif [[ "$target" == "In review" ]] && ! printf '%s' "$command" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+create'; then
-        # A REST PR whose head can no longer be read must not fall back to HEAD. The --input file is
-        # read after the command ended, so `--input f && rm f` lands here: known gap, tracked in #910.
+        # A REST PR whose head can no longer be read must not fall back to HEAD.
+        # ponytail: `--input f && rm f` lands here (no verb, no card move); fail-safe, not a wrong card.
         exit 0
     else
         read -r owner repo < <(owner_repo) || exit 0
@@ -156,6 +160,24 @@ import gh_cmd_match as g
 
 SAFE = {"git", "gh", "rtk", "echo", "printf", "cat", "mkdir", "rm", "touch", "ls", "true", "false",
         "test", "[", "jq", "sleep", "make", "mktemp", "cp", "mv", "grep", "python3", "curl", "bats"}
+REDIR = re.compile(r"\d*(?:>>?|<<?<?|>&|<&|&>>?)(.*)")
+
+
+def drop_redirects(argv):
+    """argv without its redirects: `2>&1`, `>f`, and an operator with its target in the next word."""
+    out, skip = [], False
+    for word in argv:
+        if skip:
+            skip = False
+            continue
+        m = REDIR.fullmatch(word)
+        if m:
+            skip = not m.group(1)
+            continue
+        out.append(word)
+    return out
+
+
 try:
     command = os.environ["KANBAN_CMD"]
     path, out, pos = "", [], 0
@@ -167,11 +189,11 @@ try:
         # verb runs when the cd failed, and `|` or a lone `&` put the next segment in another shell.
         if path and gap and re.search(r"\||(?<!&)&(?!&)", gap):
             break
-        argv = shlex.split(segment)
+        argv = drop_redirects(shlex.split(segment))
         if argv[:1] == ["cd"]:
-            if len(argv) != 2 or argv[1].startswith("-") or re.search(r"[$`{}]", argv[1]):
+            if len(argv) != 2 or argv[1].startswith(("-", "~")) or re.search(r"[$`{}]", argv[1]):
                 break
-            path = os.path.join(path, os.path.expanduser(argv[1]))
+            path = os.path.join(path, argv[1])
             continue
         # Allowlist, not denylist: only a known external command cannot change this shell's directory.
         # `eval`, `source`, `exec`, functions, `pushd`, `if`, `(`... all stop the scan, not guess.
@@ -191,7 +213,7 @@ target_column() {
     # Map the Bash verb to its target column, or return 1 when it is neither lifecycle verb.
     local cmd="$1"
     if printf '%s' "$cmd" \
-        | grep -Ezq '^[[:space:]]*(rtk[[:space:]]+)?git[[:space:]]+(checkout[[:space:]]+(.*[[:space:]])?-b|switch[[:space:]]+(.*[[:space:]])?-c)([[:space:]]|$)'; then
+        | grep -Ezq '^[[:space:]]*(rtk[[:space:]]+)?git[[:space:]]+(checkout[[:space:]]+(.*[[:space:]])?-[bB]|switch[[:space:]]+(.*[[:space:]])?(-[cC]|--(force-)?create([[:space:]=]|$)))'; then
         printf 'In progress'; return 0
     fi
     if printf '%s' "$cmd" \
@@ -226,10 +248,11 @@ DYNAMIC = re.compile(r"[$`{}]")
 
 def head_from_input(str_path):
     # The `head` of the JSON body file, or "" for stdin, a path the shell builds, or a bad file.
-    if str_path == "-" or DYNAMIC.search(str_path):
+    # `~`: shlex cannot tell `'~/f'` (literal, gh reads ./~/f) from `~/f` (shell-expanded).
+    if str_path == "-" or DYNAMIC.search(str_path) or str_path.startswith("~"):
         return ""
     try:
-        with open(os.path.expanduser(str_path), encoding="utf-8") as cls_file:
+        with open(str_path, encoding="utf-8") as cls_file:
             head = json.load(cls_file).get("head")
     except (OSError, ValueError, AttributeError):
         return ""
@@ -381,6 +404,28 @@ resolve_board() {
         return 1
     fi
     read -r project_number project_node status_field option_id <<<"$out"
+}
+
+response_pr_head() {
+    # `<owner> <repo> <head>` of the LAST pull-request JSON object in the payload's ($1) stdout,
+    # or return 1 when none is there (`--jq`, `--silent`, redirected output).
+    printf '%s' "$1" | jq -r '.tool_response.stdout // empty | strings' 2>/dev/null | python3 -c '
+import json, sys
+text, dec, found, i = sys.stdin.read(), json.JSONDecoder(), None, 0
+while (i := text.find("{", i)) != -1:
+    try:
+        obj, end = dec.raw_decode(text, i)
+    except ValueError:
+        i += 1
+        continue
+    head, base = obj.get("head"), obj.get("base")
+    if isinstance(head, dict) and isinstance(base, dict) and isinstance(head.get("ref"), str):
+        full, ref = (base.get("repo") or {}).get("full_name", ""), head["ref"]
+        if isinstance(full, str) and full.count("/") == 1 and ref and not any(c.isspace() for c in full + ref):
+            found = full.replace("/", " ") + " " + ref
+    i = end
+sys.exit(1) if found is None else print(found)
+'
 }
 
 tool_response_failed() {

@@ -510,8 +510,9 @@ assert_rest_call_moves_nothing() {
     assert_rest_call_moves_nothing "gh api repos/acme/widgets/pulls --input body.json -f head=fix/564-other"
 }
 
+# Last verb wins (#902): checkout -b runs after the REST call, so the REST head is not used.
 @test "checkout -b compounded with a REST PR call does not use the REST issue" {
-    assert_rest_call_moves_nothing "git checkout -b feat/1-x ; gh api repos/acme/widgets/pulls -f head=fix/564-other"
+    assert_rest_call_moves_nothing "gh api repos/acme/widgets/pulls -f head=fix/564-other ; git checkout -b feat/1-x"
 }
 
 @test "gh api pulls with an attached short value flag before the path still moves the card" {
@@ -652,6 +653,15 @@ write_pr_json() {
     printf '%s' "${2:-$json}" > "$1"
 }
 
+@test "gh api pulls --input takes the head the response echoed, not a rewritten file" {
+    write_fake_gh "OPEN"
+    write_pr_json "$TEST_TMP/pr.json" '{"head":"fix/999-rewritten","base":"main"}'
+    git checkout -q -b feat/999-other
+    local resp='{"stdout":"{\"number\":7,\"head\":{\"ref\":\"fix/131-rest\"},\"base\":{\"repo\":{\"full_name\":\"guilhermegor/dotfiles-dev\"}}}","stderr":""}'
+    run run_hook_resp "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/pr.json" "$resp"
+    [[ "$output" == *"moved issue"*"131"* ]]
+}
+
 @test "gh api pulls --input moves the card named by head in the file" {
     write_fake_gh "OPEN"
     write_pr_json "$TEST_TMP/pr.json"
@@ -786,6 +796,26 @@ write_pr_json() {
     [[ "$output" == *"In progress"* ]]
 }
 
+@test "an attached -b value and switch --create are branch creations" {
+    write_fake_gh "OPEN"
+    run run_hook "git checkout -bfeat/131-x"
+    [[ "$output" == *"In progress"* ]]
+    run run_hook "git switch --create feat/131-y"
+    [[ "$output" == *"In progress"* ]]
+}
+
+@test "a ~-prefixed --input or cd path is not resolved (quoted ~ stays literal for gh)" {
+    write_fake_gh "OPEN"
+    write_pr_json "$TEST_TMP/pr.json"
+    git checkout -q -b feat/999-other
+    export HOME="$TEST_TMP"
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input '~/pr.json'"
+    [[ "$output" != *"131"* ]]
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    run run_hook "cd ~/wt && gh pr create --title x --body y"
+    [[ "$output" != *"131"* ]]
+}
+
 @test "eval, source and exec stop the scan rather than resolve the original cwd" {
     write_fake_gh "OPEN"
     run run_hook "eval \"cd $TEST_TMP\" && gh pr create --title x --body y"
@@ -811,8 +841,8 @@ write_pr_json() {
     git checkout -q -b feat/999-other
     run run_hook "cd $TEST_TMP/wt 2>&1 && gh pr create --title x --body y"
     [[ "$output" == *"moved issue"*"131"* ]]
-    run run_hook "$(printf "cat > pr.txt <<EOF\ndon't cd /nowhere\nEOF\ngh pr create --title x --body y")"
-    [[ "$output" == *"moved issue"* ]]
+    run run_hook "$(printf "cd %s/wt && cat > pr.txt <<EOF\ndon't cd /nowhere\nEOF\ngh pr create --title x --body y" "$TEST_TMP")"
+    [[ "$output" == *"moved issue"*"131"* ]]
 }
 
 @test "a lone & or command cd does not carry the cd path" {
