@@ -208,7 +208,7 @@ _ru_unblock() {
 # (a cleared "Blocked by" reads as "blocked by nothing"; a re-block whose blocker closes keeps its label).
 _ru_write_failed_line() {
 	if _board_throttled; then
-		printf 'SKIPPED %s %s: GraphQL rate-limited — retry next round, verify by hand if it stays wrong\n' "$1" "$2"
+		printf 'SKIPPED %s %s: GraphQL rate-limited — retry next round; partial write possible, verify by hand\n' "$1" "$2"
 		return 0
 	fi
 	printf 'FAILED to %s %s: a gh write failed partway — verify by hand\n' "$1" "$2"

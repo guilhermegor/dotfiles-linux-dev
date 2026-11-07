@@ -426,6 +426,17 @@ run_reconcile() {
     [[ "$output" != *"unblocked owner/repo#3"* ]]
 }
 
+@test "prose-only blocker: a write failing under a throttle is SKIPPED too (#921)" {
+    write_items "$(item "owner/repo" 405 "Blocked" "" "**Blocked by:** owner/blueprintx#314")"
+    write_blockers 405
+    write_ref_state "owner/blueprintx" 314 "CLOSED"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-edit" "$TEST_TMP/throttled"
+    run_reconcile
+    [[ "$output" == *"SKIPPED unblock owner/repo#405: GraphQL rate-limited"* ]]
+    [[ "$output" != *"FAILED"* ]]
+}
+
 @test "a write failing under a confirmed GraphQL throttle is SKIPPED, not FAILED (#921)" {
     write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
