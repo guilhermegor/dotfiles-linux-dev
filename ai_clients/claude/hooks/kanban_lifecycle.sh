@@ -5,6 +5,12 @@
 #   git checkout -b / git switch -c  (a linked branch opened) -> card to "In progress"
 #   gh pr create                     (the PR opened)          -> card to "In review"
 #   gh api repos/<o>/<r>/pulls -f head=<b>  (the REST twin, #859) -> card to "In review"
+#   gh api repos/<o>/<r>/pulls --input <f>  (head read from the JSON file, #900) -> "In review"
+#
+# Each verb is recognised as any segment of a compound command, and a literal `cd <path>` before it
+# decides where the repo and branch resolve (#900): `cd <worktree> && gh pr create` is the normal
+# shape for an agent in a worktree. The first verb in the command wins. A `cd` the hook cannot
+# resolve (`$VAR`, flags, no argument) stops the scan, so nothing moves rather than the wrong card.
 #
 # NOT handled here — on purpose: "PR merged / issue closed -> Done" is a built-in GitHub Projects
 # workflow (issue.md already relies on it via `Closes #N`). Duplicating it in a hook would race the
@@ -54,7 +60,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HOOK_DIR/lib/kanban_reconcile.sh"
 
 main() {
-    local payload tool command target owner repo issue rest rest_head
+    local payload payload_cwd tool command segment cd_path target owner repo issue rest rest_head
     local project_number project_node status_field option_id item_id
 
     payload="$(cat)"
@@ -64,15 +70,30 @@ main() {
     command="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
     [[ -n "$command" ]] || exit 0
 
-    target="$(target_column "$command")" || exit 0     # not a lifecycle verb → nothing to do
+    # The hook's own cwd is not the Bash tool's: a relative `cd` or `--input` must resolve from the
+    # payload's (#902 review). A payload without one keeps the hook's cwd.
+    payload_cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
+    if [[ -n "$payload_cwd" ]]; then cd "$payload_cwd" 2>/dev/null || exit 0; fi
+
+    select_lifecycle_segment "$command" || exit 0      # no lifecycle verb → nothing to do
+    command="$segment"
+    if [[ -n "$cd_path" ]]; then cd "$cd_path" 2>/dev/null || exit 0; fi
 
     # A REST-opened PR names its repo in the URL path and its branch in the `head=` field, so
     # neither cwd nor HEAD is consulted (#859); everything else resolves from cwd as before.
     # Only for the PR-open verb, so a `checkout -b ; gh api …/pulls` compound never pairs one
     # command's column with the other's issue.
     if [[ "$target" == "In review" ]] && rest="$(rest_pr_from_command "$command")"; then
+        # The created PR echoed on stdout is what was sent; the --input file is re-read only after the
+        # whole command ended, and a later command may have rewritten it (#902 review).
+        local sent
+        if sent="$(response_pr_head "$payload")"; then rest="$sent"; fi
         read -r owner repo rest_head <<<"$rest"
         issue="$(branch_issue "$rest_head")" || exit 0
+    elif [[ "$target" == "In review" ]] && ! printf '%s' "$command" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+create'; then
+        # A REST PR whose head can no longer be read must not fall back to HEAD.
+        # ponytail: `--input f && rm f` lands here (no verb, no card move); fail-safe, not a wrong card.
+        exit 0
     else
         read -r owner repo < <(owner_repo) || exit 0
         [[ -n "$owner" && -n "$repo" ]] || exit 0
@@ -112,15 +133,91 @@ main() {
     announce "$issue" "$target"
 }
 
+select_lifecycle_segment() {
+    # Set target, segment and cd_path from the LAST segment of command $1 holding a lifecycle verb,
+    # or return 1. This runs only after the whole command succeeded, so the last verb is the card's
+    # final state: `checkout -b x && git push && gh pr create` ends In review, not In progress. The substring gate keeps python off the path of every other Bash call.
+    printf '%s' "$1" | grep -Eq 'checkout|switch|pr[[:space:]]+create|api[[:space:]].*pulls' || return 1
+    local record path seg column found=1
+    while IFS= read -r -d '' record; do
+        path="${record%%$'\x1f'*}"
+        seg="${record#*$'\x1f'}"
+        # In a subshell at that path, so a relative `--input <file>` resolves where the command ran.
+        column="$(if [[ -n "$path" ]]; then cd "$path" 2>/dev/null || exit 1; fi; target_column "$seg")" \
+            || continue
+        target="$column" segment="$seg" cd_path="$path" found=0
+    done < <(command_segments "$1")
+    return "$found"
+}
+
+command_segments() {
+    # NUL-terminated `<cd path>\x1f<segment>` records for command $1, the path empty until a literal
+    # `cd`. A command that cannot be tokenized comes back whole, as one segment with no path.
+    KANBAN_CMD="$1" python3 - "$(dirname "${BASH_SOURCE[0]}")/lib" 2>/dev/null <<'PY' && return 0
+import os, re, shlex, sys
+sys.path.insert(0, sys.argv[1])
+import gh_cmd_match as g
+
+SAFE = {"git", "gh", "rtk", "echo", "printf", "cat", "mkdir", "rm", "touch", "ls", "true", "false",
+        "test", "[", "jq", "sleep", "make", "mktemp", "cp", "mv", "grep", "python3", "curl", "bats"}
+REDIR = re.compile(r"\d*(?:>>?|<<?<?|>&|<&|&>>?)(.*)")
+
+
+def drop_redirects(argv):
+    """argv without its redirects: `2>&1`, `>f`, and an operator with its target in the next word."""
+    out, skip = [], False
+    for word in argv:
+        if skip:
+            skip = False
+            continue
+        m = REDIR.fullmatch(word)
+        if m:
+            skip = not m.group(1)
+            continue
+        out.append(word)
+    return out
+
+
+try:
+    command = os.environ["KANBAN_CMD"]
+    path, out, pos = "", [], 0
+    for segment in g.split_segments(command):
+        start = command.find(segment, pos)
+        gap = command[pos:start] if start >= 0 else "|"  # unlocatable segment: refuse to carry
+        pos = start + len(segment) if start >= 0 else pos
+        # Once a `cd` was seen, the path only carries across `&&`, `;` or a newline: after `||` the
+        # verb runs when the cd failed, and `|` or a lone `&` put the next segment in another shell.
+        if path and gap and re.search(r"\||(?<!&)&(?!&)", gap):
+            break
+        argv = drop_redirects(shlex.split(segment))
+        if argv[:1] == ["cd"]:
+            if len(argv) != 2 or argv[1].startswith(("-", "~")) or re.search(r"[$`{}]", argv[1]):
+                break
+            path = os.path.join(path, argv[1])
+            continue
+        # Allowlist, not denylist: only a known external command cannot change this shell's directory.
+        # `eval`, `source`, `exec`, functions, `pushd`, `if`, `(`... all stop the scan, not guess.
+        assign = re.compile(r"[A-Za-z_]\w*=")
+        words = [w for w in argv if not assign.match(w)] if argv[:1] and assign.match(argv[0]) else argv
+        if not words or words[0] not in SAFE:
+            break
+        out.append(f"{path}\x1f{segment}\0")
+    sys.stdout.write("".join(out))  # only once every segment parsed, so the fallback never mixes
+except ValueError:
+    sys.exit(1)
+PY
+    printf '\x1f%s\0' "$1"
+}
+
 target_column() {
     # Map the Bash verb to its target column, or return 1 when it is neither lifecycle verb.
     local cmd="$1"
     if printf '%s' "$cmd" \
-        | grep -Eq '^[[:space:]]*(rtk[[:space:]]+)?git[[:space:]]+(checkout[[:space:]]+.*-b|switch[[:space:]]+.*-c)'; then
+        | grep -Ezq '^[[:space:]]*(rtk[[:space:]]+)?git[[:space:]]+(checkout[[:space:]]+(.*[[:space:]])?-[bB]|switch[[:space:]]+(.*[[:space:]])?(-[cC]|--(force-)?create([[:space:]=]|$)))'; then
         printf 'In progress'; return 0
     fi
     if printf '%s' "$cmd" \
-        | grep -Eq '^[[:space:]]*(rtk[[:space:]]+)?gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
+        | grep -Ezq '^[[:space:]]*(rtk[[:space:]]+)?gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
         printf 'In review'; return 0
     fi
     # Cheap gate first: python only spawns for a command that could be `gh api .../pulls`.
@@ -135,12 +232,13 @@ rest_pr_from_command() {
     # `<owner> <repo> <branch>` for a `[rtk] gh api repos/<o>/<r>/pulls` call that creates a PR
     # (#859): POST — explicit `-X`/`--method POST`, or implicit when a field flag is given and no
     # method is — carrying a `head=<branch>` field via -f/-F/--field/--raw-field (any spelling,
-    # `--field=head=x` and `-fhead=x` included). Returns 1 for everything else: a GET, a
+    # `--field=head=x` and `-fhead=x` included), or with `head` in an `--input` JSON file (#900).
+    # Returns 1 for everything else: a GET, an unreadable input file, a
     # `pulls/<n>/...` subpath, no head field, or an owner/repo/head the shell builds (`$VAR`).
     # Tokenizes with gh_cmd_match.py's own argv helpers, so a `pulls` inside a quoted argument or
     # an `echo` is not mistaken for the call.
     KANBAN_CMD="$1" python3 - "$(dirname "${BASH_SOURCE[0]}")/lib" 2>/dev/null <<'PY'
-import os, re, sys
+import json, os, re, sys
 sys.path.insert(0, sys.argv[1])
 import gh_cmd_match as g
 
@@ -148,8 +246,21 @@ PULLS = re.compile(r"^/?repos/([^/]+)/([^/]+)/pulls$")
 DYNAMIC = re.compile(r"[$`{}]")
 
 
+def head_from_input(str_path):
+    # The `head` of the JSON body file, or "" for stdin, a path the shell builds, or a bad file.
+    # `~`: shlex cannot tell `'~/f'` (literal, gh reads ./~/f) from `~/f` (shell-expanded).
+    if str_path == "-" or DYNAMIC.search(str_path) or str_path.startswith("~"):
+        return ""
+    try:
+        with open(str_path, encoding="utf-8") as cls_file:
+            head = json.load(cls_file).get("head")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return head if isinstance(head, str) else ""
+
+
 def parse_api(rest):
-    method, fields, has_input, endpoint = None, [], False, None
+    method, fields, input_path, endpoint = None, [], None, None
     i = 0
     while i < len(rest):
         tok = rest[i]
@@ -165,7 +276,7 @@ def parse_api(rest):
             elif kind == "field":
                 fields.append(value)
             else:
-                has_input = True
+                input_path = value
             i += 1 if attached else 2
         elif name in g.API_OTHER_VALUE_FLAGS:
             i += 1 if inline or (len(tok) > 2 and tok[1] != "-") else 2
@@ -175,7 +286,9 @@ def parse_api(rest):
             endpoint = endpoint or tok
             i += 1
     # With --input, gh sends -f/-F as query parameters; the body (and its head) is the file's.
-    return endpoint, method or ("POST" if fields or has_input else "GET"), [] if has_input else fields
+    has_input = input_path is not None
+    fields = [f"head={head_from_input(input_path)}"] if has_input else fields
+    return endpoint, method or ("POST" if fields else "GET"), fields
 
 
 try:
@@ -291,6 +404,28 @@ resolve_board() {
         return 1
     fi
     read -r project_number project_node status_field option_id <<<"$out"
+}
+
+response_pr_head() {
+    # `<owner> <repo> <head>` of the LAST pull-request JSON object in the payload's ($1) stdout,
+    # or return 1 when none is there (`--jq`, `--silent`, redirected output).
+    printf '%s' "$1" | jq -r '.tool_response.stdout // empty | strings' 2>/dev/null | python3 -c '
+import json, sys
+text, dec, found, i = sys.stdin.read(), json.JSONDecoder(), None, 0
+while (i := text.find("{", i)) != -1:
+    try:
+        obj, end = dec.raw_decode(text, i)
+    except ValueError:
+        i += 1
+        continue
+    head, base = obj.get("head"), obj.get("base")
+    if isinstance(head, dict) and isinstance(base, dict) and isinstance(head.get("ref"), str):
+        full, ref = (base.get("repo") or {}).get("full_name", ""), head["ref"]
+        if isinstance(full, str) and full.count("/") == 1 and ref and not any(c.isspace() for c in full + ref):
+            found = full.replace("/", " ") + " " + ref
+    i = end
+sys.exit(1) if found is None else print(found)
+'
 }
 
 tool_response_failed() {
