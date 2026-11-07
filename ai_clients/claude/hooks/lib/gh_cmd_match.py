@@ -251,7 +251,8 @@ def _iter_marked(segments, marked, depth):
         start, stop, prefix = spec
         inner = " ".join(argv[start:stop])[prefix:]
         # Text the outer shell wrote is re-parsed by the inner one, which may split it anywhere.
-        minner = " ".join(marks[start:stop])[prefix:].replace(SHELL_QUOTED, SHELL_SPLIT)
+        minner = (" ".join(marks[start:stop])[prefix:].replace(SHELL_QUOTED, SHELL_SPLIT)
+                  .replace(QUOTED_GT, ">"))
         # `eval "... \"\$Q\""`: the outer shell turns `\$` into the `$` the inner shell expands.
         minner = re.sub(r"\\[$`]", SHELL_SPLIT, minner)
         try:
@@ -678,7 +679,9 @@ def chain_moves_files(segments):
                 continue
             else:
                 target = tok.split("=", 1)[-1]  # `of=path`, `--output=path`
-            if target:
+            if target and (target.startswith("&") or any(c in target for c in "$~*?[{")):
+                opaque_at.append(n)  # `>&q`, `> "${F}x"`, `> q.gr*`: the real path is the shell's
+            elif target:
                 try:
                     writes.append((n, os.path.realpath(target)))
                 except ValueError:  # an embedded NUL: never let it fail the hook open
@@ -758,6 +761,9 @@ def api_issue_match(segments):
         endpoint, method, fields, input_file, stray = parse_api_args(rest)
         path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0])
         path = path.rstrip("/")
+        if (re.search(r"[*?\[]|\{[^}]*,[^}]*\}", endpoint or "")
+                and (fields or input_file or (method or "GET") != "GET")):
+            return graphql_issue_write([], "-")  # `{graphql,}`, `gr[a]phql`: bash picks the endpoint
         if posixpath.normpath("/" + urllib.parse.unquote(path)).strip("/").lower() in (
                 "graphql", "api/graphql"):  # `gr%61phql`, `x/../graphql`: the front end may decode
             if graphql_shell_built(rest, mrest):
@@ -854,14 +860,13 @@ def main():
         segments = split_segments(command)
         if noun == "api-issue":
             match = api_issue_match(segments)
-            if match is None and any("issues" in e or "graphql" in e.lower()
-                                     for e in NESTED_ERRORS):
+            if any("issue" in e.lower() or "graphql" in e.lower() for e in NESTED_ERRORS):
                 match = {"matched": True, "unparseable": True}
             print(json.dumps(match or {"matched": False}))
             return 0
         argv = matching_argv(segments, noun)
     except ValueError:
-        if noun == "api-issue" and re.search(r"\bapi\b[\s\S]*(issue|graphql|%[0-9a-f]{2})", command, re.I):
+        if noun == "api-issue" and re.search(r"\bgh\b[\s\S]*\bapi\b", command, re.I):
             # Fail CLOSED for `gh api` (#714): text that looks like an issues write but
             # cannot be tokenized is reported, never silently allowed.
             print(json.dumps({"matched": True, "unparseable": True}))

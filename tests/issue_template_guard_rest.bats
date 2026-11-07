@@ -932,6 +932,36 @@ guard_cmd() {
     [ "$status" -eq 2 ]
 }
 
+@test "GraphQL: a brace or glob endpoint is blind (#906 ladder 11)" {
+    run guard_cmd "gh api {graphql,} -f query='mutation{createIssue(input:{body:\"nope\"}){a}}'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api gr[a]phql -f query='mutation{createIssue(input:{body:\"nope\"}){a}}'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a shell-built redirect target may rewrite the file (#906 ladder 11)" {
+    echo '{viewer{login}}' > q.graphql
+    run guard_cmd 'F=q.gr; echo x > "${F}aphql"; gh api graphql -F query=@q.graphql'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'echo x > q.graph*; gh api graphql -F query=@q.graphql'
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a broken nested script is blind beside a matched write (#906 ladder 11)" {
+    run guard_cmd "gh api graphql -f query='mutation{updateIssue(input:{id:\"I\",title:\"t\"}){a}}'; bash -c 'gh api graphql -f query=\"mutation{createIssue(input:{body:\\\"nope\\\"}){a}}\" <<EOF'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a quoted > inside bash -c keeps its meaning (#906 ladder 11)" {
+    run guard_cmd "bash -c 'gh api graphql -f query=\"{viewer{login}}\" > out.json'"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: an unterminated heredoc on gh api fails closed (#906 ladder 11)" {
+    run guard_cmd "gh api gr''aphql -F query=@q <<EOF"
+    [ "$status" -eq 2 ]
+}
+
 @test "GraphQL: an untokenizable \$'...' query fails closed (#906 ladder 8)" {
     run guard_cmd "gh api graphql -f query=\$'mutation{createIssue(input:{body:\"it\\'s\"}){a}}'"
     [ "$status" -eq 2 ]
