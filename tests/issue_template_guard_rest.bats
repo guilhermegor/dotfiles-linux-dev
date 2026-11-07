@@ -712,3 +712,12 @@ EOF
     run bash -c "payload \"gh api graphql -f query='query(\\\$o:String!){repository(owner:\\\$o,name:\\\"r\\\"){id}}' -f o=x\" | '$GUARD'"
     [ "$status" -eq 0 ]
 }
+
+@test "GraphQL: a header inside a comment or string declares nothing (#906 security review)" {
+    local cmd='gh api graphql -f query="# query($M:x) $M"'
+    run bash -c "payload '$cmd' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    cmd='gh api graphql -f query="{a(b:\"query($M:x)\") $M}"'
+    run bash -c "payload '$cmd' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}

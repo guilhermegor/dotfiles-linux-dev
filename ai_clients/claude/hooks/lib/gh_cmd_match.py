@@ -460,7 +460,8 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
     if not query_from_file:
         # ponytail: quoting is gone after shlex, so a double-quoted `$x` in the header still reads
         # as declared; the raw token is needed to tell it apart (#908).
-        declared = GRAPHQL_VAR_DECL.findall(" ".join(GRAPHQL_OP_HEADER.findall(query)))
+        code = mask_graphql_strings(GRAPHQL_IGNORED.sub(lambda m: m.group(1) or " ", query))
+        declared = GRAPHQL_VAR_DECL.findall(" ".join(GRAPHQL_OP_HEADER.findall(code)))
         undeclared = set(GRAPHQL_VAR_USE.findall(query)) - set(declared)
         if undeclared or GRAPHQL_SHELL_BUILT.search(query):
             return blind  # `$M` / `$(...)` the shell expands: the real query is unseen
