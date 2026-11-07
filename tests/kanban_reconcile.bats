@@ -746,6 +746,7 @@ STUB_IN_REVIEW='reconcile_kanban() {
     write_board_cache
     jq '.project_number = 5' "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json" > "$TEST_TMP/c.json"
     mv "$TEST_TMP/c.json" "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
+    touch -d "2 hours ago" "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
     write_prs 10
     write_closing 10 "42:OPEN"
     write_items "$(item ITEM_42 Backlog 42)"
@@ -788,4 +789,38 @@ STUB_IN_REVIEW='reconcile_kanban() {
     [ "$(grep -c . "$GH_LOG")" -eq 3 ]
     run bash -c "source '$LIB'; echo \$KANBAN_CALLS_PER_RECONCILE"
     [ "$output" -ge 3 ]
+}
+
+# PR #913 ladder review: a confirmed mismatch must not rediscover on every pass, a corrupt cache
+# must recover, and a zero-padded registry number is the same project.
+@test "boards: a mismatch confirmed by a fresh cache does not rediscover on the next sweep" {
+    write_board_cache
+    write_prs
+    write_items
+    write_fake_gh
+    run_boards in_review "$TEST_TMP" "owner|9|repo" -- "source '$LIB'"
+    run_boards in_review "$TEST_TMP" "owner|9|repo" -- "source '$LIB'"
+    [[ "$output" == *"UNKNOWN — declared project 9 but the board named 'repo kanban' is project 1"* ]]
+    refute_gh '^project list'
+}
+
+@test "boards: a corrupt cache is rediscovered instead of staying UNKNOWN" {
+    mkdir -p "$CLAUDE_CONFIG_DIR/kanban-boards"
+    echo 'not json' > "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_fake_gh
+    run_boards in_review "$TEST_TMP" "owner|1|repo" -- "source '$LIB'"
+    [[ "$output" == *"board owner/1 (repo): ok — 1 moved"* ]]
+}
+
+@test "boards: a zero-padded registry number matches the board's number" {
+    write_board_cache
+    write_prs
+    write_items
+    write_fake_gh
+    run_boards in_review "$TEST_TMP" "owner|01|repo" -- "source '$LIB'"
+    [[ "$output" == *"board owner/1 (repo): ok"* ]]
+    refute_gh '^project list'
 }

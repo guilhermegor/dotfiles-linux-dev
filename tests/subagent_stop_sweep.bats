@@ -459,6 +459,27 @@ STUB
     [ -f "$GH_BUDGET_LATCH_FILE" ]
 }
 
+# PR #913 review: the floor is sized by the declared boards, and a latch on it says so — 50 calls
+# left is not "exhausted".
+@test "gh_budget_gate latches below the board fan-out floor and names the floor" {
+    export GH_BUDGET_LATCH_FILE="$REPO/latch"
+    cat > "$BIN/gh" <<'STUB'
+#!/bin/bash
+case "$*" in
+"api rate_limit")
+    echo '{"resources":{"core":{"remaining":5000,"reset":1},"graphql":{"remaining":50,"reset":1}}}'
+    ;;
+"api repos/o/r --jq .id") echo 12345 ;;
+*) exit 1 ;;
+esac
+STUB
+    chmod +x "$BIN/gh"
+    ROADMAP_BOARDS=("o|1|a" "o|2|b" "o|3|c")
+    gh_budget_gate "o/r" || status=$?
+    [ "${status:-0}" -eq 1 ]
+    [[ "$BUDGET_GATE_REASON" == *"under the sweep floor of 54 calls"* ]]
+}
+
 # dotfiles-linux-dev#559 (PR #559 review, comment 4117399074): gate_pr_thread_state() latching on ITS
 # OWN terminal refusal is only half the fix -- without this, PR #10's latch does nothing to stop
 # PR #20's identical GraphQL call a moment later in the SAME sweep, which is the "repeated

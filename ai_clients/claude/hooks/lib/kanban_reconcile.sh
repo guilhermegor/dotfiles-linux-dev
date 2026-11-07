@@ -525,13 +525,22 @@ kanban_boards_unknown() {
 
 # _kb_board_number OWNER REPO — prints the project number of "<REPO> kanban", the board every
 # reconcile resolves by name. Reads the per-repo cache, discovering (and caching) on a miss, so the
-# reconcile that follows reuses it. Returns 1 when the board cannot be resolved (#907).
+# reconcile that follows reuses it. An unreadable or corrupt cache is rediscovered, never left
+# UNKNOWN. Returns 1 when the board cannot be resolved (#907).
 _kb_board_number() {
-	local file cfg
+	local file n
 	file="$(cache_file "$1" "$2")"
-	[[ -r "$file" ]] && cfg="$(cat "$file")" || cfg="$(discover_board "$1" "$2")" || return 1
-	jq -er '.project_number' <<<"$cfg" 2>/dev/null
+	if [[ -r "$file" ]] && n="$(jq -er '.project_number' "$file" 2>/dev/null)"; then
+		echo "$n"
+		return 0
+	fi
+	discover_board "$1" "$2" | jq -er '.project_number' 2>/dev/null
 }
+
+# A cached number that disagrees with the registry is rediscovered only once the cache is older
+# than this, so a registry row that is simply wrong costs one discovery per board per window, not
+# one per sweep (PR #913 review). discover_board rewrites the cache, which restarts the window.
+KANBAN_CACHE_REFRESH_MINUTES=60
 
 # kanban_fanout_cost — gh calls one full sweep spends on the boards: every declared board x the
 # three kinds (in_review, closed, stale) x KANBAN_CALLS_PER_RECONCILE. in_review is MEASURED by the
@@ -561,6 +570,7 @@ reconcile_kanban_boards() {
 			continue
 		fi
 		IFS='|' read -r owner project repo <<<"$entry"
+		project=$((10#$project))
 		if command -v gh_budget_latch_active >/dev/null 2>&1 && gh_budget_latch_active; then
 			status=1
 			lines+="board $owner/$project ($repo): UNKNOWN (latched) — GitHub API budget latch active, board not swept"$'\n'
@@ -571,9 +581,10 @@ reconcile_kanban_boards() {
 			lines+="board $owner/$project ($repo): UNKNOWN — could not resolve the project number of '$repo kanban'"$'\n'
 			continue
 		fi
-		if [[ "$num" != "$project" ]]; then
-			rm -f "$(cache_file "$owner" "$repo")"
-			num="$(_kb_board_number "$owner" "$repo")" || num="?"
+		if [[ "$num" != "$project" ]] \
+			&& [[ -n "$(find "$(cache_file "$owner" "$repo")" -mmin +"$KANBAN_CACHE_REFRESH_MINUTES" 2>/dev/null)" ]]; then
+			num="$(discover_board "$owner" "$repo" | jq -er '.project_number' 2>/dev/null)" \
+				|| num="unknown (the refresh lookup failed)"
 		fi
 		if [[ "$num" != "$project" ]]; then
 			status=1

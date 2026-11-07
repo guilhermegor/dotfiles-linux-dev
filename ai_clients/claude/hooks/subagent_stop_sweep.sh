@@ -506,7 +506,7 @@ gh_budget_gate() {
 	floor="$(kanban_fanout_cost)"
 	((floor < 5)) && floor=5
 	if gh_budget_quota_exhausted "$floor"; then
-		_gh_budget_latch_reason "GitHub API quota (core or graphql) already exhausted per rate_limit"
+		_gh_budget_latch_reason "GitHub API quota (core or graphql) under the sweep floor of $floor calls per rate_limit"
 		return 1
 	fi
 	err="$(mktemp)"
