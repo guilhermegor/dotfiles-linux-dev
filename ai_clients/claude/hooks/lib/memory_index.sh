@@ -50,17 +50,19 @@ memory_index_drift() {
     while IFS= read -r line; do
         [[ "$line" =~ $entry_re ]] || continue
         file=${BASH_REMATCH[1]}
+        # A link target is untrusted text: never leave DIR, never echo a path-shaped name.
+        [[ "$file" == */* || "$file" == *..* ]] && continue
         if [[ ! -f "$dir/$file" ]]; then
-            echo "$file: indexed but the file does not exist"
+            echo "$file: missing file"
             continue
         fi
         want=$(memory_index_line "$dir/$file")
         [[ -z "$want" ]] && continue
-        [[ "$line" == "$want" ]] || echo "$file: index line differs from its frontmatter; expected: $want"
+        [[ "$line" == "$want" ]] || echo "$file: changed"
     done < "$index"
     for f in "$dir"/*.md; do
         [[ -f "$f" && "$(basename "$f")" != MEMORY.md ]] || continue
         [[ -n "$(memory_index_line "$f")" ]] || continue
-        grep -qF "]($(basename "$f"))" "$index" || echo "$(basename "$f"): not listed in MEMORY.md"
+        grep -qF "]($(basename "$f"))" "$index" || echo "$(basename "$f"): unindexed"
     done
 }

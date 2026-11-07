@@ -12,6 +12,12 @@ command -v jq >/dev/null 2>&1 || exit 0
 path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null) || exit 0
 [[ "$path" == */memory/*.md ]] || exit 0
 
+# Only real auto-memory stores: <config>/projects/*/memory/. Anything else (a repo's own
+# memory/ folder, a symlink out) is untrusted text and stays silent.
+path=$(realpath -m -- "$path" 2>/dev/null) || exit 0
+root=$(realpath -m -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" 2>/dev/null) || exit 0
+[[ "$path" == "$root"/*/memory/*.md ]] || exit 0
+
 dir=$(dirname "$path")
 # shellcheck source=lib/memory_index.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/memory_index.sh"
@@ -22,7 +28,7 @@ drift=$(memory_index_drift "$dir")
 jq -n --arg d "$drift" --arg dir "$dir" '{
     hookSpecificOutput: {
         hookEventName: "PostToolUse",
-        additionalContext: ("MEMORY.md DRIFT in \($dir) — the index is always loaded, so a stale line outranks the file body. Regenerate it from frontmatter (source ~/.claude/hooks/lib/memory_index.sh; memory_index_generate DIR > DIR/MEMORY.md); if a rule was lifted or amended, say so in that memory'"'"'s description first.\n" + $d)
+        additionalContext: ("MEMORY.md DRIFT in \($dir) (file names and kinds only; read the files yourself) — the index is always loaded, so a stale line outranks the file body. Regenerate it from frontmatter (source ~/.claude/hooks/lib/memory_index.sh; memory_index_generate DIR > DIR/MEMORY.md); if a rule was lifted or amended, say so in that memory'"'"'s description first.\n" + $d)
     }
 }'
 exit 0
