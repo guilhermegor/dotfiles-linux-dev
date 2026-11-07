@@ -42,7 +42,11 @@ thread() {
                  elif .=="Other" then {__typename:"User",login:"other"}
                  else {__typename:"User",login:"me"} end)}' | jq -s \
         --argjson r "$resolved" \
-        '{data:{viewer:{login:"me"},node:{isResolved:$r,comments:{nodes:.}}}}')
+        --arg o "${PR_OWNER-me}" --arg a "${PR_AUTHOR-me}" \
+        '{data:{viewer:{login:"me"},node:{isResolved:$r,
+          pullRequest:{author:(if $a=="null" then null else {login:$a} end),
+                       repository:{owner:(if $o=="null" then null else {login:$o} end)}},
+          comments:{nodes:.}}}}')
     export READ_JSON
 }
 
@@ -198,4 +202,55 @@ thread() {
     thread false User User
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 0 ]
+}
+
+refute_mutation() {
+    run grep -q resolveReviewThread "$GH_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "a thread on a foreign repository is refused and never mutated" {
+    PR_OWNER=someone-else thread false Bot User
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"not on your own PR"* ]]
+    refute_mutation
+}
+
+@test "a thread on a PR the viewer did not author is refused and never mutated" {
+    PR_AUTHOR=someone-else thread false Bot User
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"not on your own PR"* ]]
+    refute_mutation
+}
+
+@test "an already-resolved thread on a foreign PR is refused, not reported resolved" {
+    PR_OWNER=someone-else thread true Bot User
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"not on your own PR"* ]]
+    [[ "$output" != *"already resolved"* ]]
+    refute_mutation
+}
+
+@test "a null PR owner fails closed" {
+    PR_OWNER=null thread false Bot User
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    refute_mutation
+}
+
+@test "a null PR author fails closed" {
+    PR_AUTHOR=null thread false Bot User
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    refute_mutation
+}
+
+@test "owner and author match case-insensitively" {
+    PR_OWNER=ME PR_AUTHOR=Me thread false Bot User
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 0 ]
+    grep -q resolveReviewThread "$GH_LOG"
 }
