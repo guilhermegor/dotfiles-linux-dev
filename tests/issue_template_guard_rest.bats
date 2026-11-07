@@ -798,3 +798,66 @@ guard_cmd() {
     run guard_cmd "gh api /graphql -f query='mutation(\$b:String!){createIssue(input:{title:\"t\",body:\$b}){a}}' -f \"variables[b]=$COMPLIANT_BODY\""
     [ "$status" -eq 0 ]
 }
+
+@test "GraphQL: an escaped \$ in a double-quoted query is the \$ bash sends (#906 ladder 7)" {
+    run guard_cmd "gh api graphql -f query=\"mutation(\\\$i:UpdateIssueInput!){updateIssue(input:\\\$i){a}}\" -f 'i[id]=I' -f 'i[body]=nope'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -f query=\"mutation(\\\$i:UpdateIssueInput!){updateIssue(input:\\\$i){a}}\" -f 'i[id]=I'"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: an escaped \$ in a nested eval/bash -c is an expansion of the inner shell (#906 ladder 7)" {
+    run guard_cmd 'eval "gh api graphql -f query=\"\$Q\""'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'bash -c "gh api graphql -f query=\"\$Q\""'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'bash -c "gh api graphql -f query={viewer{login}}"'
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: a quoted expansion in the field that supplies the body is blind (#906 ladder 7)" {
+    Q='mutation($b:String!){createIssue(input:{title:"t",body:$b}){a}}'
+    run guard_cmd "gh api graphql -f query='$Q' -f b=\"\${X:-$COMPLIANT_BODY}\""
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -f query='$Q' -f b=\"\${UNSET:+$COMPLIANT_BODY}\""
+    [ "$status" -eq 2 ]
+    # an expansion in a field that is not the body stays a plain value
+    run guard_cmd "gh api graphql -f query='mutation(\$b:String!,\$r:ID!){createIssue(input:{repositoryId:\$r,title:\"t\",body:\$b}){a}}' -f r=\"\$RID\" -f b=\"$COMPLIANT_BODY\""
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: writers that name a parent directory or nothing make a file read blind (#906 ladder 7)" {
+    printf '%s' '{viewer{login}}' > "$REPO/q.graphql"
+    run guard_cmd "cp /tmp/evil . && gh api graphql -F query=@$REPO/q.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "cp /tmp/evil . && gh api graphql -F query=@q.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "mv /tmp/evil $REPO && gh api graphql -F query=@q.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "tar -xf /tmp/e.tar && gh api graphql -F query=@$REPO/q.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "make && gh api graphql -F query=@$REPO/q.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "export A=1; gh api graphql -F query=@q.graphql | jq ."
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: relative paths resolve against the payload cwd, not the hook cwd (#906 ladder 7)" {
+    printf '%s' 'mutation{createIssue(input:{body:"nope"}){a}}' > "$REPO/q.graphql"
+    cd /
+    run bash -c "jq -nc --arg c 'gh api graphql -F query=@q.graphql' --arg d '$REPO' '{tool_name:\"Bash\",cwd:\$d,tool_input:{command:\$c}}' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: percent-encoded and dot-segment endpoints are still graphql (#906 ladder 7)" {
+    for ep in 'gr%61phql' 'x/../graphql' './graphql'; do
+        run guard_cmd "gh api $ep -f query='mutation{createIssue(input:{title:\"t\",body:\"nope\"}){a}}'"
+        [ "$status" -eq 2 ]
+    done
+}
+
+@test "a NUL in a word does not crash the matcher (#906 ladder 7)" {
+    M="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/gh_cmd_match.py"
+    run bash -c "printf 'gh api graphql -f query=x \\0 -F a=@q' | python3 '$M' api-issue"
+    [ "$status" -eq 0 ]
+}

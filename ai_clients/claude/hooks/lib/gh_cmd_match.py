@@ -30,9 +30,11 @@ command found", per this repo's hook contract (a verdict from unparseable input 
 import inspect
 import json
 import os
+import posixpath
 import re
 import shlex
 import sys
+import urllib.parse
 
 SEPARATORS = set(";&|\n")
 HEREDOC_START = re.compile(r"<<-?\s*(['\"]?)(\w+)\1")
@@ -232,7 +234,9 @@ def _nested_script(argv):
 
 
 def _iter_marked(segments, marked, depth):
-    for segment, mseg in zip(segments, marked, strict=True):
+    if len(segments) != len(marked):
+        raise ValueError("marking changed the segment split")  # never expected: refuse to judge
+    for segment, mseg in zip(segments, marked):
         argv = shlex.split(segment, posix=True)
         marks = shlex.split(mark_expansions(mseg), posix=True)
         if len(marks) != len(argv):
@@ -245,6 +249,8 @@ def _iter_marked(segments, marked, depth):
         inner = " ".join(argv[start:stop])[prefix:]
         # Text the outer shell wrote is re-parsed by the inner one, which may split it anywhere.
         minner = " ".join(marks[start:stop])[prefix:].replace(SHELL_QUOTED, SHELL_SPLIT)
+        # `eval "... \"\$Q\""`: the outer shell turns `\$` into the `$` the inner shell expands.
+        minner = re.sub(r"\\[$`]", SHELL_SPLIT, minner)
         try:
             yield from _iter_marked(split_segments(inner), split_segments(minner), depth + 1)
         except ValueError:
@@ -445,8 +451,10 @@ def read_graphql_file(path, shifted):
     A pipe, tty or device (`/dev/stdin`, `/dev/zero`) is never the file the shell will feed gh,
     and a relative path after a `cd` or a redirect may name a different file than the hook sees.
     """
-    moved, written = shifted
-    if (moved and not os.path.isabs(path)) or os.path.realpath(path) in written:
+    moved, written, opaque = shifted
+    real = os.path.realpath(path)
+    if opaque or (moved and not os.path.isabs(path)) or any(
+            real == w or real.startswith(w.rstrip(os.sep) + os.sep) for w in written):
         return None
     if not os.path.isfile(path):
         return None
@@ -455,7 +463,7 @@ def read_graphql_file(path, shifted):
     return text if len(text) <= 1 << 20 else None  # over the cap: the tail is unseen
 
 
-def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
+def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False), quoted=frozenset()):
     """Return the match dict for a `gh api graphql` createIssue/updateIssue mutation, or None.
 
     The GraphQL twin of the REST issue write (dotfiles-linux-dev#903): the mutation text comes
@@ -480,6 +488,8 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
                 val = None
             if val is None:
                 return blind  # unreadable / binary / stdin / device: the value is unseen
+        if not from_file and val:
+            val = re.sub(r"\\([$`])", r"\1", val)  # shlex keeps `\$` in "..."; bash drops the `\`
         if key == "query":
             query = val
         else:
@@ -535,6 +545,9 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
                 body = body if body is None or isinstance(body, str) else ""
             except (ValueError, AttributeError, RecursionError):
                 body = ""  # input object unresolved: fail closed, body unknown
+    body_keys = {refs[0]} if refs else ({inp.group(1), inp.group(1) + "[body]"} if inp else set())
+    if not lits and body_keys & quoted:
+        body = ""  # `-f b="${X:-ok}"`: the shell rewrites the very text judged, GitHub stores another
     if body is None and re.search(r"\bbody\b", GRAPHQL_STRING.sub('""', seg)):
         body = ""  # a `body` no branch resolved (a list, an object, a bare `$`): fail closed
     if len(muts) > 1 or len(lits) + len(refs) > 1:
@@ -587,20 +600,34 @@ DIR_CHANGERS = {"cd", "pushd", "popd"}
 REDIRECT = re.compile(r"[0-9&]*>[>|]?(.*)$")
 
 
+HARMLESS_BEFORE_GH = {"export", "echo", "printf", "set", "true", "false", ":", "unset", "declare",
+                      "local", "readonly", "test", "[", "[["}
+
+
 def chain_moves_files(segments):
-    """Return (directory changed, real paths the chain may write): files a hook read may predate.
+    """Return (directory changed, real paths the chain may write, opaque): files a hook read may
+    predate.
 
     Every word of a command other than gh counts as a path it may write, not a list of known
     writers: cp, mv, ln, install, sed -i, dd of=, curl -o, ... (#906 ladder review). Paths are
-    resolved, so `> /abs/repo/q` and `@q` name the same file.
+    resolved, so `> /abs/repo/q` and `@q` name the same file; the reader also treats a written
+    directory as covering everything under it (`cp x . && ... @q`).
+    `opaque` is a command before the last gh that can write files without naming them (tar,
+    unzip, patch, a checkout, make, source, a function): a file read is then never trusted.
     ponytail: an attached short value (`curl -oq`) is not read; add it if a writer needs it.
     """
-    moved, written = False, set()
-    for argv in iter_argvs(segments):
+    moved, writes, opaque_at, last_gh = False, [], [], -1
+    for n, argv in enumerate(iter_argvs(segments)):
         words = [_word(t) for t in argv]
         moved = moved or any(w in DIR_CHANGERS for w in words) or ("env" in words and any(
             t in ("-C", "--chdir") or t.startswith(("--chdir=", "-C")) for t in argv))
         is_gh = gh_start(argv) >= 0
+        if is_gh:
+            last_gh = n
+        else:
+            command = next((w for w in words if not re.match(r"^\w+=", w)), None)
+            if command is not None and command not in HARMLESS_BEFORE_GH:
+                opaque_at.append(n)
         for i, tok in enumerate(argv):
             m = REDIRECT.search(tok)
             if m:
@@ -610,8 +637,11 @@ def chain_moves_files(segments):
             else:
                 target = tok.split("=", 1)[-1]  # `of=path`, `--output=path`
             if target:
-                written.add(os.path.realpath(target))
-    return moved, written
+                try:
+                    writes.append((n, os.path.realpath(target)))
+                except ValueError:  # an embedded NUL: never let it fail the hook open
+                    opaque_at.append(n)
+    return moved, {w for n, w in writes if n < last_gh}, any(n < last_gh for n in opaque_at)
 
 
 def parse_api_args(rest):
@@ -685,12 +715,15 @@ def api_issue_match(segments):
         endpoint, method, fields, input_file, stray = parse_api_args(rest)
         path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0])
         path = path.rstrip("/")
-        if path.strip("/").lower() in ("graphql", "api/graphql"):
+        if posixpath.normpath("/" + urllib.parse.unquote(path)).strip("/").lower() in (
+                "graphql", "api/graphql"):  # `gr%61phql`, `x/../graphql`: the front end may decode
             if graphql_shell_built(mrest):
                 return graphql_issue_write([], "-")  # the shell writes part of the call: blind
+            marked = parse_api_args(mrest)[2]
             if endpoint != "graphql":
-                fields = ungrouped_graphql_fields(fields)
-            gql = graphql_issue_write(fields, input_file, shifted)
+                fields, marked = ungrouped_graphql_fields(fields), ungrouped_graphql_fields(marked)
+            quoted = {f.partition("=")[0] for _, f in marked if SHELL_QUOTED in f.partition("=")[2]}
+            gql = graphql_issue_write(fields, input_file, shifted, quoted)
             if gql:
                 return gql
             continue
@@ -775,7 +808,8 @@ def main():
         segments = split_segments(command)
         if noun == "api-issue":
             match = api_issue_match(segments)
-            if match is None and any("issues" in e for e in NESTED_ERRORS):
+            if match is None and any("issues" in e or "graphql" in e.lower()
+                                     for e in NESTED_ERRORS):
                 match = {"matched": True, "unparseable": True}
             print(json.dumps(match or {"matched": False}))
             return 0
