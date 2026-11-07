@@ -41,6 +41,8 @@ ORPHAN_ALLOWLIST=(
     "run_ladder_review.sh"
     # Same shape: allow rule in permissions (dotfiles-linux-dev#868), no harness event.
     "merge_green_pr.sh"
+    # Same shape: allow rule in permissions (PR #909), no harness event.
+    "resolve_review_thread.sh"
 )
 
 # Every "hooks/<name>.sh" path named in settings.json, deduped.
