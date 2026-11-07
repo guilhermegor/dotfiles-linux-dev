@@ -651,6 +651,39 @@ checks_fixture() {
     [[ "$output" == *"PR #20"* ]]
 }
 
+# --- dotfiles-linux-dev#920: a cached verdict must not outlive the threads being answered ---------
+
+@test "a cached problems verdict is dropped when the gate now reads clean (#920)" {
+    export PR_LIST=$'10\n20'
+    export OPEN_THREADS_NUDGE_CACHE_TTL=600
+    clean_fixture 10
+    problem_fixture 20
+    run bash -c "payload false sess-920 | '$HOOK'"
+    [ "$status" -eq 2 ]
+
+    # PR #20 stays OPEN but its threads get answered inside the TTL.
+    clean_fixture 20
+    run bash -c "payload false sess-920 | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <"$PRLIST_LOG")" -eq 1 ]
+    [ "$(jq -r .status "$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-920-o_r")" = "clean" ]
+}
+
+@test "a cached problems verdict still blocks when the gate still says problems (#920)" {
+    export PR_LIST=$'10\n20'
+    export OPEN_THREADS_NUDGE_CACHE_TTL=600
+    clean_fixture 10
+    problem_fixture 20
+    run bash -c "payload false sess-920b | '$HOOK'"
+    [ "$status" -eq 2 ]
+
+    run bash -c "payload false sess-920b | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"PR #20"* ]]
+    [ "$(wc -l <"$PRLIST_LOG")" -eq 1 ]
+    [ "$(jq -r .status "$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-920b-o_r")" = "problems" ]
+}
+
 @test "repo-wide scan: an unreadable answer is never cached" {
     unset PR_VIEW_NUMBER
     export PR_LIST=$'7\n8'
