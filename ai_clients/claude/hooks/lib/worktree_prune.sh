@@ -190,16 +190,22 @@ prune_default_branch() {
 }
 
 # Unattended: a credential or passphrase prompt must fail and a stalled network must time out.
-# A configured core.sshCommand or GIT_SSH_COMMAND (a per-repo identity) is kept as is.
+# A configured core.sshCommand, GIT_SSH_COMMAND or GIT_SSH (a per-repo identity or wrapper) is kept.
 # Usage: prune_git_remote <repo> <git args…>
 prune_git_remote() {
 	local repo="$1"
 	shift
-	# An exported empty GIT_SSH_COMMAND would override core.sshCommand: only set it when neither exists.
-	if [ -z "${GIT_SSH_COMMAND:-}" ] && ! git -C "$repo" config core.sshCommand >/dev/null 2>&1; then
-		local -x GIT_SSH_COMMAND='ssh -oBatchMode=yes'
+	local -a envp=()
+	if [ -z "${GIT_SSH_COMMAND:-}" ]; then
+		if git -C "$repo" config core.sshCommand >/dev/null 2>&1; then
+			# An exported empty GIT_SSH_COMMAND still beats core.sshCommand in git: drop it for the child.
+			[ -z "${GIT_SSH_COMMAND+x}" ] || envp=(env -u GIT_SSH_COMMAND)
+		elif [ -z "${GIT_SSH:-}" ]; then
+			# GIT_SSH_COMMAND outranks GIT_SSH, so the batch default only goes in when neither is set.
+			envp=(env GIT_SSH_COMMAND='ssh -oBatchMode=yes')
+		fi
 	fi
-	GIT_TERMINAL_PROMPT=0 timeout -k 5 "${WORKTREE_PRUNE_REMOTE_TIMEOUT:-60}" git -C "$repo" "$@"
+	GIT_TERMINAL_PROMPT=0 timeout -k 5 "${WORKTREE_PRUNE_REMOTE_TIMEOUT:-60}" ${envp[@]+"${envp[@]}"} git -C "$repo" "$@"
 }
 
 # Removes worktree, local branch, then origin branch; each step only if the one before succeeded.
@@ -212,9 +218,11 @@ prune_apply_one() {
 	if [ -n "$branch" ]; then
 		local errf
 		errf="$(mktemp)" || { echo "remote unreadable (no tmp), nothing pruned"; return 1; }
-		remote="$(prune_git_remote "$cwd" ls-remote origin "refs/heads/$branch" 2>"$errf")" \
-			|| { echo "remote unreadable ($(tail -1 "$errf")), nothing pruned"; rm -f "$errf"; return 1; }
+		local rc=0 msg
+		remote="$(prune_git_remote "$cwd" ls-remote origin "refs/heads/$branch" 2>"$errf")" || rc=$?
+		msg="$(tail -1 "$errf")"
 		rm -f "$errf"
+		[ "$rc" = 0 ] || { echo "remote unreadable (${msg:-exit $rc}), nothing pruned"; return 1; }
 		remote="$(awk -v r="refs/heads/$branch" '$2 == r {print $1}' <<<"$remote")"
 		[ -z "$remote" ] || [ "$remote" = "$sha" ] || { echo "remote moved, nothing pruned"; return 1; }
 	fi

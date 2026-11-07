@@ -411,15 +411,58 @@ JSON
     [ -f "$wt/late.txt" ]
 }
 
+# Real git against an ssh:// URL, with ssh itself replaced by a script that names who called it.
+fake_ssh_setup() {
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    printf '#!/bin/bash\necho "FAKE-SSH $*" >&2\nexit 1\n' >"$BATS_TEST_TMPDIR/bin/ssh"
+    chmod +x "$BATS_TEST_TMPDIR/bin/ssh"
+    PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+    unset GIT_SSH GIT_SSH_COMMAND
+}
+
+@test "the batch default is used when no ssh setting exists" {
+    fake_ssh_setup
+    run prune_git_remote "$work" ls-remote ssh://host/repo
+    [[ "$output" == *"FAKE-SSH -oBatchMode=yes "* ]]
+}
+
 @test "a configured core.sshCommand is not overridden by the batch default" {
-    git -C "$work" config core.sshCommand 'ssh -i /custom/key'
-    unset GIT_SSH_COMMAND
-    timeout() { echo "ssh=${GIT_SSH_COMMAND-UNSET}"; }
-    run prune_git_remote "$work" ls-remote origin
-    [ "$output" = "ssh=UNSET" ]
-    git -C "$work" config --unset core.sshCommand
-    run prune_git_remote "$work" ls-remote origin
-    [ "$output" = "ssh=ssh -oBatchMode=yes" ]
+    fake_ssh_setup
+    git -C "$work" config core.sshCommand 'echo CONFIG-SSH >&2; false'
+    run prune_git_remote "$work" ls-remote ssh://host/repo
+    [[ "$output" == *"CONFIG-SSH"* ]]
+    [[ "$output" != *"FAKE-SSH"* ]]
+}
+
+@test "an exported empty GIT_SSH_COMMAND does not mask core.sshCommand" {
+    fake_ssh_setup
+    git -C "$work" config core.sshCommand 'echo CONFIG-SSH >&2; false'
+    export GIT_SSH_COMMAND=""
+    run prune_git_remote "$work" ls-remote ssh://host/repo
+    [[ "$output" == *"CONFIG-SSH"* ]]
+    [[ "$output" != *"cannot run"* ]]
+    # the caller's own environment is left as it was
+    [ "${GIT_SSH_COMMAND-UNSET}" = "" ]
+}
+
+@test "a configured GIT_SSH wrapper is not replaced by the batch default" {
+    fake_ssh_setup
+    printf '#!/bin/bash\necho "WRAPPER $*" >&2\nexit 1\n' >"$BATS_TEST_TMPDIR/wrapper"
+    chmod +x "$BATS_TEST_TMPDIR/wrapper"
+    export GIT_SSH="$BATS_TEST_TMPDIR/wrapper"
+    run prune_git_remote "$work" ls-remote ssh://host/repo
+    [[ "$output" == *"WRAPPER"* ]]
+    [[ "$output" != *"FAKE-SSH"* ]]
+}
+
+@test "a probe killed with no stderr still names its exit code" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    local wt="$BATS_TEST_TMPDIR/wt-b1"
+    prune_git_remote() { return 124; }
+    run prune_apply_one "$work" "$wt" b1 "$(git -C "$wt" rev-parse HEAD)"
+    [ "$status" -ne 0 ]
+    [ "$output" = "remote unreadable (exit 124), nothing pruned" ]
 }
 
 @test "a refusal that pruned nothing is reported KEEP, never PARTIAL" {
@@ -443,6 +486,8 @@ JSON
     git -C "$other" commit --quiet --allow-empty -m 'feat: raced'
     moved="$(git -C "$other" rev-parse HEAD)"
     # pre-push runs after the probe, so origin moves exactly inside the window the lease guards.
+    # A global core.hooksPath would bypass the repo's own hooks dir: pin it to the one written below.
+    git -C "$work" config core.hooksPath "$work/.git/hooks"
     printf '#!/bin/bash\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ngit -C "%s" push --quiet origin b1\n' "$other" \
         >"$work/.git/hooks/pre-push"
     chmod +x "$work/.git/hooks/pre-push"
