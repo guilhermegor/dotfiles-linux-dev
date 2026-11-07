@@ -88,12 +88,29 @@ def latch_on_refusal(text: str) -> bool:
 	if existing is not None and existing >= expiry:
 		return True
 	path = latch_path()
+	guess = Path(f"{path}.guess")
 	try:
-		_replace_atomically(Path(f"{path}.guess"), f"{expiry}\n")
+		previous = guess.read_text()
+	except OSError:
+		previous = None
+	try:
+		_replace_atomically(guess, f"{expiry}\n")
 		_replace_atomically(path, f"{expiry}\n")
 	except OSError:
+		_restore_marker(guess, previous)
 		return False
 	return True
+
+
+def _restore_marker(guess: Path, previous: str | None) -> None:
+	"""Put ``.guess`` back as it was, so an older guessed latch keeps reading as an unknown reset."""
+	try:
+		if previous is None:
+			guess.unlink(missing_ok=True)
+		else:
+			_replace_atomically(guess, previous)
+	except OSError:
+		pass
 
 
 def _replace_atomically(path: Path, text: str) -> None:

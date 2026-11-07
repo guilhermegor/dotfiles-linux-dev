@@ -814,7 +814,9 @@ def build_plan() -> dict:
 		prs = open_prs(slug) if issue_numbers else []
 	except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
 		# A refusal of this real query latches the budget (#922): later planners stop calling gh.
-		text = f"{getattr(exc, 'stderr', '')} {getattr(exc, 'stdout', '')}"
+		# stderr only: a partial GraphQL result puts the body (PR titles/bodies that may quote the
+		# phrase) on stdout, so matching stdout could latch a healthy budget (#922 review).
+		text = getattr(exc, "stderr", "") or ""
 		# The reason is what the Stop guards keep (they drop stderr), so a failed latch write shows there.
 		unlatched = is_rate_limit_refusal(text) and not latch_on_refusal(text)
 		return {

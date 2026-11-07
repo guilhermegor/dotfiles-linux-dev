@@ -232,6 +232,24 @@ STUB
     [ ! -e "$GH_BUDGET_LATCH_FILE" ]
 }
 
+@test "a failed latch write restores the old .guess of an existing guessed latch (#922 review)" {
+    soon=$(($(date +%s) + 30))
+    echo "$soon" >"$GH_BUDGET_LATCH_FILE"
+    echo "$soon" >"$GH_BUDGET_LATCH_FILE.guess"
+    run python3 -c "
+import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch
+real = gh_latch._replace_atomically
+def flaky(path, text):
+    if not str(path).endswith('.guess'):
+        raise OSError('boom')
+    return real(path, text)
+gh_latch._replace_atomically = flaky
+sys.exit(0 if gh_latch.latch_on_refusal('API rate limit already exceeded') else 1)"
+    [ "$status" -eq 1 ]
+    [ "$(cat "$GH_BUDGET_LATCH_FILE")" = "$soon" ]
+    [ "$(cat "$GH_BUDGET_LATCH_FILE.guess")" = "$soon" ]
+}
+
 gate() {
     bash -c "source $HOOKS/lib/stop_budget.sh; stop_budget_gate" 2>&1
 }
