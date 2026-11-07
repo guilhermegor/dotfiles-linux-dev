@@ -122,7 +122,9 @@ refute() {
     run claim_files 406 "first.sh" "second.sh"
     [ "$status" -ne 0 ]
     [ "$output" = "HELD:#405:second.sh" ]
-    refute grep -qF "406" "$TEST_TMP/.git/dispatch-claims.tsv"
+    # Status 1 only: a grep error (exit 2) must not pass as "not found".
+    run grep -qF $'\t406\t' "$TEST_TMP/.git/dispatch-claims.tsv"
+    [ "$status" -eq 1 ]
 }
 
 # --- a path an open PR already holds -------------------------------------------------------
