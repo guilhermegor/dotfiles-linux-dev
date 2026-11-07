@@ -248,13 +248,15 @@ run_prune() { run prune_worktrees "$work" "${1:-0}"; }
     [[ "$enc" == "me%3Afeat%2Fa%26b%23c%2Bd" ]]
 }
 
-@test "an unreadable origin after the local delete is a failure, not PRUNED" {
+@test "an unreadable origin is a failure that prunes nothing" {
     make_branch b1 f1.txt
     land_on_master f1.txt
     git -C "$work" remote set-url origin "$BATS_TEST_TMPDIR/gone.git"
     run prune_apply_one "$work" "$BATS_TEST_TMPDIR/wt-b1" b1
     [ "$status" -ne 0 ]
     [[ "$output" == *"remote unreadable"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-b1" ]
+    [ -n "$(git -C "$work" rev-parse --verify --quiet refs/heads/b1)" ]
     [ -n "$(git -C "$bare" rev-parse --verify --quiet refs/heads/b1)" ]
 }
 

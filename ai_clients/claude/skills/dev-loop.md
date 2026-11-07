@@ -182,13 +182,15 @@ boundary the loop already has, is the cheaper form of the same check.
 Runs after RESCUE, so the one real rescue is not buried under shipped worktrees. Run
 `~/.claude/hooks/lib/worktree_prune.sh <absolute-repo-path>` — a **dry run** by default — then
 `~/.claude/hooks/lib/worktree_prune.sh --apply <absolute-repo-path>`. The owner gave a standing
-go-ahead for every repo (2026-11-07, #923): worktrees whose content is already on `origin/<default>`,
-and their local and remote branches, are pruned without asking, so the step applies by default and
-stops at the dry run only in a repo that opts out. `settings.json` allows exactly that `--apply`
-command. If the auto-mode classifier still denies it, report it once and never work around it.
-Report one line per pruned worktree plus the count kept. It prunes only when the content proves it shipped (`branch_content_shipped`,
-never ancestry), the tree holds nothing beyond build noise (or a staged index equal to an older commit of
-the branch), no PR is OPEN, no live agent touched it, and origin's branch (if any) has the local sha.
+go-ahead for every repo (2026-11-07, #923): worktrees whose content is already on
+`origin/<default>`, and their local and remote branches, are pruned without asking.
+`settings.json` allows the command typed in that exact form (`~/.claude/...` path, `--apply`
+first); if the auto-mode classifier still denies it, report it once and never work around it.
+`--apply` re-classifies on its own, so build the report from its output, not the dry run's: one
+line per pruned worktree plus the count kept. It prunes only when the content proves it shipped
+(`branch_content_shipped`, never ancestry), the tree holds nothing beyond build noise (or a staged
+index equal to an older commit of the branch), no PR is OPEN, no live agent touched it, and
+origin's branch (if any) has the local sha.
 Any read failure keeps the worktree. Never prune by hand what it kept.
 
 ### The stash stack is shared — read it too
