@@ -455,7 +455,7 @@ Run the bats unit suite locally (CI runs the same suite plus shellcheck, actionl
 yamllint, and gitlint):
 
 ```bash
-make install_coding   # installs gitlint, bats, snapcraft (among other dev tools)
+make install_coding   # installs gitlint, bats (among other dev tools)
 make test             # bats unit tests under tests/
 ```
 

@@ -186,12 +186,15 @@ content is already on `origin/<default>`, and their local and remote branches, a
 asking. `settings.json` allows the command typed in that exact form (`~/.claude/...` path,
 `--apply` first); if the auto-mode classifier still denies it, report it once and never work
 around it. Report from its output: one line per pruned worktree plus the count kept. It prunes
-only when the content proves it shipped (`branch_content_shipped`, never ancestry), the tree holds
-nothing beyond build noise (or a staged index equal to an older commit of the branch), no PR is
-OPEN, no live agent touched it, and origin's branch (if any) has the local sha. A read failure, a
-new commit since classification, or an origin that moved before the probe keeps the worktree. A
-`PARTIAL` line can also mean a step failed after the worktree was removed; a failed remote delete
-names the deleted local branch's sha, for recovery. Never prune by hand what it kept.
+only when the content proves it shipped (`branch_content_shipped`, never ancestry against master)
+or, when master has since edited those files, the branch tip is contained in the head of a PR
+MERGED into the default branch (REST; a closed-unmerged head or a merge into another base never
+counts), the tree holds nothing beyond build noise (or a staged index equal to an older commit of
+the branch), no PR is OPEN, no live agent touched it, and origin's branch (if any) has the local
+sha. A read failure, a new commit or edit since classification, or an origin that moved before
+the probe keeps the worktree and prints `KEEP`. A `PARTIAL` line means a step failed after the
+worktree was removed; a failed remote delete names the deleted local branch's sha, for recovery.
+Never prune by hand what it kept.
 
 ### The stash stack is shared — read it too
 

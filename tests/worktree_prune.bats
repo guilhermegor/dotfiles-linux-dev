@@ -38,6 +38,13 @@ stub_forge() {
         [ "$PR_STATE" = unreadable ] && return 1
         echo "$PR_STATE"
     }
+    # Emits "<branch><TAB><sha>" for the sha in MERGED_HEAD_SHA (a command); default none.
+    MERGED_HEAD_SHA=""
+    prune_merged_heads() {
+        [ "$PR_STATE" = unreadable ] && return 1
+        [ -z "$MERGED_HEAD_SHA" ] || printf '%s\t%s\n' "$2" "$(eval "$MERGED_HEAD_SHA")"
+        return 0
+    }
 }
 
 # make_branch <name> <file> : worktree on a pushed branch adding <file>.
@@ -127,6 +134,96 @@ run_prune() { run prune_worktrees "$work" "${1:-0}"; }
     run_prune 1
     [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-b4: content not on origin/master"* ]]
     [ -d "$BATS_TEST_TMPDIR/wt-b4" ]
+}
+
+# master edits the squashed file afterwards, so the byte-identical test can never pass again.
+edit_on_master() {
+    echo "later-$1" >"$work/$1"
+    git -C "$work" commit --quiet -am "fix: edit $1 later"
+    git -C "$work" push --quiet origin master
+    git -C "$work" fetch --quiet origin
+}
+
+@test "tip equal to the merged PR head is shipped although master moved on" {
+    make_branch b4a f4a.txt
+    land_on_master f4a.txt
+    edit_on_master f4a.txt
+    MERGED_HEAD_SHA="git -C '$BATS_TEST_TMPDIR/wt-b4a' rev-parse HEAD"
+    run_prune 0
+    [[ "$output" == *"WOULD-PRUNE $BATS_TEST_TMPDIR/wt-b4a [b4a]"* ]]
+}
+
+@test "tip behind the merged PR head (head moved past local) is shipped" {
+    make_branch b4b f4b.txt
+    local wt="$BATS_TEST_TMPDIR/wt-b4b" old newhead
+    old="$(git -C "$wt" rev-parse HEAD)"
+    echo x >"$wt/extra.txt"
+    git -C "$wt" add extra.txt
+    git -C "$wt" commit --quiet -m 'fix: later push'
+    newhead="$(git -C "$wt" rev-parse HEAD)"
+    git -C "$wt" reset --quiet --hard "$old"
+    land_on_master f4b.txt
+    edit_on_master f4b.txt
+    MERGED_HEAD_SHA="echo $newhead"
+    run_prune 0
+    [[ "$output" == *"WOULD-PRUNE $wt [b4b]"* ]]
+}
+
+@test "local commits past the merged PR head stay KEEP" {
+    make_branch b4e f4e.txt
+    local wt="$BATS_TEST_TMPDIR/wt-b4e" merged
+    merged="$(git -C "$wt" rev-parse HEAD)"
+    land_on_master f4e.txt
+    edit_on_master f4e.txt
+    echo later >"$wt/later.txt"
+    git -C "$wt" add later.txt
+    git -C "$wt" commit --quiet -m 'feat: after the merge'
+    MERGED_HEAD_SHA="echo $merged"
+    run_prune 1
+    [[ "$output" == *"KEEP $wt: content not on origin/master"* ]]
+    [ -d "$wt" ]
+}
+
+@test "prune_merged_heads keeps only PRs merged into the default branch" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
+    fanout_repo_slug() { echo o/r; }
+    gh() {
+        cat <<'JSON'
+[{"merged_at":"2026-01-01T00:00:00Z","base":{"ref":"master"},"head":{"sha":"HEADONE"}},
+ {"merged_at":"2026-01-01T00:00:00Z","base":{"ref":"release"},"head":{"sha":"HEADTWO"}},
+ {"merged_at":null,"base":{"ref":"master"},"head":{"sha":"HEADTHREE"}}]
+JSON
+    }
+    run prune_merged_heads "$work" b1 master
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'b1\tHEADONE')" ]
+}
+
+@test "prune_merged_heads reports a forge failure" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
+    fanout_repo_slug() { echo o/r; }
+    gh() { return 1; }
+    run prune_merged_heads "$work" b1 master
+    [ "$status" -eq 1 ]
+}
+
+@test "tip only in a closed-unmerged PR head stays KEEP" {
+    make_branch b4c f4c.txt
+    land_on_master f4c.txt
+    edit_on_master f4c.txt
+    PR_STATE=closed
+    run_prune 1
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-b4c: content not on origin/master"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-b4c" ]
+}
+
+@test "unreadable forge on the merged-head path keeps the worktree" {
+    make_branch b4d f4d.txt
+    land_on_master f4d.txt
+    edit_on_master f4d.txt
+    PR_STATE=unreadable
+    run_prune 1
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-b4d: forge unreadable"* ]]
 }
 
 @test "an OPEN PR keeps the worktree" {
@@ -296,12 +393,31 @@ run_prune() { run prune_worktrees "$work" "${1:-0}"; }
     local wt="$BATS_TEST_TMPDIR/wt-b1" classified
     classified="$(git -C "$wt" rev-parse HEAD)"
     git -C "$wt" commit --quiet --allow-empty -m 'feat: unshipped'
-    git -C "$wt" push --quiet origin b1 2>/dev/null
     run prune_apply_one "$work" "$wt" b1 "$classified"
     [ "$status" -ne 0 ]
     [[ "$output" == *"HEAD moved since classification, nothing pruned"* ]]
     [ -d "$wt" ]
     [ -n "$(git -C "$bare" rev-parse --verify --quiet refs/heads/b1)" ]
+}
+
+@test "an edit landing after classification prunes nothing" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    local wt="$BATS_TEST_TMPDIR/wt-b1"
+    echo late >"$wt/late.txt"
+    run prune_apply_one "$work" "$wt" b1 "$(git -C "$wt" rev-parse HEAD)"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nothing pruned"* ]]
+    [ -f "$wt/late.txt" ]
+}
+
+@test "a refusal that pruned nothing is reported KEEP, never PARTIAL" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    prune_apply_one() { echo "remote moved, nothing pruned"; return 1; }
+    run prune_worktrees "$work" 1
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-b1: remote moved, nothing pruned"* ]]
+    [[ "$output" != *PARTIAL* ]]
 }
 
 @test "the lease refuses a push landing after the probe and keeps origin" {
@@ -321,7 +437,7 @@ run_prune() { run prune_worktrees "$work" "${1:-0}"; }
     chmod +x "$work/.git/hooks/pre-push"
     run prune_apply_one "$work" "$wt" b1 "$head"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"push --delete failed, origin/b1 kept; deleted local branch was at $head"* ]]
+    [[ "$output" == *"origin/b1 state unconfirmed; deleted local branch was at $head"* ]]
     [ "$(git -C "$bare" rev-parse refs/heads/b1)" = "$moved" ]
 }
 

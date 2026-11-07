@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,3 +59,67 @@ def refuse_if_latched(prog: str) -> bool:
 		pass
 	print(f"{prog}: BUDGET-LOW ({when}) -- not calling gh", file=sys.stderr)
 	return True
+
+
+UNKNOWN_RESET_TTL = 120
+
+
+def is_rate_limit_refusal(text: str) -> bool:
+	"""Return True for GitHub's own "API rate limit [already] exceeded" text (``gh_budget_classify``'s match)."""
+	low = (text or "").lower()
+	return "api rate limit" in low and "exceeded" in low
+
+
+def latch_on_refusal(text: str) -> bool:
+	"""Latch for a short guessed window when ``text`` is GitHub's own API rate-limit refusal.
+
+	A real query refused with "API rate limit [already] exceeded" is proof the budget is empty
+	whatever ``rate_limit`` or a passing probe says (dotfiles-linux-dev#922), and the refusal
+	carries no resetAt. The ``.guess`` marker copies the latch's own expiry so
+	``refuse_if_latched`` says the reset is unknown; it is written FIRST, so a failed marker
+	write never leaves a latch whose guessed end would print as a known reset. A later expiry
+	already recorded (a real resetAt) is kept, never shortened. Returns True when a latch is in
+	force afterwards, False for a non-refusal or a failed write.
+	"""
+	if not is_rate_limit_refusal(text):
+		return False
+	expiry = int(time.time()) + UNKNOWN_RESET_TTL
+	existing = latched_until()
+	if existing is not None and existing >= expiry:
+		return True
+	path = latch_path()
+	guess = Path(f"{path}.guess")
+	try:
+		previous = guess.read_text()
+	except OSError:
+		previous = None
+	try:
+		_replace_atomically(guess, f"{expiry}\n")
+		_replace_atomically(path, f"{expiry}\n")
+	except OSError:
+		_restore_marker(guess, previous)
+		return False
+	return True
+
+
+def _restore_marker(guess: Path, previous: str | None) -> None:
+	"""Put ``.guess`` back as it was, so an older guessed latch keeps reading as an unknown reset."""
+	try:
+		if previous is None:
+			guess.unlink(missing_ok=True)
+		else:
+			_replace_atomically(guess, previous)
+	except OSError:
+		pass
+
+
+def _replace_atomically(path: Path, text: str) -> None:
+	"""Write ``text`` via an O_EXCL temp file + ``os.replace``: a planted symlink at ``path`` is replaced, never followed."""
+	fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.tmp.")
+	try:
+		with os.fdopen(fd, "w") as handle:
+			handle.write(text)
+		os.replace(tmp, path)
+	except BaseException:
+		Path(tmp).unlink(missing_ok=True)
+		raise

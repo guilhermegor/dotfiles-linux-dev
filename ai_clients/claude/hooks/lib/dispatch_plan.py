@@ -94,7 +94,7 @@ import sys
 import time
 from pathlib import Path
 
-from gh_latch import refuse_if_latched
+from gh_latch import is_rate_limit_refusal, latch_on_refusal, refuse_if_latched
 from open_pr_pages import read_open_prs
 
 LIB_DIR = Path(__file__).resolve().parent
@@ -812,7 +812,14 @@ def build_plan() -> dict:
 	# documented legitimate-zero shape: fail closed, stay readable, say which read failed.
 	try:
 		prs = open_prs(slug) if issue_numbers else []
-	except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+	except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+		# A refusal of this real query latches the budget (#922): later planners stop calling gh.
+		# stderr only: a partial GraphQL result puts the body (PR titles/bodies that may quote the
+		# phrase) on stdout, so matching stdout could latch a healthy budget (#922 review).
+		# A timeout is never a refusal, and its stderr is bytes even under text=True (#939 review).
+		text = (exc.stderr or "") if isinstance(exc, subprocess.CalledProcessError) else ""
+		# The reason is what the Stop guards keep (they drop stderr), so a failed latch write shows there.
+		unlatched = is_rate_limit_refusal(text) and not latch_on_refusal(text)
 		return {
 			"dispatchable": [],
 			"excluded": [
@@ -821,6 +828,7 @@ def build_plan() -> dict:
 					"reason": (
 						"claimed-by-PR check UNREADABLE (gh pr list --json "
 						"closingIssuesReferences refused — GraphQL) — never assumed free"
+						+ (" (budget latch NOT written)" if unlatched else "")
 					),
 				}
 				for number in sorted(issue_numbers, reverse=True)

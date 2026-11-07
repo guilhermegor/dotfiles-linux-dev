@@ -194,6 +194,62 @@ STUB
     [ "$status" -eq 0 ]
 }
 
+@test "a refused real query latches with the reset unknown; other errors do not (#922)" {
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.latch_on_refusal('GraphQL: API rate limit already exceeded for user ID 1.') else 1)"
+    [ "$status" -eq 0 ]
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.refuse_if_latched('t') else 1)"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"reset unknown"* ]]
+    rm -f "$GH_BUDGET_LATCH_FILE" "$GH_BUDGET_LATCH_FILE.guess"
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.latch_on_refusal('HTTP 404 Not Found') else 1)"
+    [ "$status" -eq 1 ]
+    [ ! -e "$GH_BUDGET_LATCH_FILE" ]
+}
+
+@test "latch_on_refusal replaces a planted symlink instead of following it (#922)" {
+    echo keep >"$TEST_TMP/victim"
+    ln -s "$TEST_TMP/victim" "$GH_BUDGET_LATCH_FILE"
+    ln -s "$TEST_TMP/victim" "$GH_BUDGET_LATCH_FILE.guess"
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.latch_on_refusal('API rate limit already exceeded') else 1)"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$TEST_TMP/victim")" = keep ]
+    [ ! -L "$GH_BUDGET_LATCH_FILE" ]
+    [ ! -L "$GH_BUDGET_LATCH_FILE.guess" ]
+    [[ "$(cat "$GH_BUDGET_LATCH_FILE")" =~ ^[0-9]+$ ]]
+}
+
+@test "latch_on_refusal keeps a later recorded expiry (#922 review)" {
+    echo 4102531200 >"$GH_BUDGET_LATCH_FILE"
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.latch_on_refusal('API rate limit already exceeded') else 1)"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$GH_BUDGET_LATCH_FILE")" = 4102531200 ]
+}
+
+@test "latch_on_refusal writes no latch when the .guess marker cannot be written (#922 review)" {
+    mkdir "$GH_BUDGET_LATCH_FILE.guess"
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.latch_on_refusal('API rate limit already exceeded') else 1)"
+    [ "$status" -eq 1 ]
+    [ ! -e "$GH_BUDGET_LATCH_FILE" ]
+}
+
+@test "a failed latch write restores the old .guess of an existing guessed latch (#922 review)" {
+    soon=$(($(date +%s) + 30))
+    echo "$soon" >"$GH_BUDGET_LATCH_FILE"
+    echo "$soon" >"$GH_BUDGET_LATCH_FILE.guess"
+    run python3 -c "
+import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch
+real = gh_latch._replace_atomically
+def flaky(path, text):
+    if not str(path).endswith('.guess'):
+        raise OSError('boom')
+    return real(path, text)
+gh_latch._replace_atomically = flaky
+sys.exit(0 if gh_latch.latch_on_refusal('API rate limit already exceeded') else 1)"
+    [ "$status" -eq 1 ]
+    [ "$(cat "$GH_BUDGET_LATCH_FILE")" = "$soon" ]
+    [ "$(cat "$GH_BUDGET_LATCH_FILE.guess")" = "$soon" ]
+}
+
 gate() {
     bash -c "source $HOOKS/lib/stop_budget.sh; stop_budget_gate" 2>&1
 }
@@ -317,4 +373,27 @@ STUB
     TEST_TMP="$TEST_TMP" GQL_REMAINING=2842 GQL_PROBE=refuse run gate
     [ "$status" -eq 1 ]
     [ "$(cat "$GH_BUDGET_LATCH_FILE.guess")" = "$(cat "$GH_BUDGET_LATCH_FILE")" ]
+}
+
+@test "spend log: the rateLimit probe itself is logged under its caller (#922)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv" GH_BUDGET_CALLER=prober
+    GQL_PROBE=500 run bash -ec "source $HOOKS/lib/gh_budget.sh; gh_budget_graphql_read; echo \"\$GH_BUDGET_GQL_REMAINING\""
+    [ "$status" -eq 0 ] && [ "$output" = 500 ]
+    # set -e: a refused probe must still return, read as 0 and be logged (#950 review)
+    GQL_PROBE=refuse run bash -ec "source $HOOKS/lib/gh_budget.sh; gh_budget_graphql_read; echo \"\$GH_BUDGET_GQL_REMAINING\""
+    [ "$status" -eq 0 ] && [ "$output" = 0 ]
+    [ "$(awk -F"\t" '$2 == "prober"' "$GH_BUDGET_SPEND_LOG" | wc -l)" -eq 2 ]
+    [ "$(awk -F"\t" '{s += $3} END {print s}' "$GH_BUDGET_SPEND_LOG")" -eq 1 ]
+}
+
+@test "spend log: never appended under the shared /tmp last resort (#950 review)" {
+    unset GH_BUDGET_SPEND_LOG
+    run env -u XDG_RUNTIME_DIR HOME= bash -c "source $HOOKS/lib/gh_budget.sh
+        p=\"\$(gh_budget_spend_log_path)\"; before=\$(cat \"\$p\" 2>/dev/null | wc -l)
+        gh_budget_log_spend 1 tester; after=\$(cat \"\$p\" 2>/dev/null | wc -l)
+        echo \"\$p \$before \$after\""
+    [ "$status" -eq 0 ]
+    read -r p before after <<<"$output"
+    [ "${p%/*}" = /tmp ]
+    [ "$before" = "$after" ]
 }

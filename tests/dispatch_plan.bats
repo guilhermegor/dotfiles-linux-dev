@@ -488,6 +488,26 @@ PY
     [ "$output" = "{3: None, 7: None}" ]
 }
 
+@test "a claimed-by-PR read that times out excludes by name, never a crash (#939 review)" {
+    run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import subprocess, sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan
+
+def timeout(_slug):
+    raise subprocess.TimeoutExpired(cmd="gh", timeout=1, stderr=b"API rate limit exceeded")
+
+dispatch_plan.repo_slug = lambda: "acme/widget"
+dispatch_plan.repo_root = lambda: None
+dispatch_plan.open_issues = lambda _slug: [{"number": 5}]
+dispatch_plan.open_prs = timeout
+plan = dispatch_plan.build_plan()
+print(plan["excluded"][0]["issue"], "NOT written" in plan["excluded"][0]["reason"])
+PY
+    [ "$status" -eq 0 ]
+    [ "$output" = "5 False" ]
+}
+
 # --- glob expansion against the real tree ----------------------------------------------------
 
 @test "a glob token expands to the concrete files it matches in the tree" {
