@@ -849,7 +849,7 @@ allowed-tools: Read Glob Grep  # space-separated for skills (no commas)
 | **Source** | `ai_clients/claude/profile_functions.sh` (the launcher) |
 | **Installs to** | `~/.claude/profile_functions.sh`, sourced from `~/.bashrc` |
 | **Lib script** | `lib/profiles.sh` → `install_profiles()`, step key `profiles` |
-| **Invoked by user as** | `claude-profile <name>` (shell function; runs `~/.claude/settings.<name>.json`) |
+| **Invoked by user as** | `claude-profile <name>` (shell function; runs `${CLAUDE_CONFIG_DIR:-~/.claude}/settings.<name>.json`) |
 
 A profile is an `env`-only `--settings` overlay that points
 `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` at an Anthropic-compatible
