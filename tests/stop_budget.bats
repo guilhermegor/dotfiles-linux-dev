@@ -27,7 +27,7 @@ if [ "$1 $2" = "api graphql" ] && [ -n "${GQL_PROBE:-}" ]; then
         echo '{"errors":[{"type":"RATE_LIMIT","message":"API rate limit already exceeded for user ID 1."}]}'
         exit 1
     fi
-    echo "{\"data\":{\"rateLimit\":{\"remaining\":$GQL_PROBE,\"resetAt\":\"2100-01-01T00:00:00Z\"}}}"
+    echo "{\"data\":{\"rateLimit\":{\"remaining\":$GQL_PROBE,\"resetAt\":\"2100-01-02T00:00:00Z\"}}}"
     exit 0
 fi
 echo "{\"resources\":{\"graphql\":{\"remaining\":${GQL_REMAINING:-5000},\"reset\":4102444800}}}"
@@ -220,7 +220,7 @@ gate() {
     GQL_REMAINING=5 GQL_PROBE=7 run gate
     [ "$status" -eq 1 ]
     [[ "$output" == *"BUDGET-LOW (resets 00:00Z)"* ]]
-    [ "$(cat "$GH_BUDGET_LATCH_FILE")" -eq 4102444800 ]
+    [ "$(cat "$GH_BUDGET_LATCH_FILE")" -eq 4102531200 ] # resetAt, not rate_limit's 4102444800
 }
 
 @test "gate reports the disagreement when rate_limit is low and GraphQL is healthy (#925 review)" {
