@@ -1,0 +1,68 @@
+#!/usr/bin/env bats
+#
+# promote_plugin_to_user_scope (dotfiles-linux-dev#932): a missing cache is
+# installed through `claude plugin install --scope user`. `claude` is a PATH stub.
+
+setup() {
+    REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
+    TMP="$(mktemp -d)"
+    CLAUDE_DIR="$TMP/claude"
+    mkdir -p "$CLAUDE_DIR/plugins" "$TMP/bin"
+    export CLAUDE_DIR TMP LOG_FILE="$TMP/log"
+    export PATH="$TMP/bin:$PATH"
+    print_status() { echo "$1: $2"; }
+    # shellcheck source=../ai_clients/claude/lib/plugins.sh
+    source "$REPO_ROOT/ai_clients/claude/lib/plugins.sh"
+}
+
+teardown() {
+    rm -rf "$TMP"
+}
+
+# Stub claude: records its args; exits with $1, writing a user-scope entry on 0
+# like the real CLI does.
+stub_claude() {
+    cat > "$TMP/bin/claude" <<STUB
+#!/bin/bash
+echo "\$*" >> "$TMP/calls"
+[ "$1" -eq 0 ] || exit "$1"
+jq '.plugins["foo@mkt"] = [{scope:"user",version:"1"}]' \\
+    "$CLAUDE_DIR/plugins/installed_plugins.json" > "$TMP/x" \\
+    && mv "$TMP/x" "$CLAUDE_DIR/plugins/installed_plugins.json"
+STUB
+    chmod +x "$TMP/bin/claude"
+}
+
+@test "install success: runs claude plugin install and records user scope" {
+    stub_claude 0
+    run promote_plugin_to_user_scope "foo@mkt" foo mkt
+    [ "$status" -eq 0 ]
+    grep -q "plugin install foo@mkt --scope user" "$TMP/calls"
+    [ "$(jq -r '.plugins["foo@mkt"][0].scope' "$CLAUDE_DIR/plugins/installed_plugins.json")" = user ]
+}
+
+@test "install failure: warns and returns 0" {
+    stub_claude 1
+    run promote_plugin_to_user_scope "foo@mkt" foo mkt
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"claude plugin install failed"* ]]
+    [[ "$output" == *"Cache missing"* ]]
+}
+
+@test "claude absent: warns and returns 0" {
+    echo '{"plugins":{}}' > "$CLAUDE_DIR/plugins/installed_plugins.json"
+    run env PATH="/usr/bin:/bin" CLAUDE_DIR="$CLAUDE_DIR" bash -c "
+        print_status() { echo \"\$1: \$2\"; }
+        source '$REPO_ROOT/ai_clients/claude/lib/plugins.sh'
+        promote_plugin_to_user_scope foo@mkt foo mkt"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Cache missing"* ]]
+}
+
+@test "already at user scope: no install call" {
+    stub_claude 0
+    echo '{"plugins":{"foo@mkt":[{"scope":"user"}]}}' > "$CLAUDE_DIR/plugins/installed_plugins.json"
+    run promote_plugin_to_user_scope "foo@mkt" foo mkt
+    [ "$status" -eq 0 ]
+    [ ! -e "$TMP/calls" ]
+}
