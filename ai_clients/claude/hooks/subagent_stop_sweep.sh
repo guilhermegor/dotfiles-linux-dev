@@ -627,6 +627,8 @@ dispatch: UNKNOWN — $BUDGET_GATE_REASON"
 		sweep_roadmap_boards
 		echo "[9] kanban reconcile, every declared board (closed issues -> Done, No Status -> placed)"
 		sweep_kanban_boards closed "$cwd" "$repo"
+		echo "[9b] closed issues whose card is not in Done (REST only, runs while GraphQL is down)"
+		kanban_stale_cards_rest
 		echo "[10] issue hygiene (surface block + milestone, report only)"
 		sweep_issue_hygiene "$repo"
 		echo "[11] kanban reconcile, every declared board (closed-unmerged PR -> Ready; idle In progress, report only)"

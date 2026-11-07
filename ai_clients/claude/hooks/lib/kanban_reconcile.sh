@@ -540,14 +540,20 @@ reconcile_kanban_boards() {
 		IFS='|' read -r owner project repo <<<"$entry"
 		if command -v gh_budget_latch_active >/dev/null 2>&1 && gh_budget_latch_active; then
 			status=1
-			lines+="board $owner/$project ($repo): UNKNOWN (latched) — GitHub API budget latch active, board not swept"$'\n'
+			lines+="board $owner/$project ($repo): SKIPPED — GraphQL rate-limited (budget latch active), board not swept"$'\n'
 			continue
 		fi
 		rc=0
 		_kb_run_kind "$kind" "$owner" "$repo" "$cwd" || rc=$?
 		if ((rc != 0)); then
 			status=1
-			lines+="board $owner/$project ($repo): UNKNOWN — $_KB_REPORT"$'\n'
+			# #921: a throttled board is SKIPPED (retry next round), not "unknown": the two want
+			# different responses from a reader. Throttle is only named by a confirmed probe.
+			if [[ "$_KB_REPORT" == *"UNKNOWN (throttled)"* ]]; then
+				lines+="board $owner/$project ($repo): SKIPPED — GraphQL rate-limited, retry next round"$'\n'
+			else
+				lines+="board $owner/$project ($repo): UNKNOWN — $_KB_REPORT"$'\n'
+			fi
 			continue
 		fi
 		moved="$(printf '%s\n' "$_KB_REPORT" | grep -c '^moved' || true)"
