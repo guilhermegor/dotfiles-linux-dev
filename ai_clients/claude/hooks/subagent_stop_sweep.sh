@@ -574,6 +574,20 @@ sweep_issue_hygiene() {
 	fi
 }
 
+# sweep_stale_cards_gated — the budget gate stopped the sweep, but the stale-card check is REST and
+# draws on the separate core quota (#921). Run it only when `rate_limit` (free) shows core healthy;
+# an unreadable or low core is UNKNOWN, never a skipped-as-clean line.
+STALE_CARDS_CORE_FLOOR=100
+sweep_stale_cards_gated() {
+	local core
+	core="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)"
+	if [[ "$core" =~ ^[0-9]+$ ]] && ((core >= STALE_CARDS_CORE_FLOOR)); then
+		kanban_stale_cards_rest
+	else
+		echo "stale cards: UNKNOWN — REST core quota low or unreadable, not checked"
+	fi
+}
+
 main() {
 	local payload cwd repo owner name db roster_file report agent_type
 	if [ ! -t 0 ]; then payload="$(cat)"; else payload=""; fi
@@ -606,7 +620,8 @@ dispatch: free surface empty"
 $BUDGET_GATE_REASON (dotfiles-linux-dev#445) — skipping this sweep, no further gh calls.
 kanban boards (declared: ROADMAP_BOARDS), none swept:
 $KANBAN_BOARDS_REPORT
-dispatch: UNKNOWN — $BUDGET_GATE_REASON"
+dispatch: UNKNOWN — $BUDGET_GATE_REASON
+$(sweep_stale_cards_gated)"
 		exit 1
 	fi
 

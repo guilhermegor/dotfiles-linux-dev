@@ -629,14 +629,17 @@ reconcile_kanban_boards() {
 # board would need `orgs/`. Add the owner-type probe if one is ever registered.
 kanban_stale_cards_rest() {
 	local entry owner project repo field rows out=""
-	declare -p ROADMAP_BOARDS >/dev/null 2>&1 || { echo "stale cards: UNKNOWN — ROADMAP_BOARDS not loaded"; return 0; }
+	if ! declare -p ROADMAP_BOARDS >/dev/null 2>&1 || ((${#ROADMAP_BOARDS[@]} == 0)); then
+		echo "stale cards: UNKNOWN — ROADMAP_BOARDS is empty or not loaded; no board was checked"
+		return 0
+	fi
 	for entry in "${ROADMAP_BOARDS[@]}"; do
 		IFS='|' read -r owner project repo <<<"$entry"
 		field="$(gh api "users/$owner/projectsV2/$project/fields" \
 			--jq '.[] | select(.name=="Status") | .id' 2>/dev/null | head -n1)"
 		if [[ -z "$field" ]] || ! rows="$(gh api --paginate "users/$owner/projectsV2/$project/items?per_page=100&fields=$field" \
 			--jq '.[] | select(.content_type=="Issue" and .content.state=="closed")
-				| [(.content.repository_url | split("/") | last), .content.number, .content.closed_at,
+				| [(.content.repository_url | split("/") | .[-2:] | join("/")), .content.number, .content.closed_at,
 				   ((.fields[] | select(.id=='"$field"') | .value.name.raw) // "No Status")] | @tsv' 2>/dev/null)"; then
 			out+="stale cards: board $owner/$project ($repo) UNKNOWN — REST could not read card status; check the board by hand"$'\n'
 			continue

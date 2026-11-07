@@ -673,18 +673,51 @@ STUB_IN_REVIEW='reconcile_kanban() {
     [[ "$output" == *"board owner/13 (broken): UNKNOWN — UNKNOWN: nope"* ]]
 }
 
-@test "stale cards: a closed issue whose card is in Blocked is listed, Done is not (#921)" {
-    run env bash -c "source '$LIB'; ROADMAP_BOARDS=(\"owner|13|repo\"); \
-        gh() { case \"\$*\" in *'/fields'*) echo 99;; *) printf 'repo\t5\t2026-11-05T00:00:00Z\tBlocked\nrepo\t6\t2026-11-05T00:00:00Z\tDone\n';; esac; }; \
+FIELDS_FIXTURE='[{"id":11,"name":"Title"},{"id":99,"name":"Status"}]'
+ITEMS_FIXTURE='[
+ {"content_type":"Issue","content":{"state":"closed","number":5,"closed_at":"2026-11-05T00:00:00Z","repository_url":"https://api.github.com/repos/owner/repo"},"fields":[{"id":99,"value":{"name":{"raw":"Blocked"}}}]},
+ {"content_type":"Issue","content":{"state":"closed","number":6,"closed_at":"2026-11-05T00:00:00Z","repository_url":"https://api.github.com/repos/owner/repo"},"fields":[{"id":99,"value":{"name":{"raw":"Done"}}}]},
+ {"content_type":"Issue","content":{"state":"closed","number":7,"closed_at":"2026-11-06T00:00:00Z","repository_url":"https://api.github.com/repos/other/repo"},"fields":[]},
+ {"content_type":"Issue","content":{"state":"open","number":8,"closed_at":null,"repository_url":"https://api.github.com/repos/owner/repo"},"fields":[{"id":99,"value":{"name":{"raw":"Blocked"}}}]},
+ {"content_type":"PullRequest","content":{"state":"closed","number":9,"closed_at":"x","repository_url":"https://api.github.com/repos/owner/repo"},"fields":[]}]'
+
+# The gh stub applies the REAL --jq projection to these fixtures, so a broken Status or
+# closed-issue extraction fails the test. MODE: ok | fail-fields | fail-items.
+run_stale_rest() {
+    run env FIELDS="$FIELDS_FIXTURE" ITEMS="$ITEMS_FIXTURE" MODE="$1" bash -c "source '$LIB'; \
+        ROADMAP_BOARDS=(\"owner|13|repo\"); \
+        gh() { local jq='' url=\"\$2\"; while (( \$# )); do [ \"\$1\" = --jq ] && jq=\"\$2\"; shift; done; \
+            case \"\$url\" in \
+            */fields) [ \"\$MODE\" = fail-fields ] && return 1; printf '%s' \"\$FIELDS\" | jq -r \"\$jq\";; \
+            *) [ \"\$MODE\" = fail-items ] && return 1; printf '%s' \"\$ITEMS\" | jq -r \"\$jq\";; esac; }; \
         kanban_stale_cards_rest"
-    [[ "$output" == *"stale card: repo#5 in Blocked (closed 2026-11-05T00:00:00Z)"* ]]
-    [[ "$output" != *"repo#6"* ]]
+}
+
+@test "stale cards: a closed issue in Blocked is listed with owner; Done, open, PR are not (#921)" {
+    run_stale_rest ok
+    [[ "$output" == *"stale card: owner/repo#5 in Blocked (closed 2026-11-05T00:00:00Z)"* ]]
+    [[ "$output" == *"stale card: other/repo#7 in No Status (closed 2026-11-06T00:00:00Z)"* ]]
+    [[ "$output" != *"#6 "* ]]
+    [[ "$output" != *"#8 "* ]]
+    [[ "$output" != *"#9 "* ]]
     [[ "$output" == *"Workflows"* ]]
 }
 
-@test "stale cards: an unreadable board is named, never reported clean (#921)" {
-    run env bash -c "source '$LIB'; ROADMAP_BOARDS=(\"owner|13|repo\"); gh() { return 1; }; kanban_stale_cards_rest"
+@test "stale cards: an unreadable Status field is named, never reported clean (#921)" {
+    run_stale_rest fail-fields
     [[ "$output" == *"board owner/13 (repo) UNKNOWN"* ]]
+    [[ "$output" != *"none"* ]]
+}
+
+@test "stale cards: a failed item request after a good field lookup is UNKNOWN (#921)" {
+    run_stale_rest fail-items
+    [[ "$output" == *"board owner/13 (repo) UNKNOWN"* ]]
+    [[ "$output" != *"none"* ]]
+}
+
+@test "stale cards: an empty registry is UNKNOWN, never 'none' (#921)" {
+    run env bash -c "source '$LIB'; ROADMAP_BOARDS=(); gh() { return 1; }; kanban_stale_cards_rest"
+    [[ "$output" == *"UNKNOWN — ROADMAP_BOARDS is empty"* ]]
     [[ "$output" != *"none"* ]]
 }
 
