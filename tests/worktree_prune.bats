@@ -169,6 +169,44 @@ edit_on_master() {
     [[ "$output" == *"WOULD-PRUNE $wt [b4b]"* ]]
 }
 
+@test "local commits past the merged PR head stay KEEP" {
+    make_branch b4e f4e.txt
+    local wt="$BATS_TEST_TMPDIR/wt-b4e" merged
+    merged="$(git -C "$wt" rev-parse HEAD)"
+    land_on_master f4e.txt
+    edit_on_master f4e.txt
+    echo later >"$wt/later.txt"
+    git -C "$wt" add later.txt
+    git -C "$wt" commit --quiet -m 'feat: after the merge'
+    MERGED_HEAD_SHA="echo $merged"
+    run_prune 1
+    [[ "$output" == *"KEEP $wt: content not on origin/master"* ]]
+    [ -d "$wt" ]
+}
+
+@test "prune_merged_heads keeps only PRs merged into the default branch" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
+    fanout_repo_slug() { echo o/r; }
+    gh() {
+        cat <<'JSON'
+[{"merged_at":"2026-01-01T00:00:00Z","base":{"ref":"master"},"head":{"sha":"HEADONE"}},
+ {"merged_at":"2026-01-01T00:00:00Z","base":{"ref":"release"},"head":{"sha":"HEADTWO"}},
+ {"merged_at":null,"base":{"ref":"master"},"head":{"sha":"HEADTHREE"}}]
+JSON
+    }
+    run prune_merged_heads "$work" b1 master
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'b1\tHEADONE')" ]
+}
+
+@test "prune_merged_heads reports a forge failure" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
+    fanout_repo_slug() { echo o/r; }
+    gh() { return 1; }
+    run prune_merged_heads "$work" b1 master
+    [ "$status" -eq 1 ]
+}
+
 @test "tip only in a closed-unmerged PR head stays KEEP" {
     make_branch b4c f4c.txt
     land_on_master f4c.txt

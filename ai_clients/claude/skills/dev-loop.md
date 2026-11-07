@@ -185,8 +185,8 @@ its list to the owner. ⚠️ **Never pass `--apply` (or `WORKTREE_PRUNE_APPLY=1
 explicit go-ahead on that list**: it removes worktrees, local branches and `push origin --delete`s remote
 ones, so an autonomous round stops at the dry-run report. Report one line per pruned worktree plus the
 count kept. It prunes only when the content proves it shipped (`branch_content_shipped`,
-never ancestry) or, when master has since edited those files, the branch tip is contained in the head of a
-MERGED PR (REST; a closed-unmerged head never counts), the tree holds nothing beyond build noise (or a staged index equal to an older commit of
+never ancestry against master) or, when master has since edited those files, the branch tip is contained in the head of a
+PR MERGED into the default branch (REST; a closed-unmerged head or a merge into another base never counts), the tree holds nothing beyond build noise (or a staged index equal to an older commit of
 the branch), no PR is OPEN, no live agent touched it, and origin's branch (if any) has the local sha.
 Any read failure keeps the worktree. Never prune by hand what it kept.
 

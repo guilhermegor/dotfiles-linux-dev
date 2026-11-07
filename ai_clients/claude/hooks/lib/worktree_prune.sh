@@ -103,22 +103,24 @@ prune_pr_state() {
 	esac
 }
 
-# "<branch>\t<head.sha>" for each MERGED PR whose head is <branch>; rc 1 = forge unreadable.
+# "<branch>\t<head.sha>" for each PR from <branch> MERGED INTO <db>; rc 1 = forge unreadable.
+# A merge into any other base never reached the default branch, so it proves nothing.
 # REST only (no GraphQL budget). Fetches a head object the clone lacks so the ancestor test
 # in merged_pr_covers_head can run; a failed fetch leaves it absent, which reads as not covered.
 # Overridden by tests.
 prune_merged_heads() {
-	local cwd="$1" branch="$2" slug owner enc out sha
+	local cwd="$1" branch="$2" db="$3" slug owner enc out shas sha
 	slug="$(fanout_repo_slug "$cwd")" || return 1
 	owner="${slug%%/*}"
 	enc="$(jq -rn --arg b "$owner:$branch" '$b|@uri')" || return 1
-	out="$(gh api "repos/$slug/pulls?state=all&per_page=100&head=$enc" \
-		--jq '.[] | select(.merged_at) | .head.sha' 2>/dev/null)" || return 1
+	out="$(gh api "repos/$slug/pulls?state=all&per_page=100&head=$enc" 2>/dev/null)" || return 1
+	shas="$(jq -r --arg db "$db" '.[] | select(.merged_at and .base.ref == $db) | .head.sha' <<<"$out" 2>/dev/null)" || return 1
 	while IFS= read -r sha; do
 		[ -n "$sha" ] || continue
-		git -C "$cwd" cat-file -e "$sha^{commit}" 2>/dev/null || git -C "$cwd" fetch -q origin "$sha" 2>/dev/null
+		git -C "$cwd" cat-file -e "$sha^{commit}" 2>/dev/null \
+			|| GIT_TERMINAL_PROMPT=0 timeout 60 git -C "$cwd" fetch -q --no-write-fetch-head origin "$sha" 2>/dev/null
 		printf '%s\t%s\n' "$branch" "$sha"
-	done <<<"$out"
+	done <<<"$shas"
 }
 
 prune_recently_touched() {
@@ -150,10 +152,11 @@ prune_classify() {
 	if ! branch_content_shipped "$path" "$db"; then
 		# Once master edits a squash-merged file the byte-identical test fails forever
 		# (#946/#947): the forge's MERGED PR head is the proof instead (same predicate the
-		# fan-out uses). A closed-unmerged head proves nothing shipped.
+		# fan-out uses). A closed-unmerged head proves nothing shipped. A merged-then-reverted
+		# PR still counts: the owner's merge decided it, and refs/pull/<n>/head keeps the commits.
 		local heads
 		[ -n "$branch" ] || { echo "content not on origin/$db (or undecidable)"; return 1; }
-		heads="$(prune_merged_heads "$cwd" "$branch")" || { echo "forge unreadable"; return 1; }
+		heads="$(prune_merged_heads "$cwd" "$branch" "$db")" || { echo "forge unreadable"; return 1; }
 		merged_pr_covers_head "$path" "$branch" "$heads" \
 			|| { echo "content not on origin/$db (or undecidable)"; return 1; }
 	fi
