@@ -145,7 +145,15 @@ spec_incomplete_reasons() {
 	local body="$1"; shift
 	local -a templates=("$@") best=() reasons=()
 	local best_n=-1 template fallback="" line header stripped
-	if ((${#templates[@]} == 0)); then
+	# A template with no `##`/`###` heading (blank or free-form) requires nothing, so on its own it
+	# would let any body with a surface block win "fewest reasons". Without a single sectioned
+	# template, the `What / Why` skeleton applies, exactly as when the repo ships none.
+	local t sectioned=0
+	for t in "${templates[@]+"${templates[@]}"}"; do
+		strip_frontmatter_and_comments "$t" | grep -qE '^#{2,3}[[:space:]]' && sectioned=1
+	done
+	if ((sectioned == 0)); then
+		templates=()
 		fallback="$(mktemp)" || { echo "no temp file for the fallback template" >&2; return 1; }
 		printf '## What / Why\n' >"$fallback"
 		templates=("$fallback")
@@ -162,7 +170,8 @@ spec_incomplete_reasons() {
 			# evaluate_template matched the header text anywhere; the heading line itself is
 			# required here, and its section must hold text.
 			if ! _spec_section "$body" "$header" >/dev/null; then
-				printf '%s\n' "${reasons[@]+"${reasons[@]}"}" | grep -qxF -- "$header" \
+				printf '%s\n' "${reasons[@]+"${reasons[@]}"}" \
+					| grep -qxF -e "$header" -e "$header (needs at least one - [ ] item)" \
 					|| reasons+=("$header")
 			elif ! spec_section_filled "$body" "$header"; then
 				reasons+=("empty $header")

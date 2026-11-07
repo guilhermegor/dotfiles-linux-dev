@@ -383,6 +383,15 @@ EOF"
     [ "$status" -eq 0 ]
 }
 
+@test "spec_incomplete_reasons: a heading-less template does not waive What / Why" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh" t
+    t="$(mktemp)"
+    printf 'Free-form report, write anything.\n' >"$t"
+    run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf 'just prose\n\n\`\`\`surface\na.sh\n\`\`\`\n')\" '$t'"
+    rm -f "$t"
+    [[ "$output" == *"What / Why"* ]]
+}
+
 @test "CRLF bodies: headings, fences and the surface block still match" {
     local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
     run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## What / Why\r\n\r\nx\r\n\r\n\`\`\`surface\r\na.sh\r\n\`\`\`\r\n')\""
