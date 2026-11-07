@@ -21,19 +21,68 @@ def latch_path() -> Path:
 	override = os.environ.get("GH_BUDGET_LATCH_FILE")
 	if override:
 		return Path(override)
+	return _default_dir() / LATCH_NAME
+
+
+def _default_dir() -> Path:
+	"""Return gh_budget_latch_default_dir's directory (runtime dir, ~/.cache, else /tmp)."""
 	runtime = os.environ.get("XDG_RUNTIME_DIR", "")
 	if runtime and Path(runtime).is_dir():
-		return Path(runtime) / LATCH_NAME
+		return Path(runtime)
 	home = os.environ.get("HOME", "")
 	if home:
 		cache = Path(home) / ".cache"
 		try:  # same as gh_budget_latch_default_dir: create it 0700 rather than skip to /tmp
 			cache.mkdir(mode=0o700, parents=True, exist_ok=True)
 			cache.chmod(0o700)
-			return cache / LATCH_NAME
+			return cache
 		except OSError:
 			pass
-	return Path("/tmp") / LATCH_NAME  # noqa: S108 - same last-resort fallback as gh_budget.sh
+	return Path("/tmp")  # noqa: S108 - same last-resort fallback as gh_budget.sh
+
+
+def log_spend(points: int = 0, caller: str = "") -> None:
+	"""Append one line to the GraphQL spend log gh_budget_log_spend writes (#922); best-effort, never raises.
+
+	Same file and ``epoch<TAB>caller<TAB>points`` shape, so ``gh_spend_summary.sh`` ranks planner
+	calls beside the thread gate. The cost of a ``gh pr list`` is not exposed, so callers pass 0
+	and the call still counts. The bare /tmp fallback is never appended to (planted-symlink risk).
+	"""
+	override = os.environ.get("GH_BUDGET_SPEND_LOG")
+	if override:
+		path = Path(override)
+	else:  # resolve the default dir only here: it creates ~/.cache as a side effect
+		base = _default_dir()
+		if str(base) == "/tmp":  # noqa: S108
+			return
+		path = base / "dotfiles-dev-graphql-spend.tsv"
+	name = (caller or os.environ.get("GH_BUDGET_CALLER") or Path((sys.argv or [""])[0]).name or "unknown").replace("\t", " ").replace("\n", " ")
+	try:
+		import fcntl
+
+		with open(f"{path}.lock", "a") as lock:
+			deadline = time.monotonic() + 2  # bounded like the shell side's `flock -w 2`
+			while True:
+				try:
+					fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+					break
+				except BlockingIOError:
+					if time.monotonic() >= deadline:
+						return
+					time.sleep(0.05)
+			with open(path, "a") as handle:
+				handle.write(f"{int(time.time())}\t{name}\t{max(points, 0)}\n")
+			try:
+				cap = int(os.environ.get("GH_BUDGET_SPEND_LOG_MAX", "2000"))
+			except ValueError:
+				cap = 2000
+			if cap < 2:
+				cap = 2000
+			lines = path.read_text().splitlines(keepends=True)
+			if len(lines) > cap:
+				_replace_atomically(path, "".join(lines[-(cap // 2):]))
+	except (OSError, ValueError):
+		pass
 
 
 def latched_until() -> int | None:
