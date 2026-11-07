@@ -2188,7 +2188,7 @@ state beyond the <code>AGENTS.md</code> that <code>make ai_clients</code> deploy
 <h2 id="development">Development<a class="headerlink" href="#development" title="Permanent link">&para;</a></h2>
 <p>Run the bats unit suite locally (CI runs the same suite plus shellcheck, actionlint,
 yamllint, and gitlint):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>make<span class="w"> </span>install_coding<span class="w">   </span><span class="c1"># installs gitlint, bats, snapcraft (among other dev tools)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>make<span class="w"> </span>install_coding<span class="w">   </span><span class="c1"># installs gitlint, bats (among other dev tools)</span>
 <a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>make<span class="w"> </span><span class="nb">test</span><span class="w">             </span><span class="c1"># bats unit tests under tests/</span>
 </code></pre></div>
 <p>Enable the local git hooks once so violations are caught <em>before</em> you push (the same
