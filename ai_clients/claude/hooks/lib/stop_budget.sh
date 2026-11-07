@@ -43,7 +43,7 @@ stop_budget_gate() {
 			# The marker copies the latch's own expiry: a second computed `now` could differ by one.
 			ttl="${GH_BUDGET_UNKNOWN_RESET_TTL:-120}"
 			gh_budget_latch_write "$ttl" \
-				&& cp -f "$(gh_budget_latch_path)" "$(gh_budget_latch_path).guess" 2>/dev/null
+				&& { cp -f "$(gh_budget_latch_path)" "$(gh_budget_latch_path).guess" 2>/dev/null || true; }
 		fi
 	fi
 	until="$(cat "$(gh_budget_latch_path)" 2>/dev/null)"
