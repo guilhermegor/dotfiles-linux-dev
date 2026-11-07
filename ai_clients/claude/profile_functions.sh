@@ -11,7 +11,7 @@
 #   gh issue list --label afk --label oracle:strong
 #
 # Usage:
-#   claude-profile <name> [claude args...]   e.g. claude-profile deepseek
+#   claude-profile <name> [claude args...]   runs ~/.claude/settings.<name>.json
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     echo "profile_functions.sh is meant to be sourced, not executed." >&2
@@ -21,7 +21,7 @@ fi
 claude-profile() {
     local profile_name="$1"
     if [ -z "$profile_name" ]; then
-        echo "Usage: claude-profile <name> [claude args...]  (e.g. deepseek)" >&2
+        echo "Usage: claude-profile <name> [claude args...]  (reads settings.<name>.json)" >&2
         return 1
     fi
     shift
@@ -29,7 +29,7 @@ claude-profile() {
     local settings_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.${profile_name}.json"
     if [ ! -f "$settings_file" ]; then
         echo "No profile settings at $settings_file" >&2
-        echo "Run 'make ai_clients' (profiles step) to deploy it first." >&2
+        echo "Create it: an env-only overlay setting ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN." >&2
         return 1
     fi
 
