@@ -2341,7 +2341,7 @@ drained the shared GraphQL bucket in minutes. <code>hooks/lib/stop_budget.sh</co
 <li>GraphQL spend log (#918): <code>gh_budget_log_spend POINTS [CALLER]</code> appends <code>epoch caller points</code> to
   one per-account TSV (<code>GH_BUDGET_SPEND_LOG</code>, capped at <code>GH_BUDGET_SPEND_LOG_MAX</code> lines);
   <code>hooks/lib/gh_spend_summary.sh [WINDOW_S] [TOP_N]</code> prints the top callers. Only
-  <code>gh_budget_with_backoff</code> calls (the thread gate) log today, with <code>rateLimit{cost}</code> when the
+  <code>gh_budget_with_backoff</code> calls (the thread gate) and the dispatch planner's PR read (<code>gh_latch.log_spend</code>) log today, with <code>rateLimit{cost}</code> when the
   response carries it, else 0 points and one call. The CLI does not expose a call's cost, so
   <code>gh pr list</code>-style call sites stay unlogged until they ask for <code>rateLimit{cost}</code>. Set
   <code>GH_BUDGET_CALLER</code> to attribute a subagent.</li>
