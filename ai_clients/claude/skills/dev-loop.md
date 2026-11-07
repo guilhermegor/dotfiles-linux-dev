@@ -180,11 +180,13 @@ boundary the loop already has, is the cheaper form of the same check.
 ### PRUNE — remove worktrees whose work already shipped (dotfiles-linux-dev#882)
 
 Runs after RESCUE, so the one real rescue is not buried under shipped worktrees. Run
-`~/.claude/hooks/lib/worktree_prune.sh <absolute-repo-path>` — a **dry run** by default; report
-its list to the owner. ⚠️ **Never pass `--apply` (or `WORKTREE_PRUNE_APPLY=1`) without the owner's
-explicit go-ahead on that list**: it removes worktrees, local branches and `push origin --delete`s remote
-ones, so an autonomous round stops at the dry-run report. Report one line per pruned worktree plus the
-count kept. It prunes only when the content proves it shipped (`branch_content_shipped`,
+`~/.claude/hooks/lib/worktree_prune.sh <absolute-repo-path>` — a **dry run** by default — then
+`~/.claude/hooks/lib/worktree_prune.sh --apply <absolute-repo-path>`. The owner gave a standing
+go-ahead for every repo (2026-11-07, #923): worktrees whose content is already on `origin/<default>`,
+and their local and remote branches, are pruned without asking, so the step applies by default and
+stops at the dry run only in a repo that opts out. `settings.json` allows exactly that `--apply`
+command. If the auto-mode classifier still denies it, report it once and never work around it.
+Report one line per pruned worktree plus the count kept. It prunes only when the content proves it shipped (`branch_content_shipped`,
 never ancestry), the tree holds nothing beyond build noise (or a staged index equal to an older commit of
 the branch), no PR is OPEN, no live agent touched it, and origin's branch (if any) has the local sha.
 Any read failure keeps the worktree. Never prune by hand what it kept.

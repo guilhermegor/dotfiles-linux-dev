@@ -167,3 +167,12 @@ setup() {
     run jq -e '.permissions.allow | any(. == "Bash(gh api:*)" or . == "Bash(gh pr review:*)" or . == "Bash(rtk gh api:*)" or . == "Bash(rtk gh pr review:*)")' "$settings"
     [ "$status" -ne 0 ]
 }
+
+# --- worktree prune wrapper (dotfiles-linux-dev#923) -----------------------
+
+@test "allow list carries exactly one worktree_prune.sh rule, scoped to --apply" {
+    run jq -e '.permissions.allow | index("Bash(~/.claude/hooks/lib/worktree_prune.sh --apply:*)")' "$SETTINGS"
+    [ "$status" -eq 0 ]
+    run jq -r '[.permissions.allow[] | select(test("worktree_prune"))] | length' "$SETTINGS"
+    [ "$output" = "1" ]
+}
