@@ -180,18 +180,17 @@ boundary the loop already has, is the cheaper form of the same check.
 ### PRUNE — remove worktrees whose work already shipped (dotfiles-linux-dev#882)
 
 Runs after RESCUE, so the one real rescue is not buried under shipped worktrees. Run
-`~/.claude/hooks/lib/worktree_prune.sh <absolute-repo-path>` — a **dry run** by default — then
-`~/.claude/hooks/lib/worktree_prune.sh --apply <absolute-repo-path>`. The owner gave a standing
-go-ahead for every repo (2026-11-07, #923): worktrees whose content is already on
-`origin/<default>`, and their local and remote branches, are pruned without asking.
-`settings.json` allows the command typed in that exact form (`~/.claude/...` path, `--apply`
-first); if the auto-mode classifier still denies it, report it once and never work around it.
-`--apply` re-classifies on its own, so build the report from its output, not the dry run's: one
-line per pruned worktree plus the count kept. It prunes only when the content proves it shipped
-(`branch_content_shipped`, never ancestry), the tree holds nothing beyond build noise (or a staged
-index equal to an older commit of the branch), no PR is OPEN, no live agent touched it, and
-origin's branch (if any) has the local sha.
-Any read failure keeps the worktree. Never prune by hand what it kept.
+`~/.claude/hooks/lib/worktree_prune.sh --apply <absolute-repo-path>` (without `--apply` it is a
+dry run). The owner gave a standing go-ahead for every repo (2026-11-07, #923): worktrees whose
+content is already on `origin/<default>`, and their local and remote branches, are pruned without
+asking. `settings.json` allows the command typed in that exact form (`~/.claude/...` path,
+`--apply` first); if the auto-mode classifier still denies it, report it once and never work
+around it. Report from its output: one line per pruned worktree plus the count kept. It prunes
+only when the content proves it shipped (`branch_content_shipped`, never ancestry), the tree holds
+nothing beyond build noise (or a staged index equal to an older commit of the branch), no PR is
+OPEN, no live agent touched it, and origin's branch (if any) has the local sha. Any read failure,
+or an origin that moved, keeps the worktree. A `PARTIAL` line means a later step failed after the
+worktree was removed; it names the sha left on origin. Never prune by hand what it kept.
 
 ### The stash stack is shared — read it too
 

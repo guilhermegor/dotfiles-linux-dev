@@ -164,16 +164,21 @@ prune_apply_one() {
 	local cwd="$1" path="$2" branch="$3" sha remote
 	# --force is needed for the untracked noise; ignored/secret-shaped files were screened out.
 	[ -z "$branch" ] || sha="$(git -C "$cwd" rev-parse "refs/heads/$branch" 2>/dev/null)" || { echo "branch unreadable"; return 1; }
-	# Probe origin before anything destructive: an unreadable remote leaves everything in place.
-	[ -z "$branch" ] || remote="$(git -C "$cwd" ls-remote origin "refs/heads/$branch" 2>/dev/null)" \
-		|| { echo "remote unreadable, nothing pruned"; return 1; }
+	# Probe origin before anything destructive: an unreadable or moved remote leaves everything in
+	# place. GIT_TERMINAL_PROMPT=0: unattended, a credential prompt must fail, never hang.
+	if [ -n "$branch" ]; then
+		remote="$(GIT_TERMINAL_PROMPT=0 git -C "$cwd" ls-remote origin "refs/heads/$branch" 2>/dev/null)" \
+			|| { echo "remote unreadable, nothing pruned"; return 1; }
+		remote="$(awk -v r="refs/heads/$branch" '$2 == r {print $1}' <<<"$remote")"
+		[ -z "$remote" ] || [ "$remote" = "$sha" ] || { echo "remote moved, nothing pruned"; return 1; }
+	fi
 	git -C "$cwd" worktree remove --force "$path" 2>/dev/null || { echo "worktree remove failed"; return 1; }
 	[ -n "$branch" ] || return 0
 	git -C "$cwd" branch -D "$branch" >/dev/null 2>&1 || { echo "branch -D failed"; return 1; }
 	if [ -n "$remote" ]; then
 		# Lease on the sha classify verified: a push landing since then makes the delete fail.
-		git -C "$cwd" push --force-with-lease="refs/heads/$branch:$sha" origin --delete "$branch" >/dev/null 2>&1 \
-			|| { echo "push --delete failed (remote moved?)"; return 1; }
+		GIT_TERMINAL_PROMPT=0 git -C "$cwd" push --force-with-lease="refs/heads/$branch:$sha" origin --delete "$branch" >/dev/null 2>&1 \
+			|| { echo "push --delete failed (remote moved?), origin/$branch left at $sha"; return 1; }
 	fi
 }
 

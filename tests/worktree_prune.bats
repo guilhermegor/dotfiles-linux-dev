@@ -274,7 +274,9 @@ run_prune() { run prune_worktrees "$work" "${1:-0}"; }
     git -C "$other" push --quiet origin b1 2>/dev/null
     run prune_apply_one "$work" "$BATS_TEST_TMPDIR/wt-b1" b1
     [ "$status" -ne 0 ]
-    [[ "$output" == *"push --delete failed"* ]]
+    [[ "$output" == *"remote moved, nothing pruned"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-b1" ]
+    [ -n "$(git -C "$work" rev-parse --verify --quiet refs/heads/b1)" ]
     [ -n "$(git -C "$work" ls-remote origin refs/heads/b1)" ]
 }
 
