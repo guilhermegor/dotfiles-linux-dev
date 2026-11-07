@@ -94,7 +94,7 @@ import sys
 import time
 from pathlib import Path
 
-from gh_latch import refuse_if_latched
+from gh_latch import latch_on_refusal, refuse_if_latched
 from open_pr_pages import read_open_prs
 
 LIB_DIR = Path(__file__).resolve().parent
@@ -812,7 +812,9 @@ def build_plan() -> dict:
 	# documented legitimate-zero shape: fail closed, stay readable, say which read failed.
 	try:
 		prs = open_prs(slug) if issue_numbers else []
-	except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+	except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+		# A refusal of this real query latches the budget (#922): later planners stop calling gh.
+		latch_on_refusal(f"{getattr(exc, 'stderr', '')} {getattr(exc, 'stdout', '')}")
 		return {
 			"dispatchable": [],
 			"excluded": [

@@ -194,6 +194,18 @@ STUB
     [ "$status" -eq 0 ]
 }
 
+@test "a refused real query latches with the reset unknown; other errors do not (#922)" {
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.latch_on_refusal('GraphQL: API rate limit already exceeded for user ID 1.') else 1)"
+    [ "$status" -eq 0 ]
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.refuse_if_latched('t') else 1)"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"reset unknown"* ]]
+    rm -f "$GH_BUDGET_LATCH_FILE" "$GH_BUDGET_LATCH_FILE.guess"
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.latch_on_refusal('HTTP 404 Not Found') else 1)"
+    [ "$status" -eq 1 ]
+    [ ! -e "$GH_BUDGET_LATCH_FILE" ]
+}
+
 gate() {
     bash -c "source $HOOKS/lib/stop_budget.sh; stop_budget_gate" 2>&1
 }

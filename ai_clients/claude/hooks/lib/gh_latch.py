@@ -58,3 +58,27 @@ def refuse_if_latched(prog: str) -> bool:
 		pass
 	print(f"{prog}: BUDGET-LOW ({when}) -- not calling gh", file=sys.stderr)
 	return True
+
+
+UNKNOWN_RESET_TTL = 120
+
+
+def latch_on_refusal(text: str) -> bool:
+	"""Latch for a short guessed window when ``text`` is GitHub's own API rate-limit refusal.
+
+	A real query refused with "API rate limit [already] exceeded" is proof the budget is empty
+	whatever ``rate_limit`` or a passing probe says (dotfiles-linux-dev#922), and the refusal
+	carries no resetAt. Same two-anchor match as ``gh_budget_classify``; the ``.guess`` marker
+	copies the latch's own expiry so ``refuse_if_latched`` says the reset is unknown.
+	"""
+	low = (text or "").lower()
+	if not ("api rate limit" in low and "exceeded" in low):
+		return False
+	path = latch_path()
+	until = str(int(time.time()) + UNKNOWN_RESET_TTL) + "\n"
+	try:
+		path.write_text(until)
+		Path(f"{path}.guess").write_text(until)
+	except OSError:
+		return False
+	return True
