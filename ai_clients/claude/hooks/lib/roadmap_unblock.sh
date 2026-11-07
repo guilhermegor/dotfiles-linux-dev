@@ -207,7 +207,7 @@ _ru_unblock() {
 # sequence, every earlier write is retry-safe) instead of a FAILED that asks for a hand check.
 _ru_write_failed_line() {
 	if _board_throttled; then
-		printf 'SKIPPED %s: GraphQL rate-limited — retry next round\n' "$2"
+		printf 'SKIPPED %s %s: GraphQL rate-limited — retry next round\n' "$1" "$2"
 		return 0
 	fi
 	printf 'FAILED to %s %s: a gh write failed partway — verify by hand\n' "$1" "$2"

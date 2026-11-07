@@ -432,7 +432,7 @@ run_reconcile() {
     write_fake_gh
     touch "$TEST_TMP/fail-item-edit" "$TEST_TMP/throttled"
     run_reconcile
-    [[ "$output" == *"SKIPPED owner/repo#3: GraphQL rate-limited"* ]]
+    [[ "$output" == *"SKIPPED unblock owner/repo#3: GraphQL rate-limited"* ]]
     [[ "$output" != *"FAILED"* ]]
 }
 
@@ -801,6 +801,16 @@ run_boards() {
     run_reconcile
     [[ "$output" == *"FAILED to re-block owner/repo#7"* ]]
     refute_gh 'item-edit'
+}
+
+@test "re-block: a write failing under a confirmed throttle is SKIPPED re-block (#921)" {
+    write_items "$(item "owner/repo" 7 "Ready" "" "")"
+    write_blockers 7 "$(blocker 6 open "owner/repo")"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-edit" "$TEST_TMP/throttled"
+    run_reconcile
+    [[ "$output" == *"SKIPPED re-block owner/repo#7: GraphQL rate-limited"* ]]
+    [[ "$output" != *"FAILED"* ]]
 }
 
 @test "re-block: a decision blocker on a Ready item is not touched" {
