@@ -191,7 +191,7 @@ def mark_expansions(segment):
             quote = None if c == "'" else quote
             c = QUOTED_GT if c == ">" else c  # a quoted `>` is text, never a redirect
         elif c == "\\" and i + 1 < len(segment):
-            out.append(segment[i:i + 2])
+            out.append(segment[i] + (QUOTED_GT if segment[i + 1] == ">" else segment[i + 1]))
             i += 2
             continue
         elif c == '"':
@@ -202,6 +202,8 @@ def mark_expansions(segment):
             c = SHELL_QUOTED if quote else SHELL_SPLIT
         elif c == ">" and quote:
             c = QUOTED_GT
+        elif c == "{" and not quote and re.match(r"\{[^{}\s]*(,|\.\.)", segment[i:]):
+            c = SHELL_SPLIT  # `-t {x,-Fquery=@f}`: bash brace-expands it into extra arguments
         out.append(c)
         i += 1
     return "".join(out)
@@ -245,10 +247,13 @@ def _iter_marked(segments, marked, depth):
         if len(marks) != len(argv):
             raise ValueError("marking changed the word split")  # never expected: refuse to judge
         yield argv, marks
-        spec = None if depth >= 3 else _nested_script(argv)
+        spec = _nested_script(argv)
         if not spec:
             continue
         start, stop, prefix = spec
+        if depth >= 3:  # too deep to inspect: refuse to judge rather than skip it
+            NESTED_ERRORS.append(" ".join(argv[start:stop]))
+            continue
         inner = " ".join(argv[start:stop])[prefix:]
         # Text the outer shell wrote is re-parsed by the inner one, which may split it anywhere.
         minner = (" ".join(marks[start:stop])[prefix:].replace(SHELL_QUOTED, SHELL_SPLIT)
@@ -578,6 +583,18 @@ def without_redirects(words):
     return kept
 
 
+def without_redirects_idx(words):
+    """Indexes `without_redirects` keeps, so a parallel argv can be cut the same way."""
+    marked = list(enumerate(words))
+    kept = without_redirects([w for _, w in marked])
+    out, j = [], 0
+    for i, w in marked:
+        if j < len(kept) and kept[j] is w:
+            out.append(i)
+            j += 1
+    return out
+
+
 def unread_short_flag(tok):
     """True for `-if`-shaped words: pflag clusters them, so a value flag can hide inside."""
     return (tok.startswith("-") and not tok.startswith("--") and len(tok) > 2
@@ -758,10 +775,12 @@ def api_issue_match(segments):
         if argv[sub:sub + 1] != ["api"]:
             continue
         rest, mrest = argv[sub + 1:], marks[sub + 1:]
+        keep = without_redirects_idx(mrest)
+        rest, mrest = [rest[i] for i in keep], [mrest[i] for i in keep]
         endpoint, method, fields, input_file, stray = parse_api_args(rest)
         path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0])
         path = path.rstrip("/")
-        if (re.search(r"[*?\[]|\{[^}]*,[^}]*\}", endpoint or "")
+        if (re.search(r"[*\[]|\?(?!\w+=)|\{[^}]*,[^}]*\}", endpoint or "")
                 and (fields or input_file or (method or "GET") != "GET")):
             return graphql_issue_write([], "-")  # `{graphql,}`, `gr[a]phql`: bash picks the endpoint
         if posixpath.normpath("/" + urllib.parse.unquote(path)).strip("/").lower() in (
@@ -770,6 +789,8 @@ def api_issue_match(segments):
                 return graphql_issue_write([], "-")  # the shell writes part of the call: blind
             marked = parse_api_args(mrest)[2]
             if endpoint != "graphql":
+                if any(f.startswith("variables[query") for _, f in fields):
+                    return graphql_issue_write([], "-")  # would shadow the judged `query`
                 fields, marked = ungrouped_graphql_fields(fields), ungrouped_graphql_fields(marked)
             quoted = {f.partition("=")[0] for _, f in marked if SHELL_QUOTED in f.partition("=")[2]}
             gql = graphql_issue_write(fields, input_file, shifted, quoted)
@@ -860,7 +881,7 @@ def main():
         segments = split_segments(command)
         if noun == "api-issue":
             match = api_issue_match(segments)
-            if any("issue" in e.lower() or "graphql" in e.lower() for e in NESTED_ERRORS):
+            if any(re.search(r"\bapi\b", e) for e in NESTED_ERRORS):
                 match = {"matched": True, "unparseable": True}
             print(json.dumps(match or {"matched": False}))
             return 0

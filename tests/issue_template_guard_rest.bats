@@ -962,6 +962,35 @@ guard_cmd() {
     [ "$status" -eq 2 ]
 }
 
+@test "GraphQL: variables[query] cannot shadow the judged query (#906 ladder 12)" {
+    run guard_cmd "gh api /graphql -f 'query=mutation(\$query:String!){createIssue(input:{title:\"t\",body:\$query}){a}}' -f 'variables[query]=nope'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: brace and escaped > hide no field (#906 ladder 12)" {
+    run guard_cmd 'gh api graphql -t {x,-Fquery=@evil.graphql}'
+    [ "$status" -eq 2 ]
+    run guard_cmd "X='-Fquery=mutation{createIssue(input:{body:\"nope\"}){a}}'; gh api graphql -t \\> \"\$X\""
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a redirect before the endpoint does not disguise it (#906 ladder 12)" {
+    run guard_cmd "gh api >/dev/null graphql -f query='mutation{createIssue(input:{body:\"nope\"}){a}}'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a too-deep or obfuscated nested gh api is blind (#906 ladder 12)" {
+    run guard_cmd 'eval eval eval eval gh api graphql -F query=@evil.graphql'
+    [ "$status" -eq 2 ]
+    run guard_cmd "bash -c 'gh api gr\"\"aphql -F query=@evil <<EOF'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: a query string on an unrelated endpoint is not a glob (#906 ladder 12)" {
+    run guard_cmd "gh api -X DELETE 'repos/o/r/actions/caches?key=x'"
+    [ "$status" -eq 0 ]
+}
+
 @test "GraphQL: an untokenizable \$'...' query fails closed (#906 ladder 8)" {
     run guard_cmd "gh api graphql -f query=\$'mutation{createIssue(input:{body:\"it\\'s\"}){a}}'"
     [ "$status" -eq 2 ]
