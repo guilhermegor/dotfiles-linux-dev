@@ -26,9 +26,10 @@ stub_claude() {
 #!/bin/bash
 echo "\$*" >> "$TMP/calls"
 [ "$1" -eq 0 ] || exit "$1"
-jq '.plugins["foo@mkt"] = [{scope:"user",version:"1"}]' \\
-    "$CLAUDE_DIR/plugins/installed_plugins.json" > "$TMP/x" \\
-    && mv "$TMP/x" "$CLAUDE_DIR/plugins/installed_plugins.json"
+f="$CLAUDE_DIR/plugins/installed_plugins.json"
+[ -f "\$f" ] || echo '{"plugins":{}}' > "\$f"
+jq '.plugins["foo@mkt"] = [{scope:"user",version:"1"}]' "\$f" > "$TMP/x" \\
+    && mv "$TMP/x" "\$f"
 STUB
     chmod +x "$TMP/bin/claude"
 }
@@ -43,20 +44,43 @@ STUB
 
 @test "install failure: warns and returns 0" {
     stub_claude 1
+    echo '{"plugins":{}}' > "$CLAUDE_DIR/plugins/installed_plugins.json"
     run promote_plugin_to_user_scope "foo@mkt" foo mkt
     [ "$status" -eq 0 ]
     [[ "$output" == *"claude plugin install failed"* ]]
     [[ "$output" == *"Cache missing"* ]]
 }
 
-@test "claude absent: warns and returns 0" {
-    echo '{"plugins":{}}' > "$CLAUDE_DIR/plugins/installed_plugins.json"
-    run env PATH="/usr/bin:/bin" CLAUDE_DIR="$CLAUDE_DIR" bash -c "
+# Run the function with a PATH holding only jq and bash, so a real `claude`
+# installed anywhere on the host can never be reached.
+run_without_claude() {
+    mkdir -p "$TMP/nobin"
+    ln -sf "$(command -v jq)" "$TMP/nobin/jq"
+    run env PATH="$TMP/nobin" CLAUDE_DIR="$CLAUDE_DIR" "$(command -v bash)" -c "
         print_status() { echo \"\$1: \$2\"; }
         source '$REPO_ROOT/ai_clients/claude/lib/plugins.sh'
         promote_plugin_to_user_scope foo@mkt foo mkt"
+}
+
+@test "claude absent: warns and returns 0" {
+    echo '{"plugins":{}}' > "$CLAUDE_DIR/plugins/installed_plugins.json"
+    run_without_claude
     [ "$status" -eq 0 ]
     [[ "$output" == *"Cache missing"* ]]
+}
+
+@test "claude absent and no installed_plugins.json: warns, creates nothing" {
+    run_without_claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"claude CLI absent"* ]]
+    [ ! -e "$CLAUDE_DIR/plugins/installed_plugins.json" ]
+}
+
+@test "install failure with no installed_plugins.json: no skeleton left" {
+    stub_claude 1
+    run promote_plugin_to_user_scope "foo@mkt" foo mkt
+    [ "$status" -eq 0 ]
+    [ ! -e "$CLAUDE_DIR/plugins/installed_plugins.json" ]
 }
 
 @test "already at user scope: no install call" {

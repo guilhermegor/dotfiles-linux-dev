@@ -102,7 +102,7 @@ _install_plugin_via_cli() {
     command -v claude > /dev/null 2>&1 || return 0
 
     print_status "info" "Installing $plugin_key via claude CLI ..."
-    if claude plugin install "$plugin_key" --scope user >> "${LOG_FILE:-/dev/null}" 2>&1; then
+    if claude plugin install "$plugin_key" --scope user < /dev/null >> "${LOG_FILE:-/dev/null}" 2>&1; then
         print_status "success" "Installed: $plugin_key"
     else
         print_status "warning" "claude plugin install failed for $plugin_key"
@@ -122,8 +122,13 @@ promote_plugin_to_user_scope() {
             print_status "warning" "installed_plugins.json not found and claude CLI absent — run: /plugin install $plugin_name"
             return 0
         fi
-        mkdir -p "$(dirname "$installed_file")"
-        echo '{"plugins":{}}' > "$installed_file"
+        # The CLI creates the file itself; no skeleton, so a failed install
+        # leaves nothing behind.
+        _install_plugin_via_cli "$plugin_key"
+        if [ ! -f "$installed_file" ]; then
+            print_status "warning" "installed_plugins.json not found after install — run: /plugin install $plugin_name"
+            return 0
+        fi
     fi
 
     local user_count
