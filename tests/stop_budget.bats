@@ -414,3 +414,12 @@ STUB
     [ "$(wc -l <"$GH_BUDGET_SPEND_LOG")" -eq 1000 ]
     tail -1 "$GH_BUDGET_SPEND_LOG" | grep -q $'\tsub\t0'
 }
+
+@test "spend log: python writer falls back to the script name when no caller is set (#922)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    unset GH_BUDGET_CALLER
+    printf '%s\n' 'import sys; sys.path.insert(0, sys.argv[1]); import gh_latch; gh_latch.log_spend(0)' >"$TEST_TMP/myplanner.py"
+    run python3 "$TEST_TMP/myplanner.py" "$HOOKS/lib"
+    [ "$status" -eq 0 ]
+    grep -q $'\tmyplanner.py\t0' "$GH_BUDGET_SPEND_LOG"
+}

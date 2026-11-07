@@ -49,10 +49,13 @@ def log_spend(points: int = 0, caller: str = "") -> None:
 	and the call still counts. The bare /tmp fallback is never appended to (planted-symlink risk).
 	"""
 	override = os.environ.get("GH_BUDGET_SPEND_LOG")
-	base = _default_dir()
-	if not override and str(base) == "/tmp":  # noqa: S108
-		return
-	path = Path(override) if override else base / "dotfiles-dev-graphql-spend.tsv"
+	if override:
+		path = Path(override)
+	else:  # resolve the default dir only here: it creates ~/.cache as a side effect
+		base = _default_dir()
+		if str(base) == "/tmp":  # noqa: S108
+			return
+		path = base / "dotfiles-dev-graphql-spend.tsv"
 	name = (caller or os.environ.get("GH_BUDGET_CALLER") or Path(sys.argv[0]).name).replace("\t", " ").replace("\n", " ")
 	try:
 		import fcntl
