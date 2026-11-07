@@ -363,7 +363,7 @@ GRAPHQL_ISSUE_MUTATION = re.compile(r"\b(createIssue|updateIssue)\s*\(")
 GRAPHQL_STR = r'"""(?:[^"\\]|\\[\s\S]|"(?!""))*"""|"(?:[^"\\]|\\[\s\S])*"'
 GRAPHQL_BODY_KEY = re.compile(r"\bbody\s*:")
 GRAPHQL_LEADING_STRING = re.compile(r"\s*(" + GRAPHQL_STR + ")")
-GRAPHQL_IGNORED = re.compile("(" + GRAPHQL_STR + r")|#[^\n]*|[,\ufeff]")
+GRAPHQL_IGNORED = re.compile("(" + GRAPHQL_STR + r")|#[^\n\r]*|[,\ufeff]")
 GRAPHQL_STRING = re.compile(GRAPHQL_STR)
 GRAPHQL_SHELL_BUILT = re.compile(r"\$\(|\$\{|`")
 GRAPHQL_VAR_DECL = re.compile(r"\$(\w+)\s*:")
@@ -420,10 +420,11 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
     blind = {"matched": True, "repo": None, "head": None, "has_body": False, "body": None,
              "has_body_file": True, "body_file": "-", "body_json": True,
              "labels": [], "auto": False, "method": "POST"}
-    query, values = "", {}
+    query, values, query_from_file = "", {}, False
     for typed, field in fields:
         key, _, val = field.partition("=")
-        if typed and val.startswith("@"):  # -F key=@file: gh reads the value from the file
+        from_file = typed and val.startswith("@")
+        if from_file:  # -F key=@file: gh reads the value from the file
             if val == "@-":
                 return blind  # stdin is never visible to the hook
             try:
@@ -433,7 +434,7 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
             if val is None:
                 return blind  # unreadable / binary / stdin / device: the value is unseen
         if key == "query":
-            query = val
+            query, query_from_file = val, from_file
         else:
             values[key] = val
     if input_file == "-":
@@ -444,7 +445,7 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
             if raw is None:
                 return blind
             data = json.loads(raw)
-            query = str(data.get("query", ""))
+            query, query_from_file = str(data.get("query", "")), True
             variables = data.get("variables") or {}
             values = {k: v for k, v in variables.items() if isinstance(v, str)}  # -f is query-string
             values.update({k + "[body]": v["body"] for k, v in variables.items()
@@ -453,12 +454,14 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
                            if isinstance(v, dict) and "body" not in v})  # object, no body: left alone
         except (OSError, ValueError, AttributeError):
             return blind  # unreadable / stdin / not an object: the mutation is unseen
+    # Before comments go: a `$M` in a shell-supplied comment can expand to a newline and a mutation.
+    # File text never passes through the shell, so its `$` and backticks are only text (#906 review).
+    if not query_from_file:
+        undeclared = set(GRAPHQL_VAR_USE.findall(query)) - set(GRAPHQL_VAR_DECL.findall(query))
+        if undeclared or GRAPHQL_SHELL_BUILT.search(query):
+            return blind  # `$M` / `$(...)` the shell expands: the real query is unseen
     # GraphQL treats `,` and `#...` comments as whitespace; blank them outside strings (#906 review)
     query = GRAPHQL_IGNORED.sub(lambda m: m.group(1) or " ", query)
-    shell_text = mask_graphql_strings(query) if input_file else query
-    undeclared = set(GRAPHQL_VAR_USE.findall(shell_text)) - set(GRAPHQL_VAR_DECL.findall(shell_text))
-    if undeclared or GRAPHQL_SHELL_BUILT.search(query):
-        return blind  # `$M` / `$(...)` the shell expands: the real query is unseen
     muts = list(GRAPHQL_ISSUE_MUTATION.finditer(mask_graphql_strings(query)))
     if not muts:
         return None

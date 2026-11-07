@@ -675,3 +675,29 @@ EOF
     run bash -c "payload 'gh api graphql -F query=@$REPO/big.graphql' | '$GUARD'"
     [ "$status" -eq 2 ]
 }
+
+@test "GraphQL: a carriage return ends a comment, so the mutation after it is judged (#906 CodeRabbit)" {
+    printf '# c\rmutation{createIssue(input:{body:"nope"}){a}}' > "$REPO/cr.graphql"
+    run bash -c "payload 'gh api graphql -F query=@$REPO/cr.graphql' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    jq -n --rawfile q "$REPO/cr.graphql" '{query:$q}' > "$REPO/cr.json"
+    run bash -c "payload 'gh api graphql --input $REPO/cr.json' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a shell expansion inside an inline comment is blind (#906 CodeRabbit)" {
+    run bash -c "payload 'gh api graphql -f query=\"mutation{ # \$M\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation{ # \$(cat m)\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: file-sourced query text is never judged as shell-expanded (#906 CodeRabbit)" {
+    local q='mutation{createIssue(input:{repositoryId:"R",title:"t",body:"'"$COMPLIANT_BODY"' `x` costs $5 ${y} $(z)"}){issue{id}}} # $note'
+    printf '%s' "$q" > "$REPO/ok.graphql"
+    run bash -c "payload 'gh api graphql -F query=@$REPO/ok.graphql' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    jq -n --arg q "$q" '{query:$q}' > "$REPO/ok.json"
+    run bash -c "payload 'gh api graphql --input $REPO/ok.json' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
