@@ -156,3 +156,9 @@ STUB
     run bash -c "grep graphql '$DIR/gh.log' | grep -vc 'rateLimit{remaining resetAt}'"
     [ "$output" = 0 ]
 }
+
+@test "gh_budget_log_spend survives a missing log dir under set -e" {
+    run bash -c 'set -e; source ai_clients/claude/hooks/lib/gh_budget.sh; GH_BUDGET_SPEND_LOG=/nonexistent/d/x gh_budget_log_spend 1 t; echo survived'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *survived* ]]
+}

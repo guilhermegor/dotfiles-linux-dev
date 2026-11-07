@@ -322,18 +322,23 @@ gh_budget_with_backoff() {
 gh_budget_graphql_read() {
 	local floor="${1:-${STOP_GRAPHQL_FLOOR:-100}}" out gql gql_reset="" rest rest_reset rest_json at
 	GH_BUDGET_GQL_REMAINING="" GH_BUDGET_GQL_RESET="" GH_BUDGET_GQL_NOTE=""
-	out="$(gh api graphql -f query='{rateLimit{remaining resetAt}}' 2>&1)"
+	local errf
+	errf="$(mktemp)" || errf=/dev/null
+	# stdout alone is parsed as JSON; a stderr notice must not turn a healthy reading into "unreadable"
+	out="$(gh api graphql -f query='{rateLimit{remaining resetAt}}' 2>"$errf")"
 	gql="$(printf '%s' "$out" | jq -r '.data.rateLimit.remaining // empty' 2>/dev/null)"
 	if [[ "$gql" =~ ^[0-9]+$ ]]; then
 		at="$(printf '%s' "$out" | jq -r '.data.rateLimit.resetAt // empty' 2>/dev/null)"
 		[ -n "$at" ] && gql_reset="$(date -d "$at" +%s 2>/dev/null)"
 	else
 		gql=""
+		out="$out $(cat "$errf" 2>/dev/null)"
 		gh_budget_classify "$out"
 		if gh_budget_is_terminal || [[ "$out" == *RATE_LIMIT* ]]; then
 			gql=0 # refused: no resetAt exists to read, and none is invented
 		fi
 	fi
+	[ "$errf" = /dev/null ] || rm -f "$errf"
 	rest_json="$(gh api rate_limit 2>/dev/null)" || rest_json=""
 	rest="$(printf '%s' "$rest_json" | jq -r '.resources.graphql.remaining // empty' 2>/dev/null)"
 	rest_reset="$(printf '%s' "$rest_json" | jq -r '.resources.graphql.reset // empty' 2>/dev/null)"
@@ -387,7 +392,7 @@ gh_budget_log_spend() {
 		if [ "$(wc -l <"$log" || echo 0)" -gt "$max" ]; then
 			tail -n "$((max / 2))" "$log" >"$log.tmp.$$" && mv -f "$log.tmp.$$" "$log"
 		fi
-	} 2>/dev/null 9>>"$log.lock"
+	} 2>/dev/null 9>>"$log.lock" || true # a missing log dir must not abort a `set -e` caller
 	return 0
 }
 
