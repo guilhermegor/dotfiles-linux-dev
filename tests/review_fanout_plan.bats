@@ -1559,7 +1559,7 @@ not_ready() {
 merge_pr() {
     stub_gh_prs <<EOF
 [{"number":$1,"headRefOid":"2222aaaa","baseRefName":"master","mergeStateStatus":"BLOCKED","isDraft":false,
-  "reviews":[{"commit":{"oid":"1111aaaa"}}],"comments":[],
+  "reviews":[{"commit":{"oid":"1111aaaa"},"state":"COMMENTED","body":"findings"}],"comments":[],
   "commits":[{"oid":"2222aaaa","committedDate":"$(ago 3600)"}],
   "statusCheckRollup":[],
   "patches":$2}]
@@ -1618,7 +1618,7 @@ EOF
 @test "many older comment heads do not crowd out the parent's review (#737)" {
     stub_gh_prs <<EOF
 [{"number":737,"headRefOid":"2222aaaa","baseRefName":"master","mergeStateStatus":"BLOCKED","isDraft":false,
-  "reviews":[{"commit":{"oid":"1111aaaa"}}],
+  "reviews":[{"commit":{"oid":"1111aaaa"},"state":"COMMENTED","body":"findings"}],
   "comments":[{"body":"Fallback review — runtime: codex, model: m (selected by: s)\nReviewed head: aa01","createdAt":"$(ago 7000)"},
               {"body":"Fallback review — runtime: codex, model: m (selected by: s)\nReviewed head: aa02","createdAt":"$(ago 7000)"},
               {"body":"Fallback review — runtime: codex, model: m (selected by: s)\nReviewed head: aa03","createdAt":"$(ago 7000)"},
@@ -1697,6 +1697,28 @@ EOF
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "929" ]
+}
+
+@test "an empty-body DISMISSED review is not merge-only coverage (#926)" {
+    merge_pr_reviews 930 '[{"commit":{"oid":"bbbb0002"},"state":"DISMISSED","body":""}]'
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "930" ]
+}
+
+@test "an empty-body review with no state is not merge-only coverage (#926)" {
+    merge_pr_reviews 931 '[{"commit":{"oid":"bbbb0002"},"body":"  \n"}]'
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "931" ]
+}
+
+@test "an empty-body CHANGES_REQUESTED review still carries over a merge-only update (#926)" {
+    merge_pr_reviews 932 '[{"commit":{"oid":"bbbb0002"},"state":"CHANGES_REQUESTED","body":""}]'
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 932)" == *"merge-only update"* ]]
 }
 
 @test "a binary file (no patch) is compared by blob sha: equal is covered" {

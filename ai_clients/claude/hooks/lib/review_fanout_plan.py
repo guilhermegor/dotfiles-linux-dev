@@ -862,18 +862,24 @@ def _patch_signature(base: str, oid: str) -> list | None:
 
 
 def counts_as_review(review: dict) -> bool:
-	"""False for a ``COMMENTED`` review with an empty body, the shape the thread gate drops (#926).
+	"""Mirror BlueprintX ``check_review_threads.py``'s ``counts_as_review`` (#926).
 
-	``check_review_threads.py``'s ``counts_as_review`` does not treat it as a review, so it never
-	carries forward. Counting it here made a merge-only head look covered by a review the gate
-	ignores: the planner never scheduled a review and the gate never passed. A ``PENDING``
-	review is unsubmitted, which the gate also refuses to count. A missing state
-	counts (fail toward "covered" only where the gate would too).
+	The gate counts an ``APPROVED`` or ``CHANGES_REQUESTED`` review always, and any other state,
+	a missing one included, only when its body is non-empty after ``strip()``. Counting more than
+	that here made a head look covered by a review the gate ignores, so the planner never
+	scheduled a review and the gate never passed. A ``PENDING`` review is unsubmitted and the
+	gate never sees it.
 	"""
+	# ponytail: the gate also counts an empty-body review that owns a root inline comment; the
+	# planner does not fetch review comments, so such a review reads as uncounted here. That only
+	# re-dispatches a covered head (extra cost, never false coverage). Fetch comments{replyTo} in
+	# PR_SELECTION if inline-only bot reviews start costing real reviews.
 	state = (review.get("state") or "").upper()
 	if state == "PENDING":
 		return False
-	return not (state == "COMMENTED" and not (review.get("body") or "").strip())
+	if state in {"APPROVED", "CHANGES_REQUESTED"}:
+		return True
+	return bool((review.get("body") or "").strip())
 
 
 def reviewed_heads(pr: dict) -> list[str]:
