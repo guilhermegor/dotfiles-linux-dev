@@ -816,7 +816,8 @@ def build_plan() -> dict:
 		# A refusal of this real query latches the budget (#922): later planners stop calling gh.
 		# stderr only: a partial GraphQL result puts the body (PR titles/bodies that may quote the
 		# phrase) on stdout, so matching stdout could latch a healthy budget (#922 review).
-		text = getattr(exc, "stderr", "") or ""
+		# A timeout is never a refusal, and its stderr is bytes even under text=True (#939 review).
+		text = (exc.stderr or "") if isinstance(exc, subprocess.CalledProcessError) else ""
 		# The reason is what the Stop guards keep (they drop stderr), so a failed latch write shows there.
 		unlatched = is_rate_limit_refusal(text) and not latch_on_refusal(text)
 		return {
