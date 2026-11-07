@@ -62,8 +62,11 @@ on filings-rfb, 2026-10-25): stop, print the exact command for the operator to r
 wait for their go-ahead before verifying. Never widen the allowlist to get past a refusal.
 
 ```bash
-gh workflow run release-test-pypi.yaml -f version=<next>
+cd <absolute-repo-path> && gh workflow run release-test-pypi.yaml --ref <default-branch> -f version=<next>
 ```
+
+(`--ref <default-branch>` avoids the default-branch lookup that fails under a GraphQL limit; use it
+for the PyPI dispatch below too.)
 
 Then **verify by install** before promoting — never trust a single index read:
 
@@ -80,7 +83,7 @@ Then **verify by install** before promoting — never trust a single index read:
 Only once Test PyPI is install-verified:
 
 ```bash
-gh workflow run release-pypi.yaml -f version=<next>
+cd <absolute-repo-path> && gh workflow run release-pypi.yaml --ref <default-branch> -f version=<next>
 ```
 
 Verify the same way (green run + `pip install <pkg>==<next>` with retry).
@@ -101,6 +104,11 @@ A Test PyPI run validates **only the steps the two workflows have in common**. A
 Diff the two workflows before trusting the rehearsal — **the delta is the hole**. Measured case: an
 `upload/download-artifact` bump *was* covered by the Test PyPI run, but a `gh-release@v1→v3` bump
 existed only in the prod workflow, ran for the first time ever in the real release, and failed.
+
+**Prod-only gate for `1.0.0`:** `release-pypi.yaml` may carry a `1.0.0 release gate` job the
+rehearsal never runs. Before dispatching, run it yourself:
+`cd <absolute-repo-path> && python bin/check_release_gate.py --new-version 1.0.0 --previous-version <floor>`
+(`<floor>` = the `max(PyPI, Test PyPI)` from §A). Skip if the repo ships no such script.
 
 Two traps that follow from it:
 
