@@ -370,18 +370,32 @@ gh_budget_spend_log_path() {
 
 # gh_budget_log_spend POINTS [CALLER]
 # Appends one line. CALLER defaults to $GH_BUDGET_CALLER (set it to a subagent name when known),
-# else the top-level script's basename. Past $GH_BUDGET_SPEND_LOG_MAX lines (default 2000) it keeps
-# the newest half. Never fails the caller: logging is best-effort.
+# else gh_budget_default_caller. Past $GH_BUDGET_SPEND_LOG_MAX lines (default 2000) it keeps the
+# newest half. Append and trim share one flock on `<log>.lock`, so a trim's tail+mv never drops a
+# concurrent append. Never fails the caller: logging is best-effort.
 gh_budget_log_spend() {
-	local points="${1:-0}" caller="${2:-${GH_BUDGET_CALLER:-$(basename "${BASH_SOURCE[${#BASH_SOURCE[@]}-1]}")}}"
+	local points="${1:-0}" caller="${2:-${GH_BUDGET_CALLER:-$(gh_budget_default_caller)}}"
 	local log max="${GH_BUDGET_SPEND_LOG_MAX:-2000}"
 	[[ "$points" =~ ^[0-9]+$ ]] || points=0
 	log="$(gh_budget_spend_log_path)"
-	printf '%s\t%s\t%s\n' "$(date +%s)" "${caller//[$'\t\n']/ }" "$points" >>"$log" 2>/dev/null || return 0
-	if [ "$(wc -l <"$log" 2>/dev/null || echo 0)" -gt "$max" ]; then
-		tail -n "$((max / 2))" "$log" >"$log.tmp.$$" 2>/dev/null && mv -f "$log.tmp.$$" "$log" 2>/dev/null
-	fi
+	{
+		flock -w 2 9 || return 0
+		printf '%s\t%s\t%s\n' "$(date +%s)" "${caller//[$'\t\n']/ }" "$points" >>"$log" || return 0
+		if [ "$(wc -l <"$log" || echo 0)" -gt "$max" ]; then
+			tail -n "$((max / 2))" "$log" >"$log.tmp.$$" && mv -f "$log.tmp.$$" "$log"
+		fi
+	} 9>>"$log.lock" 2>/dev/null
 	return 0
+}
+
+# gh_budget_default_caller - the executed script's basename; under `bash -c` or stdin (no script,
+# so BASH_SOURCE's bottom is only the sourced library) the outermost function called, `fn:<name>`.
+gh_budget_default_caller() {
+	if [ "${BASH_SOURCE[-1]}" = "$0" ]; then
+		basename "$0"
+	else
+		printf 'fn:%s\n' "${FUNCNAME[-1]}"
+	fi
 }
 
 # gh_budget_spend_summary [WINDOW_SECONDS] [TOP_N]

@@ -34,15 +34,17 @@ stop_budget_gate() {
 		note="${GH_BUDGET_GQL_NOTE:+ [$GH_BUDGET_GQL_NOTE]}"
 		now="$(date +%s)"
 		reset="$GH_BUDGET_GQL_RESET"
+		rm -f "$(gh_budget_latch_path).guess" 2>/dev/null
 		if [[ "$reset" =~ ^[0-9]+$ ]] && [ "$reset" -gt "$now" ]; then
 			ttl=$((reset - now))
-			rm -f "$(gh_budget_latch_path).guess" 2>/dev/null
+			gh_budget_latch_write "$ttl" || true
 		else
 			# No resetAt to read (a refused probe has none): recheck soon, and say the time is a guess.
+			# The marker copies the latch's own expiry: a second computed `now` could differ by one.
 			ttl="${GH_BUDGET_UNKNOWN_RESET_TTL:-120}"
-			printf '%s\n' "$((now + ttl))" >"$(gh_budget_latch_path).guess" 2>/dev/null || true
+			gh_budget_latch_write "$ttl" \
+				&& cp -f "$(gh_budget_latch_path)" "$(gh_budget_latch_path).guess" 2>/dev/null
 		fi
-		gh_budget_latch_write "$ttl" || true
 	fi
 	until="$(cat "$(gh_budget_latch_path)" 2>/dev/null)"
 	# Once per latch window: the marker remembers which reset was already announced.

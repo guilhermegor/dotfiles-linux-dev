@@ -260,3 +260,45 @@ STUB
     [ "$(wc -l <"$GH_BUDGET_SPEND_LOG")" -le 10 ]
     [ "$(awk -F'\t' '$2 != "unit" || $3 != 3' "$GH_BUDGET_SPEND_LOG" | wc -l)" -eq 0 ]
 }
+
+@test "spend log: an append waits for a trim holding the lock (#925 CodeRabbit)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    : >"$GH_BUDGET_SPEND_LOG"
+    # A stand-in trim: holds the lock, then replaces the log the way tail+mv does.
+    (
+        flock 9
+        touch "$TEST_TMP/held"
+        sleep 1
+        : >"$GH_BUDGET_SPEND_LOG.new"
+        mv -f "$GH_BUDGET_SPEND_LOG.new" "$GH_BUDGET_SPEND_LOG"
+    ) 9>>"$GH_BUDGET_SPEND_LOG.lock" &
+    for _ in $(seq 1 100); do [ -e "$TEST_TMP/held" ] && break; sleep 0.05; done
+    [ -e "$TEST_TMP/held" ]
+    bash -c "source $HOOKS/lib/gh_budget.sh; gh_budget_log_spend 4 waited"
+    wait
+    run grep -c waited "$GH_BUDGET_SPEND_LOG"
+    [ "$output" = "1" ]
+}
+
+@test "spend log: the default caller is the script, or the outermost function under bash -c" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    unset GH_BUDGET_CALLER
+    printf '%s\n' "source $HOOKS/lib/gh_budget.sh" 'main() { gh_budget_log_spend 1; }' 'main' >"$TEST_TMP/entry.sh"
+    bash "$TEST_TMP/entry.sh"
+    bash -c "source $HOOKS/lib/gh_budget.sh; my_outer() { gh_budget_log_spend 1; }; my_outer"
+    run cut -f2 "$GH_BUDGET_SPEND_LOG"
+    [ "${lines[0]}" = "entry.sh" ]
+    [ "${lines[1]}" = "fn:my_outer" ]
+}
+
+@test "gate: a guessed reset's marker carries the latch's own expiry (#925 CodeRabbit)" {
+    # A clock that ticks one second per `date +%s`, so two separately computed expiries differ.
+    printf '%s\n' '#!/bin/bash' \
+        'if [ "$1" = "+%s" ]; then n=$(cat "$TEST_TMP/clock" 2>/dev/null || echo 1700000000)' \
+        '  echo $((n + 1)) >"$TEST_TMP/clock"; echo "$n"; exit 0; fi' \
+        'exec /bin/date "$@"' >"$TEST_TMP/bin/date"
+    chmod +x "$TEST_TMP/bin/date"
+    TEST_TMP="$TEST_TMP" GQL_REMAINING=2842 GQL_PROBE=refuse run gate
+    [ "$status" -eq 1 ]
+    [ "$(cat "$GH_BUDGET_LATCH_FILE.guess")" = "$(cat "$GH_BUDGET_LATCH_FILE")" ]
+}
