@@ -2646,11 +2646,11 @@ field — <code>commands/act.md</code> with <code>name: c:act</code> still surfa
 <tbody>
 <tr>
 <td><strong>Source</strong></td>
-<td><code>ai_clients/claude/settings.&lt;provider&gt;.json</code> (an <code>env</code>-only overlay, not a full settings.json) + <code>ai_clients/claude/profile_functions.sh</code> (the launcher)</td>
+<td><code>ai_clients/claude/profile_functions.sh</code> (the launcher)</td>
 </tr>
 <tr>
 <td><strong>Installs to</strong></td>
-<td><code>~/.claude/settings.&lt;provider&gt;.json</code> (token resolved from <code>.env</code>) + <code>~/.claude/profile_functions.sh</code>, sourced from <code>~/.bashrc</code></td>
+<td><code>~/.claude/profile_functions.sh</code>, sourced from <code>~/.bashrc</code></td>
 </tr>
 <tr>
 <td><strong>Lib script</strong></td>
@@ -2658,23 +2658,17 @@ field — <code>commands/act.md</code> with <code>name: c:act</code> still surfa
 </tr>
 <tr>
 <td><strong>Invoked by user as</strong></td>
-<td><code>claude-profile &lt;provider&gt;</code> (shell function; e.g. <code>claude-profile deepseek</code>)</td>
+<td><code>claude-profile &lt;name&gt;</code> (shell function; runs <code>${CLAUDE_CONFIG_DIR:-~/.claude}/settings.&lt;name&gt;.json</code>)</td>
 </tr>
 </tbody>
 </table>
-<p>A profile points <code>ANTHROPIC_BASE_URL</code>/<code>ANTHROPIC_AUTH_TOKEN</code> at an
-Anthropic-compatible endpoint so the harness — every skill, hook, gate,
-guard, and MCP server — survives; only the model changes. The token is
-never committed: the source file ships the placeholder <code>KEY-GOES-HERE</code> and
-<code>_install_deepseek_profile</code> in <code>lib/profiles.sh</code> substitutes it from the
-project root <code>.env</code> at deploy time, the same pattern <code>mcp_servers.sh</code>
-already uses for <code>CONTEXT7_API_KEY</code>/<code>TAVILY_API_KEY</code>.</p>
-<p><strong>Verified endpoint:</strong> DeepSeek, <code>https://api.deepseek.com/anthropic</code>, auth
-via <code>ANTHROPIC_AUTH_TOKEN</code> — <strong>verified 2026-08-26</strong> (see the runtime
-roster issue, dotfiles-linux-dev#151, for the sourced comparison against
-Zhipu/GLM, Moonshot/Kimi, and MiniMax). Re-verify and update this date
-before relying on it again; provider compatibility is the field most
-likely to rot.</p>
+<p>A profile is an <code>env</code>-only <code>--settings</code> overlay that points
+<code>ANTHROPIC_BASE_URL</code>/<code>ANTHROPIC_AUTH_TOKEN</code> at an Anthropic-compatible
+endpoint, so the harness (every skill, hook, gate, guard and MCP server)
+survives and only the model changes. No profile ships from source: the
+DeepSeek overlay was never configured and was removed (dotfiles-linux-dev#935).
+A profile is hand-made, machine-local and holds a token, so it is never
+committed. The provider comparison lives in dotfiles-linux-dev#151.</p>
 <p>⚠️ <strong>The two-session pattern, and why it's two sessions and not one.</strong>
 <code>ANTHROPIC_BASE_URL</code> is process-level: it swaps the model for the WHOLE
 session, subagents included, because a subagent inherits the parent
