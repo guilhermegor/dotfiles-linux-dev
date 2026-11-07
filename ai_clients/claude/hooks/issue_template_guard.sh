@@ -127,13 +127,14 @@ main() {
         root="$(git rev-parse --show-toplevel 2>/dev/null)"
     fi
 
+    mapfile -t templates < <(find_issue_templates "$root")
+    [[ ${#templates[@]} -gt 0 ]] || exit 0   # no issue template anywhere → nothing to enforce
+    # Only now: a missing lib must not block a repo that has nothing to enforce.
     if [[ "$SPEC_LIB_OK" != 1 ]]; then
         echo "BLOCKED: issue_spec_complete.sh is missing next to issue_template_guard.sh, so this" >&2
         echo "issue body cannot be verified. Re-run \`make ai_clients\` to deploy hooks/lib/ in full." >&2
         exit 2
     fi
-    mapfile -t templates < <(find_issue_templates "$root")
-    [[ ${#templates[@]} -gt 0 ]] || exit 0   # no issue template anywhere → nothing to enforce
 
     if [[ "$GH_HAS_BODY_FILE" == "true" ]]; then
         if [[ -r "$GH_BODY_FILE" ]]; then

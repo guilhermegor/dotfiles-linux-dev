@@ -36,14 +36,16 @@ strip_frontmatter_and_comments() {
 # Prints the lines of the first `##`/`###` section whose heading TEXT equals HEADER
 # (case-insensitive, whole heading: `Scope` does not match `Out of scope`), up to the next heading
 # of the same or a higher level (a `###` subsection stays inside its `##` section) or EOF. Headings
-# inside fenced code blocks are not headings. Prints nothing, returns 1 when absent.
+# inside fenced code blocks are not headings. Prints nothing, returns 1 when absent. The printed
+# section is lowercased: bash folds the text (UTF-8 aware) before awk sees it, because mawk's
+# tolower() leaves non-ASCII letters alone and `## Ação` would then never match.
 _spec_section() {
-	local text="$1" header="${2,,}"
+	local text="${1,,}" header="${2,,}"
 	awk -v want="$header" '
 		/^```/ { fence = !fence }
 		!fence && /^###?[ \t]/ {
 			level = match($0, /[^#]/) - 1
-			h = tolower($0); sub(/^#+[ \t]*/, "", h); sub(/[ \t]+$/, "", h)
+			h = $0; sub(/^#+[ \t]*/, "", h); sub(/[ \t]+$/, "", h)
 			if (found && level <= flevel) exit
 			if (!found && h == want) { found = 1; flevel = level; next }
 		}
@@ -52,8 +54,8 @@ _spec_section() {
 	' <<<"$text"
 }
 
-# True if $1 (a multi-line block of text) has a `##`/`###` header matching $2 (case-insensitive
-# substring) whose section (up to the next such header, or EOF) contains a `- [ ]`/`- [x]` item.
+# True if $1 (a multi-line block of text) has a `##`/`###` header equal to $2 (case-insensitive,
+# whole heading) whose section (up to the next such header, or EOF) contains a `- [ ]`/`- [x]` item.
 section_has_checklist() {
 	local section
 	section="$(_spec_section "$1" "$2")" || return 1
@@ -66,10 +68,12 @@ spec_section_filled() {
 	local section
 	section="$(_spec_section "$1" "$2")" || return 1
 	# A fenced surface block is its own requirement (spec_surface_nonempty), never section text.
-	# Inline `<!-- … -->` goes first so prose beside it survives; multi-line comments after.
-	sed -E 's/<!--.*-->//g' <<<"$section" \
+	# Inline `<!-- … -->` goes first (non-greedy, so prose between two comments survives), then
+	# multi-line comments. A heading line is structure, not text, unless inside a code fence.
+	sed -E 's/<!--([^-]|-[^-])*-->//g' <<<"$section" \
 		| awk '/^```surface[ \t]*$/ { s=1; next } s { if ($0 ~ /^```/) s=0; next }
-			/<!--/ { c=1 } c { if ($0 ~ /-->/) c=0; next } { print }' \
+			/<!--/ { c=1 } c { if ($0 ~ /-->/) c=0; next }
+			/^```/ { f=!f } !f && /^#+[ \t]/ { next } { print }' \
 		| grep -q '[^[:space:]]'
 }
 
@@ -150,7 +154,9 @@ spec_incomplete_reasons() {
 		stripped="$(strip_frontmatter_and_comments "$template")"
 		while IFS= read -r line; do
 			header="$(sed -E 's/^#+[[:space:]]*//; s/[[:space:]]+$//' <<<"$line")"
-			[[ -n "$header" && "${header,,}" != *surface* ]] || continue
+			[[ -n "$header" ]] || continue
+			# The section holding the ```surface fence is checked by spec_surface_nonempty.
+			_spec_section "$stripped" "$header" | grep -q '^```surface' && continue
 			# evaluate_template matched the header text anywhere; the heading line itself is
 			# required here, and its section must hold text.
 			if ! _spec_section "$body" "$header" >/dev/null; then

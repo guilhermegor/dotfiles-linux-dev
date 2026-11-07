@@ -55,7 +55,9 @@ make_checkout() {
 publish_checkout() {
     local d="$ROADMAP_CHECKOUT_ROOT/$1"
     git -C "$d" add -A
-    git -C "$d" -c user.name=t -c user.email=t@t commit -q --allow-empty -m t
+    # Immune to the machine's global hooks path and signing: a fixture is not a real commit.
+    git -C "$d" -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null \
+        -c commit.gpgsign=false commit -q --no-verify --allow-empty -m t
     git -C "$d" update-ref refs/remotes/origin/main HEAD
     git -C "$d" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 }
@@ -985,6 +987,29 @@ run_boards() {
     run_reconcile
     [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
     refute_gh 'item-edit'
+}
+
+@test "unblock: an ssh origin names the repo, an ssh host alias fails closed (#931)" {
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" remote set-url origin git@github.com:owner/repo.git
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Ready"* ]]
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" remote set-url origin git@github.com-work:owner/repo.git
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+}
+
+@test "unblock: a comma inside a reason is kept as written (#931)" {
+    mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
+    printf '**Why**\n\n## What / Why\n' >"$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"
+    publish_checkout repo
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf 'Blocked by: owner/repo#2\n\n## What / Why\n\nx\n')")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (a bold first line, like: **Why**, no surface block)"* ]]
 }
 
 @test "unblock: origin casing differs from the board name and still verifies (#931)" {

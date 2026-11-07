@@ -377,6 +377,44 @@ EOF"
     [ "$status" -eq 0 ]
 }
 
+@test "section lookup: UTF-8 headings fold case on both sides (mawk tolower is ASCII-only)" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
+    run bash -c "source '$lib'; spec_section_filled \"\$(printf '## AÇÃO\n\ntexto\n')\" 'Ação'"
+    [ "$status" -eq 0 ]
+}
+
+@test "section filled: a subheading alone is not text; prose between two inline comments is" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
+    run bash -c "source '$lib'; spec_section_filled \"\$(printf '## Scope\n### Part\n## Next\n')\" Scope"
+    [ "$status" -ne 0 ]
+    run bash -c "source '$lib'; spec_section_filled \"\$(printf '## Scope\n<!-- a --> real prose <!-- b -->\n')\" Scope"
+    [ "$status" -eq 0 ]
+    run bash -c "source '$lib'; spec_section_filled \"\$(printf '## Scope\n<!-- a --> <!-- b -->\n')\" Scope"
+    [ "$status" -ne 0 ]
+}
+
+@test "spec_incomplete_reasons: only the section holding the surface fence is exempt, not any 'surface' name" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh" t
+    t="$(mktemp)"
+    printf '## Attack surface\n\n## File surface\n\n```surface\n```\n' >"$t"
+    run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## Attack surface\n\n## File surface\n\n\`\`\`surface\na.sh\n\`\`\`\n')\" '$t'"
+    rm -f "$t"
+    [[ "$output" == *"empty Attack surface"* ]]
+    [[ "$output" != *"empty File surface"* ]]
+}
+
+@test "a missing issue_spec_complete.sh does not block a repo that ships no issue template" {
+    local copy repo
+    copy="$(mktemp -d)"
+    repo="$(mktemp -d)"
+    cp -r "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/." "$copy/"
+    rm "$copy/lib/issue_spec_complete.sh"
+    git -C "$repo" init -q
+    run bash -c "cd '$repo' && payload 'gh issue create --title x --body \"$NO_DOD_BODY\"' | '$copy/issue_template_guard.sh'"
+    rm -rf "$copy" "$repo"
+    [ "$status" -eq 0 ]
+}
+
 @test "a missing issue_spec_complete.sh blocks an issue write instead of approving it" {
     local copy
     copy="$(mktemp -d)"

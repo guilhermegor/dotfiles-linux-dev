@@ -257,7 +257,11 @@ depends on the spec, not always `Ready`: `Ready` when the body fills every secti
 issue template (`What / Why` when it ships none) and has a non-empty `surface` block, else `Backlog`
 with the reason on the line (`unblocked <repo>#N … -> Backlog (no surface block)`). The test is
 `hooks/lib/issue_spec_complete.sh`, shared with `issue_template_guard.sh`. An unreadable body is
-UNKNOWN and the card is untouched. A board that reconciled clean and a board nobody swept must never look the same. Add or
+UNKNOWN and the card is untouched. So is a repo with no verified local checkout: templates are read
+at `origin/HEAD` of `~/github/<name>` (`$ROADMAP_CHECKOUT_ROOT`), whose `origin` must name the repo
+and whose `origin/HEAD` must resolve (`git remote set-head origin -a` sets it), at the freshness of
+its last fetch. A Backlog card moved by the `state:blocked` label records that label as its
+"Blocked by", so it waits for a person to clear it. A board that reconciled clean and a board nobody swept must never look the same. Add or
 drop a board by editing `ROADMAP_BOARDS`, not this prose.
 
 **The kanban reconcile covers the same boards (dotfiles-linux-dev#887).** The sweep's items `[7]`

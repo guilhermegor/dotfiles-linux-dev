@@ -226,7 +226,7 @@ _ru_unblock_dest() {
 		return 0
 	fi
 	UNBLOCK_DEST="Backlog"
-	UNBLOCK_WHY="$(printf '%s' "$reasons" | paste -sd, - | sed 's/,/, /g')"
+	UNBLOCK_WHY="$(printf '%s\n' "$reasons" | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')"
 }
 
 # _ru_dest_phrase
