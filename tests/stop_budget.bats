@@ -374,3 +374,11 @@ STUB
     [ "$status" -eq 1 ]
     [ "$(cat "$GH_BUDGET_LATCH_FILE.guess")" = "$(cat "$GH_BUDGET_LATCH_FILE")" ]
 }
+
+@test "spend log: the rateLimit probe itself is logged under its caller (#922)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv" GH_BUDGET_CALLER=prober
+    GQL_PROBE=500 run bash -c "source $HOOKS/lib/gh_budget.sh; gh_budget_graphql_read"
+    GQL_PROBE=refuse run bash -c "source $HOOKS/lib/gh_budget.sh; gh_budget_graphql_read"
+    [ "$(awk -F"\t" '$2 == "prober"' "$GH_BUDGET_SPEND_LOG" | wc -l)" -eq 2 ]
+    [ "$(awk -F"\t" '{s += $3} END {print s}' "$GH_BUDGET_SPEND_LOG")" -eq 1 ]
+}

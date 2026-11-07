@@ -327,6 +327,8 @@ gh_budget_graphql_read() {
 	# stdout alone is parsed as JSON; a stderr notice must not turn a healthy reading into "unreadable"
 	out="$(gh api graphql -f query='{rateLimit{remaining resetAt}}' 2>"$errf")"
 	gql="$(printf '%s' "$out" | jq -r '.data.rateLimit.remaining // empty' 2>/dev/null)"
+	# The probe is itself a GraphQL call (1 point when answered): log it so its caller is attributed (#922).
+	if [[ "$gql" =~ ^[0-9]+$ ]]; then gh_budget_log_spend 1; else gh_budget_log_spend 0; fi
 	if [[ "$gql" =~ ^[0-9]+$ ]]; then
 		at="$(printf '%s' "$out" | jq -r '.data.rateLimit.resetAt // empty' 2>/dev/null)"
 		[ -n "$at" ] && gql_reset="$(date -d "$at" +%s 2>/dev/null)"
