@@ -106,7 +106,16 @@ reconcile_kanban_stale() {
 	items_json="$(gh project item-list "$project_number" --owner "$owner" --format json --limit "$item_limit" 2>/dev/null)" &&
 		printf '%s' "$items_json" | jq -e --argjson cap "$item_limit" \
 			'type=="object" and (.items | type == "array") and (.items | length) < $cap' >/dev/null 2>&1 || {
-		RECONCILE_STALE_REPORT="UNKNOWN: could not read a complete project item list for $owner/$repo"
+		# #921: name a confirmed throttle so the board is reported SKIPPED, not merely unreadable.
+		# A read that SUCCEEDED but hit the cap is not a throttle: skip the probe, report the cap.
+		if [[ -n "$items_json" ]] && printf '%s' "$items_json" | jq -e --argjson cap "$item_limit" \
+			'(.items | type == "array") and (.items | length) >= $cap' >/dev/null 2>&1; then
+			RECONCILE_STALE_REPORT="UNKNOWN: project item list hit the $item_limit cap for $owner/$repo — result may be truncated"
+		elif _board_throttled; then
+			RECONCILE_STALE_REPORT="UNKNOWN (throttled): GitHub GraphQL rate limit — retry next round"
+		else
+			RECONCILE_STALE_REPORT="UNKNOWN: could not read a complete project item list for $owner/$repo"
+		fi
 		return 1
 	}
 

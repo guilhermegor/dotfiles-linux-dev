@@ -316,6 +316,34 @@ run_reconcile() {
     refute_gh 'item-edit'
 }
 
+@test "a confirmed GraphQL throttle on the item list is reported as throttled (#921)" {
+    write_issues "$(open_issue 42)"
+    write_fake_gh
+    cat > "$FAKE_BIN/gh" <<EOF
+#!/bin/bash
+case "\$1 \$2" in
+    "project list") echo '{"projects":[{"title":"repo kanban","number":1,"id":"PVT_1"}]}' ;;
+    "project field-list") cat "$TEST_TMP/fields.json" ;;
+    "api graphql") echo "API rate limit already exceeded" >&2; exit 1 ;;
+    *) exit 1 ;;
+esac
+EOF
+    run_reconcile
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"UNKNOWN (throttled)"* ]]
+}
+
+@test "a capped item list is reported as capped, never as throttled (#921)" {
+    write_issues "$(open_issue 42)"
+    jq -nc '{items: [range(500) | {id: "I\(.)", status: "Ready", content: {type: "Issue", number: ., repository: "owner/repo"}}]}' > "$TEST_TMP/items.json"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"hit the 500 cap"* ]]
+    [[ "$output" != *"throttled"* ]]
+    refute_gh 'graphql'
+}
+
 @test "a failed move is reported, not claimed" {
     write_issues "$(open_issue 42)"
     write_items "$(item ITEM_42 "In review" 42)"

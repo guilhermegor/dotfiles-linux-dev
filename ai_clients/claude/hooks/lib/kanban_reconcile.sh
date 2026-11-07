@@ -573,7 +573,7 @@ reconcile_kanban_boards() {
 		project=$((10#$project))
 		if command -v gh_budget_latch_active >/dev/null 2>&1 && gh_budget_latch_active; then
 			status=1
-			lines+="board $owner/$project ($repo): UNKNOWN (latched) — GitHub API budget latch active, board not swept"$'\n'
+			lines+="board $owner/$project ($repo): SKIPPED — GraphQL rate-limited (budget latch active), board not swept"$'\n'
 			continue
 		fi
 		if ! num="$(_kb_board_number "$owner" "$repo")"; then
@@ -595,7 +595,13 @@ reconcile_kanban_boards() {
 		_kb_run_kind "$kind" "$owner" "$repo" "$cwd" || rc=$?
 		if ((rc != 0)); then
 			status=1
-			lines+="board $owner/$project ($repo): UNKNOWN — $_KB_REPORT"$'\n'
+			# #921: a throttled board is SKIPPED (retry next round), not "unknown": the two want
+			# different responses from a reader. Throttle is only named by a confirmed probe.
+			if [[ "$_KB_REPORT" == *"UNKNOWN (throttled)"* ]]; then
+				lines+="board $owner/$project ($repo): SKIPPED — GraphQL rate-limited, retry next round"$'\n'
+			else
+				lines+="board $owner/$project ($repo): UNKNOWN — $_KB_REPORT"$'\n'
+			fi
 			continue
 		fi
 		moved="$(printf '%s\n' "$_KB_REPORT" | grep -c '^moved' || true)"
@@ -613,4 +619,41 @@ reconcile_kanban_boards() {
 	# shellcheck disable=SC2034 # read by callers
 	KANBAN_BOARDS_REPORT="$(printf '%s' "$lines" | sed '/^$/d')"
 	return "$status"
+}
+
+# kanban_stale_cards_rest — REST-only (#921): every CLOSED issue whose card is not in Done, one
+# `stale card: <repo>#N in <status> (closed <ts>)` line each, over every ROADMAP_BOARDS board. Runs
+# on the core REST budget, so it still answers while GraphQL is down. A board REST cannot read is
+# named so the owner checks it by hand, never reported as clean.
+# ponytail: `users/` endpoint (every registered board is the operator's own user board); an org
+# board would need `orgs/`. Add the owner-type probe if one is ever registered.
+kanban_stale_cards_rest() {
+	local entry owner project repo field rows out=""
+	if ! declare -p ROADMAP_BOARDS >/dev/null 2>&1 || ((${#ROADMAP_BOARDS[@]} == 0)); then
+		echo "stale cards: UNKNOWN — ROADMAP_BOARDS is empty or not loaded; no board was checked"
+		return 0
+	fi
+	for entry in "${ROADMAP_BOARDS[@]}"; do
+		IFS='|' read -r owner project repo <<<"$entry"
+		field="$(gh api "users/$owner/projectsV2/$project/fields" \
+			--jq '.[] | select(.name=="Status") | .id' 2>/dev/null | head -n1)"
+		if [[ -z "$field" ]] || ! rows="$(gh api --paginate "users/$owner/projectsV2/$project/items?per_page=100&fields=$field" \
+			--jq '.[] | select(.content_type=="Issue" and .content.state=="closed")
+				| [(.content.repository_url | split("/") | .[-2:] | join("/")), .content.number, .content.closed_at,
+				   ((.fields[] | select(.id=='"$field"') | .value.name.raw) // "No Status")] | @tsv' 2>/dev/null)"; then
+			out+="stale cards: board $owner/$project ($repo) UNKNOWN — REST could not read card status; check the board by hand"$'\n'
+			continue
+		fi
+		out+="$(printf '%s\n' "$rows" | awk -F'\t' '$1 != "" && $4 != "Done" {printf "stale card: %s#%s in %s (closed %s)\n", $1, $2, $4, $3}')"$'\n'
+	done
+	out="$(printf '%s' "$out" | sed '/^$/d')"
+	if [[ -z "$out" ]]; then
+		echo "stale cards: none — every closed issue's card is in Done"
+		return 0
+	fi
+	printf '%s\n' "$out"
+	if grep -q '^stale card:' <<<"$out"; then
+		echo "if cards keep missing Done with no reconcile in between: board -> ... -> Workflows -> enable \"Item closed\" and \"Pull request merged\""
+	fi
+	return 0
 }
