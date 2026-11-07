@@ -134,7 +134,8 @@ the documented default):
 
 | asked key | spec key |
 |---|---|
-| `name` / `description` / `root` | `project_name` / `project_description` / `project_root` |
+| `name` / `description` / `root` | `project_name` / `project_description` / `project_root` (see below: the PARENT dir) |
+| `repo_visibility` / `protect_branch` | `repo_visibility` / `protect_branch` |
 | `language`, `skeleton`, `license`, `github_username` | same name |
 | `logging_helper` / `docker_compose` / `db_backend` | `logs` / `docker_compose` / `docker_db_backend` |
 | `schemaless_storage` | `storage` |
@@ -144,16 +145,41 @@ the documented default):
 | `multiple_run_intents` | `pipeline_intent` |
 | `publish_to_pypi` / `testpypi_staging` / `private_index_or_git` | `publish_pypi` / `publish_test_pypi` / `consume_private` |
 
-`git_remote` is always written `n`: `y` needs a live `gh` session and blueprintx marks it out of
-scope for an unattended run. For a `lib-minimal` with `repo_visibility: private`, write
-`publish_pypi=n` and `publish_test_pypi=n` (git-only). Services carry no publish keys.
+`project_root` is the **parent** directory the project folder is created in (`~/github`),
+never the project directory (`~/github/<name>`): blueprintx appends `project_name` itself. If
+the `root` answer ends in `/<name>`, strip that last segment.
 
-blueprintx has no keys for `tracking`, `repo.visibility` or `registry`, so they are recorded as
-`#` comment lines at the top of the file (a record, not input) and in the issue labels:
+Always emit the remote and board block, with the exact spellings `bin/lib/spec.sh` reads
+(guilhermegor/blueprintx#940), so the repo and the kanban board are created by the scaffold run
+rather than by hand. A `#` comment is never read, so the owner's decision must live in keys:
 
 ```
-# tracking: github-projects / private
-# repo.visibility: <public|private>
+git_remote=y
+create_repo=y
+repo_visibility=<public|private>
+kanban=y
+kanban_visibility=private
+protect_branch=<y|n>
+```
+
+- `git_remote=y` and `create_repo=y` are written unconditionally (the backlog item exists to
+  produce the repo), so the `remote_setup` / `create_repo_now` answers do not map to a key.
+- `create_repo=y` requires `git_remote=y` (blueprintx rejects the reverse) and a `gh`
+  session at scaffold time.
+- `repo_visibility` is exactly `public` or `private`; `kanban_visibility` is exactly `repo`,
+  `public` or `private`. The greenfield board is private, so write `private`.
+- `kanban=y` because `tracking` is always `github-projects`; `kanban_visibility` is read only
+  then.
+- `protect_branch` is the step-2 answer as `y`/`n`.
+
+For a `lib-minimal` with `repo_visibility: private`, write `publish_pypi=n` and
+`publish_test_pypi=n` (git-only). Services carry no publish keys.
+
+blueprintx has no key for `registry` (nor for `tracking`, now expressed by `kanban*`), so
+`registry` alone stays a `#` comment line at the top of the file (a record, not input) and in
+the issue labels:
+
+```
 # registry: <production>/<staging>, git-only, or (none - service)
 project_name=<name>
 ...
