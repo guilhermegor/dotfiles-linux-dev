@@ -39,6 +39,8 @@ STUB
     run promote_plugin_to_user_scope "foo@mkt" foo mkt
     [ "$status" -eq 0 ]
     grep -q "plugin install foo@mkt --scope user" "$TMP/calls"
+    [ "$(wc -l < "$TMP/calls")" -eq 1 ]
+    [[ "$output" != *"Already at user scope"* ]]
     [ "$(jq -r '.plugins["foo@mkt"][0].scope' "$CLAUDE_DIR/plugins/installed_plugins.json")" = user ]
 }
 
@@ -89,4 +91,27 @@ run_without_claude() {
     run promote_plugin_to_user_scope "foo@mkt" foo mkt
     [ "$status" -eq 0 ]
     [ ! -e "$TMP/calls" ]
+}
+
+@test "cache missing, file present, install succeeds: one call, no warning" {
+    stub_claude 0
+    echo '{"plugins":{}}' > "$CLAUDE_DIR/plugins/installed_plugins.json"
+    run promote_plugin_to_user_scope "foo@mkt" foo mkt
+    [ "$status" -eq 0 ]
+    [ "$(wc -l < "$TMP/calls")" -eq 1 ]
+    [[ "$output" != *"warning"* ]]
+}
+
+@test "install fails but creates the file: CLI is not run twice" {
+    cat > "$TMP/bin/claude" <<STUB
+#!/bin/bash
+echo "\$*" >> "$TMP/calls"
+echo '{"plugins":{}}' > "$CLAUDE_DIR/plugins/installed_plugins.json"
+exit 1
+STUB
+    chmod +x "$TMP/bin/claude"
+    run promote_plugin_to_user_scope "foo@mkt" foo mkt
+    [ "$status" -eq 0 ]
+    [ "$(wc -l < "$TMP/calls")" -eq 1 ]
+    [[ "$output" == *"Cache missing"* ]]
 }

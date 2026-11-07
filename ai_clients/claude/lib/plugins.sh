@@ -116,6 +116,7 @@ promote_plugin_to_user_scope() {
     local marketplace_id="$3"  # e.g. claude-plugins-official
 
     local installed_file="$CLAUDE_DIR/plugins/installed_plugins.json"
+    local attempted=0
 
     if [ ! -f "$installed_file" ]; then
         if ! command -v claude > /dev/null 2>&1; then
@@ -124,9 +125,14 @@ promote_plugin_to_user_scope() {
         fi
         # The CLI creates the file itself; no skeleton, so a failed install
         # leaves nothing behind.
+        attempted=1
         _install_plugin_via_cli "$plugin_key"
         if [ ! -f "$installed_file" ]; then
             print_status "warning" "installed_plugins.json not found after install — run: /plugin install $plugin_name"
+            return 0
+        fi
+        # Fresh install already reported success; stay quiet if it took.
+        if [ "$(_user_scope_count "$plugin_key" "$installed_file")" -gt 0 ]; then
             return 0
         fi
     fi
@@ -141,7 +147,7 @@ promote_plugin_to_user_scope() {
 
     local cache_dir="$CLAUDE_DIR/plugins/cache/$marketplace_id/$plugin_name"
     if [ ! -d "$cache_dir" ]; then
-        _install_plugin_via_cli "$plugin_key"
+        [ "$attempted" -eq 1 ] || _install_plugin_via_cli "$plugin_key"
         user_count=$(_user_scope_count "$plugin_key" "$installed_file")
         if [ "$user_count" -gt 0 ]; then
             return 0
