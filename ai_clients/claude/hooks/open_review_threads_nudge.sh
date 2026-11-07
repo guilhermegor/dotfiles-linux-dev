@@ -520,6 +520,47 @@ _scan_cache_path() {
 	printf '%s/%s-%s_%s\n' "$dir" "$session_id" "$owner" "$name"
 }
 
+# _recheck_cached_pr OWNER NAME TRANSCRIPT CACHE_FILE SCAN_TS
+# dotfiles-linux-dev#920: a cache hit about to nudge re-runs the gate for that ONE PR, because a PR
+# still open can have had its threads answered inside the TTL (layouts-cvm#66: the stale verdict
+# was replayed on three more Stops). Returns 0 when the verdict stands (blocking, refreshed detail
+# kept under the original scan time; an unreadable re-check keeps the cached verdict, the existing
+# fail-open behaviour). Returns 1 when the PR no longer blocks: the entry is dropped and the
+# caller does a fresh scan. One gate call per Stop at most; TTL untouched (#423).
+_recheck_cached_pr() {
+	local owner="$1" name="$2" transcript="$3" cache="$4" scan_ts="$5"
+	local old_status="$GATE_STATUS" old_detail="$GATE_DETAIL"
+
+	gate_pr_thread_state "$owner" "$name" "$REPORT_NUMBER" "$ROSTER_FILE"
+	if [ "$GATE_STATUS" = "unreadable" ]; then
+		GATE_STATUS="$old_status"
+		GATE_DETAIL="$old_detail"
+		return 0
+	fi
+	[ "$GATE_STATUS" = "running" ] && _reclassify_running "$owner" "$name" "$REPORT_NUMBER"
+	[ "$GATE_STATUS" = "problems" ] && _apply_delegation_filter "$transcript"
+
+	case "$GATE_STATUS" in
+	running | problems) ;;
+	*)
+		# Not blocking any more (clean, unreviewed, pending_indefinite, or delegated -- liveness is
+		# never cached, #516). Caching "clean" here would hide every PR the original scan never
+		# reached, so drop the entry and let the caller rescan.
+		rm -f "$cache"
+		REPORT_NUMBER=""
+		GATE_STATUS="clean"
+		GATE_DETAIL=""
+		return 1
+		;;
+	esac
+	# Keep the ORIGINAL scan time: re-stamping on every blocking Stop would defer the next
+	# repo-wide scan indefinitely.
+	jq -nc --arg n "$REPORT_NUMBER" --arg s "$GATE_STATUS" --arg d "$GATE_DETAIL" \
+		--argjson ts "$scan_ts" \
+		'{ts: $ts, number: (if ($n | length) > 0 then $n else null end), status: $s, detail: $d}' \
+		>"$cache" 2>/dev/null || true
+}
+
 # _repo_wide_scan OWNER NAME SESSION_ID TRANSCRIPT
 # Sets GATE_STATUS/GATE_DETAIL/REPORT_NUMBER to the FIRST non-clean open PR found (REPORT_NUMBER
 # stays empty and GATE_STATUS=clean when every scanned PR is clean, or there are none), reusing
@@ -551,9 +592,14 @@ _repo_wide_scan() {
 					REPORT_NUMBER=""
 					GATE_STATUS="clean"
 					GATE_DETAIL=""
+					return 0
 				fi
+				_recheck_cached_pr "$owner" "$name" "$transcript" "$cache" "$ts" && return 0
+				# Returned 1: the flagged PR no longer blocks, and the scan that cached it stopped
+				# AT it, so the PRs after it were never read. Fall through to a fresh scan.
+			else
+				return 0
 			fi
-			return 0
 		fi
 	fi
 

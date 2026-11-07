@@ -651,6 +651,92 @@ checks_fixture() {
     [[ "$output" == *"PR #20"* ]]
 }
 
+# --- dotfiles-linux-dev#920: a cached verdict must not outlive the threads being answered ---------
+
+@test "a cached problems verdict is dropped when the gate now reads clean (#920)" {
+    export PR_LIST=$'10\n20'
+    export OPEN_THREADS_NUDGE_CACHE_TTL=600
+    clean_fixture 10
+    problem_fixture 20
+    run bash -c "payload false sess-920 | '$HOOK'"
+    [ "$status" -eq 2 ]
+
+    # PR #20 stays OPEN but its threads get answered inside the TTL.
+    clean_fixture 20
+    run bash -c "payload false sess-920 | '$HOOK'"
+    [ "$status" -eq 0 ]
+    # The flagged PR no longer blocks, and the first scan stopped AT it: PRs after it were never
+    # read, so the hook rescans instead of caching a repo-wide "clean" (PR #929 review).
+    [ "$(wc -l <"$PRLIST_LOG")" -eq 2 ]
+    [ "$(jq -r ".number // \"none\"" "$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-920-o_r")" = "none" ]
+}
+
+@test "a cached problems verdict still blocks when the gate still says problems (#920)" {
+    export PR_LIST=$'10\n20'
+    export OPEN_THREADS_NUDGE_CACHE_TTL=600
+    clean_fixture 10
+    problem_fixture 20
+    run bash -c "payload false sess-920b | '$HOOK'"
+    [ "$status" -eq 2 ]
+
+    run bash -c "payload false sess-920b | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"PR #20"* ]]
+    [ "$(wc -l <"$PRLIST_LOG")" -eq 1 ]
+    [ "$(jq -r .status "$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-920b-o_r")" = "problems" ]
+}
+
+@test "a blocking re-check keeps the original scan timestamp (#920)" {
+    export PR_LIST=$'10\n20'
+    export OPEN_THREADS_NUDGE_CACHE_TTL=600
+    clean_fixture 10
+    problem_fixture 20
+    run bash -c "payload false sess-920c | '$HOOK'"
+    [ "$status" -eq 2 ]
+    cache_file="$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-920c-o_r"
+    old_ts=$(( $(date +%s) - 100 ))
+    jq --argjson ts "$old_ts" '.ts = $ts' "$cache_file" >"$cache_file.tmp"
+    mv "$cache_file.tmp" "$cache_file"
+
+    run bash -c "payload false sess-920c | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [ "$(jq -r .ts "$cache_file")" -eq "$old_ts" ]
+}
+
+@test "an unreadable re-check keeps the cached blocking verdict and entry (#920)" {
+    export PR_LIST=$'10\n20'
+    export OPEN_THREADS_NUDGE_CACHE_TTL=600
+    clean_fixture 10
+    problem_fixture 20
+    run bash -c "payload false sess-920d | '$HOOK'"
+    [ "$status" -eq 2 ]
+
+    rm -f "$FIXTURE_DIR/20.json"   # stub now answers '{}' -> the gate reads unreadable
+    run bash -c "payload false sess-920d | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"PR #20"* ]]
+    [ "$(wc -l <"$PRLIST_LOG")" -eq 1 ]
+    [ "$(jq -r .status "$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-920d-o_r")" = "problems" ]
+}
+
+@test "a delegated re-check drops the cache entry and rescans (#920)" {
+    export PR_LIST=$'30'
+    export OPEN_THREADS_NUDGE_CACHE_TTL=600
+    replied_unresolved_fixture 30 "x/y.sh"
+    run bash -c "payload false sess-920e | '$HOOK'"
+    [ "$status" -eq 2 ]
+    cache_file="$CLAUDE_CONFIG_DIR/open-threads-nudge/sess-920e-o_r"
+    [ -f "$cache_file" ]
+
+    export ISSUE_BODY_610=$'```surface\nx/y.sh\n```'
+    TRANSCRIPT="$REPO/transcript.jsonl"
+    write_transcript "$TRANSCRIPT" "issue-610-fix-xy"
+    run bash -c "payload false sess-920e '$TRANSCRIPT' | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <"$PRLIST_LOG")" -eq 2 ]
+    [ ! -f "$cache_file" ]
+}
+
 @test "repo-wide scan: an unreadable answer is never cached" {
     unset PR_VIEW_NUMBER
     export PR_LIST=$'7\n8'
