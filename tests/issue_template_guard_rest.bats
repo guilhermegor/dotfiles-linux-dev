@@ -701,3 +701,14 @@ EOF
     run bash -c "payload 'gh api graphql --input $REPO/ok.json' | '$GUARD'"
     [ "$status" -eq 0 ]
 }
+
+@test "GraphQL: shell text only declares a variable in the operation header (#906 security review)" {
+    run bash -c "payload 'gh api graphql -f query=\"mutation{\$M:x}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation{\$@}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api graphql -f query=\"mutation{\$*}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload \"gh api graphql -f query='query(\\\$o:String!){repository(owner:\\\$o,name:\\\"r\\\"){id}}' -f o=x\" | '$GUARD'"
+    [ "$status" -eq 0 ]
+}

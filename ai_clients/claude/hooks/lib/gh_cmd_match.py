@@ -367,7 +367,8 @@ GRAPHQL_IGNORED = re.compile("(" + GRAPHQL_STR + r")|#[^\n\r]*|[,\ufeff]")
 GRAPHQL_STRING = re.compile(GRAPHQL_STR)
 GRAPHQL_SHELL_BUILT = re.compile(r"\$\(|\$\{|`")
 GRAPHQL_VAR_DECL = re.compile(r"\$(\w+)\s*:")
-GRAPHQL_VAR_USE = re.compile(r"\$(\w+)")
+GRAPHQL_VAR_USE = re.compile(r"\$(\w*)")  # empty name: `$@`, `$*`, `$'`, never a GraphQL variable
+GRAPHQL_OP_HEADER = re.compile(r"\b(?:query|mutation|subscription)\b[^({]*\(([^)]*)\)")
 GRAPHQL_BODY_VAR = re.compile(r"\bbody\s*:\s*\$\s*(\w+)")
 GRAPHQL_INPUT_VAR = re.compile(r"\binput\s*:\s*\$\s*(\w+)")
 
@@ -457,7 +458,10 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
     # Before comments go: a `$M` in a shell-supplied comment can expand to a newline and a mutation.
     # File text never passes through the shell, so its `$` and backticks are only text (#906 review).
     if not query_from_file:
-        undeclared = set(GRAPHQL_VAR_USE.findall(query)) - set(GRAPHQL_VAR_DECL.findall(query))
+        # ponytail: quoting is gone after shlex, so a double-quoted `$x` in the header still reads
+        # as declared; the raw token is needed to tell it apart (#908).
+        declared = GRAPHQL_VAR_DECL.findall(" ".join(GRAPHQL_OP_HEADER.findall(query)))
+        undeclared = set(GRAPHQL_VAR_USE.findall(query)) - set(declared)
         if undeclared or GRAPHQL_SHELL_BUILT.search(query):
             return blind  # `$M` / `$(...)` the shell expands: the real query is unseen
     # GraphQL treats `,` and `#...` comments as whitespace; blank them outside strings (#906 review)
