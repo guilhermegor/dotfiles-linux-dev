@@ -866,12 +866,14 @@ def counts_as_review(review: dict) -> bool:
 
 	``check_review_threads.py``'s ``counts_as_review`` does not treat it as a review, so it never
 	carries forward. Counting it here made a merge-only head look covered by a review the gate
-	ignores: the planner never scheduled a review and the gate never passed. A missing state
+	ignores: the planner never scheduled a review and the gate never passed. A ``PENDING``
+	review is unsubmitted, which the gate also refuses to count. A missing state
 	counts (fail toward "covered" only where the gate would too).
 	"""
-	return not (
-		(review.get("state") or "").upper() == "COMMENTED" and not (review.get("body") or "").strip()
-	)
+	state = (review.get("state") or "").upper()
+	if state == "PENDING":
+		return False
+	return not (state == "COMMENTED" and not (review.get("body") or "").strip())
 
 
 def reviewed_heads(pr: dict) -> list[str]:

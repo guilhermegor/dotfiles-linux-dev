@@ -1688,7 +1688,15 @@ EOF
     merge_pr_reviews 928 '[{"commit":{"oid":"bbbb0002"},"state":"APPROVED","body":""}]'
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
     [[ "$(reason_for 928)" == *"merge-only update"* ]]
+}
+
+@test "a PENDING review is not merge-only coverage (#926)" {
+    merge_pr_reviews 929 '[{"commit":{"oid":"bbbb0002"},"state":"PENDING","body":"findings: fix X"}]'
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "929" ]
 }
 
 @test "a binary file (no patch) is compared by blob sha: equal is covered" {
