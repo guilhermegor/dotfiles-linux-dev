@@ -523,8 +523,40 @@ kanban_boards_unknown() {
 	KANBAN_BOARDS_REPORT="$(printf '%s' "$lines" | sed '/^$/d')"
 }
 
+# _kb_board_number OWNER REPO — prints the project number of "<REPO> kanban", the board every
+# reconcile resolves by name. Reads the per-repo cache, discovering (and caching) on a miss, so the
+# reconcile that follows reuses it. An unreadable or corrupt cache is rediscovered, never left
+# UNKNOWN. Returns 1 when the board cannot be resolved (#907).
+_kb_board_number() {
+	local file n
+	file="$(cache_file "$1" "$2")"
+	if [[ -r "$file" ]] && n="$(jq -er '.project_number' "$file" 2>/dev/null)"; then
+		echo "$n"
+		return 0
+	fi
+	discover_board "$1" "$2" | jq -er '.project_number' 2>/dev/null
+}
+
+# A cached number that disagrees with the registry is rediscovered only once the cache is older
+# than this, so a registry row that is simply wrong costs one discovery per board per window, not
+# one per sweep (PR #913 review). discover_board rewrites the cache, which restarts the window.
+KANBAN_CACHE_REFRESH_MINUTES=60
+
+# kanban_fanout_cost — gh calls one full sweep spends on the boards: every declared board x the
+# three kinds (in_review, closed, stale) x KANBAN_CALLS_PER_RECONCILE. in_review is MEASURED by the
+# bats suite at 3 fixed calls on a warm cache, plus one GraphQL read per open PR and one edit per
+# move; closed/stale paginate, so 6 is an estimate, not a measurement. A cold cache adds a one-off
+# discovery. The sweep's budget gate sizes its floor
+# on this, not on the old single-repo cost (#907).
+KANBAN_CALLS_PER_RECONCILE=6
+kanban_fanout_cost() {
+	local n=0
+	declare -p ROADMAP_BOARDS >/dev/null 2>&1 && n=${#ROADMAP_BOARDS[@]}
+	echo $((n * 3 * KANBAN_CALLS_PER_RECONCILE))
+}
+
 reconcile_kanban_boards() {
-	local kind="$1" cwd="${2:-.}" lines="" status=0 entry owner project repo rc moved detail
+	local kind="$1" cwd="${2:-.}" lines="" status=0 entry owner project repo rc moved detail num
 	local entry_shape='^[^|]+\|[0-9]+\|[^|]+$'
 	KANBAN_BOARDS_REPORT=""
 	if ! declare -p ROADMAP_BOARDS >/dev/null 2>&1 || ((${#ROADMAP_BOARDS[@]} == 0)); then
@@ -538,9 +570,25 @@ reconcile_kanban_boards() {
 			continue
 		fi
 		IFS='|' read -r owner project repo <<<"$entry"
+		project=$((10#$project))
 		if command -v gh_budget_latch_active >/dev/null 2>&1 && gh_budget_latch_active; then
 			status=1
 			lines+="board $owner/$project ($repo): SKIPPED — GraphQL rate-limited (budget latch active), board not swept"$'\n'
+			continue
+		fi
+		if ! num="$(_kb_board_number "$owner" "$repo")"; then
+			status=1
+			lines+="board $owner/$project ($repo): UNKNOWN — could not resolve the project number of '$repo kanban'"$'\n'
+			continue
+		fi
+		if [[ "$num" != "$project" ]] \
+			&& [[ -n "$(find "$(cache_file "$owner" "$repo")" -mmin +"$KANBAN_CACHE_REFRESH_MINUTES" 2>/dev/null)" ]]; then
+			num="$(discover_board "$owner" "$repo" | jq -er '.project_number' 2>/dev/null)" \
+				|| num="unknown (the refresh lookup failed)"
+		fi
+		if [[ "$num" != "$project" ]]; then
+			status=1
+			lines+="board $owner/$project ($repo): UNKNOWN — declared project $project but the board named '$repo kanban' is project $num"$'\n'
 			continue
 		fi
 		rc=0
