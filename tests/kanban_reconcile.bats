@@ -824,3 +824,15 @@ STUB_IN_REVIEW='reconcile_kanban() {
     [[ "$output" == *"board owner/1 (repo): ok"* ]]
     refute_gh '^project list'
 }
+
+@test "boards: a failed refresh of a stale mismatch keeps the cache and says the lookup failed" {
+    write_board_cache
+    jq '.project_number = 5' "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json" > "$TEST_TMP/c.json"
+    mv "$TEST_TMP/c.json" "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
+    touch -d "2 hours ago" "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
+    write_fake_gh
+    touch "$TEST_TMP/fail-field-list"
+    run_boards in_review "$TEST_TMP" "owner|1|repo" -- "source '$LIB'"
+    [[ "$output" == *"is project unknown (the refresh lookup failed)"* ]]
+    [ "$(jq -r .project_number "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json")" = 5 ]
+}
