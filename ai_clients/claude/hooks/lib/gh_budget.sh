@@ -325,8 +325,11 @@ gh_budget_graphql_read() {
 	local errf
 	errf="$(mktemp)" || errf=/dev/null
 	# stdout alone is parsed as JSON; a stderr notice must not turn a healthy reading into "unreadable"
-	out="$(gh api graphql -f query='{rateLimit{remaining resetAt}}' 2>"$errf")"
-	gql="$(printf '%s' "$out" | jq -r '.data.rateLimit.remaining // empty' 2>/dev/null)"
+	# `|| …`: a refused probe is the case that matters most, and must not abort a `set -e` caller.
+	out="$(gh api graphql -f query='{rateLimit{remaining resetAt}}' 2>"$errf")" || true
+	gql="$(printf '%s' "$out" | jq -r '.data.rateLimit.remaining // empty' 2>/dev/null)" || gql=""
+	# The probe is itself a GraphQL call (1 point when answered): log it so its caller is attributed (#922).
+	if [[ "$gql" =~ ^[0-9]+$ ]]; then gh_budget_log_spend 1; else gh_budget_log_spend 0; fi
 	if [[ "$gql" =~ ^[0-9]+$ ]]; then
 		at="$(printf '%s' "$out" | jq -r '.data.rateLimit.resetAt // empty' 2>/dev/null)"
 		[ -n "$at" ] && gql_reset="$(date -d "$at" +%s 2>/dev/null)"
@@ -386,6 +389,8 @@ gh_budget_log_spend() {
 	[[ "$points" =~ ^[0-9]+$ ]] || points=0
 	[[ "$max" =~ ^[0-9]+$ ]] && [ "$max" -ge 2 ] || max=2000
 	log="$(gh_budget_spend_log_path)"
+	# The bare /tmp last resort is shared: never append there (a planted symlink would redirect it).
+	[ -n "${GH_BUDGET_SPEND_LOG:-}" ] || [ "${log%/*}" != /tmp ] || return 0
 	{
 		flock -w 2 9 || return 0
 		printf '%s\t%s\t%s\n' "$(date +%s)" "${caller//[$'\t\n']/ }" "$points" >>"$log" || return 0
