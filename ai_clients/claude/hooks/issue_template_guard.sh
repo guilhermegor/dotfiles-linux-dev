@@ -72,6 +72,14 @@ main() {
     command="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
     [[ -n "$command" ]] || exit 0
 
+    # Relative paths in the command (`@q.graphql`) resolve against the Bash tool's cwd, which the
+    # payload names; the hook's own cwd may differ, so judge the file gh will actually read.
+    local payload_cwd
+    payload_cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
+    if [[ -n "$payload_cwd" && -d "$payload_cwd" ]]; then
+        cd "$payload_cwd" || return 1
+    fi
+
     # Find a `[rtk] gh issue create|edit` invocation by real argv, not by scanning raw text —
     # mirrors pr_template_guard.sh's resolve_gh_command call exactly (see its comment for the
     # bypasses a start-anchored regex missed: chained after `;`/`&&`/`||`/`|`/`&`/a newline, or
