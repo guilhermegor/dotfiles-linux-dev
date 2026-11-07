@@ -20,6 +20,16 @@ setup() {
     cat >"$TEST_TMP/bin/gh" <<'STUB'
 #!/bin/bash
 echo "gh $*" >>"$GH_LOG"
+# GraphQL's own rateLimit probe (#918): GQL_PROBE=refuse errors like a spent account, GQL_PROBE=<n>
+# answers n with a resetAt; unset leaves the probe unreadable so only rate_limit is read.
+if [ "$1 $2" = "api graphql" ] && [ -n "${GQL_PROBE:-}" ]; then
+    if [ "$GQL_PROBE" = refuse ]; then
+        echo '{"errors":[{"type":"RATE_LIMIT","message":"API rate limit already exceeded for user ID 1."}]}'
+        exit 1
+    fi
+    echo "{\"data\":{\"rateLimit\":{\"remaining\":$GQL_PROBE,\"resetAt\":\"2100-01-02T00:00:00Z\"}}}"
+    exit 0
+fi
 echo "{\"resources\":{\"graphql\":{\"remaining\":${GQL_REMAINING:-5000},\"reset\":4102444800}}}"
 STUB
     chmod +x "$TEST_TMP/bin/gh"
@@ -182,4 +192,129 @@ STUB
     [ "$status" -eq 0 ]
     run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.refuse_if_latched('t') else 1)"
     [ "$status" -eq 0 ]
+}
+
+gate() {
+    bash -c "source $HOOKS/lib/stop_budget.sh; stop_budget_gate" 2>&1
+}
+
+@test "gate refuses when rate_limit says 2842 but GraphQL itself says 0 (#918)" {
+    GQL_REMAINING=2842 GQL_PROBE=0 run gate
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"BUDGET-LOW (resets 00:00Z)"* ]]
+    [[ "$output" == *"rate_limit says 2842, GraphQL says 0"* ]]
+}
+
+@test "gate treats a RATE_LIMIT refusal of the probe as low, with the reset unknown (#918)" {
+    GQL_REMAINING=2842 GQL_PROBE=refuse run gate
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"BUDGET-LOW (reset unknown, rechecking after "* ]]
+    # rate_limit's own reset (year 2100) must not be printed as if it were real
+    [[ "$output" != *"resets 00:00Z"* ]]
+    run python3 "$HOOKS/lib/dispatch_plan.py"
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"reset unknown"* ]]
+}
+
+@test "gate prints GraphQL's own resetAt, not rate_limit's reset (#918)" {
+    GQL_REMAINING=5 GQL_PROBE=7 run gate
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"BUDGET-LOW (resets 00:00Z)"* ]]
+    # resetAt (4102531200), not rate_limit's 4102444800; latch_write re-reads the clock, so allow 2s of drift
+    [ "$(cat "$GH_BUDGET_LATCH_FILE")" -ge 4102531200 ]
+    [ "$(cat "$GH_BUDGET_LATCH_FILE")" -le 4102531202 ]
+}
+
+@test "gate reports the disagreement when rate_limit is low and GraphQL is healthy (#925 review)" {
+    GQL_REMAINING=5 GQL_PROBE=3900 run gate
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"rate_limit says 5, GraphQL says 3900"* ]]
+}
+
+@test "an invalid GH_BUDGET_SPEND_LOG_MAX falls back instead of emptying the log (#925 review)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    for m in abc 1 0; do
+        GH_BUDGET_SPEND_LOG_MAX=$m bash -c "source $HOOKS/lib/gh_budget.sh; gh_budget_log_spend 1 a; gh_budget_log_spend 1 b"
+    done
+    [ "$(wc -l <"$GH_BUDGET_SPEND_LOG")" -eq 6 ]
+}
+
+@test "gate passes when GraphQL's probe and rate_limit are both healthy" {
+    GQL_REMAINING=4000 GQL_PROBE=3900 run gate
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "poll_allowed refuses on a refused probe even when rate_limit is full (#918)" {
+    GQL_REMAINING=5000 GQL_PROBE=refuse run bash -c "source $HOOKS/lib/gh_budget.sh; gh_budget_poll_allowed; echo \"\$GH_BUDGET_POLL_REASON\""
+    [[ "$output" == *"GraphQL budget 0 < 100"* ]]
+}
+
+@test "spend log: summary names the top callers by points, window-bound (#918)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    now=$(date +%s)
+    printf '%s\tsweep\t30\n%s\tgate\t5\n%s\tsweep\t20\n%s\tplanner\t40\n%s\told\t999\n' \
+        "$now" "$now" "$now" "$now" "$((now - 7200))" >"$GH_BUDGET_SPEND_LOG"
+    run bash "$HOOKS/lib/gh_spend_summary.sh"
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "sweep: 50 points, 2 calls" ]
+    [ "${lines[1]}" = "planner: 40 points, 1 calls" ]
+    [ "${lines[2]}" = "gate: 5 points, 1 calls" ]
+    [ "${#lines[@]}" -eq 3 ]
+}
+
+@test "spend log: gh_budget_with_backoff records the response's cost, and the log is capped" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv" GH_BUDGET_SPEND_LOG_MAX=10 GH_BUDGET_CALLER=unit
+    cat >"$TEST_TMP/bin/costly" <<'STUB'
+#!/bin/bash
+echo '{"data":{"rateLimit":{"cost":3}}}'
+STUB
+    chmod +x "$TEST_TMP/bin/costly"
+    for _ in $(seq 1 12); do
+        bash -c "source $HOOKS/lib/gh_budget.sh; gh_budget_with_backoff 1 costly" >/dev/null
+    done
+    [ "$(wc -l <"$GH_BUDGET_SPEND_LOG")" -le 10 ]
+    [ "$(awk -F'\t' '$2 != "unit" || $3 != 3' "$GH_BUDGET_SPEND_LOG" | wc -l)" -eq 0 ]
+}
+
+@test "spend log: an append waits for a trim holding the lock (#925 CodeRabbit)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    : >"$GH_BUDGET_SPEND_LOG"
+    # A stand-in trim: holds the lock, then replaces the log the way tail+mv does.
+    (
+        flock 9
+        touch "$TEST_TMP/held"
+        sleep 1
+        : >"$GH_BUDGET_SPEND_LOG.new"
+        mv -f "$GH_BUDGET_SPEND_LOG.new" "$GH_BUDGET_SPEND_LOG"
+    ) 9>>"$GH_BUDGET_SPEND_LOG.lock" &
+    for _ in $(seq 1 100); do [ -e "$TEST_TMP/held" ] && break; sleep 0.05; done
+    [ -e "$TEST_TMP/held" ]
+    bash -c "source $HOOKS/lib/gh_budget.sh; gh_budget_log_spend 4 waited"
+    wait
+    run grep -c waited "$GH_BUDGET_SPEND_LOG"
+    [ "$output" = "1" ]
+}
+
+@test "spend log: the default caller is the script, or the outermost function under bash -c" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    unset GH_BUDGET_CALLER
+    printf '%s\n' "source $HOOKS/lib/gh_budget.sh" 'main() { gh_budget_log_spend 1; }' 'main' >"$TEST_TMP/entry.sh"
+    bash "$TEST_TMP/entry.sh"
+    bash -c "source $HOOKS/lib/gh_budget.sh; my_outer() { gh_budget_log_spend 1; }; my_outer"
+    run cut -f2 "$GH_BUDGET_SPEND_LOG"
+    [ "${lines[0]}" = "entry.sh" ]
+    [ "${lines[1]}" = "fn:my_outer" ]
+}
+
+@test "gate: a guessed reset's marker carries the latch's own expiry (#925 CodeRabbit)" {
+    # A clock that ticks one second per `date +%s`, so two separately computed expiries differ.
+    printf '%s\n' '#!/bin/bash' \
+        'if [ "$1" = "+%s" ]; then n=$(cat "$TEST_TMP/clock" 2>/dev/null || echo 1700000000)' \
+        '  echo $((n + 1)) >"$TEST_TMP/clock"; echo "$n"; exit 0; fi' \
+        'exec /bin/date "$@"' >"$TEST_TMP/bin/date"
+    chmod +x "$TEST_TMP/bin/date"
+    TEST_TMP="$TEST_TMP" GQL_REMAINING=2842 GQL_PROBE=refuse run gate
+    [ "$status" -eq 1 ]
+    [ "$(cat "$GH_BUDGET_LATCH_FILE.guess")" = "$(cat "$GH_BUDGET_LATCH_FILE")" ]
 }

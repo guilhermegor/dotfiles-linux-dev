@@ -152,6 +152,13 @@ STUB
     source "$DIR/funcs.sh"
     run sweep_review_gate o r o/r /dev/null
     [[ "$output" == *"UNKNOWN"*"GraphQL budget 10 < 100"* ]]
-    run grep -c graphql "$DIR/gh.log"
+    # The only graphql call allowed is the free rateLimit probe (#918); no thread query.
+    run bash -c "grep graphql '$DIR/gh.log' | grep -vc 'rateLimit{remaining resetAt}'"
     [ "$output" = 0 ]
+}
+
+@test "gh_budget_log_spend survives a missing log dir under set -e" {
+    run bash -c 'set -e; source "$1/lib/gh_budget.sh"; GH_BUDGET_SPEND_LOG=/nonexistent/d/x gh_budget_log_spend 1 t; echo survived' _ "$HOOKS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *survived* ]]
 }

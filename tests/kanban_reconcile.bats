@@ -579,10 +579,17 @@ run_boards() {
         boards+=("$1"); shift
     done
     run env KANBAN_CHECKOUT_ROOT="$TEST_TMP/checkouts" bash -c "source '$LIB'; \
-        ROADMAP_BOARDS=(\"\$@\"); ${snippet:-:}; \
+        ROADMAP_BOARDS=(\"\$@\"); $DECLARED_NUMBER_STUB; ${snippet:-:}; \
         reconcile_kanban_boards '$kind' '$cwd'; echo \"rc=\$?\"; \
         printf '%s\n' \"\$KANBAN_BOARDS_REPORT\"" _ "${boards[@]}"
 }
+
+# The board number a repo's board really has: by default exactly the number its registry row
+# declares, so the stub-based tests below do not touch gh. Tests of the check itself re-source the lib.
+DECLARED_NUMBER_STUB='_kb_board_number() {
+    local e; for e in "${ROADMAP_BOARDS[@]}"; do
+        [[ "$e" == "$1|"*"|$2" ]] && { e="${e#*|}"; echo "${e%%|*}"; return 0; }
+    done; return 1; }'
 
 # Stub reconcile_kanban per repo name: "clean" -> ok, empty report; "busy" -> ok, one move;
 # anything else -> failure. Every call is logged to $TEST_TMP/calls.
@@ -611,10 +618,10 @@ STUB_IN_REVIEW='reconcile_kanban() {
 
 @test "boards: all boards clean returns 0 and still reports every one" {
     export TEST_TMP
-    run_boards in_review "$TEST_TMP" "owner|17|clean" "owner|16|clean" -- "$STUB_IN_REVIEW"
+    run_boards in_review "$TEST_TMP" "owner|17|clean" "other|16|clean" -- "$STUB_IN_REVIEW"
     [[ "$output" == *"rc=0"* ]]
     [[ "$output" == *"board owner/17 (clean): ok — nothing to change"* ]]
-    [[ "$output" == *"board owner/16 (clean): ok — nothing to change"* ]]
+    [[ "$output" == *"board other/16 (clean): ok — nothing to change"* ]]
 }
 
 @test "boards: success path returns a usable per-board answer from real reconcile_kanban" {
@@ -639,13 +646,13 @@ STUB_IN_REVIEW='reconcile_kanban() {
     [[ "$output" != *"ok —"* ]]
 }
 
-@test "boards: an active latch reports every board UNKNOWN (latched) and calls nothing" {
+@test "boards: an active latch reports every board SKIPPED and calls nothing" {
     export TEST_TMP
     run_boards in_review "$TEST_TMP" "owner|17|clean" "owner|13|busy" \
         -- "gh_budget_latch_active() { return 0; }; $STUB_IN_REVIEW"
     [[ "$output" == *"rc=1"* ]]
-    [[ "$output" == *"board owner/17 (clean): UNKNOWN (latched)"* ]]
-    [[ "$output" == *"board owner/13 (busy): UNKNOWN (latched)"* ]]
+    [[ "$output" == *"board owner/17 (clean): SKIPPED — GraphQL rate-limited"* ]]
+    [[ "$output" == *"board owner/13 (busy): SKIPPED — GraphQL rate-limited"* ]]
     [ ! -e "$TEST_TMP/calls" ]
 }
 
@@ -654,8 +661,64 @@ STUB_IN_REVIEW='reconcile_kanban() {
     run_boards in_review "$TEST_TMP" "owner|17|clean" "owner|13|busy" \
         -- "gh_budget_latch_active() { [ -e \"\$TEST_TMP/calls\" ]; }; $STUB_IN_REVIEW"
     [[ "$output" == *"board owner/17 (clean): ok — nothing to change"* ]]
-    [[ "$output" == *"board owner/13 (busy): UNKNOWN (latched)"* ]]
+    [[ "$output" == *"board owner/13 (busy): SKIPPED — GraphQL rate-limited"* ]]
     [ "$(grep -c . "$TEST_TMP/calls")" -eq 1 ]
+}
+
+@test "boards: a throttled reconcile is reported SKIPPED, an unreadable one stays UNKNOWN (#921)" {
+    export TEST_TMP
+    run_boards in_review "$TEST_TMP" "owner|17|limited" "owner|13|broken" \
+        -- 'reconcile_kanban() { case "$2" in limited) RECONCILE_KANBAN_REPORT="UNKNOWN (throttled): GitHub GraphQL rate limit — retry next round";; *) RECONCILE_KANBAN_REPORT="UNKNOWN: nope";; esac; return 1; }'
+    [[ "$output" == *"board owner/17 (limited): SKIPPED — GraphQL rate-limited"* ]]
+    [[ "$output" == *"board owner/13 (broken): UNKNOWN — UNKNOWN: nope"* ]]
+}
+
+FIELDS_FIXTURE='[{"id":11,"name":"Title"},{"id":99,"name":"Status"}]'
+ITEMS_FIXTURE='[
+ {"content_type":"Issue","content":{"state":"closed","number":5,"closed_at":"2026-11-05T00:00:00Z","repository_url":"https://api.github.com/repos/owner/repo"},"fields":[{"id":99,"value":{"name":{"raw":"Blocked"}}}]},
+ {"content_type":"Issue","content":{"state":"closed","number":6,"closed_at":"2026-11-05T00:00:00Z","repository_url":"https://api.github.com/repos/owner/repo"},"fields":[{"id":99,"value":{"name":{"raw":"Done"}}}]},
+ {"content_type":"Issue","content":{"state":"closed","number":7,"closed_at":"2026-11-06T00:00:00Z","repository_url":"https://api.github.com/repos/other/repo"},"fields":[]},
+ {"content_type":"Issue","content":{"state":"open","number":8,"closed_at":null,"repository_url":"https://api.github.com/repos/owner/repo"},"fields":[{"id":99,"value":{"name":{"raw":"Blocked"}}}]},
+ {"content_type":"PullRequest","content":{"state":"closed","number":9,"closed_at":"x","repository_url":"https://api.github.com/repos/owner/repo"},"fields":[]}]'
+
+# The gh stub applies the REAL --jq projection to these fixtures, so a broken Status or
+# closed-issue extraction fails the test. MODE: ok | fail-fields | fail-items.
+run_stale_rest() {
+    run env FIELDS="$FIELDS_FIXTURE" ITEMS="$ITEMS_FIXTURE" MODE="$1" bash -c "source '$LIB'; \
+        ROADMAP_BOARDS=(\"owner|13|repo\"); \
+        gh() { local jq='' url=\"\$2\"; while (( \$# )); do [ \"\$1\" = --jq ] && jq=\"\$2\"; shift; done; \
+            case \"\$url\" in \
+            */fields) [ \"\$MODE\" = fail-fields ] && return 1; printf '%s' \"\$FIELDS\" | jq -r \"\$jq\";; \
+            *) [ \"\$MODE\" = fail-items ] && return 1; printf '%s' \"\$ITEMS\" | jq -r \"\$jq\";; esac; }; \
+        kanban_stale_cards_rest"
+}
+
+@test "stale cards: a closed issue in Blocked is listed with owner; Done, open, PR are not (#921)" {
+    run_stale_rest ok
+    [[ "$output" == *"stale card: owner/repo#5 in Blocked (closed 2026-11-05T00:00:00Z)"* ]]
+    [[ "$output" == *"stale card: other/repo#7 in No Status (closed 2026-11-06T00:00:00Z)"* ]]
+    [[ "$output" != *"#6 "* ]]
+    [[ "$output" != *"#8 "* ]]
+    [[ "$output" != *"#9 "* ]]
+    [[ "$output" == *"Workflows"* ]]
+}
+
+@test "stale cards: an unreadable Status field is named, never reported clean (#921)" {
+    run_stale_rest fail-fields
+    [[ "$output" == *"board owner/13 (repo) UNKNOWN"* ]]
+    [[ "$output" != *"none"* ]]
+}
+
+@test "stale cards: a failed item request after a good field lookup is UNKNOWN (#921)" {
+    run_stale_rest fail-items
+    [[ "$output" == *"board owner/13 (repo) UNKNOWN"* ]]
+    [[ "$output" != *"none"* ]]
+}
+
+@test "stale cards: an empty registry is UNKNOWN, never 'none' (#921)" {
+    run env bash -c "source '$LIB'; ROADMAP_BOARDS=(); gh() { return 1; }; kanban_stale_cards_rest"
+    [[ "$output" == *"UNKNOWN — ROADMAP_BOARDS is empty"* ]]
+    [[ "$output" != *"none"* ]]
 }
 
 @test "boards: an empty or missing registry is UNKNOWN, never a clean sweep" {
@@ -718,4 +781,114 @@ STUB_IN_REVIEW='reconcile_kanban() {
     [[ "$output" == *"board owner/17 (a): UNKNOWN — latched — test"* ]]
     [[ "$output" == *"board owner/13 (b): UNKNOWN — latched — test"* ]]
     [ ! -e "$TEST_TMP/calls" ]
+}
+
+# --- dotfiles-linux-dev#907 ------------------------------------------------------------------------
+
+@test "boards: a declared project number the board lookup did not resolve is UNKNOWN, nothing moves" {
+    write_board_cache
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_fake_gh
+    run_boards in_review "$TEST_TMP" "owner|9|repo" -- "source '$LIB'"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"board owner/9 (repo): UNKNOWN — declared project 9 but the board named 'repo kanban' is project 1"* ]]
+    [[ "$output" != *"ok —"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "boards: a stale cached project number is refreshed once, then the board is swept" {
+    write_board_cache
+    jq '.project_number = 5' "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json" > "$TEST_TMP/c.json"
+    mv "$TEST_TMP/c.json" "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
+    touch -d "2 hours ago" "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_fake_gh
+    run_boards in_review "$TEST_TMP" "owner|1|repo" -- "source '$LIB'"
+    [[ "$output" == *"board owner/1 (repo): ok — 1 moved"* ]]
+    [ "$(jq -r .project_number "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json")" = 1 ]
+}
+
+@test "boards: a matching declared project number is swept, read from the cache without a gh call" {
+    write_board_cache
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_fake_gh
+    run_boards in_review "$TEST_TMP" "owner|1|repo" -- "source '$LIB'"
+    [[ "$output" == *"board owner/1 (repo): ok — 1 moved"* ]]
+    refute_gh '^project list'
+}
+
+@test "boards: an unresolvable board is UNKNOWN before any reconcile runs" {
+    export TEST_TMP
+    run_boards in_review "$TEST_TMP" "owner|1|clean" -- "_kb_board_number() { return 1; }; $STUB_IN_REVIEW"
+    [[ "$output" == *"board owner/1 (clean): UNKNOWN — could not resolve the project number of 'clean kanban'"* ]]
+    [ ! -e "$TEST_TMP/calls" ]
+}
+
+@test "boards: kanban_fanout_cost is boards x 3 kinds x the estimated calls per reconcile" {
+    run bash -c "source '$LIB'; ROADMAP_BOARDS=('a|1|x' 'b|2|y' 'c|3|z'); kanban_fanout_cost"
+    [ "$output" = "$((3 * 3 * 6))" ]
+}
+
+@test "boards: a warm-cache in_review reconcile with nothing to move costs 3 fixed gh calls, inside the estimate" {
+    write_board_cache
+    write_prs
+    write_items
+    write_fake_gh
+    run_boards in_review "$TEST_TMP" "owner|1|repo" -- "source '$LIB'"
+    [[ "$output" == *"board owner/1 (repo): ok"* ]]
+    [ "$(grep -c . "$GH_LOG")" -eq 3 ]
+    run bash -c "source '$LIB'; echo \$KANBAN_CALLS_PER_RECONCILE"
+    [ "$output" -ge 3 ]
+}
+
+# PR #913 ladder review: a confirmed mismatch must not rediscover on every pass, a corrupt cache
+# must recover, and a zero-padded registry number is the same project.
+@test "boards: a mismatch confirmed by a fresh cache does not rediscover on the next sweep" {
+    write_board_cache
+    write_prs
+    write_items
+    write_fake_gh
+    run_boards in_review "$TEST_TMP" "owner|9|repo" -- "source '$LIB'"
+    run_boards in_review "$TEST_TMP" "owner|9|repo" -- "source '$LIB'"
+    [[ "$output" == *"UNKNOWN — declared project 9 but the board named 'repo kanban' is project 1"* ]]
+    refute_gh '^project list'
+}
+
+@test "boards: a corrupt cache is rediscovered instead of staying UNKNOWN" {
+    mkdir -p "$CLAUDE_CONFIG_DIR/kanban-boards"
+    echo 'not json' > "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_fake_gh
+    run_boards in_review "$TEST_TMP" "owner|1|repo" -- "source '$LIB'"
+    [[ "$output" == *"board owner/1 (repo): ok — 1 moved"* ]]
+}
+
+@test "boards: a zero-padded registry number matches the board's number" {
+    write_board_cache
+    write_prs
+    write_items
+    write_fake_gh
+    run_boards in_review "$TEST_TMP" "owner|01|repo" -- "source '$LIB'"
+    [[ "$output" == *"board owner/1 (repo): ok"* ]]
+    refute_gh '^project list'
+}
+
+@test "boards: a failed refresh of a stale mismatch keeps the cache and says the lookup failed" {
+    write_board_cache
+    jq '.project_number = 5' "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json" > "$TEST_TMP/c.json"
+    mv "$TEST_TMP/c.json" "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
+    touch -d "2 hours ago" "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
+    write_fake_gh
+    touch "$TEST_TMP/fail-field-list"
+    run_boards in_review "$TEST_TMP" "owner|1|repo" -- "source '$LIB'"
+    [[ "$output" == *"is project unknown (the refresh lookup failed)"* ]]
+    [ "$(jq -r .project_number "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json")" = 5 ]
 }

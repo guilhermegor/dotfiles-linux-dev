@@ -476,6 +476,7 @@ format_free_surface_report() {
 # dotfiles-linux-dev#445: 6 agents x a sweep per SubagentStop x ~6 gh calls each burned the whole
 # hourly budget on sweeps that read UNKNOWN either way — these cheap calls replace finding that
 # out the expensive way every time.
+# The quota floor is the board fan-out's own estimated cost (kanban_fanout_cost, #907), never below 5.
 # A non-budget failure (bad repo, network blip) still returns 0: this gate only ever stops the
 # sweep for a BUDGET reason, it is not a general health check.
 # _gh_budget_latch_reason WHY
@@ -501,8 +502,11 @@ gh_budget_gate() {
 		BUDGET_GATE_REASON="403 latch active — GitHub API budget still exhausted"
 		return 1
 	fi
-	if gh_budget_quota_exhausted; then
-		_gh_budget_latch_reason "GitHub API quota (core or graphql) already exhausted per rate_limit"
+	local floor
+	floor="$(kanban_fanout_cost)"
+	((floor < 5)) && floor=5
+	if gh_budget_quota_exhausted "$floor"; then
+		_gh_budget_latch_reason "GitHub API quota (core or graphql) under the sweep floor of $floor calls per rate_limit"
 		return 1
 	fi
 	err="$(mktemp)"
@@ -570,6 +574,20 @@ sweep_issue_hygiene() {
 	fi
 }
 
+# sweep_stale_cards_gated — the budget gate stopped the sweep, but the stale-card check is REST and
+# draws on the separate core quota (#921). Run it only when `rate_limit` (free) shows core healthy;
+# an unreadable or low core is UNKNOWN, never a skipped-as-clean line.
+STALE_CARDS_CORE_FLOOR=100
+sweep_stale_cards_gated() {
+	local core
+	core="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)"
+	if [[ "$core" =~ ^[0-9]+$ ]] && ((core >= STALE_CARDS_CORE_FLOOR)); then
+		kanban_stale_cards_rest
+	else
+		echo "stale cards: UNKNOWN — REST core quota low or unreadable, not checked"
+	fi
+}
+
 main() {
 	local payload cwd repo owner name db roster_file report agent_type
 	if [ ! -t 0 ]; then payload="$(cat)"; else payload=""; fi
@@ -602,7 +620,8 @@ dispatch: free surface empty"
 $BUDGET_GATE_REASON (dotfiles-linux-dev#445) — skipping this sweep, no further gh calls.
 kanban boards (declared: ROADMAP_BOARDS), none swept:
 $KANBAN_BOARDS_REPORT
-dispatch: UNKNOWN — $BUDGET_GATE_REASON"
+dispatch: UNKNOWN — $BUDGET_GATE_REASON
+$(sweep_stale_cards_gated)"
 		exit 1
 	fi
 
@@ -627,6 +646,8 @@ dispatch: UNKNOWN — $BUDGET_GATE_REASON"
 		sweep_roadmap_boards
 		echo "[9] kanban reconcile, every declared board (closed issues -> Done, No Status -> placed)"
 		sweep_kanban_boards closed "$cwd" "$repo"
+		echo "[9b] closed issues whose card is not in Done (REST only, runs while GraphQL is down)"
+		kanban_stale_cards_rest
 		echo "[10] issue hygiene (surface block + milestone, report only)"
 		sweep_issue_hygiene "$repo"
 		echo "[11] kanban reconcile, every declared board (closed-unmerged PR -> Ready; idle In progress, report only)"

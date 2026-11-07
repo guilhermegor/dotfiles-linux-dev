@@ -637,10 +637,10 @@ run_boards() {
         printf '%s\n' \"\$RECONCILE_BOARDS_REPORT\"; echo REPORT_END" _ "$@"
 }
 
-@test "registry: declares the six maintained boards and excludes stpstone (2) by declaration" {
+@test "registry: declares the seven maintained boards and excludes stpstone (2) by declaration" {
     run bash -c "source '$LIB'; printf '%s\n' \"\${ROADMAP_BOARDS[@]}\""
     [ "$status" -eq 0 ]
-    for n in 8 9 13 15 16 17; do
+    for n in 8 9 13 15 16 17 21; do
         [[ "$output" == *"guilhermegor|$n|"* ]]
     done
     [[ "$output" != *"guilhermegor|2|"* ]]
