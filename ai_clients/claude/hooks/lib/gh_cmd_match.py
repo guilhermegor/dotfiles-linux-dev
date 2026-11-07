@@ -27,6 +27,7 @@ failure). Exit code 1 if the command could not be tokenized at all (an unbalance
 unterminated heredoc) — the caller MUST treat this as "unknown" and fail OPEN, never as "no gh
 command found", per this repo's hook contract (a verdict from unparseable input is a guess).
 """
+import inspect
 import json
 import os
 import re
@@ -168,53 +169,102 @@ def gh_sub(argv, idx):
     return i
 
 
-def iter_argvs(segments, depth=0):
-    """Yield the argv of every simple command, descending into `bash -c '...'` / `eval ...`.
+# Stand-ins for a `$`/backtick the shell expands: inside double quotes (one word, but the shell
+# writes its text) and unquoted (the shell also word-splits it into extra arguments). Private-use
+# code points are ordinary word characters to shlex, so the marked text splits into the same words.
+SHELL_QUOTED, SHELL_SPLIT = "\ue000", "\ue001"
+
+
+def mark_expansions(segment):
+    """Replace every `$`/backtick bash would expand with SHELL_QUOTED/SHELL_SPLIT (#908).
+
+    shlex drops quoting, so after it a single-quoted `$x` (text) and a double-quoted `$x` (the
+    shell's) are the same string; marking first keeps that fact. A backslash-escaped `$` is text.
+    `$'...'` is marked too: fail closed on a quoting form nobody writes a query in.
+    """
+    out, quote, i = [], None, 0
+    while i < len(segment):
+        c = segment[i]
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif c == "\\" and i + 1 < len(segment):
+            out.append(segment[i:i + 2])
+            i += 2
+            continue
+        elif c == '"':
+            quote = None if quote else '"'
+        elif c == "'" and quote is None:
+            quote = "'"
+        elif c in "$`":
+            c = SHELL_QUOTED if quote else SHELL_SPLIT
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _nested_script(argv):
+    """Where `bash -c S` / `env -S S` / `eval ...` keeps its script: (start, stop, prefix), so
+    the same cut can be taken from the marked argv; None when argv runs no nested script."""
+    for i, w in enumerate(_word(t) for t in argv):
+        base = w.rsplit("/", 1)[-1]
+        if base in SHELLS:
+            for j in range(i + 1, len(argv) - 1):
+                if re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", argv[j]):
+                    return j + 1, j + 2, 0
+            return None
+        if base == "env":
+            # `env -S 'cmd args'` / `--split-string=...` splits its one argument into a
+            # command line: nested shell text, like `bash -c`.
+            for j in range(i + 1, len(argv)):
+                a = argv[j]
+                if a in ("-S", "--split-string") and j + 1 < len(argv) and argv[j + 1]:
+                    return j + 1, j + 2, 0
+                if a.startswith("--split-string=") and len(a) > len("--split-string="):
+                    return j, j + 1, len("--split-string=")
+                if a.startswith("-S") and len(a) > 2:
+                    return j, j + 1, 2
+        if base == "eval":
+            return i + 1, len(argv), 0
+        if (w not in WRAPPERS and w not in SHELL_KEYWORDS
+                and not re.match(r"^\w+=", w) and w != ""):
+            return None
+    return None
+
+
+def _iter_marked(segments, marked, depth):
+    for segment, mseg in zip(segments, marked, strict=True):
+        argv = shlex.split(segment, posix=True)
+        marks = shlex.split(mark_expansions(mseg), posix=True)
+        if len(marks) != len(argv):
+            raise ValueError("marking changed the word split")  # never expected: refuse to judge
+        yield argv, marks
+        spec = None if depth >= 3 else _nested_script(argv)
+        if not spec:
+            continue
+        start, stop, prefix = spec
+        inner = " ".join(argv[start:stop])[prefix:]
+        # Text the outer shell wrote is re-parsed by the inner one, which may split it anywhere.
+        minner = " ".join(marks[start:stop])[prefix:].replace(SHELL_QUOTED, SHELL_SPLIT)
+        try:
+            yield from _iter_marked(split_segments(inner), split_segments(minner), depth + 1)
+        except ValueError:
+            # The inner script is broken but the outer shell still runs what follows it.
+            NESTED_ERRORS.append(inner)
+
+
+def iter_argvs_marked(segments):
+    """Yield (argv, marked argv) for every simple command, descending into `bash -c '...'` /
+    `eval ...`; the marked argv carries SHELL_QUOTED/SHELL_SPLIT where the shell expands.
 
     ValueError (unbalanced quote) propagates from any level, so nothing is skipped silently.
     """
-    for segment in segments:
-        argv = shlex.split(segment, posix=True)
+    yield from _iter_marked(segments, segments, 0)
+
+
+def iter_argvs(segments):
+    """Yield the argv of every simple command, descending into `bash -c '...'` / `eval ...`."""
+    for argv, _ in iter_argvs_marked(segments):
         yield argv
-        if depth >= 3:
-            continue
-        words = [_word(t) for t in argv]
-        inner = None
-        for i, w in enumerate(words):
-            base = w.rsplit("/", 1)[-1]
-            if base in SHELLS:
-                for j in range(i + 1, len(argv) - 1):
-                    if re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", argv[j]):
-                        inner = argv[j + 1]
-                        break
-                break
-            if base == "env":
-                # `env -S 'cmd args'` / `--split-string=...` splits its one argument into a
-                # command line: nested shell text, like `bash -c`.
-                for j in range(i + 1, len(argv)):
-                    a = argv[j]
-                    if a in ("-S", "--split-string") and j + 1 < len(argv):
-                        inner = argv[j + 1]
-                    elif a.startswith("--split-string="):
-                        inner = a.split("=", 1)[1]
-                    elif a.startswith("-S") and len(a) > 2:
-                        inner = a[2:]
-                    if inner:
-                        break
-                if inner:
-                    break
-            if base == "eval":
-                inner = " ".join(argv[i + 1:])
-                break
-            if (w not in WRAPPERS and w not in SHELL_KEYWORDS
-                    and not re.match(r"^\w+=", w) and w != ""):
-                break
-        if inner:
-            try:
-                yield from iter_argvs(split_segments(inner), depth + 1)
-            except ValueError:
-                # The inner script is broken but the outer shell still runs what follows it.
-                NESTED_ERRORS.append(inner)
 
 
 def matching_argv(segments, noun):
@@ -360,15 +410,11 @@ def only_repo_segment_is_dynamic(path):
 
 
 GRAPHQL_ISSUE_MUTATION = re.compile(r"\b(createIssue|updateIssue)\s*\(")
-GRAPHQL_STR = r'"""(?:[^"\\]|\\[\s\S]|"(?!""))*"""|"(?:[^"\\]|\\[\s\S])*"'
+GRAPHQL_STR = r'"""(?:\\"""|(?!""")[\s\S])*"""|"(?:[^"\\]|\\[\s\S])*"'
 GRAPHQL_BODY_KEY = re.compile(r"\bbody\s*:")
 GRAPHQL_LEADING_STRING = re.compile(r"\s*(" + GRAPHQL_STR + ")")
 GRAPHQL_IGNORED = re.compile("(" + GRAPHQL_STR + r")|#[^\n\r]*|[,\ufeff]")
 GRAPHQL_STRING = re.compile(GRAPHQL_STR)
-GRAPHQL_SHELL_BUILT = re.compile(r"\$\(|\$\{|`")
-GRAPHQL_VAR_DECL = re.compile(r"\$(\w+)\s*:")
-GRAPHQL_VAR_USE = re.compile(r"\$(\w*)")  # empty name: `$@`, `$*`, `$'`, never a GraphQL variable
-GRAPHQL_OP_HEADER = re.compile(r"\b(?:query|mutation|subscription)\b[^({]*\(([^)]*)\)")
 GRAPHQL_BODY_VAR = re.compile(r"\bbody\s*:\s*\$\s*(\w+)")
 GRAPHQL_INPUT_VAR = re.compile(r"\binput\s*:\s*\$\s*(\w+)")
 
@@ -380,7 +426,7 @@ def graphql_call_args(query, start):
     (#906 review); an unbalanced list runs to the end, which only widens what is judged.
     """
     depth = 0
-    masked = GRAPHQL_STRING.sub(lambda m: " " * len(m.group(0)), query)
+    masked = mask_graphql_strings(query)
     for i in range(start, len(masked)):
         depth += {"(": 1, ")": -1}.get(masked[i], 0)
         if depth < 0:
@@ -400,7 +446,7 @@ def read_graphql_file(path, shifted):
     and a relative path after a `cd` or a redirect may name a different file than the hook sees.
     """
     moved, written = shifted
-    if (moved and not os.path.isabs(path)) or os.path.normpath(path) in written:
+    if (moved and not os.path.isabs(path)) or os.path.realpath(path) in written:
         return None
     if not os.path.isfile(path):
         return None
@@ -421,7 +467,7 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
     blind = {"matched": True, "repo": None, "head": None, "has_body": False, "body": None,
              "has_body_file": True, "body_file": "-", "body_json": True,
              "labels": [], "auto": False, "method": "POST"}
-    query, values, query_from_file = "", {}, False
+    query, values = "", {}
     for typed, field in fields:
         key, _, val = field.partition("=")
         from_file = typed and val.startswith("@")
@@ -435,7 +481,7 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
             if val is None:
                 return blind  # unreadable / binary / stdin / device: the value is unseen
         if key == "query":
-            query, query_from_file = val, from_file
+            query = val
         else:
             values[key] = val
     if input_file == "-":
@@ -446,25 +492,15 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
             if raw is None:
                 return blind
             data = json.loads(raw)
-            query, query_from_file = str(data.get("query", "")), True
+            query = str(data.get("query", ""))
             variables = data.get("variables") or {}
             values = {k: v for k, v in variables.items() if isinstance(v, str)}  # -f is query-string
             values.update({k + "[body]": v["body"] for k, v in variables.items()
                            if isinstance(v, dict) and isinstance(v.get("body"), str)})
             values.update({k + "[]": "" for k, v in variables.items()
                            if isinstance(v, dict) and "body" not in v})  # object, no body: left alone
-        except (OSError, ValueError, AttributeError):
-            return blind  # unreadable / stdin / not an object: the mutation is unseen
-    # Before comments go: a `$M` in a shell-supplied comment can expand to a newline and a mutation.
-    # File text never passes through the shell, so its `$` and backticks are only text (#906 review).
-    if not query_from_file:
-        # ponytail: quoting is gone after shlex, so a double-quoted `$x` in the header still reads
-        # as declared; the raw token is needed to tell it apart (#908).
-        code = mask_graphql_strings(GRAPHQL_IGNORED.sub(lambda m: m.group(1) or " ", query))
-        declared = GRAPHQL_VAR_DECL.findall(" ".join(GRAPHQL_OP_HEADER.findall(code)))
-        undeclared = set(GRAPHQL_VAR_USE.findall(query)) - set(declared)
-        if undeclared or GRAPHQL_SHELL_BUILT.search(query):
-            return blind  # `$M` / `$(...)` the shell expands: the real query is unseen
+        except (OSError, ValueError, AttributeError, RecursionError):
+            return blind  # unreadable / stdin / not an object / too deep: the mutation is unseen
     # GraphQL treats `,` and `#...` comments as whitespace; blank them outside strings (#906 review)
     query = GRAPHQL_IGNORED.sub(lambda m: m.group(1) or " ", query)
     muts = list(GRAPHQL_ISSUE_MUTATION.finditer(mask_graphql_strings(query)))
@@ -480,7 +516,8 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
     if lits:  # the literal in the mutation itself is what GitHub stores: judge it first
         lit = lits[0]
         if lit.startswith('"""'):
-            body = lit[3:-3]
+            # ponytail: cleandoc also strips the first line's indent, which GraphQL keeps
+            body = inspect.cleandoc(lit[3:-3].replace('\\"""', '"""'))
         else:
             try:
                 body = json.loads(lit)
@@ -491,16 +528,15 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
     elif inp:
         name = inp.group(1)
         body = values.get(name + "[body]")
-        if body is None and any(k.startswith(name + "[") for k in values):
-            body = None  # gh `name[k]=` fields without a body: the update leaves it alone
-        elif body is None:
+        # gh `name[k]=` fields without a body: the update leaves the body alone
+        if body is None and not any(k.startswith(name + "[") for k in values):
             try:
                 body = json.loads(values.get(name, "")).get("body")
                 body = body if body is None or isinstance(body, str) else ""
-            except (ValueError, AttributeError):
+            except (ValueError, AttributeError, RecursionError):
                 body = ""  # input object unresolved: fail closed, body unknown
     if body is None and re.search(r"\bbody\b", GRAPHQL_STRING.sub('""', seg)):
-        body = ""  # a `body` token no branch resolved (`body: $ b` spellings): fail closed
+        body = ""  # a `body` no branch resolved (a list, an object, a bare `$`): fail closed
     if len(muts) > 1 or len(lits) + len(refs) > 1:
         body = ""  # several mutations / decoy `body:` literals: ambiguous, fail closed
     creating = muts[0].group(1) == "createIssue" or len(muts) > 1
@@ -511,19 +547,99 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset())):
             "labels": [], "auto": False, "method": "POST" if creating else "PATCH"}
 
 
+def graphql_shell_built(mrest):
+    """True when the shell expands anything that can change what a `gh api graphql` call sends.
+
+    An unquoted expansion can add whole arguments (`$ARGS`, `"$@"` aside, both split); a quoted
+    one rewrites the word it sits in, so a field key, a query, an --input path or a stray
+    positional is unseen. A quoted expansion inside another field's VALUE is only a value
+    (`-f owner="$OWNER"`): the mutation text the hook judges is unchanged by it.
+    """
+    if any(SHELL_SPLIT in t for t in mrest):
+        return True
+    endpoint, _, fields, input_file, stray = parse_api_args(mrest)
+    keys_and_queries = [f if f.partition("=")[0] == "query" else f.partition("=")[0]
+                        for _, f in fields]
+    return any(SHELL_QUOTED in t for t in (endpoint or "", input_file or "", *stray,
+                                           *keys_and_queries))
+
+
+DIR_CHANGERS = {"cd", "pushd", "popd"}
+REDIRECT = re.compile(r"[0-9&]*>[>|]?(.*)$")
+
+
 def chain_moves_files(segments):
-    """Return (cd seen, paths the chain writes via `>`/`>>`/`tee`): files a hook read may predate."""
+    """Return (directory changed, real paths the chain may write): files a hook read may predate.
+
+    Every word of a command other than gh counts as a path it may write, not a list of known
+    writers: cp, mv, ln, install, sed -i, dd of=, curl -o, ... (#906 ladder review). Paths are
+    resolved, so `> /abs/repo/q` and `@q` name the same file.
+    ponytail: an attached short value (`curl -oq`) is not read; add it if a writer needs it.
+    """
     moved, written = False, set()
     for argv in iter_argvs(segments):
-        moved = moved or argv[:1] in (["cd"], ["pushd"])
-        if argv[:1] == ["tee"]:
-            written.update(os.path.normpath(t) for t in argv[1:] if not t.startswith("-"))
+        words = [_word(t) for t in argv]
+        moved = moved or any(w in DIR_CHANGERS for w in words) or ("env" in words and any(
+            t in ("-C", "--chdir") or t.startswith(("--chdir=", "-C")) for t in argv))
+        is_gh = gh_start(argv) >= 0
         for i, tok in enumerate(argv):
-            m = re.match(r"^[0-9&]*>>?(.*)$", tok)
-            target = m and (m.group(1) or (argv[i + 1] if i + 1 < len(argv) else ""))
+            m = REDIRECT.search(tok)
+            if m:
+                target = m.group(1) or (argv[i + 1] if i + 1 < len(argv) else "")
+            elif is_gh or (tok.startswith("-") and "=" not in tok):
+                continue
+            else:
+                target = tok.split("=", 1)[-1]  # `of=path`, `--output=path`
             if target:
-                written.add(os.path.normpath(target))
+                written.add(os.path.realpath(target))
     return moved, written
+
+
+def parse_api_args(rest):
+    """Return (endpoint, method, fields, input_file, stray) read off `gh api`'s argv tail.
+
+    stray: 2nd+ positionals; gh takes one, so these are a flag value we misparsed.
+    """
+    endpoint, method, fields, input_file = None, None, [], None
+    stray = []
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if tok == "--":  # end of options: the rest are positionals
+            tail = rest[i + 1:]
+            if endpoint:
+                stray += tail
+            else:
+                endpoint, stray = (tail[0] if tail else None), stray + tail[1:]
+            break
+        name, _, inline = tok.partition("=") if tok.startswith("--") else (tok, "", "")
+        if tok.startswith("-") and tok[1:2] != "-" and len(tok) > 2 and tok[:2] in API_VALUE_FLAGS:
+            name, inline = tok[:2], tok[2:].lstrip("=")  # attached short value: -XPOST
+        if name in API_VALUE_FLAGS:
+            if inline or tok != name:
+                value, step = inline, 1
+            elif i + 1 < len(rest):
+                value, step = rest[i + 1], 2
+            else:
+                value, step = "", 1
+            kind = API_VALUE_FLAGS[name]
+            if kind == "method":
+                method = value.upper()
+            elif kind == "field":
+                fields.append((name in ("-F", "--field"), value))
+            else:
+                input_file = value
+            i += step
+        elif name in API_OTHER_VALUE_FLAGS:
+            i += 1 if inline else 2
+        elif tok.startswith("-"):
+            i += 1
+        else:
+            if endpoint:
+                stray.append(tok)
+            endpoint = endpoint or tok
+            i += 1
+    return endpoint, method, fields, input_file, stray
 
 
 def api_issue_match(segments):
@@ -536,7 +652,7 @@ def api_issue_match(segments):
     and `--input f` are file-valued (`body_json` marks that the file is a JSON payload).
     """
     shifted = chain_moves_files(segments)
-    for argv in iter_argvs(segments):
+    for argv, marks in iter_argvs_marked(segments):
         # Same command-word rule as the `gh issue` path: gh must be the command itself (after
         # wrappers), so printed text like `echo gh api ...` is not a write. The fail-closed part
         # lives below, in how an understood-vs-unknown `gh api` call is judged.
@@ -546,49 +662,13 @@ def api_issue_match(segments):
         sub = gh_sub(argv, gh_at)
         if argv[sub:sub + 1] != ["api"]:
             continue
-        rest = argv[sub + 1:]
-        endpoint, method, fields, input_file = None, None, [], None
-        stray = []  # 2nd+ positionals: gh takes one, so these are a flag value we misparsed
-        i = 0
-        while i < len(rest):
-            tok = rest[i]
-            if tok == "--":  # end of options: the rest are positionals
-                tail = rest[i + 1:]
-                if endpoint:
-                    stray += tail
-                else:
-                    endpoint, stray = (tail[0] if tail else None), stray + tail[1:]
-                break
-            name, _, inline = tok.partition("=") if tok.startswith("--") else (tok, "", "")
-            if tok.startswith("-") and tok[1:2] != "-" and len(tok) > 2 and tok[:2] in API_VALUE_FLAGS:
-                name, inline = tok[:2], tok[2:].lstrip("=")  # attached short value: -XPOST
-            if name in API_VALUE_FLAGS:
-                if inline or tok != name:
-                    value, step = inline, 1
-                elif i + 1 < len(rest):
-                    value, step = rest[i + 1], 2
-                else:
-                    value, step = "", 1
-                kind = API_VALUE_FLAGS[name]
-                if kind == "method":
-                    method = value.upper()
-                elif kind == "field":
-                    fields.append((name in ("-F", "--field"), value))
-                else:
-                    input_file = value
-                i += step
-            elif name in API_OTHER_VALUE_FLAGS:
-                i += 1 if inline else 2
-            elif tok.startswith("-"):
-                i += 1
-            else:
-                if endpoint:
-                    stray.append(tok)
-                endpoint = endpoint or tok
-                i += 1
+        rest, mrest = argv[sub + 1:], marks[sub + 1:]
+        endpoint, method, fields, input_file, stray = parse_api_args(rest)
         path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0])
         path = path.rstrip("/")
         if path.strip("/").lower() in ("graphql", "api/graphql"):
+            if graphql_shell_built(mrest):
+                return graphql_issue_write([], "-")  # the shell writes part of the call: blind
             gql = graphql_issue_write(fields, input_file, shifted)
             if gql:
                 return gql

@@ -498,7 +498,8 @@ EOF
 }
 
 @test "GraphQL: createIssue with a compliant body variable is allowed (#903)" {
-    run bash -c "payload 'gh api graphql -f query=\"mutation(\$body:String!){ createIssue(input:{body:\$body}) { clientMutationId } }\" -f body=\"$COMPLIANT_BODY\"' | '$GUARD'"
+    # Single-quoted query: double-quoted, the shell expands $body and gh sends another query.
+    run guard_cmd "gh api graphql -f query='mutation(\$body:String!){ createIssue(input:{body:\$body}) { clientMutationId } }' -f body=\"$COMPLIANT_BODY\""
     [ "$status" -eq 0 ]
 }
 
@@ -601,13 +602,14 @@ EOF
 }
 
 @test "GraphQL updateIssue cannot dodge via '$ b', a variable default or a BOM; closing stays allowed (#906 ladder)" {
-    run bash -c "payload 'gh api graphql -f query=\"mutation{updateIssue(input:{id:\\\"I\\\",body: \$ b}){a}}\" -f b=nope' | '$GUARD'"
+    # Single-quoted queries: a double-quoted `$b` is the shell's, which blocks for another reason.
+    run guard_cmd "gh api graphql -f query='mutation{updateIssue(input:{id:\"I\",body: \$ b}){a}}' -f b=nope"
     [ "$status" -eq 2 ]
-    run bash -c "payload 'gh api graphql -f query=\"mutation(\$b:String=\\\"nope\\\"){updateIssue(input:{id:\\\"I\\\",body:\$b}){a}}\"' | '$GUARD'"
+    run guard_cmd "gh api graphql -f query='mutation(\$b:String=\"nope\"){updateIssue(input:{id:\"I\",body:\$b}){a}}'"
     [ "$status" -eq 2 ]
-    run bash -c "payload 'gh api graphql -f query=\"mutation{updateIssue(input:{id:\\\"I\\\",body"$'\xef\xbb\xbf'":\\\"nope\\\"}){a}}\"' | '$GUARD'"
+    run guard_cmd "gh api graphql -f query='mutation{updateIssue(input:{id:\"I\",body"$'\xef\xbb\xbf'":\"nope\"}){a}}'"
     [ "$status" -eq 2 ]
-    run bash -c "payload 'gh api graphql -f query=\"mutation(\$i:UpdateIssueInput!){updateIssue(input:\$i){a}}\" -f \"i[id]=I\" -f \"i[state]=CLOSED\"' | '$GUARD'"
+    run guard_cmd "gh api graphql -f query='mutation(\$i:UpdateIssueInput!){updateIssue(input:\$i){a}}' -f 'i[id]=I' -f 'i[state]=CLOSED'"
     [ "$status" -eq 0 ]
 }
 
@@ -720,4 +722,69 @@ EOF
     cmd='gh api graphql -f query="{a(b:\"query($M:x)\") $M}"'
     run bash -c "payload '$cmd' | '$GUARD'"
     [ "$status" -eq 2 ]
+}
+
+# --- #906 ladder review on 59529e04: quoting decides what the shell builds (#908) ------------------
+
+guard_cmd() {
+    jq -nc --arg cmd "$1" '{tool_name: "Bash", tool_input: {command: $cmd}}' | "$GUARD"
+}
+
+@test "GraphQL: shell-built positionals and field keys are blind (#906 ladder 6)" {
+    run guard_cmd 'gh api graphql $ARGS'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql "$@"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f "$Q"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f "qu${x}ery=mutation{createIssue(input:{body:\"x\"}){a}}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -f query='{viewer{login}}' -F n=\$N"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a double-quoted \$var is shell-built wherever it sits (#906 ladder 6, #908)" {
+    run guard_cmd 'gh api graphql -f query="mutation($M:x){a}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query="mutation{query: addStar($M:x)}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -f query='query(\$o:String!){repository(owner:\$o,name:\"r\"){id}}' -f o=\"\$OWNER\""
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: single-quoted \$ and backticks are text, so reads and inline bodies pass (#906 ladder 6)" {
+    run guard_cmd "gh api graphql -f query='{search(query:\"cost \$5\",type:ISSUE,first:1){issueCount}}'"
+    [ "$status" -eq 0 ]
+    local body
+    body="$(printf %b "$COMPLIANT_BODY") \`code\`"
+    run guard_cmd "gh api graphql -f query='mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"\"\"$body\"\"\"}){issue{id}}}'"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: an escaped triple quote ends a block string where GraphQL ends it (#906 ladder 6)" {
+    printf '%s' 'mutation{a: addStar(input:{starrableId:"""x\\"""  """}){clientMutationId} b: createIssue(input:{repositoryId:"R",title:"t",body:"nope"}){issue{id}}} # """' > "$REPO/bs.graphql"
+    run guard_cmd "gh api graphql -F query=@$REPO/bs.graphql"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a deeply nested --input file is blind, not a crash (#906 ladder 6)" {
+    { printf '{"query":"mutation{createIssue(input:{body:\\"nope\\"}){a}}","x":'; printf '[%.0s' $(seq 1 100000); printf ']%.0s' $(seq 1 100000); printf '}'; } > "$REPO/deep.json"
+    run guard_cmd "gh api graphql --input $REPO/deep.json"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: any other command naming the query file, or a directory change, makes it blind (#906 ladder 6)" {
+    printf '%s' '{viewer{login}}' > "$REPO/q.graphql"
+    run guard_cmd "cp evil q.graphql && gh api graphql -F query=@q.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "printf x > $REPO/q.graphql && gh api graphql -F query=@q.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "printf x >|q.graphql && gh api graphql -F query=@q.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "popd && gh api graphql -F query=@q.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "builtin cd /tmp && gh api graphql -F query=@q.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -F query=@q.graphql"
+    [ "$status" -eq 0 ]
 }
