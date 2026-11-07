@@ -47,8 +47,6 @@ if BlueprintX's own prompts have moved on since.
 | key | notes |
 |---|---|
 | `github_username` | |
-| `remote_setup` | wire a git remote now? |
-| `create_repo_now` | create the GitHub repo now, or scaffold only? |
 | `repo_visibility` | `public` / `private` — **also drives the `registry` derivation in step 3** |
 | `protect_branch` | protect the default branch? |
 | `human_reviewers_gate_merges` | require human review before merge? |
@@ -73,7 +71,7 @@ one call for everything — a batch per concern keeps each question legible):
 
 1. **Identity + stack**: `name`, `description`, `root`, `language`, `skeleton` (skip if
    `--skeleton` was passed), `license`.
-2. **Repo**: `github_username`, `remote_setup`, `create_repo_now`, `repo_visibility`,
+2. **Repo**: `github_username`, `repo_visibility`,
    `protect_branch`, `human_reviewers_gate_merges`.
 3. **Skeleton-specific**: exactly the row from step 1's per-skeleton table matching the chosen
    `skeleton` — nothing else.
@@ -163,7 +161,7 @@ protect_branch=<y|n>
 ```
 
 - `git_remote=y` and `create_repo=y` are written unconditionally (the backlog item exists to
-  produce the repo), so the `remote_setup` / `create_repo_now` answers do not map to a key.
+  produce the repo), so they are never asked.
 - `create_repo=y` requires `git_remote=y` (blueprintx rejects the reverse) and a `gh`
   session at scaffold time.
 - `repo_visibility` is exactly `public` or `private`; `kanban_visibility` is exactly `repo`,
