@@ -846,14 +846,14 @@ STUB
     [[ "$output" == *"note: o/undeclared has no ROADMAP_BOARDS entry"* ]]
 }
 
-@test "sweep_kanban_boards: an active latch reports every board UNKNOWN (latched), no gh call" {
+@test "sweep_kanban_boards: an active latch reports every board SKIPPED, no gh call" {
     export GH_BUDGET_LATCH_FILE="$REPO/latch"
     printf '%s\n' "$(($(date +%s) + 600))" > "$GH_BUDGET_LATCH_FILE"
     stub_gh_present_only
     ROADMAP_BOARDS=("o|13|a" "o|9|b")
     run sweep_kanban_boards closed "$REPO" "o/a"
-    [[ "$output" == *"board o/13 (a): UNKNOWN (latched)"* ]]
-    [[ "$output" == *"board o/9 (b): UNKNOWN (latched)"* ]]
+    [[ "$output" == *"board o/13 (a): SKIPPED — GraphQL rate-limited"* ]]
+    [[ "$output" == *"board o/9 (b): SKIPPED — GraphQL rate-limited"* ]]
 }
 
 @test "main(): a budget stop still names every declared board as UNKNOWN, not silence" {

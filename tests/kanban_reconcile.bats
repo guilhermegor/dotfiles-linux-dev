@@ -639,13 +639,13 @@ STUB_IN_REVIEW='reconcile_kanban() {
     [[ "$output" != *"ok —"* ]]
 }
 
-@test "boards: an active latch reports every board UNKNOWN (latched) and calls nothing" {
+@test "boards: an active latch reports every board SKIPPED and calls nothing" {
     export TEST_TMP
     run_boards in_review "$TEST_TMP" "owner|17|clean" "owner|13|busy" \
         -- "gh_budget_latch_active() { return 0; }; $STUB_IN_REVIEW"
     [[ "$output" == *"rc=1"* ]]
-    [[ "$output" == *"board owner/17 (clean): UNKNOWN (latched)"* ]]
-    [[ "$output" == *"board owner/13 (busy): UNKNOWN (latched)"* ]]
+    [[ "$output" == *"board owner/17 (clean): SKIPPED — GraphQL rate-limited"* ]]
+    [[ "$output" == *"board owner/13 (busy): SKIPPED — GraphQL rate-limited"* ]]
     [ ! -e "$TEST_TMP/calls" ]
 }
 
@@ -654,8 +654,31 @@ STUB_IN_REVIEW='reconcile_kanban() {
     run_boards in_review "$TEST_TMP" "owner|17|clean" "owner|13|busy" \
         -- "gh_budget_latch_active() { [ -e \"\$TEST_TMP/calls\" ]; }; $STUB_IN_REVIEW"
     [[ "$output" == *"board owner/17 (clean): ok — nothing to change"* ]]
-    [[ "$output" == *"board owner/13 (busy): UNKNOWN (latched)"* ]]
+    [[ "$output" == *"board owner/13 (busy): SKIPPED — GraphQL rate-limited"* ]]
     [ "$(grep -c . "$TEST_TMP/calls")" -eq 1 ]
+}
+
+@test "boards: a throttled reconcile is reported SKIPPED, an unreadable one stays UNKNOWN (#921)" {
+    export TEST_TMP
+    run_boards in_review "$TEST_TMP" "owner|17|limited" "owner|13|broken" \
+        -- 'reconcile_kanban() { case "$2" in limited) RECONCILE_KANBAN_REPORT="UNKNOWN (throttled): GitHub GraphQL rate limit — retry next round";; *) RECONCILE_KANBAN_REPORT="UNKNOWN: nope";; esac; return 1; }'
+    [[ "$output" == *"board owner/17 (limited): SKIPPED — GraphQL rate-limited"* ]]
+    [[ "$output" == *"board owner/13 (broken): UNKNOWN — UNKNOWN: nope"* ]]
+}
+
+@test "stale cards: a closed issue whose card is in Blocked is listed, Done is not (#921)" {
+    run env bash -c "source '$LIB'; ROADMAP_BOARDS=(\"owner|13|repo\"); \
+        gh() { case \"\$*\" in *'/fields'*) echo 99;; *) printf 'repo\t5\t2026-11-05T00:00:00Z\tBlocked\nrepo\t6\t2026-11-05T00:00:00Z\tDone\n';; esac; }; \
+        kanban_stale_cards_rest"
+    [[ "$output" == *"stale card: repo#5 in Blocked (closed 2026-11-05T00:00:00Z)"* ]]
+    [[ "$output" != *"repo#6"* ]]
+    [[ "$output" == *"Workflows"* ]]
+}
+
+@test "stale cards: an unreadable board is named, never reported clean (#921)" {
+    run env bash -c "source '$LIB'; ROADMAP_BOARDS=(\"owner|13|repo\"); gh() { return 1; }; kanban_stale_cards_rest"
+    [[ "$output" == *"board owner/13 (repo) UNKNOWN"* ]]
+    [[ "$output" != *"none"* ]]
 }
 
 @test "boards: an empty or missing registry is UNKNOWN, never a clean sweep" {
