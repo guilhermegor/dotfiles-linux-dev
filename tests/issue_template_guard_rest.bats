@@ -861,3 +861,49 @@ guard_cmd() {
     run bash -c "printf 'gh api graphql -f query=x \\0 -F a=@q' | python3 '$M' api-issue"
     [ "$status" -eq 0 ]
 }
+
+@test "GraphQL: words the parser cannot place are blind (#906 ladder 8)" {
+    local q="query='mutation{createIssue(input:{title:\"t\",body:\"nope\"}){a}}'"
+    for cmd in "gh api graphql -if $q" \
+        'gh api graphql {-F,query=@evil.graphql}' \
+        'gh api graphql -F{a=1,query=@evil.graphql}' \
+        "gh api graphql -f query='{viewer{login}}' \"--\$X\"" \
+        "gh api 'graphql?query=mutation{a}'"; do
+        run guard_cmd "$cmd"
+        [ "$status" -eq 2 ]
+    done
+}
+
+@test "GraphQL: a command substitution beside a file read is blind (#906 ladder 8)" {
+    echo '{viewer{login}}' > q.graphql
+    run guard_cmd "gh api graphql -F query=@q.graphql -f x=\"\$(cp evil q.graphql)\""
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a second write in the chain cannot hide behind the first (#906 ladder 8)" {
+    local good="-f query='mutation{updateIssue(input:{id:\"i\",title:\"t\"}){a}}'"
+    local bad="-f query='mutation{createIssue(input:{title:\"t\",body:\"nope\"}){a}}'"
+    run guard_cmd "gh api graphql $good && gh api graphql $bad"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a file gh downloaded is not trusted (#906 ladder 8)" {
+    echo '{viewer{login}}' > q.graphql
+    run guard_cmd "gh release download -p q.graphql -O q.graphql && gh api graphql -F query=@q.graphql"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: an untokenizable \$'...' query fails closed (#906 ladder 8)" {
+    run guard_cmd "gh api graphql -f query=\$'mutation{createIssue(input:{body:\"it\\'s\"}){a}}'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: ordinary reads stay allowed (#906 ladder 8)" {
+    local q="query='{viewer{login}}'"
+    for cmd in "gh api graphql -f $q -f owner=\"\$OWNER\"" \
+        "gh api graphql -f $q -F o=\"\$(whoami)\" --jq .data" \
+        "gh api graphql --paginate -f $q -q.data"; do
+        run guard_cmd "$cmd"
+        [ "$status" -eq 0 ]
+    done
+}

@@ -560,17 +560,47 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False),
             "labels": [], "auto": False, "method": "POST" if creating else "PATCH"}
 
 
-def graphql_shell_built(mrest):
-    """True when the shell expands anything that can change what a `gh api graphql` call sends.
+def without_redirects(words):
+    """Drop `> out` and `2>&1`: bash consumes them, so gh never sees them as arguments."""
+    kept, skip = [], False
+    for word in words:
+        m = None if skip else REDIRECT.match(word)
+        if not skip and not m:
+            kept.append(word)
+        skip = bool(m and not m.group(1))
+    return kept
+
+
+def unread_short_flag(tok):
+    """True for `-if`-shaped words: pflag clusters them, so a value flag can hide inside."""
+    return (tok.startswith("-") and not tok.startswith("--") and len(tok) > 2
+            and tok[:2] not in API_VALUE_FLAGS and tok[:2] not in API_OTHER_VALUE_FLAGS)
+
+
+def graphql_shell_built(rest, mrest):
+    """True when the hook cannot see what a `gh api graphql` call sends.
 
     An unquoted expansion can add whole arguments (`$ARGS`, `"$@"` aside, both split); a quoted
     one rewrites the word it sits in, so a field key, a query, an --input path or a stray
     positional is unseen. A quoted expansion inside another field's VALUE is only a value
-    (`-f owner="$OWNER"`): the mutation text the hook judges is unchanged by it.
+    (`-f owner="$OWNER"`): the mutation text the hook judges is unchanged by it, unless it is a
+    command substitution next to a file read: bash runs it before gh opens the file.
+    A word the parser could not place (a stray, a flag cluster, a brace expansion) or a query
+    in the URL hides the real call just the same.
     """
+    mrest = without_redirects(mrest)
     if any(SHELL_SPLIT in t for t in mrest):
         return True
     endpoint, _, fields, input_file, stray = parse_api_args(mrest)
+    if stray or "?" in (endpoint or "") or any(
+            unread_short_flag(t) or (t.startswith("-") and SHELL_QUOTED in t) for t in mrest):
+        return True
+    pairs = [f.partition("=") for _, f in fields]
+    if any("{" in key or (val.startswith("@") and "{" in val) for key, _, val in pairs):
+        return True  # `-F{a=1,query=@f}`: bash expands it into fields the parser never saw
+    reads_file = input_file or any(val.startswith("@") for _, _, val in pairs)
+    if reads_file and any("$(" in t or "`" in t for t in rest):
+        return True
     keys_and_queries = [f if f.partition("=")[0] == "query" else f.partition("=")[0]
                         for _, f in fields]
     return any(SHELL_QUOTED in t for t in (endpoint or "", input_file or "", *stray,
@@ -624,6 +654,8 @@ def chain_moves_files(segments):
         is_gh = gh_start(argv) >= 0
         if is_gh:
             last_gh = n
+            if "download" in words or "clone" in words:  # `gh release download -O q.graphql`
+                opaque_at.append(n)
         else:
             command = next((w for w in words if not re.match(r"^\w+=", w)), None)
             if command is not None and command not in HARMLESS_BEFORE_GH:
@@ -701,6 +733,7 @@ def api_issue_match(segments):
     and `--input f` are file-valued (`body_json` marks that the file is a JSON payload).
     """
     shifted = chain_moves_files(segments)
+    graphql_write = None
     for argv, marks in iter_argvs_marked(segments):
         # Same command-word rule as the `gh issue` path: gh must be the command itself (after
         # wrappers), so printed text like `echo gh api ...` is not a write. The fail-closed part
@@ -717,15 +750,16 @@ def api_issue_match(segments):
         path = path.rstrip("/")
         if posixpath.normpath("/" + urllib.parse.unquote(path)).strip("/").lower() in (
                 "graphql", "api/graphql"):  # `gr%61phql`, `x/../graphql`: the front end may decode
-            if graphql_shell_built(mrest):
+            if graphql_shell_built(rest, mrest):
                 return graphql_issue_write([], "-")  # the shell writes part of the call: blind
             marked = parse_api_args(mrest)[2]
             if endpoint != "graphql":
                 fields, marked = ungrouped_graphql_fields(fields), ungrouped_graphql_fields(marked)
             quoted = {f.partition("=")[0] for _, f in marked if SHELL_QUOTED in f.partition("=")[2]}
             gql = graphql_issue_write(fields, input_file, shifted, quoted)
-            if gql:
-                return gql
+            if gql and graphql_write:
+                return graphql_issue_write([], "-")  # one verdict cannot cover two writes
+            graphql_write = graphql_write or gql
             continue
         dynamic = ("$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
                    or any("$" in t or "`" in t for t in stray))  # stray may be the real endpoint
@@ -786,6 +820,8 @@ def api_issue_match(segments):
         body_json = False
         if input_file is not None:
             has_body_file, body_file, body_json, has_body, body = True, input_file, True, False, None
+        if graphql_write:
+            return graphql_issue_write([], "-")  # one verdict cannot cover two writes
         no_body = not (has_body or has_body_file)
         if no_body and (unknown_write or (method in ("POST", "?") and not number)):
             has_body, body = True, ""  # REST create has no editor mode: no body IS an empty body
@@ -794,7 +830,7 @@ def api_issue_match(segments):
             "has_body_file": has_body_file, "body_file": body_file, "body_json": body_json,
             "labels": labels, "auto": False, "method": method,
         }
-    return None
+    return graphql_write
 
 
 def main():
@@ -815,8 +851,8 @@ def main():
             return 0
         argv = matching_argv(segments, noun)
     except ValueError:
-        if noun == "api-issue" and re.search(r"\bapi\b[\s\S]*issues", command):
-            # Fail CLOSED for the REST path (#714): text that looks like an issues write but
+        if noun == "api-issue" and re.search(r"\bapi\b[\s\S]*(issues|graphql)", command, re.I):
+            # Fail CLOSED for `gh api` (#714): text that looks like an issues write but
             # cannot be tokenized is reported, never silently allowed.
             print(json.dumps({"matched": True, "unparseable": True}))
             return 0
