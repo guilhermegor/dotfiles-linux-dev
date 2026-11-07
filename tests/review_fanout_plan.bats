@@ -141,7 +141,7 @@ elif [ "$1" = "api" ] && [[ "$2" == */pulls/*/reviews* ]]; then
     [ -n "${GH_PAGING_FAIL:-}" ] && { echo "gh: HTTP 502" >&2; exit 1; }
     p=1; [[ "$2" == *\&page=* ]] && p="${2##*\&page=}"
     jq --argjson n "$n" --argjson p "$p" '[.[] | select(.number == $n) | (.reviews // [])[]
-        | {commit_id: .commit.oid, body: (.body // ""), user: {login: (.author.login // "coderabbitai"),
+        | {commit_id: .commit.oid, state: .state, body: (.body // ""), user: {login: (.author.login // "coderabbitai"),
                     type: (.author.__typename // (if .author then "User" else "Bot" end))}}]
         | .[($p - 1) * 100:$p * 100]' "$FIXTURE"
 elif [ "$1" = "api" ] && [[ "$2" == */issues/*/comments* ]]; then
@@ -1653,6 +1653,42 @@ EOF
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "741" ]
+}
+
+# merge_pr_reviews PR REVIEWS — head 2222aaaa is a merge whose parents are bbbb0002 and the base;
+# aaaa0001 is an older reviewed head with a different patch.
+merge_pr_reviews() {
+    stub_gh_prs <<EOF
+[{"number":$1,"headRefOid":"2222aaaa","baseRefName":"master","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":$2,"comments":[],"parents":["bbbb0002","9999base"],
+  "commits":[{"oid":"2222aaaa","committedDate":"$(ago 3600)"}],"statusCheckRollup":[],
+  "patches":{"aaaa0001":[{"filename":"a.sh","status":"added","sha":"s1","patch":"@@ -1 +1 @@\n+old"}],
+             "bbbb0002":[{"filename":"a.sh","status":"added","sha":"s2","patch":"@@ -1 +1 @@\n+x"}],
+             "2222aaaa":[{"filename":"a.sh","status":"added","sha":"s2","patch":"@@ -3 +3 @@\n+x"}]}}]
+EOF
+}
+
+@test "an empty-body COMMENTED review is not merge-only coverage (#926)" {
+    merge_pr_reviews 926 '[{"commit":{"oid":"aaaa0001"},"state":"COMMENTED","body":"findings: fix X"},
+                           {"commit":{"oid":"bbbb0002"},"state":"COMMENTED","body":""}]'
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "926" ]
+}
+
+@test "a COMMENTED review with a body still carries over a merge-only update (#926)" {
+    merge_pr_reviews 927 '[{"commit":{"oid":"bbbb0002"},"state":"COMMENTED","body":"findings: fix X"}]'
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 927)" == *"merge-only update"* ]]
+}
+
+@test "an empty-body APPROVED review still carries over a merge-only update (#926)" {
+    merge_pr_reviews 928 '[{"commit":{"oid":"bbbb0002"},"state":"APPROVED","body":""}]'
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [[ "$(reason_for 928)" == *"merge-only update"* ]]
 }
 
 @test "a binary file (no patch) is compared by blob sha: equal is covered" {
