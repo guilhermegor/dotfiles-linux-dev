@@ -188,9 +188,10 @@ asking. `settings.json` allows the command typed in that exact form (`~/.claude/
 around it. Report from its output: one line per pruned worktree plus the count kept. It prunes
 only when the content proves it shipped (`branch_content_shipped`, never ancestry), the tree holds
 nothing beyond build noise (or a staged index equal to an older commit of the branch), no PR is
-OPEN, no live agent touched it, and origin's branch (if any) has the local sha. Any read failure,
-or an origin that moved, keeps the worktree. A `PARTIAL` line means a later step failed after the
-worktree was removed; it names the sha left on origin. Never prune by hand what it kept.
+OPEN, no live agent touched it, and origin's branch (if any) has the local sha. A read failure, a
+new commit since classification, or an origin that moved before the probe keeps the worktree. A
+`PARTIAL` line can also mean a step failed after the worktree was removed; a failed remote delete
+names the deleted local branch's sha, for recovery. Never prune by hand what it kept.
 
 ### The stash stack is shared — read it too
 

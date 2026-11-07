@@ -252,7 +252,7 @@ run_prune() { run prune_worktrees "$work" "${1:-0}"; }
     make_branch b1 f1.txt
     land_on_master f1.txt
     git -C "$work" remote set-url origin "$BATS_TEST_TMPDIR/gone.git"
-    run prune_apply_one "$work" "$BATS_TEST_TMPDIR/wt-b1" b1
+    run prune_apply_one "$work" "$BATS_TEST_TMPDIR/wt-b1" b1 "$(git -C "$BATS_TEST_TMPDIR/wt-b1" rev-parse HEAD)"
     [ "$status" -ne 0 ]
     [[ "$output" == *"remote unreadable"* ]]
     [ -d "$BATS_TEST_TMPDIR/wt-b1" ]
@@ -272,7 +272,7 @@ run_prune() { run prune_worktrees "$work" "${1:-0}"; }
     git -C "$other" add extra.txt
     git -C "$other" commit --quiet -m 'feat: extra'
     git -C "$other" push --quiet origin b1 2>/dev/null
-    run prune_apply_one "$work" "$BATS_TEST_TMPDIR/wt-b1" b1
+    run prune_apply_one "$work" "$BATS_TEST_TMPDIR/wt-b1" b1 "$(git -C "$BATS_TEST_TMPDIR/wt-b1" rev-parse HEAD)"
     [ "$status" -ne 0 ]
     [[ "$output" == *"remote moved, nothing pruned"* ]]
     [ -d "$BATS_TEST_TMPDIR/wt-b1" ]
@@ -290,11 +290,59 @@ run_prune() { run prune_worktrees "$work" "${1:-0}"; }
     [ -z "$(git -C "$work" worktree list --porcelain | grep wt-b1)" ]
 }
 
+@test "a commit landing after classification prunes nothing" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    local wt="$BATS_TEST_TMPDIR/wt-b1" classified
+    classified="$(git -C "$wt" rev-parse HEAD)"
+    git -C "$wt" commit --quiet --allow-empty -m 'feat: unshipped'
+    git -C "$wt" push --quiet origin b1 2>/dev/null
+    run prune_apply_one "$work" "$wt" b1 "$classified"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"HEAD moved since classification, nothing pruned"* ]]
+    [ -d "$wt" ]
+    [ -n "$(git -C "$bare" rev-parse --verify --quiet refs/heads/b1)" ]
+}
+
+@test "the lease refuses a push landing after the probe and keeps origin" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    local other="$BATS_TEST_TMPDIR/other" wt="$BATS_TEST_TMPDIR/wt-b1" head moved
+    head="$(git -C "$wt" rev-parse HEAD)"
+    git clone --quiet "$bare" "$other" 2>/dev/null
+    git -C "$other" config user.email t@e.com
+    git -C "$other" config user.name t
+    git -C "$other" checkout --quiet b1
+    git -C "$other" commit --quiet --allow-empty -m 'feat: raced'
+    moved="$(git -C "$other" rev-parse HEAD)"
+    # pre-push runs after the probe, so origin moves exactly inside the window the lease guards.
+    printf '#!/bin/bash\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ngit -C "%s" push --quiet origin b1\n' "$other" \
+        >"$work/.git/hooks/pre-push"
+    chmod +x "$work/.git/hooks/pre-push"
+    run prune_apply_one "$work" "$wt" b1 "$head"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"push --delete failed, origin/b1 kept; deleted local branch was at $head"* ]]
+    [ "$(git -C "$bare" rev-parse refs/heads/b1)" = "$moved" ]
+}
+
+@test "the probe ignores a branch that only tail-matches the name" {
+    make_branch b1 f1.txt
+    land_on_master f1.txt
+    local wt="$BATS_TEST_TMPDIR/wt-b1" head
+    head="$(git -C "$wt" rev-parse HEAD)"
+    git -C "$wt" push --quiet origin --delete b1 2>/dev/null
+    git -C "$work" push --quiet origin "master:refs/heads/x/refs/heads/b1" 2>/dev/null
+    run prune_apply_one "$work" "$wt" b1 "$head"
+    [ "$status" -eq 0 ]
+    [ ! -d "$wt" ]
+    [ -n "$(git -C "$bare" rev-parse --verify --quiet refs/heads/x/refs/heads/b1)" ]
+}
+
 @test "a detached worktree is removed without any remote call" {
     local wt="$BATS_TEST_TMPDIR/wt-det"
     git -C "$work" worktree add --quiet --detach "$wt" origin/master
     git -C "$work" remote set-url origin "$BATS_TEST_TMPDIR/gone.git"
-    run prune_apply_one "$work" "$wt" ""
+    run prune_apply_one "$work" "$wt" "" "$(git -C "$wt" rev-parse HEAD)"
     [ "$status" -eq 0 ]
     [ ! -d "$wt" ]
 }
@@ -302,7 +350,7 @@ run_prune() { run prune_worktrees "$work" "${1:-0}"; }
 @test "a branch never pushed is pruned locally with no remote delete" {
     local wt="$BATS_TEST_TMPDIR/wt-lo"
     git -C "$work" worktree add --quiet -b lo "$wt" origin/master
-    run prune_apply_one "$work" "$wt" lo
+    run prune_apply_one "$work" "$wt" lo "$(git -C "$wt" rev-parse HEAD)"
     [ "$status" -eq 0 ]
     [ ! -d "$wt" ]
     [ -z "$(git -C "$work" rev-parse --verify --quiet refs/heads/lo)" ]

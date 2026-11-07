@@ -159,31 +159,37 @@ prune_default_branch() {
 	[ -n "$db" ] && echo "$db"
 }
 
+# Unattended: a credential or passphrase prompt must fail and a stalled network must time out.
+prune_git_remote() {
+	GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -oBatchMode=yes' timeout "${WORKTREE_PRUNE_REMOTE_TIMEOUT:-60}" git "$@"
+}
+
 # Removes worktree, local branch, then origin branch; each step only if the one before succeeded.
+# $4 is the HEAD prune_classify judged: a commit landing since then was never classified.
 prune_apply_one() {
-	local cwd="$1" path="$2" branch="$3" sha remote
-	# --force is needed for the untracked noise; ignored/secret-shaped files were screened out.
-	[ -z "$branch" ] || sha="$(git -C "$cwd" rev-parse "refs/heads/$branch" 2>/dev/null)" || { echo "branch unreadable"; return 1; }
-	# Probe origin before anything destructive: an unreadable or moved remote leaves everything in
-	# place. GIT_TERMINAL_PROMPT=0: unattended, a credential prompt must fail, never hang.
+	local cwd="$1" path="$2" branch="$3" classified="$4" sha remote
+	sha="$(git -C "$path" rev-parse HEAD 2>/dev/null)" || { echo "HEAD unreadable, nothing pruned"; return 1; }
+	[ "$sha" = "$classified" ] || { echo "HEAD moved since classification, nothing pruned"; return 1; }
+	# Probe origin before anything destructive: an unreadable or moved remote leaves everything in place.
 	if [ -n "$branch" ]; then
-		remote="$(GIT_TERMINAL_PROMPT=0 git -C "$cwd" ls-remote origin "refs/heads/$branch" 2>/dev/null)" \
+		remote="$(prune_git_remote -C "$cwd" ls-remote origin "refs/heads/$branch" 2>/dev/null)" \
 			|| { echo "remote unreadable, nothing pruned"; return 1; }
 		remote="$(awk -v r="refs/heads/$branch" '$2 == r {print $1}' <<<"$remote")"
 		[ -z "$remote" ] || [ "$remote" = "$sha" ] || { echo "remote moved, nothing pruned"; return 1; }
 	fi
+	# --force is needed for the untracked noise; ignored/secret-shaped files were screened out.
 	git -C "$cwd" worktree remove --force "$path" 2>/dev/null || { echo "worktree remove failed"; return 1; }
 	[ -n "$branch" ] || return 0
 	git -C "$cwd" branch -D "$branch" >/dev/null 2>&1 || { echo "branch -D failed"; return 1; }
 	if [ -n "$remote" ]; then
-		# Lease on the sha classify verified: a push landing since then makes the delete fail.
-		GIT_TERMINAL_PROMPT=0 git -C "$cwd" push --force-with-lease="refs/heads/$branch:$sha" origin --delete "$branch" >/dev/null 2>&1 \
-			|| { echo "push --delete failed (remote moved?), origin/$branch left at $sha"; return 1; }
+		# Lease on the classified sha: a push landing since the probe makes the delete fail.
+		prune_git_remote -C "$cwd" push --force-with-lease="refs/heads/$branch:$sha" origin --delete "$branch" >/dev/null 2>&1 \
+			|| { echo "push --delete failed, origin/$branch kept; deleted local branch was at $sha"; return 1; }
 	fi
 }
 
 prune_worktrees() {
-	local cwd="$1" apply="$2" db self main="" path="" branch="" line why locked=0 failed=0 rpath rmain
+	local cwd="$1" apply="$2" db self main="" path="" branch="" line why head locked=0 failed=0 rpath rmain
 	local min_age="${WORKTREE_PRUNE_MIN_AGE:-900}" pruned=0 kept=0 verb="WOULD-PRUNE"
 	[ "$apply" = 1 ] && verb="PRUNED"
 
@@ -211,9 +217,10 @@ prune_worktrees() {
 				elif [ "$locked" = 1 ]; then
 					printf 'KEEP %s: locked\n' "$path"
 					kept=$((kept + 1))
-				elif why="$(prune_classify "$cwd" "$path" "$branch" "$db" "$min_age")"; then
-					if [ "$apply" = 1 ] && ! why="$(prune_apply_one "$cwd" "$path" "$branch")"; then
-						# Past the first step the worktree may already be gone: say so, never "KEEP".
+				elif head="$(git -C "$path" rev-parse HEAD 2>/dev/null)" \
+					&& why="$(prune_classify "$cwd" "$path" "$branch" "$db" "$min_age")"; then
+					if [ "$apply" = 1 ] && ! why="$(prune_apply_one "$cwd" "$path" "$branch" "$head")"; then
+						# Past the probes the worktree may already be gone: say so, never "KEEP".
 						printf 'PARTIAL %s: %s\n' "$path" "$why"
 						failed=$((failed + 1))
 					else
