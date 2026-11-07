@@ -590,6 +590,8 @@ _repo_wide_scan() {
 					REPORT_NUMBER=""
 					GATE_STATUS="clean"
 					GATE_DETAIL=""
+				else
+					_recheck_cached_pr "$owner" "$name" "$transcript" "$cache"
 				fi
 			fi
 			return 0
