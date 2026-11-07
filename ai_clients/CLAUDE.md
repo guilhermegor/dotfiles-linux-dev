@@ -846,25 +846,18 @@ allowed-tools: Read Glob Grep  # space-separated for skills (no commas)
 
 | | |
 |---|---|
-| **Source** | `ai_clients/claude/settings.<provider>.json` (an `env`-only overlay, not a full settings.json) + `ai_clients/claude/profile_functions.sh` (the launcher) |
-| **Installs to** | `~/.claude/settings.<provider>.json` (token resolved from `.env`) + `~/.claude/profile_functions.sh`, sourced from `~/.bashrc` |
+| **Source** | `ai_clients/claude/profile_functions.sh` (the launcher) |
+| **Installs to** | `~/.claude/profile_functions.sh`, sourced from `~/.bashrc` |
 | **Lib script** | `lib/profiles.sh` → `install_profiles()`, step key `profiles` |
-| **Invoked by user as** | `claude-profile <provider>` (shell function; e.g. `claude-profile deepseek`) |
+| **Invoked by user as** | `claude-profile <name>` (shell function; runs `${CLAUDE_CONFIG_DIR:-~/.claude}/settings.<name>.json`) |
 
-A profile points `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` at an
-Anthropic-compatible endpoint so the harness — every skill, hook, gate,
-guard, and MCP server — survives; only the model changes. The token is
-never committed: the source file ships the placeholder `KEY-GOES-HERE` and
-`_install_deepseek_profile` in `lib/profiles.sh` substitutes it from the
-project root `.env` at deploy time, the same pattern `mcp_servers.sh`
-already uses for `CONTEXT7_API_KEY`/`TAVILY_API_KEY`.
-
-**Verified endpoint:** DeepSeek, `https://api.deepseek.com/anthropic`, auth
-via `ANTHROPIC_AUTH_TOKEN` — **verified 2026-08-26** (see the runtime
-roster issue, dotfiles-linux-dev#151, for the sourced comparison against
-Zhipu/GLM, Moonshot/Kimi, and MiniMax). Re-verify and update this date
-before relying on it again; provider compatibility is the field most
-likely to rot.
+A profile is an `env`-only `--settings` overlay that points
+`ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` at an Anthropic-compatible
+endpoint, so the harness (every skill, hook, gate, guard and MCP server)
+survives and only the model changes. No profile ships from source: the
+DeepSeek overlay was never configured and was removed (dotfiles-linux-dev#935).
+A profile is hand-made, machine-local and holds a token, so it is never
+committed. The provider comparison lives in dotfiles-linux-dev#151.
 
 ⚠️ **The two-session pattern, and why it's two sessions and not one.**
 `ANTHROPIC_BASE_URL` is process-level: it swaps the model for the WHOLE

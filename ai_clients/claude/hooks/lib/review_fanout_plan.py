@@ -143,7 +143,7 @@ OPEN_PR_LIST_CAP = 200
 # (see `truncated_window`).
 PR_SELECTION = (
 	"number headRefOid baseRefName mergeStateStatus isDraft author{login} "
-	"reviews(last:100){totalCount nodes{body commit{oid} author{login __typename}}} "
+	"reviews(last:100){totalCount nodes{state body commit{oid} author{login __typename}}} "
 	"comments(last:100){totalCount nodes{body createdAt author{login}}} "
 	"commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{"
 	"__typename ... on CheckRun{name status conclusion} "
@@ -326,6 +326,7 @@ def _rest_window(nodes: list) -> dict:
 def _rest_review(review: dict) -> dict:
 	"""Adapt one REST review into the GraphQL review shape (commit and author)."""
 	return {
+		"state": review.get("state"),
 		"body": review.get("body"),
 		"commit": {"oid": review.get("commit_id")},
 		"author": {
@@ -860,6 +861,27 @@ def _patch_signature(base: str, oid: str) -> list | None:
 		return None
 
 
+def counts_as_review(review: dict) -> bool:
+	"""Mirror BlueprintX ``check_review_threads.py``'s ``counts_as_review`` (#926).
+
+	The gate counts an ``APPROVED`` or ``CHANGES_REQUESTED`` review always, and any other state,
+	a missing one included, only when its body is non-empty after ``strip()``. Counting more than
+	that here made a head look covered by a review the gate ignores, so the planner never
+	scheduled a review and the gate never passed. A ``PENDING`` review is unsubmitted and the
+	gate never sees it.
+	"""
+	# ponytail: the gate also counts an empty-body review that owns a root inline comment; the
+	# planner does not fetch review comments, so such a review reads as uncounted here. That only
+	# re-dispatches a covered head (extra cost, never false coverage). Fetch comments{replyTo} in
+	# PR_SELECTION if inline-only bot reviews start costing real reviews.
+	state = (review.get("state") or "").upper()
+	if state == "PENDING":
+		return False
+	if state in {"APPROVED", "CHANGES_REQUESTED"}:
+		return True
+	return bool((review.get("body") or "").strip())
+
+
 def reviewed_heads(pr: dict) -> list[str]:
 	"""Return every other head that has review coverage (order is irrelevant).
 
@@ -868,7 +890,9 @@ def reviewed_heads(pr: dict) -> list[str]:
 	candidate.
 	"""
 	head = pr.get("headRefOid") or ""
-	found = [((r.get("commit") or {}).get("oid") or "") for r in roster_reviews(pr)]
+	found = [
+		((r.get("commit") or {}).get("oid") or "") for r in roster_reviews(pr) if counts_as_review(r)
+	]
 	for comment in pr.get("comments") or []:
 		body = comment.get("body") or ""
 		lines = body.split("\n")
