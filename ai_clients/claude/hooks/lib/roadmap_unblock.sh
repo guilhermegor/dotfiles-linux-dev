@@ -219,7 +219,8 @@ _ru_unblock_dest() {
 	labels="$(_ru_item_labels "$item" "$repo" "$number")" || { rm -rf "$tdir"; return 1; }
 	UNBLOCK_LABELS="$labels"
 	labels="$(grep -vxF 'state:blocked' <<<"$labels" || true)"
-	reasons="$(SPEC_LABELS="$labels" spec_incomplete_reasons "$body" "${templates[@]+"${templates[@]}"}")"
+	reasons="$(SPEC_LABELS="$labels" spec_incomplete_reasons "$body" "${templates[@]+"${templates[@]}"}")" \
+		|| { rm -rf "$tdir"; return 1; }
 	rm -rf "$tdir"
 	if [[ -z "$reasons" ]]; then
 		UNBLOCK_DEST="Ready"
@@ -433,8 +434,9 @@ _ru_reblock() {
 # fallback read does not, so a missing key is read from the issue. Returns 1 when unreadable.
 _ru_item_labels() {
 	if jq -e 'has("labels")' <<<"$1" >/dev/null 2>&1; then
+		# jq's own status is the answer: a failed parse is "unreadable", never "no labels".
 		jq -r '(.labels // [])[] | if type == "object" then .name else . end' <<<"$1" 2>/dev/null
-		return 0
+		return
 	fi
 	gh issue view "$3" --repo "$2" --json labels --jq '.labels[].name' 2>/dev/null
 }

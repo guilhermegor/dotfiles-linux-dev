@@ -1001,6 +1001,11 @@ run_boards() {
     [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
 }
 
+@test "item labels: a malformed labels value is unreadable, never an empty label set (#931)" {
+    run bash -c "source '$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/roadmap_unblock.sh'; _ru_item_labels '{\"labels\": 5}' o/r 1"
+    [ "$status" -ne 0 ]
+}
+
 @test "unblock: a comma inside a reason is kept as written (#931)" {
     mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
     printf '**Why**\n\n## What / Why\n' >"$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"

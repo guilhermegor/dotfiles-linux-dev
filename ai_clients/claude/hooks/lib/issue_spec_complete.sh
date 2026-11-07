@@ -68,7 +68,7 @@ spec_section_filled() {
 	local section
 	section="$(_spec_section "$1" "$2")" || return 1
 	# A fenced surface block is its own requirement (spec_surface_nonempty), never section text.
-	# Inline `<!-- … -->` goes first (non-greedy, so prose between two comments survives), then
+	# Inline `<!-- … -->` goes first (each comment stops at its first `-->`, so prose between two survives), then
 	# multi-line comments. A heading line is structure, not text, unless inside a code fence.
 	sed -E 's/<!--([^-]|-[^-])*-->//g' <<<"$section" \
 		| awk '/^```surface[ \t]*$/ { s=1; next } s { if ($0 ~ /^```/) s=0; next }
@@ -144,7 +144,7 @@ spec_incomplete_reasons() {
 	local -a templates=("$@") best=() reasons=()
 	local best_n=-1 template fallback="" line header stripped
 	if ((${#templates[@]} == 0)); then
-		fallback="$(mktemp)"
+		fallback="$(mktemp)" || { echo "no temp file for the fallback template" >&2; return 1; }
 		printf '## What / Why\n' >"$fallback"
 		templates=("$fallback")
 	fi
