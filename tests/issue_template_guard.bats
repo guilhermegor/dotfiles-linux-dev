@@ -367,6 +367,29 @@ EOF"
     grep -q '^evaluate_template()' "$hooks/lib/issue_spec_complete.sh"
 }
 
+@test "section lookup: whole heading only, and a ### subsection stays inside its ## section" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
+    run bash -c "source '$lib'; _spec_section \"\$(printf '## Out of scope\n\nx\n')\" Scope"
+    [ "$status" -ne 0 ]
+    run bash -c "source '$lib'; spec_section_filled \"\$(printf '## Scope\n\n### Part\n\ntext\n\n## Next\n')\" Scope"
+    [ "$status" -eq 0 ]
+    run bash -c "source '$lib'; spec_section_filled \"\$(printf '## Scope\n\n\`\`\`\n## fake\n\`\`\`\n')\" Scope"
+    [ "$status" -eq 0 ]
+}
+
+@test "a missing issue_spec_complete.sh blocks an issue write instead of approving it" {
+    local copy
+    copy="$(mktemp -d)"
+    cp -r "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/." "$copy/"
+    rm "$copy/lib/issue_spec_complete.sh"
+    run bash -c "payload 'gh issue create --title x --body \"$NO_DOD_BODY\"' | '$copy/issue_template_guard.sh'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"issue_spec_complete.sh is missing"* ]]
+    run bash -c "payload 'ls -la' | '$copy/issue_template_guard.sh'"
+    [ "$status" -eq 0 ]
+    rm -rf "$copy"
+}
+
 @test "spec_incomplete_reasons: a complete spec prints nothing; empty section and no surface say why" {
     local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
     run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## What / Why\n\nx\n\n\`\`\`surface\na.sh\n\`\`\`\n')\""

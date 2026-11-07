@@ -32,23 +32,24 @@ strip_frontmatter_and_comments() {
 	' "$1"
 }
 
-# _spec_section TEXT HEADER_SUBSTR
-# Prints the lines of the first `##`/`###` section whose header line contains HEADER_SUBSTR
-# (case-insensitive), up to the next such header or EOF. Prints nothing, returns 1 when absent.
+# _spec_section TEXT HEADER
+# Prints the lines of the first `##`/`###` section whose heading TEXT equals HEADER
+# (case-insensitive, whole heading: `Scope` does not match `Out of scope`), up to the next heading
+# of the same or a higher level (a `###` subsection stays inside its `##` section) or EOF. Headings
+# inside fenced code blocks are not headings. Prints nothing, returns 1 when absent.
 _spec_section() {
-	local text="$1" header_substr="$2" start_line next_line
-	# Heading lines only: prose like "Scope follows" must not stand in for a `## Scope` heading.
-	start_line="$(grep -n -E '^#{2,3}[[:space:]]' <<<"$text" | grep -i -F -- "$header_substr" \
-		| head -n1 | cut -d: -f1)"
-	[[ -n "$start_line" ]] || return 1
-	next_line="$(tail -n "+$((start_line + 1))" <<<"$text" | grep -n -E '^#{2,3}[[:space:]]' | head -n1 | cut -d: -f1)"
-	if [[ "$next_line" == 1 ]]; then
-		return 0   # adjacent heading: the section is empty, not the next heading's line
-	elif [[ -n "$next_line" ]]; then
-		sed -n "$((start_line + 1)),$((start_line + next_line - 1))p" <<<"$text"
-	else
-		sed -n "$((start_line + 1)),\$p" <<<"$text"
-	fi
+	local text="$1" header="${2,,}"
+	awk -v want="$header" '
+		/^```/ { fence = !fence }
+		!fence && /^###?[ \t]/ {
+			level = match($0, /[^#]/) - 1
+			h = tolower($0); sub(/^#+[ \t]*/, "", h); sub(/[ \t]+$/, "", h)
+			if (found && level <= flevel) exit
+			if (!found && h == want) { found = 1; flevel = level; next }
+		}
+		found { print }
+		END { exit !found }
+	' <<<"$text"
 }
 
 # True if $1 (a multi-line block of text) has a `##`/`###` header matching $2 (case-insensitive
@@ -67,7 +68,7 @@ spec_section_filled() {
 	# A fenced surface block is its own requirement (spec_surface_nonempty), never section text.
 	# Inline `<!-- … -->` goes first so prose beside it survives; multi-line comments after.
 	sed -E 's/<!--.*-->//g' <<<"$section" \
-		| awk '/^```surface/ { s=1; next } s { if ($0 ~ /^```/) s=0; next }
+		| awk '/^```surface[ \t]*$/ { s=1; next } s { if ($0 ~ /^```/) s=0; next }
 			/<!--/ { c=1 } c { if ($0 ~ /-->/) c=0; next } { print }' \
 		| grep -q '[^[:space:]]'
 }
@@ -145,7 +146,7 @@ spec_incomplete_reasons() {
 	fi
 	for template in "${templates[@]}"; do
 		evaluate_template "$template" "$body" "${SPEC_LABELS:-}"
-		reasons=("${missing[@]}")
+		reasons=("${missing[@]+"${missing[@]}"}")
 		stripped="$(strip_frontmatter_and_comments "$template")"
 		while IFS= read -r line; do
 			header="$(sed -E 's/^#+[[:space:]]*//; s/[[:space:]]+$//' <<<"$line")"
@@ -153,7 +154,8 @@ spec_incomplete_reasons() {
 			# evaluate_template matched the header text anywhere; the heading line itself is
 			# required here, and its section must hold text.
 			if ! _spec_section "$body" "$header" >/dev/null; then
-				[[ " ${reasons[*]} " == *" $header "* ]] || reasons+=("$header")
+				printf '%s\n' "${reasons[@]+"${reasons[@]}"}" | grep -qxF -- "$header" \
+					|| reasons+=("$header")
 			elif ! spec_section_filled "$body" "$header"; then
 				reasons+=("empty $header")
 			fi
@@ -161,7 +163,7 @@ spec_incomplete_reasons() {
 		spec_surface_nonempty "$body" || reasons+=("no surface block")
 		if ((best_n == -1 || ${#reasons[@]} < best_n)); then
 			best_n=${#reasons[@]}
-			best=("${reasons[@]}")
+			best=("${reasons[@]+"${reasons[@]}"}")
 		fi
 	done
 	[[ -z "$fallback" ]] || rm -f "$fallback"

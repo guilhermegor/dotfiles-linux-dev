@@ -174,32 +174,53 @@ _ru_has_comment() {
 		| grep -qxF "$3"
 }
 
+# _ru_origin_names_repo ROOT REPO
+# True when checkout ROOT's `origin` is github.com's REPO (https or ssh, `.git` optional), compared
+# as lowercase literals: GitHub names are case-insensitive and a `.` in one is not a wildcard.
+_ru_origin_names_repo() {
+	local url
+	url="$(git -C "$1" remote get-url origin 2>/dev/null)" || return 1
+	url="${url#*github.com[:/]}"
+	url="${url%/}"
+	url="${url%.git}"
+	[[ -n "$url" && "${url,,}" == "${2,,}" ]]
+}
+
 # _ru_unblock_dest REPO ITEM_JSON
 # Decides where an unblocked card goes (dotfiles-linux-dev#931): Ready when its body is a complete
-# spec (issue_spec_complete.sh, the check issue_template_guard.sh applies at creation), Backlog
-# otherwise. Sets UNBLOCK_DEST and UNBLOCK_WHY (what is missing, "" when complete). Returns 1 when
-# the body was not read at all (no string `.content.body`): UNKNOWN, never "complete".
+# spec (issue_spec_complete.sh, shared with issue_template_guard.sh), Backlog otherwise. Sets
+# UNBLOCK_DEST, UNBLOCK_WHY (what is missing, "" when complete) and UNBLOCK_LABELS. Returns 1 for
+# UNKNOWN, never "complete": no `body` key at all (a present-but-null body is readable and empty,
+# so it routes to Backlog), unreadable labels, or no verified template source.
 #
-# Templates come from the repo's local checkout (`$ROADMAP_CHECKOUT_ROOT/<name>`, default
-# ~/github/<name>), which must exist AND have an `origin` naming REPO: a missing or same-named
-# foreign checkout is UNKNOWN (return 1), never a guess. The `What / Why` skeleton is the fallback
-# only when the VERIFIED checkout ships no template. No extra API call. The issue's labels
-# (minus `state:blocked`, which this unblock removes) feed the template's `if-label` rules.
+# Templates are read at an EXPLICIT ref, `origin/HEAD` of the local checkout
+# (`$ROADMAP_CHECKOUT_ROOT/<name>`, default ~/github/<name>), never its working tree, which may sit
+# on a stale feature branch (same implicit-HEAD class as #229/#410). The checkout must exist, its
+# origin must name REPO, and `origin/HEAD` must resolve; its freshness is that of the last fetch
+# (no network call here). The `What / Why` skeleton is the fallback only when that ref ships no
+# template. Labels (minus `state:blocked`, which the unblock removes) feed `if-label` rules.
 _ru_unblock_dest() {
-	local repo="$1" item="$2" body reasons root labels
+	local repo="$1" item="$2" body reasons root labels number tdir file
 	local -a templates=()
-	UNBLOCK_DEST="" UNBLOCK_WHY=""
-	jq -e '.content.body | type == "string"' <<<"$item" >/dev/null 2>&1 || return 1
-	body="$(jq -r '.content.body' <<<"$item")"
+	UNBLOCK_DEST="" UNBLOCK_WHY="" UNBLOCK_LABELS=""
+	jq -e '.content | has("body")' <<<"$item" >/dev/null 2>&1 || return 1
+	body="$(jq -r '.content.body // ""' <<<"$item")"
+	number="$(jq -r '.content.number' <<<"$item")"
 	root="${ROADMAP_CHECKOUT_ROOT:-$HOME/github}/${repo##*/}"
-	[[ "$(git -C "$root" remote get-url origin 2>/dev/null)" =~ github\.com[:/]${repo}(\.git)?/?$ ]] \
-		|| return 1
-	if [[ -d "$root/.github/ISSUE_TEMPLATE" ]]; then
-		mapfile -t templates < <(find "$root/.github/ISSUE_TEMPLATE" -maxdepth 1 -iname '*.md' 2>/dev/null | sort)
-	fi
-	labels="$(jq -r '(.labels // [])[] | if type == "object" then .name else . end' <<<"$item" 2>/dev/null \
-		| grep -vxF 'state:blocked')" || true
-	reasons="$(SPEC_LABELS="$labels" spec_incomplete_reasons "$body" "${templates[@]}")"
+	_ru_origin_names_repo "$root" "$repo" || return 1
+	git -C "$root" rev-parse --verify -q origin/HEAD >/dev/null 2>&1 || return 1
+	tdir="$(mktemp -d)"
+	while IFS= read -r file; do
+		[[ "${file,,}" == *.md ]] || continue
+		git -C "$root" show "origin/HEAD:$file" >"$tdir/$(basename "$file")" 2>/dev/null \
+			|| { rm -rf "$tdir"; return 1; }
+		templates+=("$tdir/$(basename "$file")")
+	done < <(git -C "$root" ls-tree --name-only origin/HEAD .github/ISSUE_TEMPLATE/ 2>/dev/null | sort)
+	labels="$(_ru_item_labels "$item" "$repo" "$number")" || { rm -rf "$tdir"; return 1; }
+	UNBLOCK_LABELS="$labels"
+	labels="$(grep -vxF 'state:blocked' <<<"$labels" || true)"
+	reasons="$(SPEC_LABELS="$labels" spec_incomplete_reasons "$body" "${templates[@]+"${templates[@]}"}")"
+	rm -rf "$tdir"
 	if [[ -z "$reasons" ]]; then
 		UNBLOCK_DEST="Ready"
 		return 0
@@ -239,8 +260,10 @@ _ru_unblock() {
 	local -a label_args=(--remove-label "state:blocked")
 	if [[ "$dest" == "Ready" ]]; then
 		label_args=(--add-label "state:ready" "${label_args[@]}")
-	else
-		label_args+=(--remove-label "state:ready")   # an incomplete spec must not advertise readiness
+	elif grep -qxF 'state:ready' <<<"${UNBLOCK_LABELS:-}"; then
+		# An incomplete spec must not advertise readiness. Only when the label is on the issue:
+		# removing one that is absent may error and fail the whole write.
+		label_args+=(--remove-label "state:ready")
 	fi
 	gh issue edit "$number" --repo "$repo" "${label_args[@]}" >/dev/null 2>&1 || return 1
 	gh project item-edit "$project" --owner "$owner" --url "$url" \
@@ -410,7 +433,7 @@ _ru_reblock() {
 # fallback read does not, so a missing key is read from the issue. Returns 1 when unreadable.
 _ru_item_labels() {
 	if jq -e 'has("labels")' <<<"$1" >/dev/null 2>&1; then
-		jq -r '.labels[] | if type == "object" then .name else . end' <<<"$1" 2>/dev/null
+		jq -r '(.labels // [])[] | if type == "object" then .name else . end' <<<"$1" 2>/dev/null
 		return 0
 	fi
 	gh issue view "$3" --repo "$2" --json labels --jq '.labels[].name' 2>/dev/null
@@ -438,7 +461,7 @@ _ru_process_open_item() {
 	ident="$repo#$number"
 	body_line="$(_ru_body_blocked_line "$body")"
 	# A body-only `decision:` blocker would be invisible without the body: unreadable is UNKNOWN.
-	if ! jq -e '.content.body | type == "string"' <<<"$item" >/dev/null 2>&1; then
+	if ! jq -e '.content | has("body")' <<<"$item" >/dev/null 2>&1; then
 		printf 'UNKNOWN %s: could not read the issue body — left untouched\n' "$ident"
 		return 0
 	fi
@@ -471,7 +494,7 @@ _ru_process_open_item() {
 	if _ru_reblock "$owner" "$project" "$repo" "$number" "$url" "$detail"; then
 		printf '%s: %s by %s%s\n' "$verb" "$ident" "$detail" "$(_ru_kind_tag "$kind")"
 	else
-		_ru_write_failed_line re-block "$ident"
+		_ru_write_failed_line "${verb%ed}" "$ident"
 	fi
 }
 

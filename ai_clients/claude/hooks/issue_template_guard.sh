@@ -56,7 +56,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/gh_body_guard_common.sh
 source "$SCRIPT_DIR/lib/gh_body_guard_common.sh"
 # shellcheck source=lib/issue_spec_complete.sh
-source "$SCRIPT_DIR/lib/issue_spec_complete.sh"
+# A missing helper (partial deploy) must not read as "every body is compliant": without
+# evaluate_template nothing is checked. This runs on EVERY Bash call, so only a matched issue
+# write is refused (below), never unrelated commands.
+SPEC_LIB_OK=1
+source "$SCRIPT_DIR/lib/issue_spec_complete.sh" 2>/dev/null || SPEC_LIB_OK=0
 
 # Fail open if jq (used to parse the hook payload) is unavailable.
 command -v jq >/dev/null 2>&1 || exit 0
@@ -123,6 +127,11 @@ main() {
         root="$(git rev-parse --show-toplevel 2>/dev/null)"
     fi
 
+    if [[ "$SPEC_LIB_OK" != 1 ]]; then
+        echo "BLOCKED: issue_spec_complete.sh is missing next to issue_template_guard.sh, so this" >&2
+        echo "issue body cannot be verified. Re-run \`make ai_clients\` to deploy hooks/lib/ in full." >&2
+        exit 2
+    fi
     mapfile -t templates < <(find_issue_templates "$root")
     [[ ${#templates[@]} -gt 0 ]] || exit 0   # no issue template anywhere → nothing to enforce
 

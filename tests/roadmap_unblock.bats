@@ -34,7 +34,7 @@ item() {
     local repo="$1" number="$2" status="$3" blocked_by="$4" body="$5"
     jq -nc --arg repo "$repo" --argjson number "$number" --arg status "$status" \
         --arg blocked_by "$blocked_by" --arg body "$body" '
-        {status: $status, content: {type: "Issue", number: $number, repository: $repo,
+        {status: $status, labels: [], content: {type: "Issue", number: $number, repository: $repo,
          url: ("https://github.com/" + $repo + "/issues/" + ($number|tostring)), body: $body}}
         | if $blocked_by == "" then . else . + {"blocked by": $blocked_by} end
     '
@@ -46,6 +46,18 @@ make_checkout() {
     mkdir -p "$ROADMAP_CHECKOUT_ROOT/$1"
     git -C "$ROADMAP_CHECKOUT_ROOT/$1" init -q
     git -C "$ROADMAP_CHECKOUT_ROOT/$1" remote add origin "https://github.com/$2.git"
+    publish_checkout "$1"
+}
+
+# publish_checkout DIRNAME
+# Commits the checkout's working tree and points origin/HEAD at that commit, standing in for a
+# fetched default branch: the unblock reads templates at origin/HEAD, never the working tree.
+publish_checkout() {
+    local d="$ROADMAP_CHECKOUT_ROOT/$1"
+    git -C "$d" add -A
+    git -C "$d" -c user.name=t -c user.email=t@t commit -q --allow-empty -m t
+    git -C "$d" update-ref refs/remotes/origin/main HEAD
+    git -C "$d" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 }
 
 # spec_body BLOCKER_REF
@@ -640,6 +652,7 @@ run_reconcile() {
     write_item_list_graphql "$(graphql_item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_fake_gh
+    : > "$TEST_TMP/labels-3.txt"
     touch "$TEST_TMP/fail-item-list"
     run_reconcile
     [[ "$output" == *"STATUS=ok"* ]]
@@ -839,6 +852,7 @@ run_boards() {
 @test "unblock: a repo template drives the required sections" {
     mkdir -p "$TEST_TMP/co/repo/.github/ISSUE_TEMPLATE"
     printf '## What / Why\n\n## Scope\n' > "$TEST_TMP/co/repo/.github/ISSUE_TEMPLATE/t.md"
+    publish_checkout repo
     write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_fake_gh
@@ -867,8 +881,8 @@ run_boards() {
     refute_gh 'item-edit'
 }
 
-@test "unblock: Backlog destination also removes a stale state:ready label (#931)" {
-    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+@test "unblock: Backlog destination also removes a stale state:ready label, only when present (#931)" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2" | jq -c '.labels = ["state:blocked","state:ready"]')"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_fake_gh
     run_reconcile
@@ -878,6 +892,7 @@ run_boards() {
 @test "unblock: a required heading satisfied only by prose does not count (#931)" {
     mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
     printf '## What / Why\n\n## Scope\n' > "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"
+    publish_checkout repo
     write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf '## What / Why\n\nScope follows later.\n\n```surface\nfoo.sh\n```\n')")"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_fake_gh
@@ -888,6 +903,7 @@ run_boards() {
 @test "unblock: an adjacent heading leaves the section empty (#931)" {
     mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
     printf '## Scope\n\n## What / Why\n' > "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"
+    publish_checkout repo
     write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf '## Scope\n## What / Why\n\nx\n\n```surface\nfoo.sh\n```\n')")"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_fake_gh
@@ -915,6 +931,7 @@ run_boards() {
     mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
     printf '## What / Why\n<!-- issue-template-guard: require "Risk assessment" if-label risk:high -->\n' \
         > "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"
+    publish_checkout repo
     write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)" | jq -c '. + {labels: ["risk:high","state:blocked"]}')"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_fake_gh
@@ -933,7 +950,7 @@ run_boards() {
 }
 
 @test "Backlog read without a labels key (GraphQL fallback) reads them from the issue (#931)" {
-    write_items "$(item "owner/repo" 8 "Backlog" "" "")"
+    write_items "$(item "owner/repo" 8 "Backlog" "" "" | jq -c "del(.labels)")"
     write_blockers 8
     printf 'state:blocked\n' > "$TEST_TMP/labels-8.txt"
     write_fake_gh
@@ -942,12 +959,81 @@ run_boards() {
 }
 
 @test "Backlog whose labels cannot be read is UNKNOWN, no edit (#931)" {
-    write_items "$(item "owner/repo" 8 "Backlog" "" "")"
+    write_items "$(item "owner/repo" 8 "Backlog" "" "" | jq -c "del(.labels)")"
     write_blockers 8
     write_fake_gh
     run_reconcile
     [[ "$output" == *"UNKNOWN owner/repo#8: could not read labels"* ]]
     refute_gh 'item-edit'
+}
+
+@test "unblock: a template only in the working tree, not at origin/HEAD, is ignored (#931)" {
+    mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
+    printf '## What / Why\n\n## Scope\n' > "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Ready"* ]]
+}
+
+@test "unblock: a checkout with no origin/HEAD is UNKNOWN (#931)" {
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" symbolic-ref --delete refs/remotes/origin/HEAD
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "unblock: origin casing differs from the board name and still verifies (#931)" {
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" remote set-url origin https://github.com/Owner/Repo.git
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Ready"* ]]
+}
+
+@test "unblock: a null body is readable and routes to Backlog, a missing body key is UNKNOWN (#931)" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "x" | jq -c '.content.body = null')"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (What / Why, no surface block)"* ]]
+}
+
+@test "unblock: if-label rules read labels from the issue when the board read lacks them (#931)" {
+    mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
+    printf '## What / Why\n<!-- issue-template-guard: require "Risk assessment" if-label risk:high -->\n' \
+        > "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"
+    publish_checkout repo
+    printf 'risk:high\nstate:blocked\n' > "$TEST_TMP/labels-3.txt"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)" | jq -c "del(.labels)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (Risk assessment)"* ]]
+}
+
+@test "unblock: unreadable labels on the unblock path are UNKNOWN, no edit (#931)" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)" | jq -c "del(.labels)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "round trip: a Backlog card moved to Blocked by its label is reported, not edited, next sweep (#931)" {
+    write_items "$(item "owner/repo" 8 "Blocked" "state:blocked" "" | jq -c '. + {labels: ["state:blocked"]}')"
+    write_blockers 8
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"still blocked owner/repo#8: recorded blocker state:blocked"* ]]
+    refute_gh 'item-edit'
+    refute_gh 'issue edit'
 }
 
 @test "re-block: a Ready item whose only blocker is closed is left alone" {
