@@ -223,6 +223,20 @@ gate() {
     [ "$(cat "$GH_BUDGET_LATCH_FILE")" -eq 4102444800 ]
 }
 
+@test "gate reports the disagreement when rate_limit is low and GraphQL is healthy (#925 review)" {
+    GQL_REMAINING=5 GQL_PROBE=3900 run gate
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"rate_limit says 5, GraphQL says 3900"* ]]
+}
+
+@test "an invalid GH_BUDGET_SPEND_LOG_MAX falls back instead of emptying the log (#925 review)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    for m in abc 1 0; do
+        GH_BUDGET_SPEND_LOG_MAX=$m bash -c "source $HOOKS/lib/gh_budget.sh; gh_budget_log_spend 1 a; gh_budget_log_spend 1 b"
+    done
+    [ "$(wc -l <"$GH_BUDGET_SPEND_LOG")" -eq 6 ]
+}
+
 @test "gate passes when GraphQL's probe and rate_limit are both healthy" {
     GQL_REMAINING=4000 GQL_PROBE=3900 run gate
     [ "$status" -eq 0 ]

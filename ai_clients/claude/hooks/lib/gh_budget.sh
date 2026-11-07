@@ -345,6 +345,8 @@ gh_budget_graphql_read() {
 		if [ "$gql" -lt "$rest" ]; then GH_BUDGET_GQL_REMAINING="$gql"; else GH_BUDGET_GQL_REMAINING="$rest"; fi
 		if [ "$gql" -lt "$floor" ] && [ "$rest" -ge "$floor" ]; then
 			GH_BUDGET_GQL_NOTE="rate_limit says $rest, GraphQL says $gql - trusting GraphQL"
+		elif [ "$rest" -lt "$floor" ] && [ "$gql" -ge "$floor" ]; then
+			GH_BUDGET_GQL_NOTE="rate_limit says $rest, GraphQL says $gql - trusting the lower"
 		fi
 	else
 		GH_BUDGET_GQL_REMAINING="${gql:-$rest}"
@@ -377,6 +379,7 @@ gh_budget_log_spend() {
 	local points="${1:-0}" caller="${2:-${GH_BUDGET_CALLER:-$(gh_budget_default_caller)}}"
 	local log max="${GH_BUDGET_SPEND_LOG_MAX:-2000}"
 	[[ "$points" =~ ^[0-9]+$ ]] || points=0
+	[[ "$max" =~ ^[0-9]+$ ]] && [ "$max" -ge 2 ] || max=2000
 	log="$(gh_budget_spend_log_path)"
 	{
 		flock -w 2 9 || return 0
@@ -384,7 +387,7 @@ gh_budget_log_spend() {
 		if [ "$(wc -l <"$log" || echo 0)" -gt "$max" ]; then
 			tail -n "$((max / 2))" "$log" >"$log.tmp.$$" && mv -f "$log.tmp.$$" "$log"
 		fi
-	} 9>>"$log.lock" 2>/dev/null
+	} 2>/dev/null 9>>"$log.lock"
 	return 0
 }
 
