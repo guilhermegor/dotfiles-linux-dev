@@ -605,7 +605,7 @@ def graphql_shell_built(rest, mrest):
     if any("{" in key or (val.startswith("@") and "{" in val) for key, _, val in pairs):
         return True  # `-F{a=1,query=@f}`: bash expands it into fields the parser never saw
     reads_file = input_file or any(val.startswith("@") for _, _, val in pairs)
-    if reads_file and any("$(" in t or "`" in t for t in rest):
+    if reads_file and any(m in t for t in rest for m in ("$(", "`", "<(", ">(")):
         return True
     keys_and_queries = [f if f.partition("=")[0] == "query" else f.partition("=")[0]
                         for _, f in fields]
@@ -636,7 +636,7 @@ DIR_CHANGERS = {"cd", "pushd", "popd"}
 REDIRECT = re.compile(r"[0-9&]*>[>|]?(.*)$")
 
 
-GH_NO_FILE_WRITE = {"api", "issue", "auth", "search", "status"}
+GH_NO_FILE_WRITE = {"api", "auth", "search", "status"}  # not issue: `issue develop --checkout`
 HARMLESS_BEFORE_GH = {"export", "echo", "printf", "set", "true", "false", ":", "unset", "declare",
                       "local", "readonly", "test", "[", "[["}
 
@@ -667,8 +667,9 @@ def chain_moves_files(segments):
                 opaque_at.append(n)
         else:
             command = next((w for w in words if not re.match(r"^\w+=", w)), None)
-            if command is not None and command not in HARMLESS_BEFORE_GH:
-                opaque_at.append(n)
+            substitutes = any(m in t for t in argv for m in ("$(", "`", "<(", ">("))
+            if substitutes or (command is not None and command not in HARMLESS_BEFORE_GH):
+                opaque_at.append(n)  # `X=$(cp evil q)` runs a writer inside a "harmless" word
         for i, tok in enumerate(argv):
             m = REDIRECT.search(tok)
             if m:
@@ -860,7 +861,7 @@ def main():
             return 0
         argv = matching_argv(segments, noun)
     except ValueError:
-        if noun == "api-issue" and re.search(r"\bapi\b[\s\S]*(issues|graphql)", command, re.I):
+        if noun == "api-issue" and re.search(r"\bapi\b[\s\S]*(issue|graphql|%[0-9a-f]{2})", command, re.I):
             # Fail CLOSED for `gh api` (#714): text that looks like an issues write but
             # cannot be tokenized is reported, never silently allowed.
             print(json.dumps({"matched": True, "unparseable": True}))

@@ -909,6 +909,29 @@ guard_cmd() {
     [ "$status" -eq 2 ]
 }
 
+@test "GraphQL: a substitution in an assignment may rewrite the file (#906 ladder 10)" {
+    echo '{viewer{login}}' > q.graphql
+    run guard_cmd 'X=$(cp /tmp/evil q.graphql); gh api graphql -F query=@q.graphql'
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: gh issue develop may rewrite the file (#906 ladder 10)" {
+    echo '{viewer{login}}' > q.graphql
+    run guard_cmd "gh issue develop 5 --checkout && gh api graphql -F query=@q.graphql"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: process substitution beside a file read is blind (#906 ladder 10)" {
+    echo '{viewer{login}}' > q.graphql
+    run guard_cmd 'gh api graphql -f x=<(cp\ /tmp/evil\ q.graphql) -F query=@q.graphql'
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: two issue writes in one chain are judged blind (#906 ladder 10)" {
+    run guard_cmd "gh api -X PATCH repos/o/r/issues/1 -f title=a && gh api -X PATCH repos/o/r/issues/2 -f title=b"
+    [ "$status" -eq 2 ]
+}
+
 @test "GraphQL: an untokenizable \$'...' query fails closed (#906 ladder 8)" {
     run guard_cmd "gh api graphql -f query=\$'mutation{createIssue(input:{body:\"it\\'s\"}){a}}'"
     [ "$status" -eq 2 ]
