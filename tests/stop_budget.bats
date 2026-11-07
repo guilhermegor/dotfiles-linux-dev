@@ -397,3 +397,37 @@ STUB
     [ "${p%/*}" = /tmp ]
     [ "$before" = "$after" ]
 }
+
+@test "spend log: the planners' python log_spend lands in the same summary (#922)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    run python3 -c "import sys; sys.path.insert(0, '$HOOKS/lib'); import gh_latch; gh_latch.log_spend(0, 'dispatch_plan.py'); gh_latch.log_spend(0, 'dispatch_plan.py')"
+    [ "$status" -eq 0 ]
+    run bash "$HOOKS/lib/gh_spend_summary.sh"
+    [ "${lines[0]}" = "dispatch_plan.py: 0 points, 2 calls" ]
+}
+
+@test "spend log: python writer falls back to 2000 on a bad cap and trims atomically (#922)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv" GH_BUDGET_SPEND_LOG_MAX=abc GH_BUDGET_CALLER=sub
+    seq 1 2100 | sed 's/.*/1\tx\t0/' >"$GH_BUDGET_SPEND_LOG"
+    run python3 -c "import sys; sys.path.insert(0, '$HOOKS/lib'); import gh_latch; gh_latch.log_spend(0)"
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <"$GH_BUDGET_SPEND_LOG")" -eq 1000 ]
+    tail -1 "$GH_BUDGET_SPEND_LOG" | grep -q $'\tsub\t0'
+}
+
+@test "spend log: python writer falls back to the script name when no caller is set (#922)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    unset GH_BUDGET_CALLER
+    printf '%s\n' 'import sys; sys.path.insert(0, sys.argv[1]); import gh_latch; gh_latch.log_spend(0)' >"$TEST_TMP/myplanner.py"
+    run python3 "$TEST_TMP/myplanner.py" "$HOOKS/lib"
+    [ "$status" -eq 0 ]
+    grep -q $'\tmyplanner.py\t0' "$GH_BUDGET_SPEND_LOG"
+}
+
+@test "spend log: python writer survives an empty sys.argv (#922)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    unset GH_BUDGET_CALLER
+    run python3 -c "import sys; sys.path.insert(0, '$HOOKS/lib'); import gh_latch; sys.argv = []; gh_latch.log_spend(0)"
+    [ "$status" -eq 0 ]
+    grep -q $'\tunknown\t0' "$GH_BUDGET_SPEND_LOG"
+}
