@@ -423,3 +423,11 @@ STUB
     [ "$status" -eq 0 ]
     grep -q $'\tmyplanner.py\t0' "$GH_BUDGET_SPEND_LOG"
 }
+
+@test "spend log: python writer survives an empty sys.argv (#922)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    unset GH_BUDGET_CALLER
+    run python3 -c "import sys; sys.path.insert(0, '$HOOKS/lib'); import gh_latch; sys.argv = []; gh_latch.log_spend(0)"
+    [ "$status" -eq 0 ]
+    grep -q $'\tunknown\t0' "$GH_BUDGET_SPEND_LOG"
+}

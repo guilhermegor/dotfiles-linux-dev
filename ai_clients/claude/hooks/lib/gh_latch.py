@@ -56,7 +56,7 @@ def log_spend(points: int = 0, caller: str = "") -> None:
 		if str(base) == "/tmp":  # noqa: S108
 			return
 		path = base / "dotfiles-dev-graphql-spend.tsv"
-	name = (caller or os.environ.get("GH_BUDGET_CALLER") or Path(sys.argv[0]).name).replace("\t", " ").replace("\n", " ")
+	name = (caller or os.environ.get("GH_BUDGET_CALLER") or Path((sys.argv or [""])[0]).name or "unknown").replace("\t", " ").replace("\n", " ")
 	try:
 		import fcntl
 
