@@ -220,7 +220,9 @@ gate() {
     GQL_REMAINING=5 GQL_PROBE=7 run gate
     [ "$status" -eq 1 ]
     [[ "$output" == *"BUDGET-LOW (resets 00:00Z)"* ]]
-    [ "$(cat "$GH_BUDGET_LATCH_FILE")" -eq 4102531200 ] # resetAt, not rate_limit's 4102444800
+    # resetAt (4102531200), not rate_limit's 4102444800; latch_write re-reads the clock, so allow 2s of drift
+    [ "$(cat "$GH_BUDGET_LATCH_FILE")" -ge 4102531200 ]
+    [ "$(cat "$GH_BUDGET_LATCH_FILE")" -le 4102531202 ]
 }
 
 @test "gate reports the disagreement when rate_limit is low and GraphQL is healthy (#925 review)" {
