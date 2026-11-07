@@ -2326,10 +2326,25 @@ registry entry gets a <code>note:</code> line. Tests: <code>tests/kanban_reconci
 re-plan from scratch each time and never consulted the #445 latch; a long <code>/dev-loop</code> session
 drained the shared GraphQL bucket in minutes. <code>hooks/lib/stop_budget.sh</code> is the one fix:</p>
 <ul>
-<li><code>stop_budget_gate</code>: while the latch is active, or <code>gh api rate_limit</code> (free) shows GraphQL under
+<li><code>stop_budget_gate</code>: while the latch is active, or the <strong>lower</strong> of GraphQL's own
+  <code>{rateLimit{remaining resetAt}}</code> and <code>gh api rate_limit</code> shows GraphQL under
   <code>STOP_GRAPHQL_FLOOR</code> (default 100), it writes the latch until the reset, prints
   <code>BUDGET-LOW (resets HH:MMZ)</code> once per window, and the guard <strong>passes</strong> (exit 0). It never blocks
-  a turn on a board it cannot read, and never spends the remainder.</li>
+  a turn on a board it cannot read, and never spends the remainder. (#918:) <code>rate_limit</code> was
+  measured saying 2842-3455 while GraphQL said 0 or refused, so it can only confirm LOW. A
+  <code>RATE_LIMIT</code> refusal of the probe counts as 0, not as an unreadable read; a refusal carries no
+  <code>resetAt</code>, so the latch is a 120 s guess (<code>GH_BUDGET_UNKNOWN_RESET_TTL</code>) and the message says
+  <code>reset unknown, rechecking after HH:MMZ</code> rather than printing <code>rate_limit</code>'s reset, which
+  printed 20:56Z for a real 21:25Z. When the sources disagree about being under the floor the
+  message says so. <code>gh_budget_poll_allowed</code> shares the same reader (<code>gh_budget_graphql_read</code>).
+  A passing probe still proves nothing about the call about to run (#533): it only ever lowers.</li>
+<li>GraphQL spend log (#918): <code>gh_budget_log_spend POINTS [CALLER]</code> appends <code>epoch caller points</code> to
+  one per-account TSV (<code>GH_BUDGET_SPEND_LOG</code>, capped at <code>GH_BUDGET_SPEND_LOG_MAX</code> lines);
+  <code>hooks/lib/gh_spend_summary.sh [WINDOW_S] [TOP_N]</code> prints the top callers. Only
+  <code>gh_budget_with_backoff</code> calls (the thread gate) log today, with <code>rateLimit{cost}</code> when the
+  response carries it, else 0 points and one call. The CLI does not expose a call's cost, so
+  <code>gh pr list</code>-style call sites stay unlogged until they ask for <code>rateLimit{cost}</code>. Set
+  <code>GH_BUDGET_CALLER</code> to attribute a subagent.</li>
 <li><code>stop_plan_cache_*</code>: the dispatch planner's result is cached per repo in
   <code>&lt;git-common-dir&gt;/stop-plan-cache/</code> (shared by both dispatch guards) for <code>STOP_PLAN_CACHE_TTL</code>
   seconds (default 180). A push, <code>gh pr create|merge</code> or <code>Agent</code> dispatch appearing in the
