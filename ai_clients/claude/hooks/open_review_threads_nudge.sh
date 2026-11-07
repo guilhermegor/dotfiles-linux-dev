@@ -520,14 +520,15 @@ _scan_cache_path() {
 	printf '%s/%s-%s_%s\n' "$dir" "$session_id" "$owner" "$name"
 }
 
-# _recheck_cached_pr OWNER NAME TRANSCRIPT CACHE_FILE
+# _recheck_cached_pr OWNER NAME TRANSCRIPT CACHE_FILE SCAN_TS
 # dotfiles-linux-dev#920: a cache hit about to nudge re-runs the gate for that ONE PR, because a PR
 # still open can have had its threads answered inside the TTL (layouts-cvm#66: the stale verdict
-# was replayed on three more Stops). The fresh verdict replaces the cached one; a non-blocking
-# result clears REPORT_NUMBER and rewrites the entry. An unreadable re-check keeps the cached
-# verdict (existing fail-open behaviour). Bounded to 0-1 gate calls per Stop; TTL untouched (#423).
+# was replayed on three more Stops). Returns 0 when the verdict stands (blocking, refreshed detail
+# kept under the original scan time; an unreadable re-check keeps the cached verdict, the existing
+# fail-open behaviour). Returns 1 when the PR no longer blocks: the entry is dropped and the
+# caller does a fresh scan. One gate call per Stop at most; TTL untouched (#423).
 _recheck_cached_pr() {
-	local owner="$1" name="$2" transcript="$3" cache="$4"
+	local owner="$1" name="$2" transcript="$3" cache="$4" scan_ts="$5"
 	local old_status="$GATE_STATUS" old_detail="$GATE_DETAIL"
 
 	gate_pr_thread_state "$owner" "$name" "$REPORT_NUMBER" "$ROSTER_FILE"
@@ -541,20 +542,21 @@ _recheck_cached_pr() {
 
 	case "$GATE_STATUS" in
 	running | problems) ;;
-	delegated)
-		# Delegation is liveness, never cached (#516): drop the entry so the next Stop re-derives it.
-		rm -f "$cache"
-		REPORT_NUMBER=""
-		return 0
-		;;
 	*)
+		# Not blocking any more (clean, unreviewed, pending_indefinite, or delegated -- liveness is
+		# never cached, #516). Caching "clean" here would hide every PR the original scan never
+		# reached, so drop the entry and let the caller rescan.
+		rm -f "$cache"
 		REPORT_NUMBER=""
 		GATE_STATUS="clean"
 		GATE_DETAIL=""
+		return 1
 		;;
 	esac
+	# Keep the ORIGINAL scan time: re-stamping on every blocking Stop would defer the next
+	# repo-wide scan indefinitely.
 	jq -nc --arg n "$REPORT_NUMBER" --arg s "$GATE_STATUS" --arg d "$GATE_DETAIL" \
-		--argjson ts "$(date +%s)" \
+		--argjson ts "$scan_ts" \
 		'{ts: $ts, number: (if ($n | length) > 0 then $n else null end), status: $s, detail: $d}' \
 		>"$cache" 2>/dev/null || true
 }
@@ -590,11 +592,14 @@ _repo_wide_scan() {
 					REPORT_NUMBER=""
 					GATE_STATUS="clean"
 					GATE_DETAIL=""
-				else
-					_recheck_cached_pr "$owner" "$name" "$transcript" "$cache"
+					return 0
 				fi
+				_recheck_cached_pr "$owner" "$name" "$transcript" "$cache" "$ts" && return 0
+				# Returned 1: the flagged PR no longer blocks, and the scan that cached it stopped
+				# AT it, so the PRs after it were never read. Fall through to a fresh scan.
+			else
+				return 0
 			fi
-			return 0
 		fi
 	fi
 
