@@ -405,3 +405,12 @@ STUB
     run bash "$HOOKS/lib/gh_spend_summary.sh"
     [ "${lines[0]}" = "dispatch_plan.py: 0 points, 2 calls" ]
 }
+
+@test "spend log: python writer falls back to 2000 on a bad cap and trims atomically (#922)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv" GH_BUDGET_SPEND_LOG_MAX=abc GH_BUDGET_CALLER=sub
+    seq 1 2100 | sed 's/.*/1\tx\t0/' >"$GH_BUDGET_SPEND_LOG"
+    run python3 -c "import sys; sys.path.insert(0, '$HOOKS/lib'); import gh_latch; gh_latch.log_spend(0)"
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <"$GH_BUDGET_SPEND_LOG")" -eq 1000 ]
+    tail -1 "$GH_BUDGET_SPEND_LOG" | grep -q $'\tsub\t0'
+}

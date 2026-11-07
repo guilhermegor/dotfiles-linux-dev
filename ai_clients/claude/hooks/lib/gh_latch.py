@@ -58,13 +58,26 @@ def log_spend(points: int = 0, caller: str = "") -> None:
 		import fcntl
 
 		with open(f"{path}.lock", "a") as lock:
-			fcntl.flock(lock, fcntl.LOCK_EX)
+			deadline = time.monotonic() + 2  # bounded like the shell side's `flock -w 2`
+			while True:
+				try:
+					fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+					break
+				except BlockingIOError:
+					if time.monotonic() >= deadline:
+						return
+					time.sleep(0.05)
 			with open(path, "a") as handle:
 				handle.write(f"{int(time.time())}\t{name}\t{max(points, 0)}\n")
-			cap = int(os.environ.get("GH_BUDGET_SPEND_LOG_MAX", "2000"))
+			try:
+				cap = int(os.environ.get("GH_BUDGET_SPEND_LOG_MAX", "2000"))
+			except ValueError:
+				cap = 2000
+			if cap < 2:
+				cap = 2000
 			lines = path.read_text().splitlines(keepends=True)
-			if cap >= 2 and len(lines) > cap:
-				path.write_text("".join(lines[-(cap // 2):]))
+			if len(lines) > cap:
+				_replace_atomically(path, "".join(lines[-(cap // 2):]))
 	except (OSError, ValueError):
 		pass
 

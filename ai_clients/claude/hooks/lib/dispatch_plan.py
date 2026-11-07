@@ -414,10 +414,14 @@ def open_prs(slug: str) -> list[dict]:
 	request; a failing page raises and discards the pages before it, which ``build_plan``
 	turns into the by-name UNREADABLE exclusion rather than a partial list.
 	"""
-	log_spend(0, "dispatch_plan.py")  # one GraphQL read (paged); cost unexposed, so 0 points (#922)
+
+	def logged_run(cmd: list[str], timeout: float = GH_TIMEOUT) -> str:
+		log_spend(0)  # each page is one GraphQL request, logged before it can fail; cost unexposed (#922)
+		return _run(cmd, timeout)
+
 	return [
 		{**node, "closingIssuesReferences": node["closingIssuesReferences"]["nodes"]}
-		for node in read_open_prs(PR_SELECTION, _run, OPEN_PR_LIST_CAP, slug)
+		for node in read_open_prs(PR_SELECTION, logged_run, OPEN_PR_LIST_CAP, slug)
 	]
 
 
