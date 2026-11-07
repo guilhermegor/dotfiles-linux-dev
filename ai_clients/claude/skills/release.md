@@ -82,6 +82,28 @@ Scan `git log <last-tag>..HEAD` subjects and bodies. Take the **highest** signal
 deliberately when the API is stable, then switch to full major/minor/patch. Apply the table; do not
 leave this to recall.
 
+### The `1.0.0` cut — steps the bump table does not produce
+
+The table never yields `1.0.0`; it is a deliberate decision, and the first cut
+(layouts-cvm#95) hit steps nothing named. Each is checkable; drop one that proves repo-specific.
+
+- **Keep the release issue open until the install is verified.** The closer
+  (`close-linked-issues.yml` → `bin/close_linked_issues.sh`, BlueprintX-derived) reads the
+  **branch name** (`<type>/<N>-…` closes `#N`) as well as `Closes` keywords; `Refs #N` in the
+  body does not close, but a `chore/95-…` branch does. So the prep PR's branch must **not** carry
+  the release issue's number (name it for the release, e.g. `chore/release-1.0.0`), and the issue
+  is closed by hand after step 6's install-verify. Check the repo's closer before relying on this.
+- **API guarantee and breaking notes go in the GitHub release body.** `generate_release_notes:
+  true` writes only the PR list, and a template rule keeps the guarantee out of `CHANGELOG.md`.
+  After the publish, append them: `--notes-file` replaces the whole body, so fetch it first
+  (`gh release view <tag> --json body -q .body`), add the text, then `gh release edit <tag> --notes-file …`.
+- **Review each sentence of the guarantee against the code** as a claim: a private-path
+  exception named as stable, a frozen signature that blocks keyword-only additions, and
+  unversioned names read as "the latest" were all real over-promises.
+- **Published docs lag the repo.** `mike` deploys only on a release. After the deploy, compare
+  the published assets with the repo and look at rendered pages in both colour schemes; a repo-side
+  guard comparing files that already match cannot see a stale site.
+
 ## 4. Detect the ecosystem, and get the version floor from its arm
 
 **Detect — never assume.** Check the repo for, in order:
@@ -148,8 +170,11 @@ Hand off to **`s:release-py`**: Test PyPI → install-verify → PyPI → instal
 ### 6b. Workflow dispatch (tag-driven, ecosystem-agnostic)
 
 ```bash
-gh workflow run <release-workflow>.yml -f version=<next>
+cd <absolute-repo-path> && gh workflow run <release-workflow>.yml --ref <default-branch> -f version=<next>
 ```
+
+`--ref <default-branch>` skips the default-branch lookup, which fails under a GraphQL limit.
+Resolve the name over REST: `gh api repos/{owner}/{repo} --jq .default_branch`, not `gh repo view`.
 
 Then verify — **all three, none is implied by another**:
 
