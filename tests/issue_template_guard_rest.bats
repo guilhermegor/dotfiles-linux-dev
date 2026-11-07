@@ -893,6 +893,22 @@ guard_cmd() {
     [ "$status" -eq 2 ]
 }
 
+@test "GraphQL: a REST issue write before a GraphQL write is blind (#906 ladder 9)" {
+    run guard_cmd "gh api -X PATCH repos/o/r/issues/1 -f title=x && gh api graphql -f query='mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"nope\"}){a}}'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a quoted '>' value does not hide an expansion (#906 ladder 9)" {
+    run guard_cmd "X='-Fquery=mutation{createIssue(input:{body:\"nope\"}){a}}'; gh api graphql -t '>' \"\$X\""
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a gh pr checkout may rewrite the file read (#906 ladder 9)" {
+    echo '{viewer{login}}' > q.graphql
+    run guard_cmd "gh pr checkout 5 && gh api graphql -F query=@q.graphql"
+    [ "$status" -eq 2 ]
+}
+
 @test "GraphQL: an untokenizable \$'...' query fails closed (#906 ladder 8)" {
     run guard_cmd "gh api graphql -f query=\$'mutation{createIssue(input:{body:\"it\\'s\"}){a}}'"
     [ "$status" -eq 2 ]

@@ -174,7 +174,7 @@ def gh_sub(argv, idx):
 # Stand-ins for a `$`/backtick the shell expands: inside double quotes (one word, but the shell
 # writes its text) and unquoted (the shell also word-splits it into extra arguments). Private-use
 # code points are ordinary word characters to shlex, so the marked text splits into the same words.
-SHELL_QUOTED, SHELL_SPLIT = "\ue000", "\ue001"
+SHELL_QUOTED, SHELL_SPLIT, QUOTED_GT = "\ue000", "\ue001", "\ue002"
 
 
 def mark_expansions(segment):
@@ -189,6 +189,7 @@ def mark_expansions(segment):
         c = segment[i]
         if quote == "'":
             quote = None if c == "'" else quote
+            c = QUOTED_GT if c == ">" else c  # a quoted `>` is text, never a redirect
         elif c == "\\" and i + 1 < len(segment):
             out.append(segment[i:i + 2])
             i += 2
@@ -199,6 +200,8 @@ def mark_expansions(segment):
             quote = "'"
         elif c in "$`":
             c = SHELL_QUOTED if quote else SHELL_SPLIT
+        elif c == ">" and quote:
+            c = QUOTED_GT
         out.append(c)
         i += 1
     return "".join(out)
@@ -561,7 +564,10 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False),
 
 
 def without_redirects(words):
-    """Drop `> out` and `2>&1`: bash consumes them, so gh never sees them as arguments."""
+    """Drop `> out` and `2>&1`: bash consumes them, so gh never sees them as arguments.
+
+    Works on marked words, where a quoted `>` is QUOTED_GT and so never matches.
+    """
     kept, skip = [], False
     for word in words:
         m = None if skip else REDIRECT.match(word)
@@ -630,6 +636,7 @@ DIR_CHANGERS = {"cd", "pushd", "popd"}
 REDIRECT = re.compile(r"[0-9&]*>[>|]?(.*)$")
 
 
+GH_NO_FILE_WRITE = {"api", "issue", "auth", "search", "status"}
 HARMLESS_BEFORE_GH = {"export", "echo", "printf", "set", "true", "false", ":", "unset", "declare",
                       "local", "readonly", "test", "[", "[["}
 
@@ -654,7 +661,9 @@ def chain_moves_files(segments):
         is_gh = gh_start(argv) >= 0
         if is_gh:
             last_gh = n
-            if "download" in words or "clone" in words:  # `gh release download -O q.graphql`
+            # `gh release download -O q`, `gh pr checkout`, `gh repo sync`, an extension: all can
+            # rewrite the worktree, so only the subcommands known to touch no file are trusted.
+            if (argv[gh_sub(argv, gh_start(argv)):][:1] or [""])[0] not in GH_NO_FILE_WRITE:
                 opaque_at.append(n)
         else:
             command = next((w for w in words if not re.match(r"^\w+=", w)), None)
@@ -733,7 +742,7 @@ def api_issue_match(segments):
     and `--input f` are file-valued (`body_json` marks that the file is a JSON payload).
     """
     shifted = chain_moves_files(segments)
-    graphql_write = None
+    found = None
     for argv, marks in iter_argvs_marked(segments):
         # Same command-word rule as the `gh issue` path: gh must be the command itself (after
         # wrappers), so printed text like `echo gh api ...` is not a write. The fail-closed part
@@ -757,9 +766,9 @@ def api_issue_match(segments):
                 fields, marked = ungrouped_graphql_fields(fields), ungrouped_graphql_fields(marked)
             quoted = {f.partition("=")[0] for _, f in marked if SHELL_QUOTED in f.partition("=")[2]}
             gql = graphql_issue_write(fields, input_file, shifted, quoted)
-            if gql and graphql_write:
+            if gql and found:
                 return graphql_issue_write([], "-")  # one verdict cannot cover two writes
-            graphql_write = graphql_write or gql
+            found = found or gql
             continue
         dynamic = ("$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
                    or any("$" in t or "`" in t for t in stray))  # stray may be the real endpoint
@@ -820,17 +829,17 @@ def api_issue_match(segments):
         body_json = False
         if input_file is not None:
             has_body_file, body_file, body_json, has_body, body = True, input_file, True, False, None
-        if graphql_write:
+        if found:
             return graphql_issue_write([], "-")  # one verdict cannot cover two writes
         no_body = not (has_body or has_body_file)
         if no_body and (unknown_write or (method in ("POST", "?") and not number)):
             has_body, body = True, ""  # REST create has no editor mode: no body IS an empty body
-        return {
+        found = {
             "matched": True, "repo": repo, "head": None, "has_body": has_body, "body": body,
             "has_body_file": has_body_file, "body_file": body_file, "body_json": body_json,
             "labels": labels, "auto": False, "method": method,
         }
-    return graphql_write
+    return found
 
 
 def main():
