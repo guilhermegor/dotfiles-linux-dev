@@ -174,6 +174,7 @@ cd <absolute-repo-path> && gh workflow run <release-workflow>.yml --ref <default
 ```
 
 `--ref <default-branch>` skips the default-branch lookup, which fails under a GraphQL limit.
+Resolve the name over REST: `gh api repos/{owner}/{repo} --jq .default_branch`, not `gh repo view`.
 
 Then verify — **all three, none is implied by another**:
 
