@@ -193,22 +193,28 @@ prune_default_branch() {
 # A configured core.sshCommand or GIT_SSH_COMMAND (a per-repo identity) is kept as is.
 # Usage: prune_git_remote <repo> <git args…>
 prune_git_remote() {
-	local repo="$1" ssh="${GIT_SSH_COMMAND:-}"
+	local repo="$1"
 	shift
-	[ -n "$ssh" ] || git -C "$repo" config core.sshCommand >/dev/null 2>&1 || ssh='ssh -oBatchMode=yes'
-	GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$ssh" timeout "${WORKTREE_PRUNE_REMOTE_TIMEOUT:-60}" git -C "$repo" "$@"
+	# An exported empty GIT_SSH_COMMAND would override core.sshCommand: only set it when neither exists.
+	if [ -z "${GIT_SSH_COMMAND:-}" ] && ! git -C "$repo" config core.sshCommand >/dev/null 2>&1; then
+		local -x GIT_SSH_COMMAND='ssh -oBatchMode=yes'
+	fi
+	GIT_TERMINAL_PROMPT=0 timeout -k 5 "${WORKTREE_PRUNE_REMOTE_TIMEOUT:-60}" git -C "$repo" "$@"
 }
 
 # Removes worktree, local branch, then origin branch; each step only if the one before succeeded.
-# $4 is the HEAD prune_classify judged: a commit landing since then was never classified.
+# $4 is HEAD read just before prune_classify ran: a commit landing since then was never classified.
 prune_apply_one() {
 	local cwd="$1" path="$2" branch="$3" classified="$4" sha remote
 	local why
 	sha="$classified"
 	# Probe origin before anything destructive: an unreadable or moved remote leaves everything in place.
 	if [ -n "$branch" ]; then
-		remote="$(prune_git_remote "$cwd" ls-remote origin "refs/heads/$branch" 2>/dev/null)" \
-			|| { echo "remote unreadable, nothing pruned"; return 1; }
+		local errf
+		errf="$(mktemp)" || { echo "remote unreadable (no tmp), nothing pruned"; return 1; }
+		remote="$(prune_git_remote "$cwd" ls-remote origin "refs/heads/$branch" 2>"$errf")" \
+			|| { echo "remote unreadable ($(tail -1 "$errf")), nothing pruned"; rm -f "$errf"; return 1; }
+		rm -f "$errf"
 		remote="$(awk -v r="refs/heads/$branch" '$2 == r {print $1}' <<<"$remote")"
 		[ -z "$remote" ] || [ "$remote" = "$sha" ] || { echo "remote moved, nothing pruned"; return 1; }
 	fi

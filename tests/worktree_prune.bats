@@ -411,6 +411,17 @@ JSON
     [ -f "$wt/late.txt" ]
 }
 
+@test "a configured core.sshCommand is not overridden by the batch default" {
+    git -C "$work" config core.sshCommand 'ssh -i /custom/key'
+    unset GIT_SSH_COMMAND
+    timeout() { echo "ssh=${GIT_SSH_COMMAND-UNSET}"; }
+    run prune_git_remote "$work" ls-remote origin
+    [ "$output" = "ssh=UNSET" ]
+    git -C "$work" config --unset core.sshCommand
+    run prune_git_remote "$work" ls-remote origin
+    [ "$output" = "ssh=ssh -oBatchMode=yes" ]
+}
+
 @test "a refusal that pruned nothing is reported KEEP, never PARTIAL" {
     make_branch b1 f1.txt
     land_on_master f1.txt
