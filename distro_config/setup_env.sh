@@ -2,7 +2,7 @@
 # distro_config/setup_env.sh
 # Shell environment setup, run by `make run` (see Makefile's `setup_env` target):
 #   1. Prompts to create the project .env from .env.example (the single AUTHORED
-#      source of truth — Context7/Tavily/DeepSeek/CodeRabbit keys).
+#      source of truth — Context7/Tavily/CodeRabbit keys).
 #   2. Generates ~/.claude/.env FROM the project .env — a copy, never a second
 #      authored file, so the two cannot drift. It keeps its own path so the
 #      shell still works if this repo moves or is deleted.
