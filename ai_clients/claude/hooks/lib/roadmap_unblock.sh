@@ -439,6 +439,7 @@ reconcile_roadmap_unblock() {
 # kanban reconcile sweeps this same list; do not add a second one.
 # shellcheck disable=SC2034 # read by reconcile_roadmap_boards below and by its callers' tests
 ROADMAP_BOARDS=(
+	"guilhermegor|21|layouts-cvm"
 	"guilhermegor|17|greenfield"
 	"guilhermegor|16|wwdates"
 	"guilhermegor|15|filings-b3"
