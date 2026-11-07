@@ -383,6 +383,15 @@ EOF"
     [ "$status" -eq 0 ]
 }
 
+@test "CRLF bodies: headings, fences and the surface block still match" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
+    run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## What / Why\r\n\r\nx\r\n\r\n\`\`\`surface\r\na.sh\r\n\`\`\`\r\n')\""
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    run bash -c "source '$lib'; section_has_checklist \"\$(printf '## Definition of Done\r\n- [ ] a\r\n')\" 'Definition of Done'"
+    [ "$status" -eq 0 ]
+}
+
 @test "section filled: a subheading alone is not text; prose between two inline comments is" {
     local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
     run bash -c "source '$lib'; spec_section_filled \"\$(printf '## Scope\n### Part\n## Next\n')\" Scope"

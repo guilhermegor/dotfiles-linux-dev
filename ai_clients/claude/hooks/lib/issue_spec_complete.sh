@@ -40,7 +40,9 @@ strip_frontmatter_and_comments() {
 # section is lowercased: bash folds the text (UTF-8 aware) before awk sees it, because mawk's
 # tolower() leaves non-ASCII letters alone and `## Ação` would then never match.
 _spec_section() {
-	local text="${1,,}" header="${2,,}"
+	# CR stripped first: bodies edited in GitHub's web UI arrive with CRLF line endings.
+	local text="${1//$'\r'/}" header="${2,,}"
+	text="${text,,}"
 	awk -v want="$header" '
 		/^```/ { fence = !fence }
 		!fence && /^###?[ \t]/ {
@@ -86,7 +88,7 @@ spec_surface_nonempty() {
 		in_block && /^```/ { in_block=0; if (found) ok=1; next }
 		in_block && $0 !~ /^[[:space:]]*(#.*)?$/ { found=1 }
 		END { exit !ok }
-	' <<<"$1"
+	' <<<"${1//$'\r'/}"
 }
 
 # Populate the global `missing` array with every requirement of $1 (a template file) that $2 (the
