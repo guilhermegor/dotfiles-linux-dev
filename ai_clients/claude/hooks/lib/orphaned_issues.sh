@@ -80,6 +80,7 @@ _orphan_merged_pr_mentions() {
 		after=""
 		[ -n "$cursor" ] && after=",after:\"$cursor\""
 		query="{search(query:\"repo:$slug is:pr is:merged\",type:ISSUE,first:50$after){issueCount pageInfo{hasNextPage endCursor} nodes{... on PullRequest{number title body headRefName closingIssuesReferences(first:20){nodes{number}}}}}}"
+		gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
 		result="$(gh api graphql -f query="$query" 2>/dev/null)" || return 1
 		printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
 		# GraphQL `search` stops yielding at 1000 results however far you paginate, so a

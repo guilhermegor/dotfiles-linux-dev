@@ -180,3 +180,13 @@ gh() {
     [ -z "$FREE_CLAIMED_ISSUES" ]
     [ -z "$FREE_UNCLAIMED_ISSUES" ]
 }
+
+# --- GraphQL spend log (dotfiles-linux-dev#922) ---------------------------------------------------
+
+@test "_free_claimed_issues logs its GraphQL request to the spend log" {
+    export GH_BUDGET_SPEND_LOG="$BATS_TEST_TMPDIR/spend.tsv"
+    gh() { echo '{"data":{"search":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}'; }
+    run _free_claimed_issues o/r
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <"$GH_BUDGET_SPEND_LOG")" -eq 1 ]
+}

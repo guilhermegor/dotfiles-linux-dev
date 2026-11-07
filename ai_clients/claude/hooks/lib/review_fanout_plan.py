@@ -121,7 +121,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from gh_latch import refuse_if_latched
+from gh_latch import log_spend, refuse_if_latched
 from open_pr_pages import read_open_prs
 from slot_classify import greptile_body_refused
 
@@ -443,6 +443,12 @@ def _open_pr_nodes_rest() -> list[dict]:
 	return [_rest_node(pr) for pr in prs]
 
 
+def _logged_run(cmd: list[str], *args, **kwargs) -> str:
+	"""Run ``cmd`` via ``_run`` after logging one GraphQL request to the spend log (#922)."""
+	log_spend(0)  # one page = one request, logged before it can fail; cost unexposed
+	return _run(cmd, *args, **kwargs)
+
+
 def open_prs() -> list[dict]:
 	"""Return every open PR with the fields the predicate and the eligibility rules need.
 
@@ -460,7 +466,7 @@ def open_prs() -> list[dict]:
 	"""
 	# _flatten runs inside each guard: a malformed nested field must reach the fallback too.
 	try:
-		return [_complete_window(_flatten(n)) for n in read_open_prs(PR_SELECTION, _run, OPEN_PR_LIST_CAP)]
+		return [_complete_window(_flatten(n)) for n in read_open_prs(PR_SELECTION, _logged_run, OPEN_PR_LIST_CAP)]
 	except _READ_ERRORS as graphql_error:
 		try:
 			return [_complete_window(_flatten(n)) for n in _open_pr_nodes_rest()]
