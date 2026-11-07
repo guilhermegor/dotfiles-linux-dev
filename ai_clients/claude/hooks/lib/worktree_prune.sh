@@ -161,13 +161,15 @@ prune_default_branch() {
 
 # Removes worktree, local branch, then origin branch; each step only if the one before succeeded.
 prune_apply_one() {
-	local cwd="$1" path="$2" branch="$3" sha
+	local cwd="$1" path="$2" branch="$3" sha remote
 	# --force is needed for the untracked noise; ignored/secret-shaped files were screened out.
 	[ -z "$branch" ] || sha="$(git -C "$cwd" rev-parse "refs/heads/$branch" 2>/dev/null)" || { echo "branch unreadable"; return 1; }
 	git -C "$cwd" worktree remove --force "$path" 2>/dev/null || { echo "worktree remove failed"; return 1; }
 	[ -n "$branch" ] || return 0
 	git -C "$cwd" branch -D "$branch" >/dev/null 2>&1 || { echo "branch -D failed"; return 1; }
-	if [ -n "$(git -C "$cwd" ls-remote origin "refs/heads/$branch" 2>/dev/null)" ]; then
+	remote="$(git -C "$cwd" ls-remote origin "refs/heads/$branch" 2>/dev/null)" \
+		|| { echo "remote unreadable, origin/$branch not deleted"; return 1; }
+	if [ -n "$remote" ]; then
 		# Lease on the sha classify verified: a push landing since then makes the delete fail.
 		git -C "$cwd" push --force-with-lease="refs/heads/$branch:$sha" origin --delete "$branch" >/dev/null 2>&1 \
 			|| { echo "push --delete failed (remote moved?)"; return 1; }
