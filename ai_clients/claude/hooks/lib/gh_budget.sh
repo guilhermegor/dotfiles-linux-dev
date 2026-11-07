@@ -391,7 +391,9 @@ gh_budget_log_spend() {
 # gh_budget_default_caller - the executed script's basename; under `bash -c` or stdin (no script,
 # so BASH_SOURCE's bottom is only the sourced library) the outermost function called, `fn:<name>`.
 gh_budget_default_caller() {
-	if [ "${BASH_SOURCE[-1]}" = "$0" ]; then
+	# A script's bottom frame is always `main`; under `bash -c` it is the outermost function.
+	# BASH_SOURCE is not used: for a `bash -c` function it varies by build ("environment", "", $0).
+	if [ "${FUNCNAME[-1]}" = "main" ] && [ -f "$0" ]; then
 		basename "$0"
 	else
 		printf 'fn:%s\n' "${FUNCNAME[-1]}"
