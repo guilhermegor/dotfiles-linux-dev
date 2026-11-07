@@ -202,12 +202,13 @@ _ru_unblock() {
 }
 
 # _ru_write_failed_line VERB IDENT
-# One report line for a write that failed partway. #921: under a confirmed GraphQL throttle the
-# failure is the outage, not a half-applied write, so say SKIPPED (the next round redoes the whole
-# sequence, every earlier write is retry-safe) instead of a FAILED that asks for a hand check.
+# One report line for a write that failed partway. #921: under a confirmed GraphQL throttle say
+# SKIPPED, not FAILED, since the throttle is the likely cause. Still ask for a hand check if it stays
+# wrong: the probe doesn't prove why the write failed, and a retry doesn't repair every partial state
+# (a cleared "Blocked by" reads as "blocked by nothing"; a re-block whose blocker closes keeps its label).
 _ru_write_failed_line() {
 	if _board_throttled; then
-		printf 'SKIPPED %s %s: GraphQL rate-limited — retry next round\n' "$1" "$2"
+		printf 'SKIPPED %s %s: GraphQL rate-limited — retry next round, verify by hand if it stays wrong\n' "$1" "$2"
 		return 0
 	fi
 	printf 'FAILED to %s %s: a gh write failed partway — verify by hand\n' "$1" "$2"

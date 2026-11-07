@@ -433,6 +433,7 @@ run_reconcile() {
     touch "$TEST_TMP/fail-item-edit" "$TEST_TMP/throttled"
     run_reconcile
     [[ "$output" == *"SKIPPED unblock owner/repo#3: GraphQL rate-limited"* ]]
+    [[ "$output" == *"verify by hand"* ]]
     [[ "$output" != *"FAILED"* ]]
 }
 
@@ -810,6 +811,7 @@ run_boards() {
     touch "$TEST_TMP/fail-item-edit" "$TEST_TMP/throttled"
     run_reconcile
     [[ "$output" == *"SKIPPED re-block owner/repo#7: GraphQL rate-limited"* ]]
+    [[ "$output" == *"verify by hand"* ]]
     [[ "$output" != *"FAILED"* ]]
 }
 
