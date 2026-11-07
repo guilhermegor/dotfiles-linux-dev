@@ -289,3 +289,21 @@ run_prune() { run prune_worktrees "$work" "${1:-0}"; }
     run_prune 1
     [ -z "$(git -C "$work" worktree list --porcelain | grep wt-b1)" ]
 }
+
+@test "a detached worktree is removed without any remote call" {
+    local wt="$BATS_TEST_TMPDIR/wt-det"
+    git -C "$work" worktree add --quiet --detach "$wt" origin/master
+    git -C "$work" remote set-url origin "$BATS_TEST_TMPDIR/gone.git"
+    run prune_apply_one "$work" "$wt" ""
+    [ "$status" -eq 0 ]
+    [ ! -d "$wt" ]
+}
+
+@test "a branch never pushed is pruned locally with no remote delete" {
+    local wt="$BATS_TEST_TMPDIR/wt-lo"
+    git -C "$work" worktree add --quiet -b lo "$wt" origin/master
+    run prune_apply_one "$work" "$wt" lo
+    [ "$status" -eq 0 ]
+    [ ! -d "$wt" ]
+    [ -z "$(git -C "$work" rev-parse --verify --quiet refs/heads/lo)" ]
+}
