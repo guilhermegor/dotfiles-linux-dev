@@ -218,6 +218,20 @@ STUB
     [[ "$(cat "$GH_BUDGET_LATCH_FILE")" =~ ^[0-9]+$ ]]
 }
 
+@test "latch_on_refusal keeps a later recorded expiry (#922 review)" {
+    echo 4102531200 >"$GH_BUDGET_LATCH_FILE"
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.latch_on_refusal('API rate limit already exceeded') else 1)"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$GH_BUDGET_LATCH_FILE")" = 4102531200 ]
+}
+
+@test "latch_on_refusal writes no latch when the .guess marker cannot be written (#922 review)" {
+    mkdir "$GH_BUDGET_LATCH_FILE.guess"
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.latch_on_refusal('API rate limit already exceeded') else 1)"
+    [ "$status" -eq 1 ]
+    [ ! -e "$GH_BUDGET_LATCH_FILE" ]
+}
+
 gate() {
     bash -c "source $HOOKS/lib/stop_budget.sh; stop_budget_gate" 2>&1
 }

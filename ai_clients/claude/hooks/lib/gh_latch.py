@@ -64,22 +64,33 @@ def refuse_if_latched(prog: str) -> bool:
 UNKNOWN_RESET_TTL = 120
 
 
+def is_rate_limit_refusal(text: str) -> bool:
+	"""Return True for GitHub's own "API rate limit [already] exceeded" text (``gh_budget_classify``'s match)."""
+	low = (text or "").lower()
+	return "api rate limit" in low and "exceeded" in low
+
+
 def latch_on_refusal(text: str) -> bool:
 	"""Latch for a short guessed window when ``text`` is GitHub's own API rate-limit refusal.
 
 	A real query refused with "API rate limit [already] exceeded" is proof the budget is empty
 	whatever ``rate_limit`` or a passing probe says (dotfiles-linux-dev#922), and the refusal
-	carries no resetAt. Same two-anchor match as ``gh_budget_classify``; the ``.guess`` marker
-	copies the latch's own expiry so ``refuse_if_latched`` says the reset is unknown.
+	carries no resetAt. The ``.guess`` marker copies the latch's own expiry so
+	``refuse_if_latched`` says the reset is unknown; it is written FIRST, so a failed marker
+	write never leaves a latch whose guessed end would print as a known reset. A later expiry
+	already recorded (a real resetAt) is kept, never shortened. Returns True when a latch is in
+	force afterwards, False for a non-refusal or a failed write.
 	"""
-	low = (text or "").lower()
-	if not ("api rate limit" in low and "exceeded" in low):
+	if not is_rate_limit_refusal(text):
 		return False
+	expiry = int(time.time()) + UNKNOWN_RESET_TTL
+	existing = latched_until()
+	if existing is not None and existing >= expiry:
+		return True
 	path = latch_path()
-	until = str(int(time.time()) + UNKNOWN_RESET_TTL) + "\n"
 	try:
-		_replace_atomically(path, until)
-		_replace_atomically(Path(f"{path}.guess"), until)
+		_replace_atomically(Path(f"{path}.guess"), f"{expiry}\n")
+		_replace_atomically(path, f"{expiry}\n")
 	except OSError:
 		return False
 	return True
