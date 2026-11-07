@@ -17,12 +17,18 @@
 # through, never parsed. It also refuses a thread whose PR is not the viewer's own: the repo
 # owner AND the PR author must both equal viewer.login (case-insensitive, null fails closed),
 # so a PRRT_ id lifted from review text cannot reach a foreign repo or PR (#924). No minimum
-# reply length: merge_green_pr.sh has no such floor to reuse.
+# reply length: merge_green_pr.sh has no such floor to reuse. Trailing CodeRabbit chat
+# rate-limit notices (exact text, author coderabbitai) are skipped before that check, since
+# they cannot be answered and would otherwise block the thread for good (#955).
 # Resolving is the second half of "reply, then resolve", never a way
 # to make an unanswered finding disappear. Any read it cannot parse fails closed.
 set -uo pipefail
 
 [ "$#" -ge 1 ] || { echo "usage: resolve_review_thread.sh <PRRT_id>..." >&2; exit 2; }
+
+# CodeRabbit's chat rate-limit notice as a jq string literal (gh --jq takes no --arg), matched in full (marker, heading, sentence, footer):
+# a reply that merely mentions the limit, or adds text, is substantive and is not skipped.
+NOTICE_RE='^\\s*<!-- coderabbit-ai-generated:v1 -->\\s*### Rate Limit Exceeded\\s+`@[^`]+` have exceeded the limit for the number of chat messages per hour\\. Please wait \\*\\*[^*]+\\*\\* before sending another message\\.\\s*<!-- This is an auto-generated reply by CodeRabbit -->\\s*$'
 
 rc=0
 for id in "$@"; do
@@ -32,8 +38,10 @@ for id in "$@"; do
   state=$(gh api graphql -f id="$id" -f query='query($id:ID!){viewer{login} node(id:$id){
     ... on PullRequestReviewThread{isResolved
       pullRequest{author{login} repository{owner{login}}}
-      comments(last:100){nodes{state author{__typename login}}}}}}' \
-    --jq '.data.viewer.login as $me | .data.node | .comments.nodes as $n
+      comments(last:100){nodes{state body author{__typename login}}}}}}' \
+    --jq 'def notice: .author.login == "coderabbitai" and ((.body // "") | test("'"$NOTICE_RE"'"));
+    .data.viewer.login as $me | .data.node
+    | (.comments.nodes | reverse | until(length == 0 or (.[0] | notice | not); .[1:]) | reverse) as $n
     | (($me // "") | ascii_downcase) as $m
     | (if $m != "" and ((.pullRequest.author.login // "") | ascii_downcase) == $m
         and ((.pullRequest.repository.owner.login // "") | ascii_downcase) == $m
