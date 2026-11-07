@@ -181,18 +181,25 @@ _ru_has_comment() {
 # the body was not read at all (no string `.content.body`): UNKNOWN, never "complete".
 #
 # Templates come from the repo's local checkout (`$ROADMAP_CHECKOUT_ROOT/<name>`, default
-# ~/github/<name>); none found means the guard's `What / Why` skeleton. No extra API call.
+# ~/github/<name>), which must exist AND have an `origin` naming REPO: a missing or same-named
+# foreign checkout is UNKNOWN (return 1), never a guess. The `What / Why` skeleton is the fallback
+# only when the VERIFIED checkout ships no template. No extra API call. The issue's labels
+# (minus `state:blocked`, which this unblock removes) feed the template's `if-label` rules.
 _ru_unblock_dest() {
-	local repo="$1" item="$2" body reasons dir
+	local repo="$1" item="$2" body reasons root labels
 	local -a templates=()
 	UNBLOCK_DEST="" UNBLOCK_WHY=""
 	jq -e '.content.body | type == "string"' <<<"$item" >/dev/null 2>&1 || return 1
 	body="$(jq -r '.content.body' <<<"$item")"
-	dir="${ROADMAP_CHECKOUT_ROOT:-$HOME/github}/${repo##*/}/.github/ISSUE_TEMPLATE"
-	if [[ -d "$dir" ]]; then
-		mapfile -t templates < <(find "$dir" -maxdepth 1 -iname '*.md' 2>/dev/null | sort)
+	root="${ROADMAP_CHECKOUT_ROOT:-$HOME/github}/${repo##*/}"
+	[[ "$(git -C "$root" remote get-url origin 2>/dev/null)" =~ github\.com[:/]${repo}(\.git)?/?$ ]] \
+		|| return 1
+	if [[ -d "$root/.github/ISSUE_TEMPLATE" ]]; then
+		mapfile -t templates < <(find "$root/.github/ISSUE_TEMPLATE" -maxdepth 1 -iname '*.md' 2>/dev/null | sort)
 	fi
-	reasons="$(spec_incomplete_reasons "$body" "${templates[@]}")"
+	labels="$(jq -r '(.labels // [])[] | if type == "object" then .name else . end' <<<"$item" 2>/dev/null \
+		| grep -vxF 'state:blocked')" || true
+	reasons="$(SPEC_LABELS="$labels" spec_incomplete_reasons "$body" "${templates[@]}")"
 	if [[ -z "$reasons" ]]; then
 		UNBLOCK_DEST="Ready"
 		return 0
@@ -230,7 +237,11 @@ _ru_unblock() {
 	local owner="$1" project="$2" repo="$3" number="$4" url="$5" detail="$6" dest="${7:-Ready}"
 	local note="Unblocked: $detail. Status set to $dest."
 	local -a label_args=(--remove-label "state:blocked")
-	[[ "$dest" != "Ready" ]] || label_args=(--add-label "state:ready" "${label_args[@]}")
+	if [[ "$dest" == "Ready" ]]; then
+		label_args=(--add-label "state:ready" "${label_args[@]}")
+	else
+		label_args+=(--remove-label "state:ready")   # an incomplete spec must not advertise readiness
+	fi
 	gh issue edit "$number" --repo "$repo" "${label_args[@]}" >/dev/null 2>&1 || return 1
 	gh project item-edit "$project" --owner "$owner" --url "$url" \
 		--field "Blocked by" --clear >/dev/null 2>&1 || return 1
@@ -290,7 +301,7 @@ _ru_process_item() {
 			local detail
 			detail="$(printf '%s' "$closed_list" | paste -sd, -)"
 			if ! _ru_unblock_dest "$repo" "$item"; then
-				printf 'UNKNOWN %s: could not read the issue body to judge the spec — left untouched\n' "$ident"
+				printf 'UNKNOWN %s: could not read the issue body or the repo template checkout to judge the spec — left untouched\n' "$ident"
 			elif _ru_unblock "$owner" "$project" "$repo" "$number" "$url" "$detail" "$UNBLOCK_DEST"; then
 				printf 'unblocked %s: all native blockers closed (%s) -> %s%s\n' \
 					"$ident" "$detail" "$(_ru_dest_phrase)" "$(_ru_kind_tag "$kind")"
@@ -337,7 +348,7 @@ _ru_process_item() {
 			local detail
 			detail="$(printf '%s' "$closed_refs" | paste -sd, -)"
 			if ! _ru_unblock_dest "$repo" "$item"; then
-				printf 'UNKNOWN %s: could not read the issue body to judge the spec — left untouched\n' "$ident"
+				printf 'UNKNOWN %s: could not read the issue body or the repo template checkout to judge the spec — left untouched\n' "$ident"
 			elif _ru_unblock "$owner" "$project" "$repo" "$number" "$url" "$detail" "$UNBLOCK_DEST"; then
 				printf 'unblocked %s: prose blocker(s) closed (%s) -> %s%s\n' \
 					"$ident" "$detail" "$(_ru_dest_phrase)" "$(_ru_kind_tag "$kind")"
@@ -394,6 +405,17 @@ _ru_reblock() {
 		--field "Status" --value "Blocked" >/dev/null 2>&1 || return 1
 }
 
+# _ru_item_labels ITEM_JSON REPO NUMBER
+# Prints the issue's labels, one per line. The porcelain read carries `labels`; the GraphQL
+# fallback read does not, so a missing key is read from the issue. Returns 1 when unreadable.
+_ru_item_labels() {
+	if jq -e 'has("labels")' <<<"$1" >/dev/null 2>&1; then
+		jq -r '.labels[] | if type == "object" then .name else . end' <<<"$1" 2>/dev/null
+		return 0
+	fi
+	gh issue view "$3" --repo "$2" --json labels --jq '.labels[].name' 2>/dev/null
+}
+
 # _ru_process_open_item OWNER PROJECT ITEM_JSON
 # The reverse direction (dotfiles-linux-dev#812) for an item in Ready, and (#931) in Backlog, where
 # it prints `blocked:` instead of `re-blocked:`. A Backlog card's way back is _ru_unblock_dest, so
@@ -415,6 +437,11 @@ _ru_process_open_item() {
 	field_text="$(jq -r '."blocked by" // ""' <<<"$item")"
 	ident="$repo#$number"
 	body_line="$(_ru_body_blocked_line "$body")"
+	# A body-only `decision:` blocker would be invisible without the body: unreadable is UNKNOWN.
+	if ! jq -e '.content.body | type == "string"' <<<"$item" >/dev/null 2>&1; then
+		printf 'UNKNOWN %s: could not read the issue body — left untouched\n' "$ident"
+		return 0
+	fi
 
 	if _ru_is_decision "$field_text" || _ru_is_decision "$body_line"; then
 		return 0
@@ -429,9 +456,14 @@ _ru_process_open_item() {
 	if [[ -n "$open" ]]; then
 		detail="$(printf '%s' "$open" | paste -sd, -)"
 		kind="$(_ru_refs_kind "$repo" "$open")"
-	elif [[ "$status" == "Backlog" ]] \
-		&& jq -e '(.labels // []) | map(if type == "object" then .name else . end) | index("state:blocked")' \
-			<<<"$item" >/dev/null 2>&1; then
+	elif [[ "$status" == "Backlog" ]]; then
+		local labels lrc=0
+		labels="$(_ru_item_labels "$item" "$repo" "$number")" || lrc=1
+		if ((lrc != 0)); then
+			printf 'UNKNOWN %s: could not read labels — left untouched\n' "$ident"
+			return 0
+		fi
+		grep -qxF 'state:blocked' <<<"$labels" || return 0
 		detail="state:blocked"
 	else
 		return 0

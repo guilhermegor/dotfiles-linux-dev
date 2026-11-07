@@ -1,10 +1,11 @@
 #!/bin/bash
 # Shared "is this issue body a complete spec?" check (dotfiles-linux-dev#931).
 #
-# One implementation, two callers: issue_template_guard.sh applies it at creation (`evaluate_template`),
+# One implementation, two callers: issue_template_guard.sh applies `evaluate_template` at creation,
 # and roadmap_unblock.sh applies it when the last blocker closes, to pick Ready (complete) or
-# Backlog (not). Never a second copy: a spec the guard accepts is by construction one the unblock
-# reads as complete, so the two cannot drift.
+# Backlog (not). Never a second copy of the template rules, so the two cannot drift on them. The
+# unblock is STRICTER than the guard: on top of the template it requires every section to hold
+# text and a closed, non-empty surface block (`spec_incomplete_reasons`), which the guard does not.
 #
 # Functions (all sourced, none print unless stated):
 #   strip_frontmatter_and_comments FILE      prints the template's structural markdown
@@ -36,10 +37,14 @@ strip_frontmatter_and_comments() {
 # (case-insensitive), up to the next such header or EOF. Prints nothing, returns 1 when absent.
 _spec_section() {
 	local text="$1" header_substr="$2" start_line next_line
-	start_line="$(grep -n -i -F -- "$header_substr" <<<"$text" | head -n1 | cut -d: -f1)"
+	# Heading lines only: prose like "Scope follows" must not stand in for a `## Scope` heading.
+	start_line="$(grep -n -E '^#{2,3}[[:space:]]' <<<"$text" | grep -i -F -- "$header_substr" \
+		| head -n1 | cut -d: -f1)"
 	[[ -n "$start_line" ]] || return 1
 	next_line="$(tail -n "+$((start_line + 1))" <<<"$text" | grep -n -E '^#{2,3}[[:space:]]' | head -n1 | cut -d: -f1)"
-	if [[ -n "$next_line" ]]; then
+	if [[ "$next_line" == 1 ]]; then
+		return 0   # adjacent heading: the section is empty, not the next heading's line
+	elif [[ -n "$next_line" ]]; then
 		sed -n "$((start_line + 1)),$((start_line + next_line - 1))p" <<<"$text"
 	else
 		sed -n "$((start_line + 1)),\$p" <<<"$text"
@@ -60,19 +65,22 @@ spec_section_filled() {
 	local section
 	section="$(_spec_section "$1" "$2")" || return 1
 	# A fenced surface block is its own requirement (spec_surface_nonempty), never section text.
-	awk '/^```surface/ { s=1; next } s { if ($0 ~ /^```/) s=0; next }
-		/<!--/ { c=1 } c { if ($0 ~ /-->/) c=0; next } { print }' <<<"$section" \
+	# Inline `<!-- … -->` goes first so prose beside it survives; multi-line comments after.
+	sed -E 's/<!--.*-->//g' <<<"$section" \
+		| awk '/^```surface/ { s=1; next } s { if ($0 ~ /^```/) s=0; next }
+			/<!--/ { c=1 } c { if ($0 ~ /-->/) c=0; next } { print }' \
 		| grep -q '[^[:space:]]'
 }
 
 # True when body $1 carries a fenced ```surface block with at least one path line (not blank, not
 # a `#` placeholder), the same convention dispatch_plan.py's SURFACE_LABEL_PREFIX reads.
 spec_surface_nonempty() {
+	# Only a CLOSED fence counts: dispatch_plan.py reads an unterminated block as undeclared.
 	awk '
-		/^```surface[[:space:]]*$/ { in_block=1; next }
-		in_block && /^```/ { in_block=0; next }
+		/^```surface[[:space:]]*$/ { in_block=1; found=0; next }
+		in_block && /^```/ { in_block=0; if (found) ok=1; next }
 		in_block && $0 !~ /^[[:space:]]*(#.*)?$/ { found=1 }
-		END { exit !found }
+		END { exit !ok }
 	' <<<"$1"
 }
 
@@ -124,6 +132,7 @@ evaluate_template() {
 # Complete = some template is fully satisfied (evaluate_template) with every non-surface section
 # actually filled, AND a non-empty surface block. With no template (the repo ships none) the
 # one required section is `What / Why`, the section every issue skeleton here starts with.
+# SPEC_LABELS (newline-separated issue labels, optional) enables a template's `if-label` rules.
 # The best template (fewest reasons) is the one reported, same as the guard's "closest template".
 spec_incomplete_reasons() {
 	local body="$1"; shift
@@ -135,14 +144,17 @@ spec_incomplete_reasons() {
 		templates=("$fallback")
 	fi
 	for template in "${templates[@]}"; do
-		evaluate_template "$template" "$body" ""
+		evaluate_template "$template" "$body" "${SPEC_LABELS:-}"
 		reasons=("${missing[@]}")
 		stripped="$(strip_frontmatter_and_comments "$template")"
 		while IFS= read -r line; do
 			header="$(sed -E 's/^#+[[:space:]]*//; s/[[:space:]]+$//' <<<"$line")"
 			[[ -n "$header" && "${header,,}" != *surface* ]] || continue
-			# Absent headers are already in `missing`; only a present-but-blank one is added here.
-			if grep -qiF -- "$header" <<<"$body" && ! spec_section_filled "$body" "$header"; then
+			# evaluate_template matched the header text anywhere; the heading line itself is
+			# required here, and its section must hold text.
+			if ! _spec_section "$body" "$header" >/dev/null; then
+				[[ " ${reasons[*]} " == *" $header "* ]] || reasons+=("$header")
+			elif ! spec_section_filled "$body" "$header"; then
 				reasons+=("empty $header")
 			fi
 		done < <(grep -E '^#{2,3}[[:space:]]' <<<"$stripped")
