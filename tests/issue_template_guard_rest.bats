@@ -788,3 +788,13 @@ guard_cmd() {
     run guard_cmd "gh api graphql -F query=@q.graphql"
     [ "$status" -eq 0 ]
 }
+
+@test "/graphql sends fields ungrouped: variables[...] are the real variables (#906 ladder 6)" {
+    # gh groups fields into `variables` only for the literal `graphql` endpoint.
+    run guard_cmd "gh api /graphql -f query='mutation(\$i:UpdateIssueInput!){updateIssue(input:\$i){a}}' -f 'i[id]=I' -f 'variables[i][id]=I' -f 'variables[i][body]=nope'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api https://api.github.com/graphql -f query='mutation(\$b:String!){createIssue(input:{title:\"t\",body:\$b}){a}}' -f \"b=$COMPLIANT_BODY\" -f 'variables[b]=nope'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api /graphql -f query='mutation(\$b:String!){createIssue(input:{title:\"t\",body:\$b}){a}}' -f \"variables[b]=$COMPLIANT_BODY\""
+    [ "$status" -eq 0 ]
+}

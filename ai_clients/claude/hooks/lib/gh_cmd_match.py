@@ -564,6 +564,25 @@ def graphql_shell_built(mrest):
                                            *keys_and_queries))
 
 
+GRAPHQL_RAW_VARIABLE = re.compile(r"variables\[([^\]]*)\](.*)$")
+
+
+def ungrouped_graphql_fields(fields):
+    """Fields as GitHub sees them when gh does not group them into `variables`.
+
+    gh groups fields into `variables` only for the literal endpoint `graphql`; `/graphql` or a
+    full URL sends each field as a top-level JSON member (measured with GH_DEBUG=api), so there
+    the real variables are `variables[k]...` fields and any other field is not a variable.
+    """
+    out = []
+    for typed, field in fields:
+        key, eq, val = field.partition("=")
+        m = GRAPHQL_RAW_VARIABLE.match(key)
+        if key == "query" or m:
+            out.append((typed, (m.group(1) + m.group(2) if m else key) + eq + val))
+    return out
+
+
 DIR_CHANGERS = {"cd", "pushd", "popd"}
 REDIRECT = re.compile(r"[0-9&]*>[>|]?(.*)$")
 
@@ -669,6 +688,8 @@ def api_issue_match(segments):
         if path.strip("/").lower() in ("graphql", "api/graphql"):
             if graphql_shell_built(mrest):
                 return graphql_issue_write([], "-")  # the shell writes part of the call: blind
+            if endpoint != "graphql":
+                fields = ungrouped_graphql_fields(fields)
             gql = graphql_issue_write(fields, input_file, shifted)
             if gql:
                 return gql
