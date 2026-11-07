@@ -122,7 +122,7 @@ refute() {
     run claim_files 406 "first.sh" "second.sh"
     [ "$status" -ne 0 ]
     [ "$output" = "HELD:#405:second.sh" ]
-    refute grep -qF "406" "$TEST_TMP/.git/dispatch-claims.tsv"
+    refute grep -qP '\t406\t' "$TEST_TMP/.git/dispatch-claims.tsv"
 }
 
 # --- a path an open PR already holds -------------------------------------------------------
