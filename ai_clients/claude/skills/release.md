@@ -95,7 +95,8 @@ The table never yields `1.0.0`; it is a deliberate decision, and the first cut
   is closed by hand after step 6's install-verify. Check the repo's closer before relying on this.
 - **API guarantee and breaking notes go in the GitHub release body.** `generate_release_notes:
   true` writes only the PR list, and a template rule keeps the guarantee out of `CHANGELOG.md`.
-  After the publish, edit the release (`gh release edit <tag> --notes-file …`) to add them.
+  After the publish, append them: `--notes-file` replaces the whole body, so fetch it first
+  (`gh release view <tag> --json body -q .body`), add the text, then `gh release edit <tag> --notes-file …`.
 - **Review each sentence of the guarantee against the code** as a claim: a private-path
   exception named as stable, a frozen signature that blocks keyword-only additions, and
   unversioned names read as "the latest" were all real over-promises.

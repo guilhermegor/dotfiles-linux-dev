@@ -66,11 +66,12 @@ cd <absolute-repo-path> && gh workflow run release-test-pypi.yaml --ref <default
 ```
 
 (`--ref <default-branch>` avoids the default-branch lookup that fails under a GraphQL limit; use it
-for the PyPI dispatch below too.)
+for the PyPI dispatch below too. Resolve the name over REST, not `gh repo view`:
+`gh api repos/{owner}/{repo} --jq .default_branch`.)
 
 Then **verify by install** before promoting — never trust a single index read:
 
-- Poll the run to green: `gh run list --workflow=release-test-pypi.yaml --limit 1`.
+- Poll the run to green: `cd <absolute-repo-path> && gh run list --workflow=release-test-pypi.yaml --branch <default-branch> --limit 1`.
 - `pip install -i https://test.pypi.org/simple/ <pkg>==<next>` in a throwaway venv, and **retry on
   failure** — both `/simple/` and the file host lag a fresh upload, so first-attempt-fail then
   success is normal. Ground truth is the workflow's publish log showing twine's `200 OK` plus a
@@ -108,7 +109,9 @@ existed only in the prod workflow, ran for the first time ever in the real relea
 **Prod-only gate for `1.0.0`:** `release-pypi.yaml` may carry a `1.0.0 release gate` job the
 rehearsal never runs. Before dispatching, run it yourself:
 `cd <absolute-repo-path> && python bin/check_release_gate.py --new-version 1.0.0 --previous-version <floor>`
-(`<floor>` = the `max(PyPI, Test PyPI)` from §A). Skip if the repo ships no such script.
+(`<floor>` = the `max(PyPI, Test PyPI)` recorded in §A, not a fresh read: after the rehearsal
+Test PyPI already holds `1.0.0`). Prefer the exact step command from the `1.0.0 release gate` job
+in `release-pypi.yaml` (interpreter, env, flags); skip only if the workflow has no such job.
 
 Two traps that follow from it:
 
