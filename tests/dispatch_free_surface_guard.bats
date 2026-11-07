@@ -36,9 +36,14 @@ setup() {
     # with a log line makes that visible instead of silently working.
     cat >"$BIN/gh" <<'STUB'
 #!/bin/bash
-# The Stop budget gate's own free quota read (#814) is not a planner/board call.
+# The Stop budget gate's own quota reads (#814, and GraphQL's rateLimit probe since #918) are
+# not planner/board calls.
 if [ "$1 $2" = "api rate_limit" ]; then
 	echo '{"resources":{"graphql":{"remaining":5000,"reset":4102444800}}}'
+	exit 0
+fi
+if [ "$1 $2" = "api graphql" ] && [ "$*" = "api graphql -f query={rateLimit{remaining resetAt}}" ]; then
+	echo '{"data":{"rateLimit":{"remaining":5000,"resetAt":"2100-01-01T00:00:00Z"}}}'
 	exit 0
 fi
 echo "gh $*" >>"$GH_LOG"
