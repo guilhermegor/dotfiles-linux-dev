@@ -377,8 +377,23 @@ STUB
 
 @test "spend log: the rateLimit probe itself is logged under its caller (#922)" {
     export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv" GH_BUDGET_CALLER=prober
-    GQL_PROBE=500 run bash -c "source $HOOKS/lib/gh_budget.sh; gh_budget_graphql_read"
-    GQL_PROBE=refuse run bash -c "source $HOOKS/lib/gh_budget.sh; gh_budget_graphql_read"
+    GQL_PROBE=500 run bash -ec "source $HOOKS/lib/gh_budget.sh; gh_budget_graphql_read; echo \"\$GH_BUDGET_GQL_REMAINING\""
+    [ "$status" -eq 0 ] && [ "$output" = 500 ]
+    # set -e: a refused probe must still return, read as 0 and be logged (#950 review)
+    GQL_PROBE=refuse run bash -ec "source $HOOKS/lib/gh_budget.sh; gh_budget_graphql_read; echo \"\$GH_BUDGET_GQL_REMAINING\""
+    [ "$status" -eq 0 ] && [ "$output" = 0 ]
     [ "$(awk -F"\t" '$2 == "prober"' "$GH_BUDGET_SPEND_LOG" | wc -l)" -eq 2 ]
     [ "$(awk -F"\t" '{s += $3} END {print s}' "$GH_BUDGET_SPEND_LOG")" -eq 1 ]
+}
+
+@test "spend log: never appended under the shared /tmp last resort (#950 review)" {
+    unset GH_BUDGET_SPEND_LOG
+    run env -u XDG_RUNTIME_DIR HOME= bash -c "source $HOOKS/lib/gh_budget.sh
+        p=\"\$(gh_budget_spend_log_path)\"; before=\$(cat \"\$p\" 2>/dev/null | wc -l)
+        gh_budget_log_spend 1 tester; after=\$(cat \"\$p\" 2>/dev/null | wc -l)
+        echo \"\$p \$before \$after\""
+    [ "$status" -eq 0 ]
+    read -r p before after <<<"$output"
+    [ "${p%/*}" = /tmp ]
+    [ "$before" = "$after" ]
 }
