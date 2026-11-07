@@ -28,7 +28,7 @@ set -uo pipefail
 
 # CodeRabbit's chat rate-limit notice as a jq string literal (gh --jq takes no --arg), matched in full (marker, heading, sentence, footer):
 # a reply that merely mentions the limit, or adds text, is substantive and is not skipped.
-NOTICE_RE='^\\s*<!-- coderabbit-ai-generated:v1 -->\\s*### Rate Limit Exceeded\\s+`@[^`]+` have exceeded the limit for the number of chat messages per hour\\. Please wait \\*\\*[^*]+\\*\\* before sending another message\\.\\s*<!-- This is an auto-generated reply by CodeRabbit -->\\s*$'
+NOTICE_RE='\\A\\s*<!-- coderabbit-ai-generated:v1 -->\\s*### Rate Limit Exceeded\\s+`@[A-Za-z0-9-]+` have exceeded the limit for the number of chat messages per hour\\. Please wait \\*\\*[0-9]+ (minutes?|seconds?)( and [0-9]+ seconds?)?\\*\\* before sending another message\\.\\s*<!-- This is an auto-generated reply by CodeRabbit -->\\s*\\z'
 
 rc=0
 for id in "$@"; do
@@ -39,7 +39,7 @@ for id in "$@"; do
     ... on PullRequestReviewThread{isResolved
       pullRequest{author{login} repository{owner{login}}}
       comments(last:100){nodes{state body author{__typename login}}}}}}' \
-    --jq 'def notice: .author.login == "coderabbitai" and ((.body // "") | test("'"$NOTICE_RE"'"));
+    --jq 'def notice: .author.__typename == "Bot" and .author.login == "coderabbitai" and ((.body // "") | test("'"$NOTICE_RE"'"));
     .data.viewer.login as $me | .data.node
     | (.comments.nodes | reverse | until(length == 0 or (.[0] | notice | not); .[1:]) | reverse) as $n
     | (($me // "") | ascii_downcase) as $m

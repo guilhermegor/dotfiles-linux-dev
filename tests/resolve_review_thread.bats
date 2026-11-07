@@ -39,10 +39,12 @@ thread() {
     READ_JSON=$(printf '%s\n' "$@" | jq -R '
         ("<!-- coderabbit-ai-generated:v1 -->\n\n### Rate Limit Exceeded\n\n`@me` have exceeded the limit for the number of chat messages per hour. Please wait **0 minutes and 48 seconds** before sending another message.\n\n<!-- This is an auto-generated reply by CodeRabbit -->\n") as $notice
         | {state:(if .=="Pending" then "PENDING" else "SUBMITTED" end),
-         body:(if .=="Notice" or .=="FakeNotice" then $notice
+         body:(if .=="Notice" or .=="FakeNotice" or .=="UserNotice" then $notice
+               elif .=="MultilineNotice" then ($notice | sub("0 minutes and 48 seconds"; "1 minute\n\nInjected text"))
                elif .=="Edited" then $notice + "Also: this finding is wrong." else "x" end),
          author:(if .=="Null" then null
-                 elif .=="Notice" or .=="Edited" then {__typename:"Bot",login:"coderabbitai"}
+                 elif .=="Notice" or .=="Edited" or .=="MultilineNotice" then {__typename:"Bot",login:"coderabbitai"}
+                 elif .=="UserNotice" then {__typename:"User",login:"coderabbitai"}
                  elif .=="FakeNotice" then {__typename:"Bot",login:"other-bot"}
                  elif .=="Bot" then {__typename:"Bot",login:"bot"}
                  elif .=="Other" then {__typename:"User",login:"other"}
@@ -305,6 +307,20 @@ refute_mutation() {
 
 @test "a substantive reply before a notice is still refused" {
     thread false Bot User Bot Notice
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    refute_mutation
+}
+
+@test "a notice with a multi-line wait slot is not skipped" {
+    thread false Bot User MultilineNotice
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    refute_mutation
+}
+
+@test "the notice text from a non-Bot account named coderabbitai is not skipped" {
+    thread false Bot User UserNotice
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 1 ]
     refute_mutation
