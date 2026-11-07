@@ -15,6 +15,7 @@ setup() {
     TEST_TMP="$(mktemp -d)"
     FAKE_BIN="$TEST_TMP/bin"
     mkdir -p "$FAKE_BIN"
+    export ROADMAP_CHECKOUT_ROOT="$TEST_TMP/no-checkouts"
     PATH="$FAKE_BIN:$PATH"
     export GH_LOG="$TEST_TMP/gh.log"
     : > "$GH_LOG"
@@ -35,6 +36,12 @@ item() {
          url: ("https://github.com/" + $repo + "/issues/" + ($number|tostring)), body: $body}}
         | if $blocked_by == "" then . else . + {"blocked by": $blocked_by} end
     '
+}
+
+# spec_body BLOCKER_REF
+# A complete spec (#931): a Blocked-by line, a filled What / Why and a non-empty surface block.
+spec_body() {
+    printf '**Blocked by:** %s\n\n## What / Why\n\nDo the thing.\n\n```surface\nfoo.sh\n```\n' "$1"
 }
 
 # write_items ITEM_JSON...
@@ -233,7 +240,7 @@ run_reconcile() {
 # --- one closed blocker: unblocked + commented ---------------------------------------------------
 
 @test "one closed native blocker: item is unblocked, labeled, and commented" {
-    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_fake_gh
     run_reconcile
@@ -292,7 +299,7 @@ run_reconcile() {
 }
 
 @test "prose blocker referencing a closed issue, no native blocked_by: unblocked" {
-    write_items "$(item "owner/repo" 405 "Blocked" "" "**Blocked by:** owner/blueprintx#314")"
+    write_items "$(item "owner/repo" 405 "Blocked" "" "$(spec_body owner/blueprintx#314)")"
     write_blockers 405
     write_ref_state "owner/blueprintx" 314 "CLOSED"
     write_fake_gh
@@ -480,7 +487,7 @@ run_reconcile() {
 # --- PR #376 review: Status is the completion marker, so it is written last ----------------------
 
 @test "Status is the last write, after the field clear and the audit comment" {
-    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_fake_gh
     run_reconcile
@@ -505,7 +512,7 @@ run_reconcile() {
 }
 
 @test "the audit comment is not posted twice when it is already on the issue" {
-    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_existing_comments 3 "Unblocked: owner/repo#2. Status set to Ready."
     write_fake_gh
@@ -736,15 +743,94 @@ run_boards() {
     grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Blocked' "$GH_LOG"
 }
 
-@test "re-block: a Backlog item with an open native blocker is left in Backlog, never promoted to Ready" {
+@test "a Backlog item with an open native blocker is moved to Blocked (#931)" {
     write_items "$(item "owner/repo" 8 "Backlog" "" "")"
     write_blockers 8 "$(blocker 6 open "other/repo")"
     write_fake_gh
     run_reconcile
     [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" == *"blocked: owner/repo#8 by other/repo#6 [blocker-kind: external]"* ]]
     [[ "$output" != *"re-blocked"* ]]
-    refute_gh 'issue edit'
+    grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Blocked' "$GH_LOG"
+}
+
+@test "a Backlog item with the state:blocked label and no blocker is moved to Blocked (#931)" {
+    write_items "$(item "owner/repo" 8 "Backlog" "" "" | jq -c '. + {labels: ["state:blocked"]}')"
+    write_blockers 8
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"blocked: owner/repo#8 by state:blocked"* ]]
+    grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Blocked' "$GH_LOG"
+}
+
+@test "a Backlog item with a decision blocker is left alone (#931)" {
+    write_items "$(item "owner/repo" 8 "Backlog" "decision: pick a vendor" "")"
+    write_blockers 8 "$(blocker 6 open "other/repo")"
+    write_fake_gh
+    run_reconcile
     refute_gh 'item-edit'
+}
+
+# --- #931: where an unblocked card goes depends on how complete its spec is ----------------------
+
+@test "unblock: a complete spec goes to Ready" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"unblocked owner/repo#3: all native blockers closed (owner/repo#2) -> Ready"* ]]
+    grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Ready' "$GH_LOG"
+}
+
+@test "unblock: no surface block goes to Backlog and names why" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf '## What / Why\n\nDo the thing.\n')")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"unblocked owner/repo#3"*"-> Backlog (no surface block)"* ]]
+    grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Backlog' "$GH_LOG"
+    grep -q 'issue edit 3 --repo owner/repo --remove-label state:blocked' "$GH_LOG"
+    refute_gh 'add-label state:ready'
+    refute_gh 'Status --value Ready'
+}
+
+@test "unblock: an empty What / Why goes to Backlog" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf '## What / Why\n\n<!-- fill me -->\n\n```surface\nfoo.sh\n```\n')")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (empty What / Why)"* ]]
+    grep -q 'Status --value Backlog' "$GH_LOG"
+}
+
+@test "unblock: a prose-only blocker also routes by spec completeness" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf '**Blocked by:** owner/repo#2')")"
+    write_blockers 3
+    write_ref_state "owner/repo" 2 "CLOSED"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"prose blocker(s) closed (owner/repo#2) -> Backlog (What / Why, no surface block)"* ]]
+}
+
+@test "unblock: an unreadable body is UNKNOWN with no item-edit" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "x" | jq -c 'del(.content.body)')"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+    refute_gh 'item-edit'
+    refute_gh 'issue edit'
+}
+
+@test "unblock: a repo template drives the required sections" {
+    mkdir -p "$TEST_TMP/co/repo/.github/ISSUE_TEMPLATE"
+    printf '## What / Why\n\n## Scope\n' > "$TEST_TMP/co/repo/.github/ISSUE_TEMPLATE/t.md"
+    export ROADMAP_CHECKOUT_ROOT="$TEST_TMP/co"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (Scope)"* ]]
 }
 
 @test "re-block: a Ready item whose only blocker is closed is left alone" {

@@ -355,3 +355,24 @@ EOF"
     [[ "$output" == *"Sign-off"* ]]
     rm -rf "$fake_home"
 }
+
+# --- #931: the completeness check is one shared helper, never a second copy ----------------------
+
+@test "the guard takes evaluate_template from issue_spec_complete.sh, defining none itself" {
+    local hooks="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks"
+    grep -q 'lib/issue_spec_complete.sh' "$hooks/issue_template_guard.sh"
+    run grep -E '^(evaluate_template|section_has_checklist|strip_frontmatter_and_comments)\(\)' \
+        "$hooks/issue_template_guard.sh"
+    [ "$status" -ne 0 ]
+    grep -q '^evaluate_template()' "$hooks/lib/issue_spec_complete.sh"
+}
+
+@test "spec_incomplete_reasons: a complete spec prints nothing; empty section and no surface say why" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
+    run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## What / Why\n\nx\n\n\`\`\`surface\na.sh\n\`\`\`\n')\""
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## What / Why\n\n<!-- todo -->\n')\""
+    [[ "$output" == *"empty What / Why"* ]]
+    [[ "$output" == *"no surface block"* ]]
+}
