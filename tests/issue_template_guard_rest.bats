@@ -991,6 +991,35 @@ guard_cmd() {
     [ "$status" -eq 0 ]
 }
 
+@test "GraphQL: a redirect attached to a word does not disguise it (#906 ladder 13)" {
+    run guard_cmd "gh api graphql>/dev/null -f query='mutation{createIssue(input:{body:\"nope\"}){a}}'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -t>/dev/null -t -Fquery=@evil.graphql"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: an input redirect on an ordinary read stays allowed (#906 ladder 13)" {
+    run guard_cmd "gh api graphql -f query='{viewer{login}}' </dev/null"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: an empty --flag= value swallows nothing (#906 ladder 13)" {
+    run guard_cmd "gh api graphql --template= -Fquery=@evil.graphql"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a brace list with a quoted space is still a split (#906 ladder 13)" {
+    run guard_cmd 'gh api graphql -t {x" ",-Fquery=@evil.graphql}'
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: an obfuscated api word and an uppercase scheme are judged (#906 ladder 13)" {
+    run guard_cmd "gh a''pi graphql -F query=@evil <<EOF"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api HTTPS://api.github.com/graphql -f query='mutation{createIssue(input:{body:\"nope\"}){a}}'"
+    [ "$status" -eq 2 ]
+}
+
 @test "GraphQL: an untokenizable \$'...' query fails closed (#906 ladder 8)" {
     run guard_cmd "gh api graphql -f query=\$'mutation{createIssue(input:{body:\"it\\'s\"}){a}}'"
     [ "$status" -eq 2 ]

@@ -189,9 +189,9 @@ def mark_expansions(segment):
         c = segment[i]
         if quote == "'":
             quote = None if c == "'" else quote
-            c = QUOTED_GT if c == ">" else c  # a quoted `>` is text, never a redirect
+            c = QUOTED_GT if c in "<>" else c  # a quoted `>` is text, never a redirect
         elif c == "\\" and i + 1 < len(segment):
-            out.append(segment[i] + (QUOTED_GT if segment[i + 1] == ">" else segment[i + 1]))
+            out.append(segment[i] + (QUOTED_GT if segment[i + 1] in "<>" else segment[i + 1]))
             i += 2
             continue
         elif c == '"':
@@ -200,9 +200,9 @@ def mark_expansions(segment):
             quote = "'"
         elif c in "$`":
             c = SHELL_QUOTED if quote else SHELL_SPLIT
-        elif c == ">" and quote:
+        elif c in "<>" and quote:
             c = QUOTED_GT
-        elif c == "{" and not quote and re.match(r"\{[^{}\s]*(,|\.\.)", segment[i:]):
+        elif c == "{" and not quote and re.match(r"\{[^{}]*(,|\.\.)", segment[i:]):
             c = SHELL_SPLIT  # `-t {x,-Fquery=@f}`: bash brace-expands it into extra arguments
         out.append(c)
         i += 1
@@ -583,16 +583,31 @@ def without_redirects(words):
     return kept
 
 
-def without_redirects_idx(words):
-    """Indexes `without_redirects` keeps, so a parallel argv can be cut the same way."""
-    marked = list(enumerate(words))
-    kept = without_redirects([w for _, w in marked])
-    out, j = [], 0
-    for i, w in marked:
-        if j < len(kept) and kept[j] is w:
-            out.append(i)
-            j += 1
-    return out
+ATTACHED_REDIRECT = re.compile(r"^([^<>]*?)[0-9&]*[<>]+[|&]?(?!\()(.*)$", re.S)
+
+
+def strip_redirects(words, marked):
+    """Cut redirects out of a gh argv (and its marked twin) the way bash does, attached or not.
+
+    `graphql>/dev/null` is the word `graphql` plus a redirect; `-t>/dev/null` is `-t`. A redirect
+    with no attached target eats the next word. Quoted `<`/`>` are QUOTED_GT, never redirects.
+    """
+    out_w, out_m, skip = [], [], False
+    for word, mark in zip(words, marked):
+        if skip:
+            skip = False
+            continue
+        m = ATTACHED_REDIRECT.match(mark)
+        if not m:
+            out_w.append(word)
+            out_m.append(mark)
+            continue
+        head = len(m.group(1))
+        if head:
+            out_w.append(word[:head])
+            out_m.append(mark[:head])
+        skip = not m.group(2)
+    return out_w, out_m
 
 
 def unread_short_flag(tok):
@@ -742,7 +757,7 @@ def parse_api_args(rest):
                 input_file = value
             i += step
         elif name in API_OTHER_VALUE_FLAGS:
-            i += 1 if inline else 2
+            i += 1 if "=" in tok and tok.startswith("--") else 2  # `--template=` is complete
         elif tok.startswith("-"):
             i += 1
         else:
@@ -775,10 +790,10 @@ def api_issue_match(segments):
         if argv[sub:sub + 1] != ["api"]:
             continue
         rest, mrest = argv[sub + 1:], marks[sub + 1:]
-        keep = without_redirects_idx(mrest)
-        rest, mrest = [rest[i] for i in keep], [mrest[i] for i in keep]
+        rest, mrest = strip_redirects(rest, mrest)
         endpoint, method, fields, input_file, stray = parse_api_args(rest)
-        path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0])
+        path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0],
+                      flags=re.I)
         path = path.rstrip("/")
         if (re.search(r"[*\[]|\?(?!\w+=)|\{[^}]*,[^}]*\}", endpoint or "")
                 and (fields or input_file or (method or "GET") != "GET")):
@@ -870,6 +885,11 @@ def api_issue_match(segments):
     return found
 
 
+def looks_like_gh_api(text):
+    """True when quote-stripped text still reads `gh ... api`: `gh a''pi` is the same command."""
+    return bool(re.search(r"\bgh\b[\s\S]*\bapi\b", re.sub(r"['\"\\]", "", text), re.I))
+
+
 def main():
     noun = sys.argv[1] if len(sys.argv) > 1 else ""
     if noun not in ("pr", "issue", "api-issue"):
@@ -881,13 +901,13 @@ def main():
         segments = split_segments(command)
         if noun == "api-issue":
             match = api_issue_match(segments)
-            if any(re.search(r"\bapi\b", e) for e in NESTED_ERRORS):
+            if any(looks_like_gh_api(e) for e in NESTED_ERRORS):
                 match = {"matched": True, "unparseable": True}
             print(json.dumps(match or {"matched": False}))
             return 0
         argv = matching_argv(segments, noun)
     except ValueError:
-        if noun == "api-issue" and re.search(r"\bgh\b[\s\S]*\bapi\b", command, re.I):
+        if noun == "api-issue" and looks_like_gh_api(command):
             # Fail CLOSED for `gh api` (#714): text that looks like an issues write but
             # cannot be tokenized is reported, never silently allowed.
             print(json.dumps({"matched": True, "unparseable": True}))
