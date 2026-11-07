@@ -510,8 +510,9 @@ assert_rest_call_moves_nothing() {
     assert_rest_call_moves_nothing "gh api repos/acme/widgets/pulls --input body.json -f head=fix/564-other"
 }
 
+# Last verb wins (#902): checkout -b runs after the REST call, so the REST head is not used.
 @test "checkout -b compounded with a REST PR call does not use the REST issue" {
-    assert_rest_call_moves_nothing "git checkout -b feat/1-x ; gh api repos/acme/widgets/pulls -f head=fix/564-other"
+    assert_rest_call_moves_nothing "gh api repos/acme/widgets/pulls -f head=fix/564-other ; git checkout -b feat/1-x"
 }
 
 @test "gh api pulls with an attached short value flag before the path still moves the card" {
@@ -643,4 +644,240 @@ run_hook_resp() {
     write_fake_gh "OPEN"
     run run_hook_resp "rtk gh pr create --title x" '{"stdout":"ok created PR #9","stderr":""}'
     [[ "$output" == *"moved issue"* ]]
+}
+
+# --- #900: `--input` REST PRs and compound commands ---------------------------------------------
+
+write_pr_json() {
+    local json='{"head":"fix/131-rest","base":"main"}'
+    printf '%s' "${2:-$json}" > "$1"
+}
+
+@test "gh api pulls --input takes the head the response echoed, not a rewritten file" {
+    write_fake_gh "OPEN"
+    write_pr_json "$TEST_TMP/pr.json" '{"head":"fix/999-rewritten","base":"main"}'
+    git checkout -q -b feat/999-other
+    local resp='{"stdout":"{\"number\":7,\"head\":{\"ref\":\"fix/131-rest\"},\"base\":{\"repo\":{\"full_name\":\"guilhermegor/dotfiles-dev\"}}}","stderr":""}'
+    run run_hook_resp "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/pr.json" "$resp"
+    [[ "$output" == *"moved issue"*"131"* ]]
+}
+
+@test "gh api pulls --input moves the card named by head in the file" {
+    write_fake_gh "OPEN"
+    write_pr_json "$TEST_TMP/pr.json"
+    git checkout -q -b feat/999-other
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/pr.json"
+    [[ "$output" == *"moved issue"*"131"* ]]
+}
+
+@test "gh api pulls --input with an owner:branch head strips the owner" {
+    write_fake_gh "OPEN"
+    write_pr_json "$TEST_TMP/pr.json" '{"head":"guilhermegor:fix/131-rest"}'
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/pr.json"
+    [[ "$output" == *"moved issue"*"131"* ]]
+}
+
+@test "gh api pulls --input moves nothing for a missing file, bad JSON, or no head" {
+    write_fake_gh "OPEN"
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/nope.json"
+    [ -z "$output" ]
+    write_pr_json "$TEST_TMP/bad.json" 'not json'
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/bad.json"
+    [ -z "$output" ]
+    write_pr_json "$TEST_TMP/nohead.json" '{"base":"main"}'
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/nohead.json"
+    [ -z "$output" ]
+    write_pr_json "$TEST_TMP/list.json" '["fix/131-rest"]'
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/list.json"
+    [ -z "$output" ]
+}
+
+@test "gh api pulls --input with a shell-built path or stdin moves nothing" {
+    write_fake_gh "OPEN"
+    write_pr_json "$TEST_TMP/pr.json"
+    run run_hook 'gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input "$F"'
+    [ -z "$output" ]
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input -"
+    [ -z "$output" ]
+}
+
+@test "a relative --input resolves from the cd path" {
+    write_fake_gh "OPEN"
+    mkdir "$TEST_TMP/sub"
+    write_pr_json "$TEST_TMP/sub/pr.json"
+    run run_hook "cd $TEST_TMP/sub && gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input pr.json"
+    [[ "$output" == *"moved issue"* ]]
+}
+
+@test "cd <worktree> && gh pr create uses that worktree's branch" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "cd $TEST_TMP/wt && gh pr create --title x --body y"
+    [[ "$output" == *"moved issue"*"131"* ]]
+}
+
+@test "cd <worktree> && git checkout -b moves the card to In progress" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "cd $TEST_TMP/wt && git checkout -b feat/131-next"
+    [[ "$output" == *"moved issue"*"In progress"* ]]
+}
+
+@test "a verb after another command in a chain still counts, with no cd" {
+    write_fake_gh "OPEN"
+    run run_hook "git push -u origin HEAD && gh pr create --title x --body y"
+    [[ "$output" == *"moved issue"* ]]
+}
+
+@test "a cd the hook cannot resolve moves nothing" {
+    write_fake_gh "OPEN"
+    run run_hook 'cd "$WT" && gh pr create --title x --body y'
+    [ -z "$output" ]
+    run run_hook 'cd && gh pr create --title x --body y'
+    [ -z "$output" ]
+    run run_hook "cd $TEST_TMP/missing && gh pr create --title x --body y"
+    [ -z "$output" ]
+}
+
+@test "a verb inside a quoted argument or an echo does not count" {
+    write_fake_gh "OPEN"
+    run run_hook 'echo "git checkout -b feat/131-x && gh pr create"'
+    [ -z "$output" ]
+    run run_hook 'git commit -m "gh pr create" && echo gh pr create'
+    [ -z "$output" ]
+}
+
+@test "a verb on a later line of a quoted argument does not count" {
+    write_fake_gh "OPEN"
+    run run_hook "$(printf 'echo "first line\ngit checkout -b feat/131-x\ngh pr create"')"
+    [ -z "$output" ]
+}
+
+@test "a cd that does not carry to the verb (|| or |) moves nothing from the cd path" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "cd $TEST_TMP/wt || gh pr create --title x --body y"
+    [ -z "$output" ]
+    run run_hook "cd $TEST_TMP/wt | gh pr create --title x --body y"
+    [ -z "$output" ]
+}
+
+@test "pushd and builtin cd stop the scan rather than resolve the wrong card" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "pushd $TEST_TMP/wt && gh pr create --title x --body y"
+    [ -z "$output" ]
+    run run_hook "builtin cd $TEST_TMP/wt && gh pr create --title x --body y"
+    [ -z "$output" ]
+}
+
+# Changed from "the first verb wins" (#902 review): the hook runs only after the WHOLE command
+# succeeded, so the last verb describes where the card ended up; first-verb left a card with an
+# open PR in In progress.
+@test "the last verb wins: checkout -b then push then pr create lands In review" {
+    write_fake_gh "OPEN"
+    run run_hook "git checkout -b feat/131-x && git push -u origin HEAD && gh pr create --title x --body y"
+    [[ "$output" == *"In review"* ]]
+    run run_hook "gh pr create --title x --body y && git checkout -b feat/131-y"
+    [[ "$output" == *"In progress"* ]]
+}
+
+@test "a branch name containing -b or -c is not a branch creation" {
+    write_fake_gh "OPEN"
+    run run_hook "git fetch && git checkout fix/131-bar"
+    [ -z "$output" ]
+    run run_hook "git switch feat/12-config"
+    [ -z "$output" ]
+    run run_hook "git checkout -b feat/131-x"
+    [[ "$output" == *"In progress"* ]]
+}
+
+@test "an attached -b value and switch --create are branch creations" {
+    write_fake_gh "OPEN"
+    run run_hook "git checkout -bfeat/131-x"
+    [[ "$output" == *"In progress"* ]]
+    run run_hook "git switch --create feat/131-y"
+    [[ "$output" == *"In progress"* ]]
+}
+
+@test "a ~-prefixed --input or cd path is not resolved (quoted ~ stays literal for gh)" {
+    write_fake_gh "OPEN"
+    write_pr_json "$TEST_TMP/pr.json"
+    git checkout -q -b feat/999-other
+    export HOME="$TEST_TMP"
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input '~/pr.json'"
+    [[ "$output" != *"131"* ]]
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    run run_hook "cd ~/wt && gh pr create --title x --body y"
+    [[ "$output" != *"131"* ]]
+}
+
+@test "eval, source and exec stop the scan rather than resolve the original cwd" {
+    write_fake_gh "OPEN"
+    run run_hook "eval \"cd $TEST_TMP\" && gh pr create --title x --body y"
+    [ -z "$output" ]
+    run run_hook "source ./env.sh && gh pr create --title x --body y"
+    [ -z "$output" ]
+}
+
+@test "a relative cd resolves from the payload cwd, not the hook's" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    mkdir "$TEST_TMP/elsewhere"
+    cd "$TEST_TMP/elsewhere"
+    run bash -c 'jq -nc --arg c "$1" --arg d "$2" "{tool_name:\"Bash\",cwd:\$d,tool_input:{command:\$c}}" | "$3"' \
+        _ "cd wt && gh pr create --title x --body y" "$TEST_TMP" "$HOOK"
+    [[ "$output" == *"moved issue"*"131"* ]]
+}
+
+@test "redirects and a heredoc body do not break the scan" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "cd $TEST_TMP/wt 2>&1 && gh pr create --title x --body y"
+    [[ "$output" == *"moved issue"*"131"* ]]
+    run run_hook "$(printf "cd %s/wt && cat > pr.txt <<EOF\ndon't cd /nowhere\nEOF\ngh pr create --title x --body y" "$TEST_TMP")"
+    [[ "$output" == *"moved issue"*"131"* ]]
+}
+
+@test "a lone & or command cd does not carry the cd path" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "cd $TEST_TMP/wt & gh pr create --title x --body y"
+    [ -z "$output" ]
+    run run_hook "command cd $TEST_TMP/wt && gh pr create --title x --body y"
+    [ -z "$output" ]
+}
+
+@test "a REST PR whose --input file vanished does not fall back to HEAD's issue" {
+    write_fake_gh "OPEN"
+    git checkout -q -b feat/131-head
+    run run_hook "gh api -X POST repos/guilhermegor/dotfiles-dev/pulls --input $TEST_TMP/gone.json"
+    [ -z "$output" ]
+}
+
+@test "a cd followed by other work then a lone & or || does not carry the path" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "cd $TEST_TMP/wt && git status & gh pr create --title x --body y"
+    [ -z "$output" ]
+    run run_hook "cd $TEST_TMP/wt && git status || gh pr create --title x --body y"
+    [ -z "$output" ]
+}
+
+@test "a cd hidden behind if, time, ! or an assignment stops the scan" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    run run_hook "if true; then cd $TEST_TMP/wt; fi; gh pr create --title x --body y"
+    [ -z "$output" ]
+    run run_hook "time cd $TEST_TMP/wt; gh pr create --title x --body y"
+    [ -z "$output" ]
 }

@@ -89,6 +89,11 @@ def split_segments(command):
                     raise ValueError("unterminated heredoc")
                 i = mt.end()
                 continue
+        # `>&`, `<&` and `&>` are redirects (`2>&1`, `&>log`), not a background `&`.
+        if c == "&" and ((buf and buf[-1] in "<>") or command[i + 1 : i + 2] == ">"):
+            buf.append(c)
+            i += 1
+            continue
         if c in SEPARATORS:
             if buf:
                 segments.append("".join(buf))
