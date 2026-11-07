@@ -397,3 +397,11 @@ STUB
     [ "${p%/*}" = /tmp ]
     [ "$before" = "$after" ]
 }
+
+@test "spend log: the planners' python log_spend lands in the same summary (#922)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    run python3 -c "import sys; sys.path.insert(0, '$HOOKS/lib'); import gh_latch; gh_latch.log_spend(0, 'dispatch_plan.py'); gh_latch.log_spend(0, 'dispatch_plan.py')"
+    [ "$status" -eq 0 ]
+    run bash "$HOOKS/lib/gh_spend_summary.sh"
+    [ "${lines[0]}" = "dispatch_plan.py: 0 points, 2 calls" ]
+}
