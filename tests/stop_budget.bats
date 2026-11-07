@@ -206,6 +206,18 @@ STUB
     [ ! -e "$GH_BUDGET_LATCH_FILE" ]
 }
 
+@test "latch_on_refusal replaces a planted symlink instead of following it (#922)" {
+    echo keep >"$TEST_TMP/victim"
+    ln -s "$TEST_TMP/victim" "$GH_BUDGET_LATCH_FILE"
+    ln -s "$TEST_TMP/victim" "$GH_BUDGET_LATCH_FILE.guess"
+    run python3 -c "import sys; sys.path.insert(0,'$HOOKS/lib'); import gh_latch; sys.exit(0 if gh_latch.latch_on_refusal('API rate limit already exceeded') else 1)"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$TEST_TMP/victim")" = keep ]
+    [ ! -L "$GH_BUDGET_LATCH_FILE" ]
+    [ ! -L "$GH_BUDGET_LATCH_FILE.guess" ]
+    [[ "$(cat "$GH_BUDGET_LATCH_FILE")" =~ ^[0-9]+$ ]]
+}
+
 gate() {
     bash -c "source $HOOKS/lib/stop_budget.sh; stop_budget_gate" 2>&1
 }

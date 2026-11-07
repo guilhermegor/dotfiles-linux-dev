@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -77,8 +78,20 @@ def latch_on_refusal(text: str) -> bool:
 	path = latch_path()
 	until = str(int(time.time()) + UNKNOWN_RESET_TTL) + "\n"
 	try:
-		path.write_text(until)
-		Path(f"{path}.guess").write_text(until)
+		_replace_atomically(path, until)
+		_replace_atomically(Path(f"{path}.guess"), until)
 	except OSError:
 		return False
 	return True
+
+
+def _replace_atomically(path: Path, text: str) -> None:
+	"""Write ``text`` via an O_EXCL temp file + ``os.replace``: a planted symlink at ``path`` is replaced, never followed."""
+	fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.tmp.")
+	try:
+		with os.fdopen(fd, "w") as handle:
+			handle.write(text)
+		os.replace(tmp, path)
+	except BaseException:
+		Path(tmp).unlink(missing_ok=True)
+		raise
