@@ -88,46 +88,57 @@ demote_plugin_from_user_scope() {
     print_status "success" "Removed from user scope: $plugin_key"
 }
 
+# Count user-scope entries for a plugin key in installed_plugins.json.
+_user_scope_count() {
+    jq -r --arg key "$1" \
+        '.plugins[$key] // [] | map(select(.scope == "user")) | length' \
+        "$2" 2>/dev/null || echo "0"
+}
+
+# Best-effort `claude plugin install`; never fails the caller.
+_install_plugin_via_cli() {
+    local plugin_key="$1"
+
+    command -v claude > /dev/null 2>&1 || return 0
+
+    print_status "info" "Installing $plugin_key via claude CLI ..."
+    if claude plugin install "$plugin_key" --scope user < /dev/null >> "${LOG_FILE:-/dev/null}" 2>&1; then
+        print_status "success" "Installed: $plugin_key"
+    else
+        print_status "warning" "claude plugin install failed for $plugin_key"
+    fi
+    return 0
+}
+
 promote_plugin_to_user_scope() {
     local plugin_key="$1"      # e.g. superpowers@claude-plugins-official
     local plugin_name="$2"     # e.g. superpowers
     local marketplace_id="$3"  # e.g. claude-plugins-official
 
     local installed_file="$CLAUDE_DIR/plugins/installed_plugins.json"
+    local attempted=0
 
     if [ ! -f "$installed_file" ]; then
-        print_status "warning" "installed_plugins.json not found — install plugins in Claude Code first:"
-        print_status "info"    "  /plugin install superpowers"
-        print_status "info"    "  /plugin install claude-hud"
-        print_status "info"    "  /plugin install typescript-lsp"
-        print_status "info"    "  /plugin install html-lsp"
-        print_status "info"    "  /plugin install css-lsp"
-        print_status "info"    "  /plugin install mssql-lsp"
-        print_status "info"    "  /plugin install postgres-lsp"
-        print_status "info"    "  /plugin install sqlite-lsp"
-        print_status "info"    "  /plugin install mysql-lsp"
-        print_status "info"    "  /plugin install mariadb-lsp"
-        print_status "info"    "  /plugin install mongodb-lsp"
-        print_status "info"    "  /plugin install json-lsp"
-        print_status "info"    "  /plugin install yaml-lsp"
-        print_status "info"    "  /plugin install toml-lsp"
-        print_status "info"    "  /plugin install security-guidance"
-        print_status "info"    "  /plugin install code-review"
-        print_status "info"    "  /plugin install code-simplifier"
-        print_status "info"    "  /plugin install feature-dev"
-        print_status "info"    "  /plugin install learning-output-style"
-        print_status "info"    "  /plugin install pr-review-toolkit"
-        print_status "info"    "  /plugin install supabase-postgres-best-practices"
-        print_status "info"    "  /plugin install senior-prompt-engineer"
-        print_status "info"    "  /plugin install clean-code"
-        print_status "info"    "  /plugin install claude-mem"
-        return 0
+        if ! command -v claude > /dev/null 2>&1; then
+            print_status "warning" "installed_plugins.json not found and claude CLI absent — run: /plugin install $plugin_name"
+            return 0
+        fi
+        # The CLI creates the file itself; no skeleton, so a failed install
+        # leaves nothing behind.
+        attempted=1
+        _install_plugin_via_cli "$plugin_key"
+        if [ ! -f "$installed_file" ]; then
+            print_status "warning" "installed_plugins.json not found after install — run: /plugin install $plugin_name"
+            return 0
+        fi
+        # Fresh install already reported success; stay quiet if it took.
+        if [ "$(_user_scope_count "$plugin_key" "$installed_file")" -gt 0 ]; then
+            return 0
+        fi
     fi
 
     local user_count
-    user_count=$(jq -r --arg key "$plugin_key" \
-        '.plugins[$key] // [] | map(select(.scope == "user")) | length' \
-        "$installed_file" 2>/dev/null || echo "0")
+    user_count=$(_user_scope_count "$plugin_key" "$installed_file")
 
     if [ "$user_count" -gt 0 ]; then
         print_status "warning" "Already at user scope: $plugin_key"
@@ -136,8 +147,15 @@ promote_plugin_to_user_scope() {
 
     local cache_dir="$CLAUDE_DIR/plugins/cache/$marketplace_id/$plugin_name"
     if [ ! -d "$cache_dir" ]; then
-        print_status "warning" "Cache missing for $plugin_key — install it first in Claude Code"
-        return 0
+        [ "$attempted" -eq 1 ] || _install_plugin_via_cli "$plugin_key"
+        user_count=$(_user_scope_count "$plugin_key" "$installed_file")
+        if [ "$user_count" -gt 0 ]; then
+            return 0
+        fi
+        if [ ! -d "$cache_dir" ]; then
+            print_status "warning" "Cache missing for $plugin_key — install it first in Claude Code"
+            return 0
+        fi
     fi
 
     local versioned_dir

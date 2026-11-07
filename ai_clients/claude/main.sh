@@ -96,7 +96,7 @@ STEPS=(
     "marketplaces|Register plugin marketplaces"
     "plugins|Promote plugins to user scope"
     "mcp_servers|Install MCP servers"
-    "profiles|Install cheap-brain session profiles (deepseek, ...)"
+    "profiles|Install the claude-profile session launcher"
     "claude_mem|Configure claude-mem mode"
     "prune|Prune orphaned artifacts (asks before removing)"
     "state_sync|Link private AI-state repo (memories, tasks, specs) + ai-state-sync command"
