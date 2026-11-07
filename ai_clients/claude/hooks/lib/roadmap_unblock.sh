@@ -201,6 +201,18 @@ _ru_unblock() {
 		--field "Status" --value "Ready" >/dev/null 2>&1 || return 1
 }
 
+# _ru_write_failed_line VERB IDENT
+# One report line for a write that failed partway. #921: under a confirmed GraphQL throttle the
+# failure is the outage, not a half-applied write, so say SKIPPED (the next round redoes the whole
+# sequence, every earlier write is retry-safe) instead of a FAILED that asks for a hand check.
+_ru_write_failed_line() {
+	if _board_throttled; then
+		printf 'SKIPPED %s: GraphQL rate-limited — retry next round\n' "$2"
+		return 0
+	fi
+	printf 'FAILED to %s %s: a gh write failed partway — verify by hand\n' "$1" "$2"
+}
+
 # _ru_process_item OWNER PROJECT ITEM_JSON
 # Prints exactly one report line for a single Blocked item, and calls _ru_unblock when every
 # native blocker is closed and no decision blocker is recorded.
@@ -240,7 +252,7 @@ _ru_process_item() {
 				printf 'unblocked %s: all native blockers closed (%s) -> Ready%s\n' \
 					"$ident" "$detail" "$(_ru_kind_tag "$kind")"
 			else
-				printf 'FAILED to unblock %s: a gh write failed partway — verify by hand\n' "$ident"
+				_ru_write_failed_line unblock "$ident"
 			fi
 		else
 			printf 'still blocked %s: open native blocker(s) %s%s\n' \
@@ -285,7 +297,7 @@ _ru_process_item() {
 				printf 'unblocked %s: prose blocker(s) closed (%s) -> Ready%s\n' \
 					"$ident" "$detail" "$(_ru_kind_tag "$kind")"
 			else
-				printf 'FAILED to unblock %s: a gh write failed partway — verify by hand\n' "$ident"
+				_ru_write_failed_line unblock "$ident"
 			fi
 		else
 			printf 'still blocked %s: open prose blocker(s) %s%s\n' \
@@ -370,7 +382,7 @@ _ru_process_open_item() {
 	if _ru_reblock "$owner" "$project" "$repo" "$number" "$url" "$detail"; then
 		printf 're-blocked: %s by %s%s\n' "$ident" "$detail" "$(_ru_kind_tag "$kind")"
 	else
-		printf 'FAILED to re-block %s: a gh write failed partway — verify by hand\n' "$ident"
+		_ru_write_failed_line re-block "$ident"
 	fi
 }
 

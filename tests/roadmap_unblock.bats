@@ -426,6 +426,16 @@ run_reconcile() {
     [[ "$output" != *"unblocked owner/repo#3"* ]]
 }
 
+@test "a write failing under a confirmed GraphQL throttle is SKIPPED, not FAILED (#921)" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-edit" "$TEST_TMP/throttled"
+    run_reconcile
+    [[ "$output" == *"SKIPPED owner/repo#3: GraphQL rate-limited"* ]]
+    [[ "$output" != *"FAILED"* ]]
+}
+
 # --- PR #376 review: a blocker on a later page must still count ----------------------------------
 
 @test "an open blocker on the second page keeps the item blocked" {
