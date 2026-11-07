@@ -45,11 +45,11 @@ for id in "$@"; do
   if ! [[ "$resolved" =~ ^(true|false)$ && "$owned" =~ ^[01]$ && "$answered" =~ ^[0-9]+$ ]]; then
     echo "$id: UNKNOWN — unexpected read: $state" >&2; rc=1; continue
   fi
-  if [ "$resolved" = "true" ]; then echo "$id: already resolved"; continue; fi
   if [ "$owned" -lt 1 ]; then
     echo "$id: REFUSED — thread is not on your own PR; use the GitHub UI" >&2
     rc=1; continue
   fi
+  if [ "$resolved" = "true" ]; then echo "$id: already resolved"; continue; fi
   if [ "$answered" -lt 1 ]; then
     echo "$id: REFUSED — last comment is not your submitted reply yet" >&2; rc=1; continue
   fi

@@ -225,6 +225,15 @@ refute_mutation() {
     refute_mutation
 }
 
+@test "an already-resolved thread on a foreign PR is refused, not reported resolved" {
+    PR_OWNER=someone-else thread true Bot User
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"not on your own PR"* ]]
+    [[ "$output" != *"already resolved"* ]]
+    refute_mutation
+}
+
 @test "a null PR owner fails closed" {
     PR_OWNER=null thread false Bot User
     run bash "$SCRIPT" PRRT_abc123
