@@ -131,6 +131,43 @@ drift() { run bash -c "source '$LIB'; memory_index_drift '$MEM'"; }
     [ "$output" = "1" ]
 }
 
+@test "an unreadable index is refused and left untouched" {
+    echo '- [T](triage.md) — stale' > "$MEM/MEMORY.md"
+    chmod 000 "$MEM/MEMORY.md"
+    if [ -r "$MEM/MEMORY.md" ]; then skip "running as a user that ignores file modes"; fi
+    run bash -c "source '$LIB'; memory_index_sync '$MEM' 2>&1"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not readable"* ]]
+    chmod 600 "$MEM/MEMORY.md"
+    [ "$(cat "$MEM/MEMORY.md")" = "- [T](triage.md) — stale" ]
+}
+
+@test "trailing whitespace on an index line is not drift" {
+    printf -- '- [T](triage.md) — resolve once genuinely settled  \n' > "$MEM/MEMORY.md"
+    drift
+    [ -z "$output" ]
+}
+
+@test "a file with a description but no name is not unindexed (sync cannot add it)" {
+    printf -- '---\ndescription: d\n---\n' > "$MEM/noname.md"
+    echo '- [T](triage.md) — resolve once genuinely settled' > "$MEM/MEMORY.md"
+    drift
+    [ -z "$output" ]
+}
+
+@test "hook stays silent when the only drift is non-actionable counts" {
+    printf -- '* [A](triage.md) - hand edited\n- [S](sub/z.md) — k\n' > "$MEM/MEMORY.md"
+    run_hook "$MEM/triage.md"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "hook still nags when actionable and counts are mixed" {
+    printf -- '- [T](triage.md) — stale\n- [S](sub/z.md) — k\n' > "$MEM/MEMORY.md"
+    run_hook "$MEM/triage.md"
+    [[ "$output" == *"triage.md: changed"* ]]
+}
+
 @test "sync reports dropped entries whose file is gone" {
     printf -- '- [G](gone.md) — x\n- [T](triage.md) — resolve once genuinely settled\n' > "$MEM/MEMORY.md"
     run bash -c "source '$LIB'; memory_index_sync '$MEM' 2>&1"

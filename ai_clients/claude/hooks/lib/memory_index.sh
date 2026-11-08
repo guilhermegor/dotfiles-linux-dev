@@ -52,6 +52,10 @@ _memory_link_target() {
 memory_index_sync() {
     local dir=$1 index tmp line f base desc name title target failed=0 seen=" "
     index=$(readlink -f -- "$1/MEMORY.md") || return 1
+    if [[ -e "$index" && ! -r "$index" ]]; then
+        echo "MEMORY.md is not readable, left untouched" >&2
+        return 1
+    fi
     tmp=$(mktemp "$(dirname "$index")/.MEMORY.md.XXXXXX") || return 1
     # mktemp makes 0600; a NEW index should follow the umask like any file. An existing one
     # keeps its own mode (chmod --reference below).
@@ -97,16 +101,18 @@ memory_index_sync() {
 }
 
 # memory_index_drift DIR — one line per drifted entry, names and kinds only:
-#   <file>: changed | <file>: missing file | <file>: unindexed | N ... counts
+#   <file>: changed | <file>: missing file | <file>: unindexed   (memory_index_sync fixes these)
+#   N ... counts (need a hand fix; the hook never nags on these alone)
 # MEMORY_INDEX_JUST_WROTE=<file> suppresses "unindexed" for that one file. Never fails.
 memory_index_drift() {
     local dir=$1 index="$1/MEMORY.md" line base want have f target invalid=0 oddfiles=0 uncompared=0 seen=" "
-    [[ -f "$index" ]] || return 0
+    [[ -f "$index" && -r "$index" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
         line=${line%$'\r'}
         if [[ "$line" =~ $_MEMORY_ENTRY_RE ]]; then
             base=${BASH_REMATCH[2]}
             have=${BASH_REMATCH[3]}
+            have=${have%"${have##*[![:space:]]}"}   # trim like memory_fm_field does
             if [[ ! "$base" =~ $_MEMORY_FILE_RE ]]; then invalid=$((invalid + 1)); continue; fi
             seen+="$base "
             if [[ ! -f "$dir/$base" ]]; then echo "$base: missing file"; continue; fi
@@ -123,7 +129,8 @@ memory_index_drift() {
         [[ -f "$f" && "$base" != MEMORY.md && "$seen" != *" $base "* ]] || continue
         if [[ ! "$base" =~ $_MEMORY_FILE_RE ]]; then oddfiles=$((oddfiles + 1)); continue; fi
         [[ "$base" == "${MEMORY_INDEX_JUST_WROTE:-}" ]] && continue
-        [[ -n "$(memory_fm_field "$f" description)" ]] && echo "$base: unindexed"
+        # Same rule as sync's append: needs both name and description.
+        [[ -n "$(memory_fm_field "$f" description)" && -n "$(memory_fm_field "$f" name)" ]] && echo "$base: unindexed"
     done
     [[ $invalid -eq 0 ]] || echo "$invalid entries with an invalid link target"
     [[ $oddfiles -eq 0 ]] || echo "$oddfiles files with a non-conforming name"

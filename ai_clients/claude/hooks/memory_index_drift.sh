@@ -25,7 +25,9 @@ source "$hooks_dir/lib/memory_index.sh" 2>/dev/null || exit 0
 # The normal workflow writes the memory file first and its MEMORY.md pointer second, so the
 # file just written is not yet "unindexed" in any useful sense.
 drift=$(MEMORY_INDEX_JUST_WROTE=$(basename "$path") memory_index_drift "$dir")
-[[ -n "$drift" ]] || exit 0
+# Nag only for what memory_index_sync can repair; the "N ..." count lines need a hand fix and
+# would otherwise re-fire on every memory write forever.
+grep -Eq ': (changed|missing file|unindexed)$' <<< "$drift" || exit 0
 
 script=$(printf 'source %q; memory_index_sync %q' "$hooks_dir/lib/memory_index.sh" "$dir")
 fix=$(printf 'bash -c %q' "$script")
