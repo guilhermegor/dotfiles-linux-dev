@@ -1030,6 +1030,26 @@ run_boards() {
     [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
 }
 
+@test "unblock: an @github.com inside the path is not the host (#931)" {
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" remote set-url origin https://evil.example/path@github.com/owner/repo.git
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+    refute_gh 'item-edit'
+    refute_gh 'issue edit'
+}
+
+@test "unblock: https with userinfo on github.com still verifies (#931)" {
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" remote set-url origin https://user:tok@github.com/owner/repo.git
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Ready"* ]]
+}
+
 @test "unblock: a comma inside a reason is kept as written (#931)" {
     mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
     printf '**Why**\n\n## What / Why\n' >"$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"

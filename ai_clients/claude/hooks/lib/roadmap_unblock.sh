@@ -185,11 +185,19 @@ _ru_origin_names_repo() {
 	[[ "$(cd "$1" && pwd -P)" == "$(cd "$top" && pwd -P)" ]] || return 1
 	url="$(git -C "$1" remote get-url origin 2>/dev/null)" || return 1
 	# The host must be exactly github.com (https, ssh://, or scp-like git@), not `notgithub.com`.
+	# The authority is the text between `scheme://` and the FIRST `/`, so an `@github.com` further
+	# along the path (`https://evil.example/x@github.com/o/r`) never counts as the host.
+	local authority
 	case "$url" in
-		https://github.com/* | https://*@github.com/* | ssh://git@github.com/* | git@github.com:*) ;;
+		git@github.com:*) url="${url#git@github.com:}" ;;
+		https://* | ssh://*)
+			authority="${url#*://}"
+			authority="${authority%%/*}"
+			[[ "${authority##*@}" == "github.com" ]] || return 1
+			url="${url#*://"$authority"/}"
+			;;
 		*) return 1 ;;
 	esac
-	url="${url#*github.com[:/]}"
 	url="${url%/}"
 	url="${url%.git}"
 	[[ -n "$url" && "${url,,}" == "${2,,}" ]]
