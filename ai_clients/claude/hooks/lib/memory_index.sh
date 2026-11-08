@@ -9,6 +9,8 @@
 #
 # Sourced by memory_index_drift.sh. By hand: source this file; memory_index_sync <memory-dir>
 #
+# Scope: the drift hook only checks real directories under <config>/projects/*/memory/; a memory
+# directory that is a symlink elsewhere resolves outside that root and is skipped by design.
 # File names are untrusted text. Only names matching _MEMORY_FILE_RE are ever echoed or written;
 # everything else is counted, and sync and drift apply the same rule so they cannot disagree.
 
@@ -21,13 +23,14 @@ _MEMORY_FILE_RE='^[A-Za-z0-9][A-Za-z0-9._-]*\.md$'
 memory_fm_field() {
     awk -v key="$2" '
         { sub(/\r$/, "") }
+        NR == 1 { sub(/^\xef\xbb\xbf/, "") }
         NR == 1 && $0 != "---" { exit }
         NR > 1 && $0 == "---" { closed = 1; exit }
         !found && NR > 1 && index($0, key ":") == 1 {
             v = substr($0, length(key) + 2)
             sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v)
             if (v ~ /^".*"$/ || v ~ /^'"'"'.*'"'"'$/) v = substr(v, 2, length(v) - 2)
-            if (v ~ /^[>|][-+]?$/) v = ""
+            if (v ~ /^[>|][-+0-9]*$/) v = ""
             out = v; found = 1
         }
         END { if (closed) print out }' "$1"
@@ -47,9 +50,10 @@ _memory_link_target() {
 # the file's description; drop entries whose valid-named file is gone; append unindexed files
 # (title = name). Files it will not index are listed on stderr.
 memory_index_sync() {
-    local dir=$1 index tmp line f base desc name title target seen=" "
+    local dir=$1 index tmp line f base desc name title target failed=0 seen=" "
     index=$(readlink -f -- "$1/MEMORY.md") || return 1
     tmp=$(mktemp "$(dirname "$index")/.MEMORY.md.XXXXXX") || return 1
+    chmod 644 "$tmp" 2>/dev/null
     if [[ -f "$index" ]]; then
         while IFS= read -r line || [[ -n "$line" ]]; do
             line=${line%$'\r'}
@@ -57,7 +61,7 @@ memory_index_sync() {
                 title=${BASH_REMATCH[1]}
                 base=${BASH_REMATCH[2]}
                 if [[ "$base" =~ $_MEMORY_FILE_RE ]]; then
-                    [[ -f "$dir/$base" ]] || continue
+                    if [[ ! -f "$dir/$base" ]]; then echo "dropped (missing file): $base" >&2; continue; fi
                     seen+="$base "
                     desc=$(memory_fm_field "$dir/$base" description)
                     [[ -n "$desc" ]] && line="- [$title]($base) — $desc"
@@ -68,7 +72,7 @@ memory_index_sync() {
                 target=$(_memory_link_target "$line")
                 [[ "$target" =~ $_MEMORY_FILE_RE ]] && seen+="$target "
             fi
-            printf '%s\n' "$line" >> "$tmp"
+            printf '%s\n' "$line" >> "$tmp" || failed=1
         done < "$index"
     fi
     for f in "$dir"/*.md; do
@@ -78,9 +82,15 @@ memory_index_sync() {
         name=$(memory_fm_field "$f" name)
         desc=$(memory_fm_field "$f" description)
         if [[ -z "$name" || -z "$desc" ]]; then echo "skipped (no name/description): $base" >&2; continue; fi
-        printf -- '- [%s](%s) — %s\n' "$name" "$base" "$desc" >> "$tmp"
+        title=${name//[][()]/}   # untrusted: a "](" in a title would corrupt the entry
+        printf -- '- [%s](%s) — %s\n' "$title" "$base" "$desc" >> "$tmp" || failed=1
     done
     [[ -f "$index" ]] && chmod --reference="$index" "$tmp" 2>/dev/null
+    if [[ $failed -ne 0 ]]; then
+        echo "write failed, MEMORY.md left untouched" >&2
+        rm -f -- "$tmp"
+        return 1
+    fi
     mv -- "$tmp" "$index" || { rm -f -- "$tmp"; return 1; }
 }
 
@@ -88,7 +98,7 @@ memory_index_sync() {
 #   <file>: changed | <file>: missing file | <file>: unindexed | N ... counts
 # MEMORY_INDEX_JUST_WROTE=<file> suppresses "unindexed" for that one file. Never fails.
 memory_index_drift() {
-    local dir=$1 index="$1/MEMORY.md" line base want have f target invalid=0 oddfiles=0 seen=" "
+    local dir=$1 index="$1/MEMORY.md" line base want have f target invalid=0 oddfiles=0 uncompared=0 seen=" "
     [[ -f "$index" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
         line=${line%$'\r'}
@@ -103,7 +113,7 @@ memory_index_drift() {
         else
             # Listed in a shape we do not compare: counts as indexed, not as unindexed.
             target=$(_memory_link_target "$line")
-            [[ "$target" =~ $_MEMORY_FILE_RE ]] && seen+="$target "
+            if [[ "$target" =~ $_MEMORY_FILE_RE ]]; then seen+="$target "; uncompared=$((uncompared + 1)); fi
         fi
     done < "$index"
     for f in "$dir"/*.md; do
@@ -115,5 +125,6 @@ memory_index_drift() {
     done
     [[ $invalid -eq 0 ]] || echo "$invalid entries with an invalid link target"
     [[ $oddfiles -eq 0 ]] || echo "$oddfiles files with a non-conforming name"
+    [[ $uncompared -eq 0 ]] || echo "$uncompared entries in a shape not compared"
     return 0
 }

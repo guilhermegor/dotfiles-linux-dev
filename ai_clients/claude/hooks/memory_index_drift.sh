@@ -18,7 +18,7 @@ rel=${path#"$root"/}
 [[ "$path" != "$rel" && "$rel" =~ ^[^/]+/memory/[^/]+\.md$ ]] || exit 0
 
 dir=$(dirname "$path")
-hooks_dir=$(dirname "${BASH_SOURCE[0]}")
+hooks_dir=$(dirname "$(realpath -- "${BASH_SOURCE[0]}")")
 # shellcheck source=lib/memory_index.sh
 source "$hooks_dir/lib/memory_index.sh" 2>/dev/null || exit 0
 

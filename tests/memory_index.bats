@@ -125,10 +125,37 @@ drift() { run bash -c "source '$LIB'; memory_index_drift '$MEM'"; }
 @test "odd entry shapes count as indexed: no false unindexed and no duplicate on sync" {
     printf -- '* [A ] b](triage.md) - hand edited\n' > "$MEM/MEMORY.md"
     drift
-    [ -z "$output" ]
+    [ "$output" = "1 entries in a shape not compared" ]
     bash -c "source '$LIB'; memory_index_sync '$MEM'" 2>/dev/null
     run grep -c 'triage.md' "$MEM/MEMORY.md"
     [ "$output" = "1" ]
+}
+
+@test "sync reports dropped entries whose file is gone" {
+    printf -- '- [G](gone.md) — x\n- [T](triage.md) — resolve once genuinely settled\n' > "$MEM/MEMORY.md"
+    run bash -c "source '$LIB'; memory_index_sync '$MEM' 2>&1"
+    [[ "$output" == *"dropped (missing file): gone.md"* ]]
+}
+
+@test "a hostile name cannot corrupt an appended entry or cause duplicates" {
+    printf -- '---\nname: a](b\ndescription: d\n---\n' > "$MEM/x.md"
+    echo '# idx' > "$MEM/MEMORY.md"
+    bash -c "source '$LIB'; memory_index_sync '$MEM'" 2>/dev/null
+    bash -c "source '$LIB'; memory_index_sync '$MEM'" 2>/dev/null
+    run grep -c '(x.md)' "$MEM/MEMORY.md"
+    [ "$output" = "1" ]
+}
+
+@test "a new index is created world-readable" {
+    bash -c "source '$LIB'; memory_index_sync '$MEM'" 2>/dev/null
+    [ "$(stat -c %a "$MEM/MEMORY.md")" = "644" ]
+}
+
+@test "BOM frontmatter is read and indented block scalar indicators are blanked" {
+    printf '\xef\xbb\xbf---\nname: b\ndescription: with bom\n---\n' > "$MEM/bom.md"
+    printf -- '---\nname: c\ndescription: >2\n  x\n---\n' > "$MEM/c.md"
+    run bash -c "source '$LIB'; memory_fm_field '$MEM/bom.md' description; memory_fm_field '$MEM/c.md' description"
+    [ "$output" = "with bom" ]
 }
 
 @test "sync keeps the file mode and a symlinked MEMORY.md" {
