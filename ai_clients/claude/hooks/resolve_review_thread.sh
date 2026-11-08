@@ -23,6 +23,9 @@
 # Resolving is the second half of "reply, then resolve", never a way
 # to make an unanswered finding disappear. Any read it cannot parse fails closed.
 set -uo pipefail
+_gb_dir="${BASH_SOURCE[0]%/*}" # no slash (sourced by bare filename): the dir is cwd
+[[ "$_gb_dir" == "${BASH_SOURCE[0]}" ]] && _gb_dir=.
+source "$_gb_dir/lib/gh_budget.sh"
 
 [ "$#" -ge 1 ] || { echo "usage: resolve_review_thread.sh <PRRT_id>..." >&2; exit 2; }
 
@@ -35,6 +38,7 @@ for id in "$@"; do
   if ! [[ "$id" =~ ^PRRT_[A-Za-z0-9_-]+$ ]]; then
     echo "$id: REFUSED — not a review-thread node id" >&2; rc=1; continue
   fi
+  gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
   state=$(gh api graphql -f id="$id" -f query='query($id:ID!){viewer{login} node(id:$id){
     ... on PullRequestReviewThread{isResolved
       pullRequest{author{login} repository{owner{login}}}
@@ -61,6 +65,7 @@ for id in "$@"; do
   if [ "$answered" -lt 1 ]; then
     echo "$id: REFUSED — last comment is not your submitted reply yet" >&2; rc=1; continue
   fi
+  gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
   out=$(gh api graphql -f id="$id" -f query='mutation($id:ID!){
     resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' \
     --jq '.data.resolveReviewThread.thread.isResolved')

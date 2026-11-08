@@ -51,6 +51,9 @@
 # claim that cannot be proven exclusive must not be treated as granted — that is the input that
 # produces two agents in one file.
 set -u
+_gb_dir="${BASH_SOURCE[0]%/*}" # no slash (sourced by bare filename): the dir is cwd
+[[ "$_gb_dir" == "${BASH_SOURCE[0]}" ]] && _gb_dir=.
+source "$_gb_dir/gh_budget.sh"
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	echo "lib/dispatch_claims.sh is meant to be sourced, not executed." >&2
@@ -140,9 +143,11 @@ _dispatch_forge_backoff() {
 _dispatch_forge_call() {
 	local kind="$1" arg="$2" token="${GH_TOKEN:-${GITHUB_TOKEN:-}}" page=1 out
 	if [ "$kind" = graphql ]; then
+		gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
 		gh api graphql -f query="$arg" 2>/dev/null && return 0
 		[ -n "$token" ] || return 1
 		# The header goes in on stdin (`-H @-`), never argv: argv is readable by every local user.
+		gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
 		curl -fsS -H @- -X POST \
 			-d "$(jq -n --arg q "$arg" '{query:$q}')" https://api.github.com/graphql \
 			<<<"Authorization: Bearer $token" 2>/dev/null

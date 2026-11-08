@@ -526,6 +526,7 @@ gate_pr_thread_state() {
 	threads=""
 	for attempt in $(seq 1 "$attempts"); do
 		err_file="$(mktemp)"
+		gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
 		threads="$(gh api graphql -f query="$(_gate_query)" \
 			-F owner="$owner" -F repo="$repo" -F number="$number" 2>"$err_file")"
 		# GraphQL answers 200 with a PARTIAL body: `errors` alongside a half-filled `data`.

@@ -54,6 +54,9 @@
 # repo) — a guard that blocks on its own blindness gets disabled, and then protects nothing.
 
 set -u
+_gb_dir="${BASH_SOURCE[0]%/*}" # no slash (sourced by bare filename): the dir is cwd
+[[ "$_gb_dir" == "${BASH_SOURCE[0]}" ]] && _gb_dir=.
+source "$_gb_dir/lib/gh_budget.sh"
 
 command -v jq >/dev/null 2>&1 || exit 0
 command -v gh >/dev/null 2>&1 || exit 0
@@ -219,6 +222,7 @@ main() {
 	name="${repo##*/}"
 	[[ -n "$owner" && -n "$name" && "$owner" != "$repo" ]] || exit 0
 
+	gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
 	threads="$(gh api graphql -f query="$(read_query)" \
 		-F owner="$owner" -F repo="$name" -F number="$number" 2>/dev/null)" || exit 0
 	printf '%s' "$threads" | jq -e '.data.repository.pullRequest.reviewThreads' >/dev/null 2>&1 \

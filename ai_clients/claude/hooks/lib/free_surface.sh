@@ -114,6 +114,9 @@
 # touch (that needs reading the issue). This gate only does the exact-path set math underneath
 # those decisions.
 set -u
+_gb_dir="${BASH_SOURCE[0]%/*}" # no slash (sourced by bare filename): the dir is cwd
+[[ "$_gb_dir" == "${BASH_SOURCE[0]}" ]] && _gb_dir=.
+source "$_gb_dir/gh_budget.sh"
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	echo "free_surface.sh is meant to be sourced, not executed." >&2
@@ -180,6 +183,7 @@ _free_claimed_issues() {
 		after=""
 		[ -n "$cursor" ] && after=",after:\"$cursor\""
 		query="{search(query:\"repo:$slug is:pr\",type:ISSUE,first:100$after){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{closingIssuesReferences(first:10){nodes{number}}}}}}"
+		gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
 		result="$(gh api graphql -f query="$query" 2>/dev/null)" || return 1
 		printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
 		page="$(printf '%s' "$result" | jq -r '.data.search.nodes[]?.closingIssuesReferences.nodes[]?.number' 2>/dev/null)"

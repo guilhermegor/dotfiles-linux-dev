@@ -173,6 +173,7 @@ _classify_checks() {
 	local owner="$1" repo="$2" number="$3" json roster total have
 	RUNNING_DETAIL=""
 	PENDING_DETAIL=""
+	gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
 	json="$(gh api graphql -f query="$(_status_check_query)" \
 		-F owner="$owner" -F repo="$repo" -F number="$number" 2>/dev/null)" || return 0
 	printf '%s' "$json" | jq -e '.errors' >/dev/null 2>&1 && return 0

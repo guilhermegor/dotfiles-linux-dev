@@ -30,6 +30,15 @@ teardown() {
     rm -rf "$TEST_TMP"
 }
 
+@test "a graphql call that falls back from gh to curl logs two requests (#922)" {
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv" GH_TOKEN=t
+    gh() { return 1; }
+    curl() { echo '{}'; }
+    run _dispatch_forge_call graphql '{x}'
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <"$GH_BUDGET_SPEND_LOG")" -eq 2 ]
+}
+
 refute() {
     run "$@"
     [ "$status" -ne 0 ]

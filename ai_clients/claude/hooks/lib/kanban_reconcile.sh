@@ -50,6 +50,9 @@
 # different responses from a reader. Never a retry loop: one porcelain attempt, one fallback
 # attempt, then report.
 set -u
+_gb_dir="${BASH_SOURCE[0]%/*}" # no slash (sourced by bare filename): the dir is cwd
+[[ "$_gb_dir" == "${BASH_SOURCE[0]}" ]] && _gb_dir=.
+source "$_gb_dir/gh_budget.sh"
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	echo "kanban_reconcile.sh is meant to be sourced, not executed." >&2
@@ -152,6 +155,7 @@ move_card() {
 # through to the GraphQL fallback read instead of halting on a maybe.
 _board_throttled() {
 	local probe
+	gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
 	probe="$(gh api graphql -f query='query{rateLimit{remaining}}' 2>&1)" && return 1
 	printf '%s' "$probe" | grep -qiE 'rate.?limit'
 }
@@ -173,6 +177,7 @@ _board_throttled() {
 _board_item_list_graphql() {
 	local owner="$1" project="$2" query result
 	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){items(first:100,query:"-status:Done"){pageInfo{hasNextPage}nodes{id content{__typename ... on Issue{number url body repository{nameWithOwner}} ... on PullRequest{number url body repository{nameWithOwner}}}fieldValues(first:100){pageInfo{hasNextPage}nodes{__typename ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}}'
+	gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
 	result="$(gh api graphql -f query="$query" -f login="$owner" -F num="$project" 2>/dev/null)" || return 1
 	printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
 	printf '%s' "$result" \
@@ -257,6 +262,7 @@ _kr_status_names() {
 	_board_throttled && return 2
 
 	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){fields(first:50){nodes{... on ProjectV2SingleSelectField{name options{name}}}}}}}}'
+	gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
 	result="$(gh api graphql -f query="$query" -f login="$owner" -F num="$project" 2>/dev/null)" || return 1
 	printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
 	out="$(printf '%s' "$result" \
@@ -276,6 +282,7 @@ _kr_status_names() {
 _kr_closing_issues() {
 	local owner="$1" repo="$2" number="$3" query result
 	query="{repository(owner:\"$owner\",name:\"$repo\"){pullRequest(number:$number){closingIssuesReferences(first:100){pageInfo{hasNextPage}nodes{number state repository{nameWithOwner}}}}}}"
+	gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
 	result="$(gh api graphql -f query="$query" 2>/dev/null)" || return 1
 	printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
 	# A truncated page would drop linked issues while the round still reported ok. Treat it as
