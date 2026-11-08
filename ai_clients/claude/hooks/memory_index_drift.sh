@@ -3,9 +3,7 @@
 # MEMORY.md index line that no longer matches its file's frontmatter (#956).
 #
 # Advisory only: speaks through additionalContext JSON, always exits 0, fails open on a
-# missing jq or an unparseable payload. The fix is to regenerate the index:
-#   source ~/.claude/hooks/lib/memory_index.sh
-#   memory_index_generate <memory-dir> > <memory-dir>/MEMORY.md
+# missing jq or an unparseable payload. The fix is memory_index_sync <memory-dir> (lib/).
 
 command -v jq >/dev/null 2>&1 || exit 0
 
@@ -16,19 +14,21 @@ path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null) || exit 0
 # memory/ folder, a symlink out) is untrusted text and stays silent.
 path=$(realpath -m -- "$path" 2>/dev/null) || exit 0
 root=$(realpath -m -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" 2>/dev/null) || exit 0
-[[ "$path" == "$root"/*/memory/*.md ]] || exit 0
+rel=${path#"$root"/}
+[[ "$path" != "$rel" && "$rel" =~ ^[^/]+/memory/[^/]+\.md$ ]] || exit 0
 
 dir=$(dirname "$path")
+hooks_dir=$(dirname "${BASH_SOURCE[0]}")
 # shellcheck source=lib/memory_index.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib/memory_index.sh"
+source "$hooks_dir/lib/memory_index.sh" 2>/dev/null || exit 0
 
 drift=$(memory_index_drift "$dir")
 [[ -n "$drift" ]] || exit 0
 
-jq -n --arg d "$drift" --arg dir "$dir" '{
+jq -n --arg d "$drift" --arg dir "$dir" --arg lib "$hooks_dir/lib/memory_index.sh" '{
     hookSpecificOutput: {
         hookEventName: "PostToolUse",
-        additionalContext: ("MEMORY.md DRIFT in \($dir) (file names and kinds only; read the files yourself) — the index is always loaded, so a stale line outranks the file body. Regenerate it from frontmatter (source ~/.claude/hooks/lib/memory_index.sh; memory_index_generate DIR > DIR/MEMORY.md); if a rule was lifted or amended, say so in that memory'"'"'s description first.\n" + $d)
+        additionalContext: ("MEMORY.md DRIFT in \($dir) (file names and kinds only; read the files yourself) — the index is always loaded, so a stale line outranks the file body. Sync hook text from frontmatter (keeps titles and header): bash -c \"source \($lib); memory_index_sync \($dir)\". If a rule was lifted or amended, say so in that memory'"'"'s description first.\n" + $d)
     }
 }'
 exit 0
