@@ -53,7 +53,9 @@ memory_index_sync() {
     local dir=$1 index tmp line f base desc name title target failed=0 seen=" "
     index=$(readlink -f -- "$1/MEMORY.md") || return 1
     tmp=$(mktemp "$(dirname "$index")/.MEMORY.md.XXXXXX") || return 1
-    chmod 644 "$tmp" 2>/dev/null
+    # mktemp makes 0600; a NEW index should follow the umask like any file. An existing one
+    # keeps its own mode (chmod --reference below).
+    chmod "$(printf '%o' $((0666 & ~$(umask))))" "$tmp" 2>/dev/null
     if [[ -f "$index" ]]; then
         while IFS= read -r line || [[ -n "$line" ]]; do
             line=${line%$'\r'}

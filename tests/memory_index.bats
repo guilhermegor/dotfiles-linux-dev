@@ -146,8 +146,11 @@ drift() { run bash -c "source '$LIB'; memory_index_drift '$MEM'"; }
     [ "$output" = "1" ]
 }
 
-@test "a new index is created world-readable" {
-    bash -c "source '$LIB'; memory_index_sync '$MEM'" 2>/dev/null
+@test "a new index follows the umask" {
+    bash -c "umask 077; source '$LIB'; memory_index_sync '$MEM'" 2>/dev/null
+    [ "$(stat -c %a "$MEM/MEMORY.md")" = "600" ]
+    rm "$MEM/MEMORY.md"
+    bash -c "umask 022; source '$LIB'; memory_index_sync '$MEM'" 2>/dev/null
     [ "$(stat -c %a "$MEM/MEMORY.md")" = "644" ]
 }
 
