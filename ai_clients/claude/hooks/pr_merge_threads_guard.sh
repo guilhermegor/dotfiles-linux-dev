@@ -54,7 +54,7 @@
 # repo) — a guard that blocks on its own blindness gets disabled, and then protects nothing.
 
 set -u
-source "$(dirname "${BASH_SOURCE[0]}")/lib/gh_budget.sh"
+source "${BASH_SOURCE[0]%/*}/lib/gh_budget.sh"
 
 command -v jq >/dev/null 2>&1 || exit 0
 command -v gh >/dev/null 2>&1 || exit 0

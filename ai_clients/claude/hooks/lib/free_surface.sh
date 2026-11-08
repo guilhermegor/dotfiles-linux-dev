@@ -114,7 +114,7 @@
 # touch (that needs reading the issue). This gate only does the exact-path set math underneath
 # those decisions.
 set -u
-source "$(dirname "${BASH_SOURCE[0]}")/gh_budget.sh"
+source "${BASH_SOURCE[0]%/*}/gh_budget.sh"
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	echo "free_surface.sh is meant to be sourced, not executed." >&2

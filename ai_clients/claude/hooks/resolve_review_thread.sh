@@ -23,7 +23,7 @@
 # Resolving is the second half of "reply, then resolve", never a way
 # to make an unanswered finding disappear. Any read it cannot parse fails closed.
 set -uo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/lib/gh_budget.sh"
+source "${BASH_SOURCE[0]%/*}/lib/gh_budget.sh"
 
 [ "$#" -ge 1 ] || { echo "usage: resolve_review_thread.sh <PRRT_id>..." >&2; exit 2; }
 

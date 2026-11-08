@@ -186,7 +186,6 @@ _gate_page_channels() {
 				".data.repository.pullRequest[\$c] | ($cursor_path) // empty" 2>/dev/null)"
 			[ -n "$cursor" ] || break
 			# Backs off (and latches) on a rate limit instead of silently truncating the read (#875).
-			gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
 			page="$(gh_budget_with_backoff 3 gh api graphql -f query="$(_gate_page_query "$channel")" \
 				-F owner="$owner" -F repo="$repo" -F number="$number" -f cursor="$cursor")" || break
 			# A 200 with a GraphQL `errors` array is partial data, and a cursor that did not
