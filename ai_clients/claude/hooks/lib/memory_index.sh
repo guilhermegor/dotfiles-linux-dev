@@ -36,13 +36,22 @@ memory_fm_field() {
         END { if (closed) print out }' "$1"
 }
 
+# _memory_norm_target TARGET — `<x.md>`, `./x.md` and `x.md#frag` all name x.md; without this a
+# real file linked that way is never "seen", and sync appends a duplicate entry for it.
+_memory_norm_target() {
+    local t=$1
+    [[ "$t" == "<"*">" ]] && t=${t:1:${#t}-2}
+    t=${t#./}
+    printf '%s' "${t%%#*}"
+}
+
 # _memory_link_target LINE — the link target of a bullet line in any shape (`-`/`*` bullet, any
 # dash, a `]` in the title), or nothing. Only used to decide "is this file already listed".
 _memory_link_target() {
     local line=$1 rest
     [[ "$line" =~ ^[-*][[:space:]]+\[ && "$line" == *"]("* ]] || return 0
     rest=${line#*](}
-    printf '%s' "${rest%%)*}"
+    _memory_norm_target "${rest%%)*}"
 }
 
 # memory_index_sync DIR — rewrite DIR/MEMORY.md in place (mode and symlink kept): keep every
@@ -65,7 +74,7 @@ memory_index_sync() {
             line=${line%$'\r'}
             if [[ "$line" =~ $_MEMORY_ENTRY_RE ]]; then
                 title=${BASH_REMATCH[1]}
-                base=${BASH_REMATCH[2]}
+                base=$(_memory_norm_target "${BASH_REMATCH[2]}")
                 if [[ "$base" =~ $_MEMORY_FILE_RE ]]; then
                     if [[ ! -f "$dir/$base" ]]; then echo "dropped (missing file): $base" >&2; continue; fi
                     seen+="$base "
@@ -110,7 +119,7 @@ memory_index_drift() {
     while IFS= read -r line || [[ -n "$line" ]]; do
         line=${line%$'\r'}
         if [[ "$line" =~ $_MEMORY_ENTRY_RE ]]; then
-            base=${BASH_REMATCH[2]}
+            base=$(_memory_norm_target "${BASH_REMATCH[2]}")
             have=${BASH_REMATCH[3]}
             have=${have%"${have##*[![:space:]]}"}   # trim like memory_fm_field does
             if [[ ! "$base" =~ $_MEMORY_FILE_RE ]]; then invalid=$((invalid + 1)); continue; fi

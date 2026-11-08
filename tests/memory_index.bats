@@ -257,3 +257,11 @@ drift() { run bash -c "source '$LIB'; memory_index_drift '$MEM'"; }
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
+
+@test "a ./ or #fragment link to a real file is indexed, never duplicated by sync" {
+    printf -- '- [A](./triage.md) — old\n- [B](triage.md#x) — old\n' > "$MEM/MEMORY.md"
+    drift
+    [[ "$output" != *"unindexed"* ]]
+    run bash -c "source '$LIB'; memory_index_sync '$MEM'"
+    [ "$(grep -c 'triage.md' "$MEM/MEMORY.md")" -eq 2 ]
+}
