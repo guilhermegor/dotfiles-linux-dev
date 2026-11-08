@@ -22,13 +22,18 @@ hooks_dir=$(dirname "${BASH_SOURCE[0]}")
 # shellcheck source=lib/memory_index.sh
 source "$hooks_dir/lib/memory_index.sh" 2>/dev/null || exit 0
 
-drift=$(memory_index_drift "$dir")
+# The normal workflow writes the memory file first and its MEMORY.md pointer second, so the
+# file just written is not yet "unindexed" in any useful sense.
+drift=$(MEMORY_INDEX_JUST_WROTE=$(basename "$path") memory_index_drift "$dir")
 [[ -n "$drift" ]] || exit 0
 
-jq -n --arg d "$drift" --arg dir "$dir" --arg lib "$hooks_dir/lib/memory_index.sh" '{
+script=$(printf 'source %q; memory_index_sync %q' "$hooks_dir/lib/memory_index.sh" "$dir")
+fix=$(printf 'bash -c %q' "$script")
+
+jq -n --arg d "$drift" --arg dir "$dir" --arg fix "$fix" '{
     hookSpecificOutput: {
         hookEventName: "PostToolUse",
-        additionalContext: ("MEMORY.md DRIFT in \($dir) (file names and kinds only; read the files yourself) — the index is always loaded, so a stale line outranks the file body. Sync hook text from frontmatter (keeps titles and header): bash -c \"source \($lib); memory_index_sync \($dir)\". If a rule was lifted or amended, say so in that memory'"'"'s description first.\n" + $d)
+        additionalContext: ("MEMORY.md DRIFT in \($dir) (file names and kinds only; read the files yourself) — the index is always loaded, so a stale line outranks the file body. Sync hook text from frontmatter (keeps titles and header): \($fix) . If a rule was lifted or amended, say so in that memory'"'"'s description first.\n" + $d)
     }
 }'
 exit 0
