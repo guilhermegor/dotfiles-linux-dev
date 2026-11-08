@@ -32,12 +32,21 @@ STUB
 
 # thread <isResolved> <kind>...: the first kind is the thread's root comment. Kinds: Bot,
 # User (the viewer, "me"), Other (another human), Null (deleted account),
-# Pending (viewer, unsubmitted).
+# Pending (viewer, unsubmitted), Notice (CodeRabbit's chat rate-limit notice), FakeNotice
+# (the same text from another bot), Edited (CodeRabbit with the notice text plus more).
 thread() {
     local resolved="$1"; shift
     READ_JSON=$(printf '%s\n' "$@" | jq -R '
-        {state:(if .=="Pending" then "PENDING" else "SUBMITTED" end),
+        ("<!-- coderabbit-ai-generated:v1 -->\n\n### Rate Limit Exceeded\n\n`@me` have exceeded the limit for the number of chat messages per hour. Please wait **0 minutes and 48 seconds** before sending another message.\n\n<!-- This is an auto-generated reply by CodeRabbit -->\n") as $notice
+        | {state:(if .=="Pending" then "PENDING" else "SUBMITTED" end),
+         body:(if .=="Notice" or .=="FakeNotice" or .=="UserNotice" then $notice
+               elif .=="MentionNotice" then ($notice | sub("`@me`"; "`@me and more`"))
+               elif .=="MultilineNotice" then ($notice | sub("0 minutes and 48 seconds"; "1 minute\n\nInjected text"))
+               elif .=="Edited" then $notice + "Also: this finding is wrong." else "x" end),
          author:(if .=="Null" then null
+                 elif .=="Notice" or .=="Edited" or .=="MultilineNotice" or .=="MentionNotice" then {__typename:"Bot",login:"coderabbitai"}
+                 elif .=="UserNotice" then {__typename:"User",login:"coderabbitai"}
+                 elif .=="FakeNotice" then {__typename:"Bot",login:"other-bot"}
                  elif .=="Bot" then {__typename:"Bot",login:"bot"}
                  elif .=="Other" then {__typename:"User",login:"other"}
                  else {__typename:"User",login:"me"} end)}' | jq -s \
@@ -253,4 +262,74 @@ refute_mutation() {
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 0 ]
     grep -q resolveReviewThread "$GH_LOG"
+}
+
+@test "an answer followed by CodeRabbit's rate-limit notice is resolved" {
+    thread false Bot User Notice
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PRRT_abc123: resolved"* ]]
+    grep -q resolveReviewThread "$GH_LOG"
+}
+
+@test "several trailing rate-limit notices are all skipped" {
+    thread false Bot User Notice Notice
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 0 ]
+}
+
+@test "an answer followed by a substantive CodeRabbit reply is refused" {
+    thread false Bot User Bot
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    refute_mutation
+}
+
+@test "a notice plus extra text is a substantive reply and is refused" {
+    thread false Bot User Edited
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    refute_mutation
+}
+
+@test "the notice text from another bot is not skipped" {
+    thread false Bot User FakeNotice
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    refute_mutation
+}
+
+@test "a notice with no answer before it is refused" {
+    thread false Bot Notice
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    refute_mutation
+}
+
+@test "a substantive reply before a notice is still refused" {
+    thread false Bot User Bot Notice
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    refute_mutation
+}
+
+@test "a notice with a multi-line wait slot is not skipped" {
+    thread false Bot User MultilineNotice
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    refute_mutation
+}
+
+@test "the notice text from a non-Bot account named coderabbitai is not skipped" {
+    thread false Bot User UserNotice
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    refute_mutation
+}
+
+@test "a notice whose mention slot holds extra text is not skipped" {
+    thread false Bot User MentionNotice
+    run bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 1 ]
+    refute_mutation
 }
