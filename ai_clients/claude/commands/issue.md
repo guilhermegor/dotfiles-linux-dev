@@ -14,7 +14,7 @@ authoring half of a Linear-style flow. This command only sets the card's *starti
   on those events.
 - **Done** is driven by GitHub Projects' own "item closed / PR merged → Done" workflow (the
   `Closes #N` link in step 9 feeds it) — those two toggles are OFF by default and the API
-  cannot enable them, so step 7 below verifies them every run. `subagent_stop_sweep.sh`'s
+  cannot *enable* them (it can read their state), so step 7 below reads and checks them every run. `subagent_stop_sweep.sh`'s
   kanban reconcile is the deterministic fallback when a human never flips them, or a card
   lands in No Status with nothing to advance it (dotfiles-linux-dev#556). GitHub can silently
   drop the link (`closingIssuesReferences: []`), so after `gh pr create` run
@@ -467,9 +467,10 @@ and match the project titled exactly **`<repo> kanban`** (e.g. `filings-cvm kanb
   ```
 
   A `gh`-created board ships its built-in workflows **disabled**, and the GraphQL API exposes
-  no mutation to enable them (only `deleteProjectV2Workflow`) — the "card → Done on merge"
-  automation this command relies on needs a human to flip it. See the workflow-verification
-  step below, which runs for this board whether it was just created here or already existed.
+  no mutation to *enable* them (only `deleteProjectV2Workflow`; the *state* is readable) — the
+  "card → Done on merge" automation this command relies on needs a human to flip it. See the
+  workflow-verification step below, which runs for this board whether it was just created here
+  or already existed.
 
 **Verify the Done workflows every run — new board or existing.** A board created before today
 may have shipped with #7/#8 already off, and a human can turn either off again later; nothing
