@@ -51,6 +51,13 @@ if BlueprintX's own prompts have moved on since.
 | `protect_branch` | protect the default branch? |
 | `human_reviewers_gate_merges` | require human review before merge? |
 
+**MkDocs-bearing skeletons** (every skeleton except `ts-lib` and `react-spa-webpack`, which
+scaffold no MkDocs site) — also always asked:
+
+| key | notes |
+|---|---|
+| `docs_locale` | `en` / `pt-BR` — asked as the audience question "does this project serve a Brazilian regulator, exchange or data source?" (yes → `pt-BR`; an offshore-source library → `en`). Never defaulted silently: BlueprintX falls back to `en` when the key is absent, so skipping the ask scaffolds a Brazilian-audience project as English. |
+
 **Per-skeleton** (scoped — ask only the row matching the `skeleton` key from step 1):
 
 | skeleton | keys to ask |
@@ -72,7 +79,8 @@ one call for everything — a batch per concern keeps each question legible):
 1. **Identity + stack**: `name`, `description`, `root`, `language`, `skeleton` (skip if
    `--skeleton` was passed), `license`.
 2. **Repo**: `github_username`, `repo_visibility`,
-   `protect_branch`, `human_reviewers_gate_merges`.
+   `protect_branch`, `human_reviewers_gate_merges`, and — for a MkDocs-bearing skeleton —
+   `docs_locale`.
 3. **Skeleton-specific**: exactly the row from step 1's per-skeleton table matching the chosen
    `skeleton` — nothing else.
 
@@ -134,7 +142,7 @@ the documented default):
 |---|---|
 | `name` / `description` / `root` | `project_name` / `project_description` / `project_root` (see below: the PARENT dir) |
 | `human_reviewers_gate_merges` | `human_reviewers` (`y`/`n`) |
-| `language`, `skeleton`, `license`, `github_username` | same name |
+| `language`, `skeleton`, `license`, `github_username`, `docs_locale` | same name |
 | `logging_helper` / `docker_compose` / `db_backend` | `logs` / `docker_compose` / `docker_db_backend` |
 | `schemaless_storage` | `storage` |
 | `custom_output_dir` / `output_base` / `dated_subdirs` | `data_dir` / `data_dir_base` / `data_dir_dated` |
