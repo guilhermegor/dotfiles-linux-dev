@@ -178,8 +178,17 @@ _ru_has_comment() {
 # True when checkout ROOT's `origin` is github.com's REPO (https or ssh, `.git` optional), compared
 # as lowercase literals: GitHub names are case-insensitive and a `.` in one is not a wildcard.
 _ru_origin_names_repo() {
-	local url
+	local url top
+	# ROOT must itself be the checkout's top level: inside a plain directory under a parent repo,
+	# git would answer with the PARENT's origin.
+	top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || return 1
+	[[ "$(cd "$1" && pwd -P)" == "$(cd "$top" && pwd -P)" ]] || return 1
 	url="$(git -C "$1" remote get-url origin 2>/dev/null)" || return 1
+	# The host must be exactly github.com (https, ssh://, or scp-like git@), not `notgithub.com`.
+	case "$url" in
+		https://github.com/* | https://*@github.com/* | ssh://git@github.com/* | git@github.com:*) ;;
+		*) return 1 ;;
+	esac
 	url="${url#*github.com[:/]}"
 	url="${url%/}"
 	url="${url%.git}"
@@ -188,7 +197,9 @@ _ru_origin_names_repo() {
 
 # _ru_unblock_dest REPO ITEM_JSON
 # Decides where an unblocked card goes (dotfiles-linux-dev#931): Ready when its body is a complete
-# spec (issue_spec_complete.sh, shared with issue_template_guard.sh), Backlog otherwise. Sets
+# spec, Backlog otherwise. "Complete" = the template rules issue_template_guard.sh also applies
+# (shared via issue_spec_complete.sh) PLUS routing checks the guard does not make: every section
+# filled and a closed, non-empty surface block. Sets
 # UNBLOCK_DEST, UNBLOCK_WHY (what is missing, "" when complete) and UNBLOCK_LABELS. Returns 1 for
 # UNKNOWN, never "complete": no `body` key at all (a present-but-null body is readable and empty,
 # so it routes to Backlog), unreadable labels, or no verified template source.
@@ -200,7 +211,7 @@ _ru_origin_names_repo() {
 # (no network call here). The `What / Why` skeleton is the fallback only when that ref ships no
 # template. Labels (minus `state:blocked`, which the unblock removes) feed `if-label` rules.
 _ru_unblock_dest() {
-	local repo="$1" item="$2" body reasons root labels number tdir file
+	local repo="$1" item="$2" body reasons root labels number tdir file listing
 	local -a templates=()
 	UNBLOCK_DEST="" UNBLOCK_WHY="" UNBLOCK_LABELS=""
 	jq -e '.content | has("body")' <<<"$item" >/dev/null 2>&1 || return 1
@@ -209,13 +220,16 @@ _ru_unblock_dest() {
 	root="${ROADMAP_CHECKOUT_ROOT:-$HOME/github}/${repo##*/}"
 	_ru_origin_names_repo "$root" "$repo" || return 1
 	git -C "$root" rev-parse --verify -q origin/HEAD >/dev/null 2>&1 || return 1
-	tdir="$(mktemp -d)"
+	tdir="$(mktemp -d)" || return 1
+	# A failed listing must be UNKNOWN, never an empty list that selects the fallback skeleton.
+	listing="$(git -C "$root" ls-tree --name-only origin/HEAD .github/ISSUE_TEMPLATE/ 2>/dev/null)" \
+		|| { rm -rf "$tdir"; return 1; }
 	while IFS= read -r file; do
 		[[ "${file,,}" == *.md ]] || continue
 		git -C "$root" show "origin/HEAD:$file" >"$tdir/$(basename "$file")" 2>/dev/null \
 			|| { rm -rf "$tdir"; return 1; }
 		templates+=("$tdir/$(basename "$file")")
-	done < <(git -C "$root" ls-tree --name-only origin/HEAD .github/ISSUE_TEMPLATE/ 2>/dev/null | sort)
+	done < <(sort <<<"$listing")
 	labels="$(_ru_item_labels "$item" "$repo" "$number")" || { rm -rf "$tdir"; return 1; }
 	UNBLOCK_LABELS="$labels"
 	labels="$(grep -vxF 'state:blocked' <<<"$labels" || true)"

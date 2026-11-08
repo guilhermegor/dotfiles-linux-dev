@@ -165,14 +165,15 @@ spec_incomplete_reasons() {
 		while IFS= read -r line; do
 			header="$(sed -E 's/^#+[[:space:]]*//; s/[[:space:]]+$//' <<<"$line")"
 			[[ -n "$header" ]] || continue
-			# The section holding the ```surface fence is checked by spec_surface_nonempty.
-			_spec_section "$stripped" "$header" | grep -q '^```surface' && continue
 			# evaluate_template matched the header text anywhere; the heading line itself is
-			# required here, and its section must hold text.
+			# required here, and its section must hold text. The section holding the
+			# ```surface fence needs its heading too, but its text is spec_surface_nonempty's.
 			if ! _spec_section "$body" "$header" >/dev/null; then
 				printf '%s\n' "${reasons[@]+"${reasons[@]}"}" \
 					| grep -qxF -e "$header" -e "$header (needs at least one - [ ] item)" \
 					|| reasons+=("$header")
+			elif _spec_section "$stripped" "$header" | grep -q '^```surface'; then
+				continue
 			elif ! spec_section_filled "$body" "$header"; then
 				reasons+=("empty $header")
 			fi

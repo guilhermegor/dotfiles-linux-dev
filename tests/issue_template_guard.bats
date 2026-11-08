@@ -392,6 +392,15 @@ EOF"
     [[ "$output" == *"What / Why"* ]]
 }
 
+@test "spec_incomplete_reasons: the surface heading is required, prose mentioning it is not enough" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh" t
+    t="$(mktemp)"
+    printf '## What / Why\n\n## File surface\n\n```surface\n```\n' >"$t"
+    run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## What / Why\n\nx; see the File surface below\n\n\`\`\`surface\na.sh\n\`\`\`\n')\" '$t'"
+    rm -f "$t"
+    [[ "$output" == *"File surface"* ]]
+}
+
 @test "CRLF bodies: headings, fences and the surface block still match" {
     local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
     run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## What / Why\r\n\r\nx\r\n\r\n\`\`\`surface\r\na.sh\r\n\`\`\`\r\n')\""
