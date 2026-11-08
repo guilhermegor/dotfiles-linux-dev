@@ -477,6 +477,37 @@ def read_graphql_file(path, shifted):
     return text if len(text) <= 1 << 20 else None  # over the cap: the tail is unseen
 
 
+GRAPHQL_OP_HEAD = re.compile(r"\s*(query|mutation|subscription)\b\s*(\w*)")
+
+
+def select_graphql_operation(query, operation_name):
+    """Return the query text GitHub would execute: the operation `operationName` selects.
+
+    A document may hold several operations; a read selected by name must not be judged by a
+    `createIssue` mutation sitting beside it (#908). Fragments always stay (a selected
+    operation may spread one). No name, no match, or a lone operation keeps the whole text:
+    over-blocking is the only error this may make.
+    """
+    masked = mask_graphql_strings(query)
+    defs, depth, start = [], 0, 0
+    for i, ch in enumerate(masked):
+        depth += {"{": 1, "}": -1}.get(ch, 0)
+        if ch == "}" and depth == 0:
+            defs.append((start, i + 1))
+            start = i + 1
+    if not operation_name or len(defs) < 2 or masked[start:].strip():
+        return query
+    kept, named = [], False
+    for a, b in defs:
+        head = GRAPHQL_OP_HEAD.match(masked, a)
+        if head is None or head.group(1) == "fragment":
+            kept.append(query[a:b])  # anonymous shorthand or non-operation: judge it
+        elif head.group(2) == operation_name:
+            kept.append(query[a:b])
+            named = True
+    return " ".join(kept) if named else query
+
+
 def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False), quoted=frozenset()):
     """Return the match dict for a `gh api graphql` createIssue/updateIssue mutation, or None.
 
@@ -489,7 +520,7 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False),
     blind = {"matched": True, "repo": None, "head": None, "has_body": False, "body": None,
              "has_body_file": True, "body_file": "-", "body_json": True,
              "labels": [], "auto": False, "method": "POST"}
-    query, values = "", {}
+    query, values, operation_name = "", {}, None
     for typed, field in fields:
         key, _, val = field.partition("=")
         from_file = typed and val.startswith("@")
@@ -506,6 +537,8 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False),
             val = re.sub(r"\\([$`])", r"\1", val)  # shlex keeps `\$` in "..."; bash drops the `\`
         if key == "query":
             query = val
+        elif key == "operationName":
+            operation_name = val
         else:
             values[key] = val
     if input_file == "-":
@@ -517,6 +550,7 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False),
                 return blind
             data = json.loads(raw)
             query = str(data.get("query", ""))
+            operation_name = data.get("operationName")
             variables = data.get("variables") or {}
             values = {k: v for k, v in variables.items() if isinstance(v, str)}  # -f is query-string
             values.update({k + "[body]": v["body"] for k, v in variables.items()
@@ -527,6 +561,7 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False),
             return blind  # unreadable / stdin / not an object / too deep: the mutation is unseen
     # GraphQL treats `,` and `#...` comments as whitespace; blank them outside strings (#906 review)
     query = GRAPHQL_IGNORED.sub(lambda m: m.group(1) or " ", query)
+    query = select_graphql_operation(query, operation_name)
     muts = list(GRAPHQL_ISSUE_MUTATION.finditer(mask_graphql_strings(query)))
     if not muts:
         return None
