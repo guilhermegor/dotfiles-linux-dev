@@ -472,31 +472,36 @@ and match the project titled exactly **`<repo> kanban`** (e.g. `filings-cvm kanb
   workflow-verification step below, which runs for this board whether it was just created here
   or already existed.
 
-**Verify the Done workflows every run — new board or existing.** A board created before today
-may have shipped with #7/#8 already off, and a human can turn either off again later; nothing
-else in this command or in the sweep's kanban reconcile ever re-checks the toggle itself
-(dotfiles-linux-dev#556 — board 13 sat with both disabled for weeks, unnoticed, because the only
-warning ever printed was at board-creation time, and never again). GitHub exposes no GraphQL
-read for a workflow's *enabled* state, so "verify" here means **ask, every run, and record
-the answer** — never print static instructions once and move on. Use AskUserQuestion with
-these three toggles as options; do not proceed on a silent assumption:
+**Read the board's workflow state every run — new board or existing.** A board created before
+today may have shipped with #7/#8 off, and a human can turn either off again later; nothing
+else in this command or in the sweep's kanban reconcile re-checks the toggle itself
+(dotfiles-linux-dev#556 — board 13 sat with both disabled for weeks, unnoticed). Only
+*enabling* a workflow lacks a mutation; its state is a plain GraphQL read, so never ask the
+owner (dotfiles-linux-dev#869). Read it, with the same `user`/`organization` owner type the
+board lookup used:
 
-> Open `https://github.com/users/<owner>/projects/<number>/workflows` and confirm:
-> - **Item closed** → Set value → Status → Done — **ON**?
-> - **Pull request merged** → Set value → Status → Done — **ON**?
-> - **Item added to project** → stays **OFF**. Enabling it sets a Status the instant an item
->   is added — before this command's own step 7 derives and sets the real one — and races
->   `subagent_stop_sweep.sh`'s No-Status reconcile (dotfiles-linux-dev#556's scope extension) the
->   same way.
->
-> Do **not** enable **Pull request linked to issue** either — `kanban_lifecycle.sh` already
-> moves the card to *In review* when the PR opens, and this native workflow defaults to
-> *In progress*, racing the hook and dragging the card backwards (the #131 rule).
+```bash
+rtk gh api graphql -f query='{ user(login:"<owner>") { projectV2(number:<n>) {
+  workflows(first:20) { nodes { number name enabled } } } } }'
+```
 
-If the user reports #7 or #8 off, that is expected on a board this command does not fully
-control — say so and continue. `subagent_stop_sweep.sh`'s kanban reconcile (steps [7]/[9])
-makes the board eventually correct regardless of whether a human ever flips these; it does
-not replace them, and a card can sit stale until the next sweep either way.
+Expected: **#7 Item closed** and **#8 Pull request merged** ON (Set value → Status → Done);
+**#12 Item added to project** OFF (enabling it sets a Status before step 7 derives the real
+one and races `subagent_stop_sweep.sh`'s No-Status reconcile); **#11 Pull request linked to
+issue** OFF (`kanban_lifecycle.sh` already moves the card to *In review*, and this workflow
+defaults to *In progress*, dragging it backwards — the #131 rule).
+
+- **Matches** → say nothing, and run no AskUserQuestion about workflows (also under `--quick`).
+- **Differs** → print one line per wrong toggle, e.g.
+  `Workflow #8 "Pull request merged" is OFF — turn it ON at https://github.com/users/<owner>/projects/<number>/workflows`.
+  Flipping it is the only step left for a human; continue regardless.
+- **The read fails** (error, rate limit, missing field, a workflow absent from the nodes) →
+  report `Workflows: unknown (<why>)` — never treat it as ON — and continue.
+
+A mismatch is expected on a board this command does not fully control. `subagent_stop_sweep.sh`'s
+kanban reconcile (steps [7]/[9]) makes the board eventually correct regardless of whether a
+human ever flips these; it does not replace them, and a card can sit stale until the next sweep
+either way.
 
 Add the card (parents and children both):
 `rtk gh project item-add <project-number> --owner <owner> --url <issue-url>`
