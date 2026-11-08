@@ -51,7 +51,9 @@
 # claim that cannot be proven exclusive must not be treated as granted — that is the input that
 # produces two agents in one file.
 set -u
-source "${BASH_SOURCE[0]%/*}/gh_budget.sh"
+_gb_dir="${BASH_SOURCE[0]%/*}" # no slash (sourced by bare filename): the dir is cwd
+[[ "$_gb_dir" == "${BASH_SOURCE[0]}" ]] && _gb_dir=.
+source "$_gb_dir/gh_budget.sh"
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	echo "lib/dispatch_claims.sh is meant to be sourced, not executed." >&2

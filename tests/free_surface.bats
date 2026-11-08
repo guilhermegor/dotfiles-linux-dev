@@ -190,3 +190,25 @@ gh() {
     [ "$status" -eq 0 ]
     [ "$(wc -l <"$GH_BUDGET_SPEND_LOG")" -eq 1 ]
 }
+
+@test "_free_claimed_issues logs one line per page" {
+    export GH_BUDGET_SPEND_LOG="$BATS_TEST_TMPDIR/spend.tsv" CALLS="$BATS_TEST_TMPDIR/calls"
+    gh() {
+        echo x >>"$CALLS"
+        if [ "$(wc -l <"$CALLS")" -eq 1 ]; then
+            echo '{"data":{"search":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"c1"}}}}'
+        else
+            echo '{"data":{"search":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}'
+        fi
+    }
+    run _free_claimed_issues o/r
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <"$GH_BUDGET_SPEND_LOG")" -eq 2 ]
+}
+
+@test "free_surface.sh sourced by a bare filename still finds gh_budget.sh" {
+    run bash -c 'cd "$1" && source free_surface.sh && declare -F gh_budget_log_spend' _ \
+        "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *gh_budget_log_spend* ]]
+}
