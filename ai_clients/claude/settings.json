@@ -345,6 +345,15 @@
             "command": "bash \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/pr_self_assign.sh\""
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/memory_index_drift.sh\""
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
