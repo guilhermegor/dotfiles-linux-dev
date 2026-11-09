@@ -1034,3 +1034,66 @@ guard_cmd() {
         [ "$status" -eq 0 ]
     done
 }
+
+@test "GraphQL: a read selected by operationName ignores a sibling createIssue (#908)" {
+    run guard_cmd "gh api graphql -f query='query R{viewer{login}} mutation M{createIssue(input:{title:\"t\"}){clientMutationId}}' -f operationName=R"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: the createIssue operation selected by operationName is still blocked (#908)" {
+    run guard_cmd "gh api graphql -f query='query R{viewer{login}} mutation M{createIssue(input:{title:\"t\"}){clientMutationId}}' -f operationName=M"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: several operations and no operationName still fail closed (#908)" {
+    run guard_cmd "gh api graphql -f query='query R{viewer{login}} mutation M{createIssue(input:{title:\"t\"}){clientMutationId}}'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: createIssue named only in a comment or string is not a write (#908)" {
+    run guard_cmd "gh api graphql -f query='query{search(query:\"createIssue(x)\"){issueCount}} # createIssue(y)'"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: an unselected mutation's object variable default does not taint the read (#908)" {
+    run guard_cmd "gh api graphql -f query='mutation M(\$i: In = {title:\"t\"}){createIssue(input:\$i){clientMutationId}} query R{viewer{login}}' -f operationName=R"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: only fragments the selected operation reaches are judged (#908)" {
+    local frag='fragment F on Mutation{createIssue(input:{title:\"t\"}){clientMutationId}}'
+    run guard_cmd "gh api graphql -f query='query R{viewer{login}} mutation M{...F} $frag' -f operationName=R"
+    [ "$status" -eq 0 ]
+    run guard_cmd "gh api graphql -f query='query R{...F} $frag' -f operationName=R"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -f query='query R{...G} fragment G on Mutation{...F} $frag mutation M{viewer{login}}' -f operationName=R"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: variables[operationName] is a variable, never the /graphql selector (#908)" {
+    local doc="query R{viewer{login}} mutation M{createIssue(input:{title:\\\"t\\\"}){clientMutationId}}"
+    run guard_cmd "gh api /graphql -f query='$doc' -f operationName=M -f 'variables[operationName]=R'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api /graphql -f query='$doc' -f operationName=R -f 'variables[operationName]=M'"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL --input: operationName selecting a read beside a createIssue is allowed (#908)" {
+    local f="$BATS_TEST_TMPDIR/op.json"
+    printf '%s' '{"query":"query R{viewer{login}} mutation M{createIssue(input:{title:\"t\"}){clientMutationId}}","operationName":"R"}' > "$f"
+    run guard_cmd "gh api graphql --input $f"
+    [ "$status" -eq 0 ]
+    printf '%s' '{"query":"query R{viewer{login}} mutation M{createIssue(input:{title:\"t\"}){clientMutationId}}","operationName":"M"}' > "$f"
+    run guard_cmd "gh api graphql --input $f"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a read-only pullRequest/reviewThreads query with escaped quotes is allowed (#908)" {
+    run guard_cmd "gh api graphql -f query=\"{repository(owner:\\\"guilhermegor\\\",name:\\\"dotfiles-linux-dev\\\"){pullRequest(number:953){state headRefOid reviewThreads(first:50){nodes{id isResolved comments(last:1){nodes{databaseId author{login}}}}}}}}\" --jq '.data'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: -f on a pull-request merge endpoint is not an issue write (#908)" {
+    run guard_cmd "gh api -X PUT repos/guilhermegor/dotfiles-linux-dev/pulls/967/merge -f merge_method=squash -f sha=abc123"
+    [ "$status" -eq 0 ]
+}
