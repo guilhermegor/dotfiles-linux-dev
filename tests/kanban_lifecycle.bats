@@ -835,6 +835,30 @@ write_pr_json() {
     [[ "$output" == *"moved issue"*"131"* ]]
 }
 
+@test "a bare gh pr create resolves HEAD from the payload cwd, not the hook's" {
+    write_fake_gh "OPEN"
+    git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
+    git checkout -q -b feat/999-other
+    mkdir "$TEST_TMP/elsewhere"
+    cd "$TEST_TMP/elsewhere"
+    run bash -c 'jq -nc --arg c "$1" --arg d "$2" "{tool_name:\"Bash\",cwd:\$d,tool_input:{command:\$c}}" | "$3"' \
+        _ "gh pr create --title x --body y" "$TEST_TMP/wt" "$HOOK"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"moved issue #131's card"* ]]
+}
+
+@test "checkout/switch to an existing branch whose name holds -b or -c moves nothing" {
+    write_fake_gh "OPEN"
+    git branch feat/131-bugfix
+    git branch fix/12-cleanup
+    run run_hook "git checkout feat/131-bugfix"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    run run_hook "git switch fix/12-cleanup"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
 @test "redirects and a heredoc body do not break the scan" {
     write_fake_gh "OPEN"
     git worktree add -q -b feat/131-wt "$TEST_TMP/wt"
