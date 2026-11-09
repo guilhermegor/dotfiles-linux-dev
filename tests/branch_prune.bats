@@ -158,6 +158,54 @@ squash() {
     [ "$output" = "$(printf 'x\topen\tmaster\tabc\t5')" ]
 }
 
+@test "a branch checked out after the re-check is refused by the delete itself" {
+    branch_at b13 f13.txt race
+    git -C "$work" push --quiet origin b13:master
+    git -C "$work" fetch --quiet origin
+    branch_prune_recheck_pr() { git -C "$work" worktree add --quiet "$BATS_TEST_TMPDIR/wt-b13" b13; }
+    run prune_branches "$work" 1
+    [[ "$output" == *"KEEP-LOCAL b13: delete refused"* ]]
+    git -C "$work" rev-parse --verify --quiet refs/heads/b13
+}
+
+@test "a failing worktree listing skips the pass and both refs remain" {
+    branch_at b14 f14.txt listed
+    git -C "$work" push --quiet origin b14:master
+    git -C "$work" fetch --quiet origin
+    bp_git() { case "$3" in worktree) return 128 ;; esac; /usr/bin/git "$@"; }
+    run prune_branches "$work" 1
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"worktree list unreadable"* ]]
+    git -C "$work" rev-parse --verify --quiet refs/heads/b14
+    [ -n "$(git -C "$bare" for-each-ref refs/heads/b14)" ]
+}
+
+@test "no raw git available skips the pass" {
+    BRANCH_PRUNE_GIT="$BATS_TEST_TMPDIR/nogit"
+    run prune_branches "$work" 1
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"no raw git"* ]]
+}
+
+@test "a shimmed git on PATH is never called during the pass" {
+    mkdir -p "$BATS_TEST_TMPDIR/shim"
+    printf '#!/bin/bash\necho called >>"%s/shim.log"\nexec /usr/bin/git "$@"\n' "$BATS_TEST_TMPDIR" >"$BATS_TEST_TMPDIR/shim/git"
+    chmod +x "$BATS_TEST_TMPDIR/shim/git"
+    PATH="$BATS_TEST_TMPDIR/shim:$PATH" run prune_branches "$work" 0
+    [ ! -e "$BATS_TEST_TMPDIR/shim.log" ]
+}
+
+@test "prune_pr_state asks for OPEN PRs directly so a page limit cannot hide one" {
+    unset -f prune_pr_state
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
+    fanout_repo_slug() { echo me/repo; }
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    printf '#!/bin/bash\ncase "$*" in *state=open*) echo 1 ;; *) echo closed ;; esac\n' >"$BATS_TEST_TMPDIR/bin/gh"
+    chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+    PATH="$BATS_TEST_TMPDIR/bin:$PATH" run prune_pr_state "$work" some-branch
+    [ "$output" = open ]
+}
+
 @test "closed-unmerged remote branch with missing lines is reported, not deleted" {
     branch_at b2 f2.txt unique-line
     PR_ROWS="$(printf 'b2\tclosed\tmaster\t%s\t8\n' "$(git -C "$work" rev-parse b2)")"
@@ -172,7 +220,7 @@ squash() {
     squash f3.txt same
     PR_ROWS="$(printf 'b3\tclosed\tmaster\t%s\t5\n' "$(git -C "$work" rev-parse b3)")"
     run prune_branches "$work" 1
-    [[ "$output" == *"DELETED-REMOTE b3: every added line is on origin/master"* ]]
+    [[ "$output" == *"DELETED-REMOTE b3 (was $(git -C "$work" rev-parse b3)): every added line is on origin/master"* ]]
     [ -z "$(git -C "$bare" for-each-ref refs/heads/b3)" ]
 }
 

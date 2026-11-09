@@ -95,7 +95,10 @@ prune_pr_state() {
 	owner="${slug%%/*}"
 	local enc
 	enc="$(jq -rn --arg b "$owner:$branch" '$b|@uri')" || return 1
-	out="$(gh api "repos/$slug/pulls?state=all&per_page=100&head=$enc" \
+	# OPEN is what blocks a delete, so ask for it directly: never lost to a page limit on state=all.
+	out="$(gh api "repos/$slug/pulls?state=open&per_page=1&head=$enc" --jq 'length' 2>/dev/null)" || return 1
+	[ "$out" = 0 ] || { [[ "$out" =~ ^[0-9]+$ ]] && echo open && return 0; return 1; }
+	out="$(gh api --paginate "repos/$slug/pulls?state=all&per_page=100&head=$enc" \
 		--jq 'map(if .state=="open" then "open" elif .merged_at then "merged" else "closed" end) | unique | join(" ")' 2>/dev/null)" || return 1
 	case " $out " in
 	*" open "*) echo open ;;

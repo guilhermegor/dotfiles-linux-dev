@@ -24,7 +24,6 @@
 BRANCH_PRUNE_PROTECTED=(gh-pages)
 # Raw git: the rtk proxy has collapsed output mid-audit, and this parser reads diff headers.
 BRANCH_PRUNE_GIT="${BRANCH_PRUNE_GIT:-/usr/bin/git}"
-[ -x "$BRANCH_PRUNE_GIT" ] || BRANCH_PRUNE_GIT="$(command -v git)"
 BRANCH_PRUNE_PR_NS="refs/prune-pr"
 
 bp_git() { "$BRANCH_PRUNE_GIT" "$@"; }
@@ -52,9 +51,12 @@ branch_prune_is_protected() {
 	return 1
 }
 
-# Branches any worktree has checked out, one per line.
+# Branches any worktree has checked out, one per line. rc 1 = the listing failed: callers must
+# treat that as unknown, never as "none checked out".
 branch_prune_checked_out() {
-	bp_git -C "$1" worktree list --porcelain 2>/dev/null | sed -n 's|^branch refs/heads/||p'
+	local out
+	out="$(bp_git -C "$1" worktree list --porcelain 2>/dev/null)" || return 1
+	sed -n 's|^branch refs/heads/||p' <<<"$out"
 }
 
 # Prints what base..tip changes that origin/<db> lacks: one "path: line" per added line missing
@@ -141,6 +143,20 @@ branch_prune_recheck_pr() {
 	[ "$state" != open ] || { echo "PR opened since the snapshot"; return 1; }
 }
 
+# Deletes a local branch only if its tip is still $3. `branch -D` refuses a branch any worktree has
+# checked out, atomically (update-ref -d does not); its "(was <sha>)" report proves which tip went,
+# and a tip that moved in the gap is restored. Prints the reason and rc 1 on refusal.
+branch_prune_delete_local() {
+	local cwd="$1" name="$2" sha="$3" msg was
+	[ "$(bp_git -C "$cwd" rev-parse "refs/heads/$name" 2>/dev/null)" = "$sha" ] || { echo "tip moved"; return 1; }
+	msg="$(bp_git -C "$cwd" branch -D "$name" 2>&1)" || { echo "delete refused (checked out or failed)"; return 1; }
+	was="$(sed -n 's/.*(was \([0-9a-f]*\)).*/\1/p' <<<"$msg")"
+	case "$sha" in "$was"*) return 0 ;; esac
+	[ -n "$was" ] && bp_git -C "$cwd" update-ref "refs/heads/$name" "$was" "" 2>/dev/null
+	echo "tip moved during delete, restored"
+	return 1
+}
+
 branch_prune_local() {
 	local cwd="$1" apply="$2" db="$3" rows="$4" checked="$5" name sha reason why verb="WOULD-DELETE-LOCAL"
 	[ "$apply" = 1 ] && verb="DELETED-LOCAL"
@@ -160,15 +176,10 @@ branch_prune_local() {
 		fi
 		if [ "$apply" = 1 ]; then
 			why="$(branch_prune_recheck_pr "$cwd" "$name")" || { printf 'KEEP-LOCAL %s: %s\n' "$name" "$why"; continue; }
-			# Worktrees re-read just before the delete; update-ref deletes only if the tip is still $sha.
-			if [[ $'\n'"$(branch_prune_checked_out "$cwd")"$'\n' == *$'\n'"$name"$'\n'* ]]; then
-				printf 'KEEP-LOCAL %s: checked out since the snapshot\n' "$name"; continue
-			fi
-			if ! bp_git -C "$cwd" update-ref -d "refs/heads/$name" "$sha" 2>/dev/null; then
-				printf 'KEEP-LOCAL %s: tip moved or delete failed\n' "$name"; BRANCH_PRUNE_FAILED=$((BRANCH_PRUNE_FAILED + 1)); continue
-			fi
+			why="$(branch_prune_delete_local "$cwd" "$name" "$sha")" \
+				|| { printf 'KEEP-LOCAL %s: %s\n' "$name" "$why"; BRANCH_PRUNE_FAILED=$((BRANCH_PRUNE_FAILED + 1)); continue; }
 		fi
-		printf '%s %s: %s\n' "$verb" "$name" "$reason"
+		printf '%s %s (was %s): %s\n' "$verb" "$name" "$sha" "$reason"
 		BRANCH_PRUNE_DONE=$((BRANCH_PRUNE_DONE + 1))
 	done < <(bp_git -C "$cwd" for-each-ref --format='%(refname:short)	%(objectname)' refs/heads 2>/dev/null)
 }
@@ -209,7 +220,7 @@ branch_prune_remote() {
 			err="$(prune_git_remote "$cwd" push --force-with-lease="refs/heads/$name:$sha" origin --delete "refs/heads/$name" 2>&1 >/dev/null)" \
 				|| { printf 'KEEP-REMOTE %s: push --delete failed (%s)\n' "$name" "${err##*$'\n'}"; BRANCH_PRUNE_FAILED=$((BRANCH_PRUNE_FAILED + 1)); continue; }
 		fi
-		printf '%s %s: %s\n' "$verb" "$name" "$reason"
+		printf '%s %s (was %s): %s\n' "$verb" "$name" "$sha" "$reason"
 		BRANCH_PRUNE_DONE=$((BRANCH_PRUNE_DONE + 1))
 	done < <(bp_git -C "$cwd" for-each-ref --format='%(refname:short)	%(objectname)' refs/remotes/origin 2>/dev/null)
 }
@@ -225,8 +236,20 @@ branch_prune_drop_pr_refs() {
 
 # Usage: prune_branches <repo> <apply 0|1>; rc 1 = a delete failed, rc 2 = pass skipped (unreadable).
 prune_branches() {
+	local rc
+	[ -x "$BRANCH_PRUNE_GIT" ] || { echo "[branch-prune] no raw git at $BRANCH_PRUNE_GIT — skipped"; return 2; }
+	# While the pass runs a plain `git` anywhere in it (prune_default_branch, fanout_repo_slug, the
+	# ssh-config read in prune_git_remote) is the raw binary too, never a PATH shim.
+	git() { "$BRANCH_PRUNE_GIT" "$@"; }
+	_prune_branches "$@"
+	rc=$?
+	unset -f git
+	return "$rc"
+}
+
+_prune_branches() {
 	local cwd="$1" apply="$2" db rows checked
-	# Read by prune_git_remote (worktree_prune.sh) through bash dynamic scope: raw git for fetch/push.
+	# Read by prune_git_remote (worktree_prune.sh) through bash dynamic scope: `env … git` needs a path.
 	# shellcheck disable=SC2034
 	local PRUNE_GIT_BIN="$BRANCH_PRUNE_GIT"
 	BRANCH_PRUNE_DONE=0
@@ -245,7 +268,11 @@ prune_branches() {
 		echo "[branch-prune] forge PR list unreadable — skipped"
 		return 2
 	fi
-	checked="$(branch_prune_checked_out "$cwd")"
+	if ! checked="$(branch_prune_checked_out "$cwd")"; then
+		branch_prune_drop_pr_refs "$cwd"
+		echo "[branch-prune] worktree list unreadable — skipped"
+		return 2
+	fi
 	branch_prune_local "$cwd" "$apply" "$db" "$rows" "$checked"
 	branch_prune_remote "$cwd" "$apply" "$db" "$rows" "$checked"
 	branch_prune_drop_pr_refs "$cwd"
