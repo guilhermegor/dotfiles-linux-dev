@@ -200,6 +200,7 @@ $issues_json
 JSON
     ;;
 "issue list --repo acme/widgets --state open --limit 500 --json number --jq .[].number")
+    [ -n "\${GATE_SLEEP:-}" ] && sleep "\$GATE_SLEEP"
     # A QUOTED heredoc, exactly like the --json number,body branch above. Interpolating
     # \$issues_json into a double-quoted printf argument instead breaks the generated stub:
     # the JSON's own double quotes end the quoting and its \`\`\`surface fence becomes command
@@ -781,6 +782,18 @@ print(len(prs), sorted(p["number"] for p in prs) == list(range(1, 46)), prs[0]["
     [ "$(field '.excluded | length')" -eq 2 ]
     [[ "$(field '.excluded[0].reason')" == *"UNKNOWN"* ]]
     [[ "$(field '.excluded[1].reason')" == *"UNKNOWN"* ]]
+}
+
+@test "a gate slower than DISPATCH_PLAN_GATE_TIMEOUT is UNKNOWN; raising it lets it finish (#960)" {
+    export GATE_SLEEP=3
+    stub_gh "[$(issue_json 1 free/a.sh)]"
+    DISPATCH_PLAN_GATE_TIMEOUT=1 run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [[ "$(field '.excluded[0].reason')" == *"UNKNOWN"* ]]
+    DISPATCH_PLAN_GATE_TIMEOUT=20 run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 1 ]
 }
 
 # --- dotfiles-linux-dev#607: no gh call whose answer the planner throws away ----------------------

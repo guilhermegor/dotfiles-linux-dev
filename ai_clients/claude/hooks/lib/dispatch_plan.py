@@ -106,7 +106,11 @@ GH_TIMEOUT = 20
 # it lets the existing hot_read_failed path exclude the affected candidates by name instead.
 # DISPATCH_HOT_READ_BUDGET overrides it (tests).
 HOT_READ_BUDGET = 30.0
-GATE_TIMEOUT = 25
+# The gate pages EVERY PR the repo has ever had (open and closed, 100 per serial GraphQL request),
+# so its cost grows with PR history, not the open board: filings-cvm (218 PRs, 3 pages) timed out
+# three runs in a row at the old 25s (#960). 45s stays under round_dispatch_guard's 60s kill.
+# DISPATCH_PLAN_GATE_TIMEOUT overrides it, like DISPATCH_PLAN_GH_TIMEOUT does for each gh call.
+GATE_TIMEOUT = float(os.environ.get("DISPATCH_PLAN_GATE_TIMEOUT", "45"))
 # One `_ru_native_blockers` call per open issue, sequential inside a single subprocess (same
 # reasoning as GATE_TIMEOUT for the free-surface gate) — generous because a 500-issue repo would
 # otherwise need this to scale, but LATENT at this repo's ~33 open issues like the other caps.
@@ -694,14 +698,17 @@ def run_gate(
 	stdin = "".join(f"{p}\n" for p in held)
 	stdin += "===REQUESTS===\n"
 	stdin += "".join(f"{issue}\t{'|'.join(files)}\n" for issue, files in requests)
-	proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
-		["bash", "-c", _GATE_SCRIPT, "dispatch_plan", owner, repo, str(FREE_SURFACE_SH)],
-		input=stdin,
-		capture_output=True,
-		text=True,
-		timeout=GATE_TIMEOUT,
-		check=True,
-	)
+	try:
+		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
+			["bash", "-c", _GATE_SCRIPT, "dispatch_plan", owner, repo, str(FREE_SURFACE_SH)],
+			input=stdin,
+			capture_output=True,
+			text=True,
+			timeout=GATE_TIMEOUT,
+			check=True,
+		)
+	except subprocess.TimeoutExpired:
+		return False, set(), {}
 	lines = proc.stdout.splitlines()
 	if not lines or lines[0] != "GATE_STATUS:ok":
 		return False, set(), {}
