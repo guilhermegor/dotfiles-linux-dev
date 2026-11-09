@@ -387,6 +387,12 @@ API_ISSUE_SUBRESOURCE = re.compile(
     r"^repos/[^/]+/[^/]+/issues/(?:\d+/(?:comments|labels|assignees|events|timeline|reactions|"
     r"lock|sub_issues|dependencies)(?:/.*)?|comments(?:/\d+(?:/reactions)?)?|events(?:/\d+)?)$"
 )
+# Issue sub-resources that never carry an issue title/body (so no `comments`), reached through a
+# one- or two-segment dynamic repo prefix: `repos/$R/issues/5/sub_issues` (dotfiles-linux-dev#963).
+DYNAMIC_REPO_BODYLESS_SUBRESOURCE = re.compile(
+    r"^repos/(?:[^/]+/)?[^/]+/issues/\d+/(?:labels|assignees|events|timeline|reactions|lock|"
+    r"sub_issues|dependencies)(?:/[^/$`]+)*$"
+)
 API_VALUE_FLAGS = {
     "-X": "method", "--method": "method",
     "-f": "field", "--raw-field": "field", "-F": "field", "--field": "field",
@@ -413,6 +419,9 @@ def only_repo_segment_is_dynamic(path):
     var_at = [i for i, seg in enumerate(segs) if "$" in seg or "`" in seg]
     if not var_at:
         return False
+    if (DYNAMIC_REPO_BODYLESS_SUBRESOURCE.match("/".join(segs))
+            and not {".", ".."} & set(segs)):
+        return True  # the variable stands for owner/name; the tail is a bodyless sub-resource (#963)
     if min(var_at) > 3 and "issues" not in path.lower() and not {".", ".."} & set(segs):
         return True  # literal repos/O/R/<resource>/...: the variable is a loop id (#870)
     verdicts = []

@@ -1093,6 +1093,22 @@ guard_cmd() {
     [ "$status" -eq 0 ]
 }
 
+@test "REST: a one-variable repo before a bodyless issue sub-resource is allowed (#963)" {
+    run guard_cmd 'gh api repos/$R/issues/5/dependencies/blocked_by -F issue_id=1'
+    [ "$status" -eq 0 ]
+    run guard_cmd 'gh api repos/$R/issues/5/sub_issues -F sub_issue_id=1'
+    [ "$status" -eq 0 ]
+    run guard_cmd 'gh api repos/$OWNER/$REPO/issues/5/sub_issues -F sub_issue_id=1'
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: a variable repo still blocks issue create and edit (#963)" {
+    run guard_cmd 'gh api repos/$R/issues -f title=x'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api repos/$R/issues/5 -f body=x'
+    [ "$status" -eq 2 ]
+}
+
 @test "REST: -f on a pull-request merge endpoint is not an issue write (#908)" {
     run guard_cmd "gh api -X PUT repos/guilhermegor/dotfiles-linux-dev/pulls/967/merge -f merge_method=squash -f sha=abc123"
     [ "$status" -eq 0 ]
