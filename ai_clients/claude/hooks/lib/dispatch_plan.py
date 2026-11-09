@@ -111,6 +111,22 @@ HOT_READ_BUDGET = 30.0
 # three runs in a row at the old 25s (#960). 45s stays under round_dispatch_guard's 60s kill.
 # DISPATCH_PLAN_GATE_TIMEOUT overrides it, like DISPATCH_PLAN_GH_TIMEOUT does for each gh call.
 GATE_TIMEOUT = float(os.environ.get("DISPATCH_PLAN_GATE_TIMEOUT", "45"))
+# The Stop guards kill this process at ROUND_DISPATCH_PLANNER_TIMEOUT / DISPATCH_GUARD_PLANNER_TIMEOUT
+# (60s each), and the reads before the gate already spent part of that. A gate that outlives the
+# kill never gets to report UNKNOWN, so each gate call is capped to what is left of the planner's
+# budget minus PLAN_EMIT_RESERVE for printing the plan (PR #973 review).
+PLANNER_BUDGET = min(
+	float(os.environ.get("ROUND_DISPATCH_PLANNER_TIMEOUT", "60")),
+	float(os.environ.get("DISPATCH_GUARD_PLANNER_TIMEOUT", "60")),
+)
+PLAN_EMIT_RESERVE = 3.0
+_STARTED = time.monotonic()
+
+
+def gate_timeout() -> float:
+	"""The gate's own timeout, capped to the planner budget still unspent (never below 1s)."""
+	remaining = PLANNER_BUDGET - PLAN_EMIT_RESERVE - (time.monotonic() - _STARTED)
+	return max(1.0, min(GATE_TIMEOUT, remaining))
 # One `_ru_native_blockers` call per open issue, sequential inside a single subprocess (same
 # reasoning as GATE_TIMEOUT for the free-surface gate) — generous because a 500-issue repo would
 # otherwise need this to scale, but LATENT at this repo's ~33 open issues like the other caps.
@@ -326,7 +342,7 @@ def live_agent_held_paths(root: Path) -> tuple[bool, list[str]]:
 			["bash", "-c", _LIVE_AGENT_GATE_SCRIPT, "dispatch_plan", str(root), str(FREE_SURFACE_SH)],
 			capture_output=True,
 			text=True,
-			timeout=GATE_TIMEOUT,
+			timeout=gate_timeout(),
 		)
 	except subprocess.TimeoutExpired:
 		return False, []
@@ -704,7 +720,7 @@ def run_gate(
 			input=stdin,
 			capture_output=True,
 			text=True,
-			timeout=GATE_TIMEOUT,
+			timeout=gate_timeout(),
 			check=True,
 		)
 	except subprocess.TimeoutExpired:
@@ -901,7 +917,7 @@ def build_plan() -> dict:
 			excluded.append(
 				{
 					"issue": number,
-					"reason": "free surface gate UNKNOWN (gh API failure) — "
+					"reason": "free surface gate UNKNOWN (gh API failure or gate timeout) — "
 					"verify non-collision by hand",
 				}
 			)

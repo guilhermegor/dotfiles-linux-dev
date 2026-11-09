@@ -796,6 +796,24 @@ print(len(prs), sorted(p["number"] for p in prs) == list(range(1, 46)), prs[0]["
     [ "$(field '.dispatchable | length')" -eq 1 ]
 }
 
+@test "the gate timeout defaults to 45s and is capped by what is left of the planner budget (#960)" {
+    run env -u DISPATCH_PLAN_GATE_TIMEOUT -u ROUND_DISPATCH_PLANNER_TIMEOUT -u DISPATCH_GUARD_PLANNER_TIMEOUT \
+        python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan as d
+print(d.GATE_TIMEOUT, d.gate_timeout())
+d._STARTED = time.monotonic() - 40  # 40s of the 60s planner budget already spent
+print(round(d.gate_timeout()))
+d._STARTED = time.monotonic() - 100  # overspent: never below 1s
+print(d.gate_timeout())
+PY
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "45.0 45.0" ]
+    [ "${lines[1]}" = "17" ]
+    [ "${lines[2]}" = "1.0" ]
+}
+
 # --- dotfiles-linux-dev#607: no gh call whose answer the planner throws away ----------------------
 
 @test "the planner never reads per-PR files or per-branch compares it overwrites" {
