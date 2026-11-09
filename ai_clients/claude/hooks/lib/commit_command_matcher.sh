@@ -68,8 +68,14 @@ COMMIT_COMMAND_GIT_DIR=""
 # GROUPING is interpreted here — backslashes, expansions and substitutions stay literal text,
 # which is all the matcher needs to find the subcommand and the `-C` value. `read -ra` was the
 # first attempt and is wrong: it splits on IFS and ignores quotes entirely.
+#
+# With a second argument (`split`) the tokenizer also treats an UNQUOTED `;`, `&`, `|` or newline as
+# a command boundary and emits `_BOUNDARY` as its own word, so a whole multi-command string (or a
+# script body) can be tokenized in one pass with quoted bodies kept intact (#961). Without it the
+# behaviour is unchanged: callers pre-split on operators and those characters never reach here.
+_BOUNDARY=$'\x1f'
 _tokenize_segment() {
-    local segment="$1" char quote='' current='' started=0 i
+    local segment="$1" split="${2:-}" char quote='' current='' started=0 i
     _SEGMENT_WORDS=()
 
     for ((i = 0; i < ${#segment}; i++)); do
@@ -79,6 +85,9 @@ _tokenize_segment() {
         elif [[ "$char" == "'" || "$char" == '"' ]]; then
             quote="$char"
             started=1
+        elif [[ -n "$split" && ( "$char" == [\;\&\|] || "$char" == $'\n' ) ]]; then
+            ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
+            _SEGMENT_WORDS+=("$_BOUNDARY")
         elif [[ "$char" == [[:space:]] ]]; then
             ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
         else
@@ -91,16 +100,14 @@ _tokenize_segment() {
     return 0
 }
 
-# _segment_invokes_commit SEGMENT
-# Return 0 if SEGMENT is a `git commit` invocation anchored at its own start: an optional
-# `rtk` / `rtk proxy` prefix, the git binary (bare or an absolute path), any run of global
-# flags, then the literal subcommand `commit`. On a match, sets COMMIT_COMMAND_GIT_DIR.
-_segment_invokes_commit() {
-    local -a words=()
+# _words_invoke_commit
+# Return 0 if the global `_CMD_WORDS` (ONE simple command's words) is a `git commit` invocation: an
+# optional `rtk` / `rtk proxy` prefix, the git binary (bare or an absolute path), any run of global
+# flags, then the literal subcommand `commit`. On a match, sets COMMIT_COMMAND_GIT_DIR and
+# `_COMMIT_ARGS_FROM` (the index of the first word after `commit`).
+_words_invoke_commit() {
+    local -a words=("${_CMD_WORDS[@]:-}")
     local i=0 dir=''
-
-    _tokenize_segment "$1"
-    words=("${_SEGMENT_WORDS[@]:-}")
 
     # `rtk` / `rtk proxy` prefix (RTK.md's proxy and its raw escape hatch).
     if [[ "${words[i]:-}" && "${words[i]##*/}" == "rtk" ]]; then
@@ -123,7 +130,17 @@ _segment_invokes_commit() {
     [[ "${words[i]:-}" == "commit" ]] || return 1
 
     COMMIT_COMMAND_GIT_DIR="$dir"
+    _COMMIT_ARGS_FROM=$((i + 1))
     return 0
+}
+
+# _segment_invokes_commit SEGMENT
+# Return 0 if SEGMENT is a `git commit` invocation anchored at its own start (see
+# _words_invoke_commit). On a match, sets COMMIT_COMMAND_GIT_DIR.
+_segment_invokes_commit() {
+    _tokenize_segment "$1"
+    _CMD_WORDS=("${_SEGMENT_WORDS[@]:-}")
+    _words_invoke_commit
 }
 
 # command_has_git_commit COMMAND
@@ -141,4 +158,97 @@ command_has_git_commit() {
     done <<< "$(printf '%s' "$command" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
 
     return 1
+}
+
+# --- inline `-m` messages and script bodies (dotfiles-linux-dev#961) -----------------------------
+#
+# commit_body_wrap.sh and commit_title_length_guard.sh were blind to two shapes that still reach
+# gitlint's B1/T1 after the whole pre-commit gate: a `git commit -m <title> -m <long body>` (more
+# than one -m) and a commit run inside `bash <file>.sh`, where the PreToolUse payload is just
+# `bash <file>` and never matches the segment anchor above.
+
+_MSG_SEP=$'\x1f'
+
+# commit_expand_script COMMAND
+# Echo COMMAND; when a segment of it runs `bash|sh [flags] <file>.sh` and that file is a readable
+# regular file of at most 256 KiB, append the file's text so the caller can scan the commits inside.
+# One level only, no recursion. Anything unreadable, oversized or built from expansion is skipped
+# (fail open): the caller just sees the original command.
+commit_expand_script() {
+    local command="$1" segment file w out="$1"
+    local -a words
+
+    while IFS= read -r segment; do
+        _tokenize_segment "$segment"
+        words=("${_SEGMENT_WORDS[@]:-}")
+        [[ "${words[0]##*/}" == "bash" || "${words[0]##*/}" == "sh" ]] || continue
+        file=''
+        for w in "${words[@]:1}"; do
+            [[ "$w" == -* ]] && continue
+            file="$w"
+            break
+        done
+        [[ "$file" == *.sh && "$file" != *'$'* && "$file" != *'`'* ]] || continue
+        [[ -f "$file" && -r "$file" ]] || continue
+        (($(wc -c < "$file") <= 262144)) || continue
+        out+=$'\n'"$(cat "$file")"
+    done <<< "$(printf '%s' "$command" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
+
+    printf '%s' "$out"
+}
+
+# _collect_commit_messages
+# For the global `_CMD_WORDS`: when it is a `git commit` with inline messages, append one element to
+# COMMIT_MESSAGE_SETS holding its -m / --message values joined by `_MSG_SEP`. A commit that also
+# reads a message from a file (-F/--file) is skipped: its source is ambiguous. A value built from
+# shell expansion cannot be measured statically, so it is recorded as empty (fail open for that
+# paragraph only, never counting the literal `$(...)` text).
+_collect_commit_messages() {
+    local i w val skip=0
+    local -a msgs=()
+
+    _words_invoke_commit || return 0
+    for ((i = _COMMIT_ARGS_FROM; i < ${#_CMD_WORDS[@]}; i++)); do
+        w="${_CMD_WORDS[i]}"
+        val=''
+        case "$w" in
+            -F | --file | --file=* | -F?*) skip=1; continue ;;
+            -m | --message) val="${_CMD_WORDS[i + 1]:-}"; i=$((i + 1)) ;;
+            --message=*) val="${w#--message=}" ;;
+            -m?*) val="${w#-m}" ;;
+            -[A-Za-z]*m) val="${_CMD_WORDS[i + 1]:-}"; i=$((i + 1)) ;;   # a cluster such as -am
+            *) continue ;;
+        esac
+        [[ "$val" == *'$'* || "$val" == *'`'* ]] && val=''
+        msgs+=("$val")
+    done
+
+    ((skip)) && return 0
+    ((${#msgs[@]})) || return 0
+    COMMIT_MESSAGE_SETS+=("$(IFS="$_MSG_SEP"; printf '%s' "${msgs[*]}")")
+}
+
+# commit_inline_messages COMMAND
+# Fill the global array COMMIT_MESSAGE_SETS with one element per `git commit` in COMMAND (a script
+# body included) that carries inline -m messages: the messages joined by `_MSG_SEP` (\x1f). The
+# first message is the title, the rest are body paragraphs. COMMIT_COMMAND_GIT_DIR is preserved.
+commit_inline_messages() {
+    local saved_dir="$COMMIT_COMMAND_GIT_DIR" w
+    local -a all
+    COMMIT_MESSAGE_SETS=()
+    _CMD_WORDS=()
+
+    _tokenize_segment "$1" split
+    all=("${_SEGMENT_WORDS[@]:-}")
+    for w in "${all[@]}" "$_BOUNDARY"; do
+        if [[ "$w" == "$_BOUNDARY" ]]; then
+            _collect_commit_messages
+            _CMD_WORDS=()
+        else
+            _CMD_WORDS+=("$w")
+        fi
+    done
+
+    COMMIT_COMMAND_GIT_DIR="$saved_dir"
+    return 0
 }

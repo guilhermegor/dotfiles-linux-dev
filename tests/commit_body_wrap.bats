@@ -80,3 +80,59 @@ run_guard() {
     after="$(cat "$MSG_FILE")"
     [ "$before" = "$after" ]
 }
+
+# --- issue #961: inline -m bodies are blocked, and commits inside `bash <script>.sh` are seen ----
+# 127 chars of two-letter words: over the 72 target, and wrappable (so not exempt as one token).
+
+LONG_BODY="$(printf 'ab %.0s' $(seq 1 42))"
+
+@test "#961: BLOCKS a multi -m commit whose body paragraph is over the limit" {
+    run run_guard "git commit -m 'feat: x' -m '$LONG_BODY'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"126 chars"* ]]
+    [[ "$output" == *"72"* ]]
+}
+
+@test "#961: BLOCKS a single -m whose own body lines (after the title) are over the limit" {
+    run run_guard "git commit -m 'feat: x
+
+$LONG_BODY'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: PASSES a multi -m commit with a short body" {
+    run run_guard "git commit -m 'feat: x' -m 'short body line'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a long TITLE alone is not a body problem (the title guard owns it)" {
+    run run_guard "git commit -m '$LONG_BODY'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: PASSES an over-long single token (URL) in the body, which cannot be wrapped" {
+    run run_guard "git commit -m 'feat: x' -m 'https://example.com/$(printf 'a%.0s' $(seq 1 90))'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: BLOCKS a long -m body inside bash <script>.sh" {
+    printf 'git add -A\ngit commit -m "feat: x" -m "%s"\n' "$LONG_BODY" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: PASSES a bash <script>.sh whose commit body is short" {
+    printf 'git commit -m "feat: x" -m "short"\n' > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: PASSES (fails open) when the script is unreadable" {
+    run run_guard "bash $TEST_TMP/does-not-exist.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: PASSES a -m body built from shell expansion (cannot be measured)" {
+    run run_guard "git commit -m 'feat: x' -m \"\$(printf '%0100d' 0)\""
+    [ "$status" -eq 0 ]
+}

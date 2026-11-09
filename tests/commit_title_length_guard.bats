@@ -176,8 +176,56 @@ CMD
     [ "$status" -eq 0 ]
 }
 
-@test "fails open on more than one -m (multi-paragraph, ambiguous title)" {
+@test "PASSES more than one -m when the first (title) -m is short" {
     run run_guard 'git commit -m title -m body'
+    [ "$status" -eq 0 ]
+}
+
+# --- issue #961: multi -m, -am cluster, and commits inside bash <script>.sh ---------------------
+
+LONG_TITLE="docs(backlog): every zero-review notice fails, including the successful one"
+
+@test "#961: BLOCKS a long FIRST -m even when more -m follow" {
+    run run_guard "git commit -m '$LONG_TITLE' -m 'body'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: BLOCKS a long title in a -am cluster" {
+    run run_guard "git commit -am '$LONG_TITLE'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: a long SECOND -m is a body, not a title" {
+    run run_guard "git commit -m 'feat: x' -m '$LONG_TITLE'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: BLOCKS a long title inside bash <script>.sh" {
+    printf 'git add -A\ngit commit -m "%s" -m "body"\n' "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: BLOCKS the long commit when a script holds a short one first" {
+    printf 'git commit -m "feat: x"\ngit commit -m "%s"\n' "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "sh -e $TEST_TMP/c.sh"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: PASSES a script whose commit title is short" {
+    printf 'git commit -m "feat: x" -m "body"\n' > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: PASSES (fails open) when the script is unreadable" {
+    run run_guard "bash $TEST_TMP/does-not-exist.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a script that merely mentions git commit in an echo is not a commit" {
+    printf 'echo "run git commit -m %s"\n' "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
     [ "$status" -eq 0 ]
 }
 

@@ -11,10 +11,13 @@
 # Hook I/O contract (same as pr_template_guard.sh): silent on stdout, speaks only through exit code
 # + stderr — so there is intentionally no lib/common.sh / print_status here. It fails OPEN
 # everywhere: any message the guard cannot cleanly parse out of the raw command string (a heredoc
-# not feeding `-F-`, `-F path/to/file`, more than one -m, a combined short cluster like -am, or a
-# title built from shell expansion) exits 0 and lets the commit proceed. Per the
-# hook-command-string-scraping-fragile lesson, better to miss some long titles than to
-# false-block a valid commit.
+# not feeding `-F-`, `-F path/to/file`, or a title built from shell expansion) exits 0 and lets the
+# commit proceed. Per the hook-command-string-scraping-fragile lesson, better to miss some long
+# titles than to false-block a valid commit.
+#
+# Since #961 the guard also measures the FIRST -m of a multi-`-m` commit, a `-am` cluster, and every
+# commit inside a readable `bash|sh <file>.sh` (see lib/commit_command_matcher.sh); an unreadable
+# script or an unparseable message still fails open.
 #
 # One narrowed exception (issue #140): `-F-`/`--file=-` fed by exactly one heredoc is the most
 # common shape an agent session uses, and unlike `-F path`, the heredoc body IS present in the
@@ -34,7 +37,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh"
 DEFAULT_TITLE_MAX_LENGTH=72
 
 main() {
-    local payload tool command title max_len
+    local payload tool command title max_len set
+    local -a titles
 
     payload="$(cat)"
     tool="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
@@ -43,28 +47,38 @@ main() {
     command="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
     [[ -n "$command" ]] || exit 0
 
+    # A `bash|sh <file>.sh` command runs its commits out of sight of the payload (#961): append the
+    # script's text so the matcher and the title extraction below see the commits inside it.
+    command="$(commit_expand_script "$command")"
+
     # Only act on an actual `git commit`. Every accepted spelling — and the per-segment anchor
     # that keeps a mere *mention* of "git commit" from tripping this — lives in the shared
     # matcher; see its header for the four shapes the old inline regex missed.
     command_has_git_commit "$command" || exit 0
 
-    if printf '%s' "$command" | grep -q '<<'; then
-        # A heredoc is present. The one shape we can safely parse is `-F-`/`--file=-` fed by
-        # exactly one heredoc (issue #140) — its body is in the raw command string. Anything
-        # else (heredoc feeding something other than `-F-`, more than one heredoc, an `-m` also
-        # present, a title needing shell expansion) is genuinely ambiguous from a raw string
-        # scrape: fail open.
-        title="$(extract_heredoc_title "$command")" || exit 0
+    titles=()
+    if printf '%s' "$command" | grep -q '<<' && title="$(extract_heredoc_title "$command")"; then
+        # `-F-`/`--file=-` fed by exactly one heredoc (issue #140): its body is in the raw string.
+        titles=("$title")
     else
-        # `-F <path>` / `--file <path>`: title lives in a file we are not reading here.
-        printf '%s' "$command" | grep -Eq -- '(-F[[:space:]]|--file([[:space:]]|=))' && exit 0
-
-        title="$(extract_single_title "$command")" || exit 0   # unparseable / multi / dynamic
+        # Inline `-m`: the title is the FIRST -m of each commit, however many follow (#961).
+        # `-F <path>` commits carry no inline message, so they yield nothing and pass.
+        commit_inline_messages "$command"
+        for set in ${COMMIT_MESSAGE_SETS[@]+"${COMMIT_MESSAGE_SETS[@]}"}; do
+            title="${set%%"$_MSG_SEP"*}"
+            titles+=("${title%%$'\n'*}")   # first line only
+        done
     fi
     max_len="$(read_title_max_length)"
 
-    (( ${#title} > max_len )) || exit 0   # within limit → allow
+    for title in ${titles[@]+"${titles[@]}"}; do
+        (( ${#title} > max_len )) && block_title "$title" "$max_len"
+    done
+    exit 0
+}
 
+block_title() {
+    local title="$1" max_len="$2"
     {
         echo "BLOCKED: commit title is ${#title} characters; the limit is ${max_len} (gitlint T1 / title-max-length)."
         echo
@@ -75,38 +89,6 @@ main() {
         echo "Shorten the title to <= ${max_len} characters and re-run the SAME commit."
     } >&2
     exit 2
-}
-
-extract_single_title() {
-    # Emit the sole inline commit title (first line only), or return 1 if the message cannot be
-    # cleanly parsed. Handles `-m "x"`, `-m 'x'`, `-mx`, `--message x`, `--message=x`. Leading space
-    # is prepended so every flag is space-preceded, which stops `-m` from matching inside
-    # `--message`. ponytail: this is a regex over the raw string, not a shell parse — a combined
-    # short cluster (`-am`) finds no match and fails open (safe miss); upgrade to real argv parsing
-    # only if that ever bites.
-    local s=" $1" re raw matched val
-    local titles=()
-    re='[[:space:]](-m|--message)[[:space:]=]*("[^"]*"|'\''[^'\'']*'\''|[^[:space:]]+)'
-    while [[ "$s" =~ $re ]]; do
-        raw="${BASH_REMATCH[2]}"
-        matched="${BASH_REMATCH[0]}"
-        s="${s#*"$matched"}"          # advance past this candidate, keep looking
-        val="${raw#[\"\']}"           # strip a leading quote, if any
-        val="${val%[\"\']}"           # strip a trailing quote, if any
-        titles+=("$val")
-    done
-
-    # Exactly one inline message is required: zero means editor-mode/--amend/--fill (nothing to
-    # check), and more than one is a multi-paragraph commit whose title extraction is ambiguous.
-    [[ ${#titles[@]} -eq 1 ]] || return 1
-
-    # A title built from shell expansion cannot be measured statically — fail open rather than
-    # count the literal `$(...)` / `$VAR` text.
-    case "${titles[0]}" in
-        *'$'* | *'`'*) return 1 ;;
-    esac
-
-    printf '%s' "${titles[0]%%$'\n'*}"   # first line only
 }
 
 extract_heredoc_title() {
