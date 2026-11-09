@@ -906,7 +906,8 @@ def api_issue_match(segments):
         # Understood as NOT an issue write only when the endpoint is a literal that either does
         # not mention `issues` at all or is a known issue sub-resource (comments, labels, ...).
         # Anything else that mentions `issues` is judged as a write (unknown never means allowed).
-        if not m and not dynamic and (not mentions or API_ISSUE_SUBRESOURCE.match(path)):
+        if not m and not dynamic and (not mentions or API_ISSUE_SUBRESOURCE.match(path)
+                                      or DYNAMIC_REPO_BODYLESS_SUBRESOURCE.match(path)):
             continue
         # A shell-built endpoint is not statically known: with any body field/--input or a
         # non-GET method it is judged as a write even when `issues` appears nowhere (deliberate
