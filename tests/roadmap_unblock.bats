@@ -15,6 +15,9 @@ setup() {
     TEST_TMP="$(mktemp -d)"
     FAKE_BIN="$TEST_TMP/bin"
     mkdir -p "$FAKE_BIN"
+    export ROADMAP_CHECKOUT_ROOT="$TEST_TMP/co"
+    make_checkout repo owner/repo
+    make_checkout greenfield owner/greenfield
     PATH="$FAKE_BIN:$PATH"
     export GH_LOG="$TEST_TMP/gh.log"
     : > "$GH_LOG"
@@ -31,10 +34,38 @@ item() {
     local repo="$1" number="$2" status="$3" blocked_by="$4" body="$5"
     jq -nc --arg repo "$repo" --argjson number "$number" --arg status "$status" \
         --arg blocked_by "$blocked_by" --arg body "$body" '
-        {status: $status, content: {type: "Issue", number: $number, repository: $repo,
+        {status: $status, labels: [], content: {type: "Issue", number: $number, repository: $repo,
          url: ("https://github.com/" + $repo + "/issues/" + ($number|tostring)), body: $body}}
         | if $blocked_by == "" then . else . + {"blocked by": $blocked_by} end
     '
+}
+
+# make_checkout DIRNAME OWNER/REPO
+# A local checkout under ROADMAP_CHECKOUT_ROOT whose origin names OWNER/REPO (#931).
+make_checkout() {
+    mkdir -p "$ROADMAP_CHECKOUT_ROOT/$1"
+    git -C "$ROADMAP_CHECKOUT_ROOT/$1" init -q
+    git -C "$ROADMAP_CHECKOUT_ROOT/$1" remote add origin "https://github.com/$2.git"
+    publish_checkout "$1"
+}
+
+# publish_checkout DIRNAME
+# Commits the checkout's working tree and points origin/HEAD at that commit, standing in for a
+# fetched default branch: the unblock reads templates at origin/HEAD, never the working tree.
+publish_checkout() {
+    local d="$ROADMAP_CHECKOUT_ROOT/$1"
+    git -C "$d" add -A
+    # Immune to the machine's global hooks path and signing: a fixture is not a real commit.
+    git -C "$d" -c user.name=t -c user.email=t@t -c core.hooksPath=/dev/null \
+        -c commit.gpgsign=false commit -q --no-verify --allow-empty -m t
+    git -C "$d" update-ref refs/remotes/origin/main HEAD
+    git -C "$d" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+}
+
+# spec_body BLOCKER_REF
+# A complete spec (#931): a Blocked-by line, a filled What / Why and a non-empty surface block.
+spec_body() {
+    printf '**Blocked by:** %s\n\n## What / Why\n\nDo the thing.\n\n```surface\nfoo.sh\n```\n' "$1"
 }
 
 # write_items ITEM_JSON...
@@ -187,7 +218,11 @@ case "\$1 \$2" in
         # Keyed on the --json PROJECTION (state vs comments), never the full query string —
         # a stub keyed on the whole command silently breaks the moment a flag is added
         # elsewhere (dotfiles-linux-dev#409).
-        if printf '%s' "\$*" | grep -q -- '--json state'; then
+        if printf '%s' "\$*" | grep -q -- '--json labels'; then
+            f="$TEST_TMP/labels-\$3.txt"
+            [ -f "\$f" ] || exit 1
+            cat "\$f"
+        elif printf '%s' "\$*" | grep -q -- '--json state'; then
             repo="\$5"
             key="\${repo//\//_}-\$3"
             f="$TEST_TMP/refstate-\$key.json"
@@ -233,7 +268,7 @@ run_reconcile() {
 # --- one closed blocker: unblocked + commented ---------------------------------------------------
 
 @test "one closed native blocker: item is unblocked, labeled, and commented" {
-    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_fake_gh
     run_reconcile
@@ -292,7 +327,7 @@ run_reconcile() {
 }
 
 @test "prose blocker referencing a closed issue, no native blocked_by: unblocked" {
-    write_items "$(item "owner/repo" 405 "Blocked" "" "**Blocked by:** owner/blueprintx#314")"
+    write_items "$(item "owner/repo" 405 "Blocked" "" "$(spec_body owner/blueprintx#314)")"
     write_blockers 405
     write_ref_state "owner/blueprintx" 314 "CLOSED"
     write_fake_gh
@@ -480,7 +515,7 @@ run_reconcile() {
 # --- PR #376 review: Status is the completion marker, so it is written last ----------------------
 
 @test "Status is the last write, after the field clear and the audit comment" {
-    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_fake_gh
     run_reconcile
@@ -505,7 +540,7 @@ run_reconcile() {
 }
 
 @test "the audit comment is not posted twice when it is already on the issue" {
-    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_existing_comments 3 "Unblocked: owner/repo#2. Status set to Ready."
     write_fake_gh
@@ -619,6 +654,7 @@ run_reconcile() {
     write_item_list_graphql "$(graphql_item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
     write_blockers 3 "$(blocker 2 closed "owner/repo")"
     write_fake_gh
+    : > "$TEST_TMP/labels-3.txt"
     touch "$TEST_TMP/fail-item-list"
     run_reconcile
     [[ "$output" == *"STATUS=ok"* ]]
@@ -736,15 +772,342 @@ run_boards() {
     grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Blocked' "$GH_LOG"
 }
 
-@test "re-block: a Backlog item with an open native blocker is left in Backlog, never promoted to Ready" {
+@test "a Backlog item with an open native blocker is moved to Blocked (#931)" {
     write_items "$(item "owner/repo" 8 "Backlog" "" "")"
     write_blockers 8 "$(blocker 6 open "other/repo")"
     write_fake_gh
     run_reconcile
     [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" == *"blocked: owner/repo#8 by other/repo#6 [blocker-kind: external]"* ]]
     [[ "$output" != *"re-blocked"* ]]
-    refute_gh 'issue edit'
+    grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Blocked' "$GH_LOG"
+}
+
+@test "a Backlog item with the state:blocked label and no blocker is moved to Blocked (#931)" {
+    write_items "$(item "owner/repo" 8 "Backlog" "" "" | jq -c '. + {labels: ["state:blocked"]}')"
+    write_blockers 8
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"blocked: owner/repo#8 by state:blocked"* ]]
+    grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Blocked' "$GH_LOG"
+}
+
+@test "a Backlog item with a decision blocker is left alone (#931)" {
+    write_items "$(item "owner/repo" 8 "Backlog" "decision: pick a vendor" "")"
+    write_blockers 8 "$(blocker 6 open "other/repo")"
+    write_fake_gh
+    run_reconcile
     refute_gh 'item-edit'
+}
+
+# --- #931: where an unblocked card goes depends on how complete its spec is ----------------------
+
+@test "unblock: a complete spec goes to Ready" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"unblocked owner/repo#3: all native blockers closed (owner/repo#2) -> Ready"* ]]
+    grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Ready' "$GH_LOG"
+}
+
+@test "unblock: no surface block goes to Backlog and names why" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf '## What / Why\n\nDo the thing.\n')")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"unblocked owner/repo#3"*"-> Backlog (no surface block)"* ]]
+    grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Backlog' "$GH_LOG"
+    grep -q 'issue edit 3 --repo owner/repo --remove-label state:blocked' "$GH_LOG"
+    refute_gh 'add-label state:ready'
+    refute_gh 'Status --value Ready'
+}
+
+@test "unblock: an empty What / Why goes to Backlog" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf '## What / Why\n\n<!-- fill me -->\n\n```surface\nfoo.sh\n```\n')")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (empty What / Why)"* ]]
+    grep -q 'Status --value Backlog' "$GH_LOG"
+}
+
+@test "unblock: a prose-only blocker also routes by spec completeness" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf '**Blocked by:** owner/repo#2')")"
+    write_blockers 3
+    write_ref_state "owner/repo" 2 "CLOSED"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"prose blocker(s) closed (owner/repo#2) -> Backlog (What / Why, no surface block)"* ]]
+}
+
+@test "unblock: an unreadable body is UNKNOWN with no item-edit" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "x" | jq -c 'del(.content.body)')"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+    refute_gh 'item-edit'
+    refute_gh 'issue edit'
+}
+
+@test "unblock: a repo template drives the required sections" {
+    mkdir -p "$TEST_TMP/co/repo/.github/ISSUE_TEMPLATE"
+    printf '## What / Why\n\n## Scope\n' > "$TEST_TMP/co/repo/.github/ISSUE_TEMPLATE/t.md"
+    publish_checkout repo
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (Scope)"* ]]
+}
+
+@test "unblock: a missing checkout is UNKNOWN, never the fallback skeleton (#931)" {
+    rm -rf "$ROADMAP_CHECKOUT_ROOT/repo"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "unblock: a same-named checkout of another repo is UNKNOWN (#931)" {
+    rm -rf "$ROADMAP_CHECKOUT_ROOT/repo"
+    make_checkout repo other/repo
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "unblock: Backlog destination also removes a stale state:ready label, only when present (#931)" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2" | jq -c '.labels = ["state:blocked","state:ready"]')"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    grep -q 'issue edit 3 --repo owner/repo --remove-label state:blocked --remove-label state:ready' "$GH_LOG"
+}
+
+@test "unblock: a required heading satisfied only by prose does not count (#931)" {
+    mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
+    printf '## What / Why\n\n## Scope\n' > "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"
+    publish_checkout repo
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf '## What / Why\n\nScope follows later.\n\n```surface\nfoo.sh\n```\n')")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (Scope)"* ]]
+}
+
+@test "unblock: an adjacent heading leaves the section empty (#931)" {
+    mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
+    printf '## Scope\n\n## What / Why\n' > "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"
+    publish_checkout repo
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf '## Scope\n## What / Why\n\nx\n\n```surface\nfoo.sh\n```\n')")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (empty Scope)"* ]]
+}
+
+@test "unblock: prose beside an inline HTML comment still counts as filled (#931)" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf '## What / Why\n\nImplement retries. <!-- note -->\n\n```surface\nfoo.sh\n```\n')")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Ready"* ]]
+}
+
+@test "unblock: an unclosed surface fence is no surface block (#931)" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf '## What / Why\n\nx\n\n```surface\nfoo.sh\n')")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (no surface block)"* ]]
+}
+
+@test "unblock: an if-label template rule applies to the issue's own labels (#931)" {
+    mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
+    printf '## What / Why\n<!-- issue-template-guard: require "Risk assessment" if-label risk:high -->\n' \
+        > "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"
+    publish_checkout repo
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)" | jq -c '. + {labels: ["risk:high","state:blocked"]}')"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (Risk assessment)"* ]]
+}
+
+@test "Backlog with no readable body is UNKNOWN, no edit (#931)" {
+    write_items "$(item "owner/repo" 8 "Backlog" "" "x" | jq -c 'del(.content.body)')"
+    write_blockers 8 "$(blocker 6 open "other/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#8"* ]]
+    refute_gh 'item-edit'
+    refute_gh 'issue edit'
+}
+
+@test "Backlog read without a labels key (GraphQL fallback) reads them from the issue (#931)" {
+    write_items "$(item "owner/repo" 8 "Backlog" "" "" | jq -c "del(.labels)")"
+    write_blockers 8
+    printf 'state:blocked\n' > "$TEST_TMP/labels-8.txt"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"blocked: owner/repo#8 by state:blocked"* ]]
+}
+
+@test "Backlog whose labels cannot be read is UNKNOWN, no edit (#931)" {
+    write_items "$(item "owner/repo" 8 "Backlog" "" "" | jq -c "del(.labels)")"
+    write_blockers 8
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#8: could not read labels"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "unblock: a template only in the working tree, not at origin/HEAD, is ignored (#931)" {
+    mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
+    printf '## What / Why\n\n## Scope\n' > "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Ready"* ]]
+}
+
+@test "unblock: a checkout with no origin/HEAD is UNKNOWN (#931)" {
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" symbolic-ref --delete refs/remotes/origin/HEAD
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "unblock: an ssh origin names the repo, an ssh host alias fails closed (#931)" {
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" remote set-url origin git@github.com:owner/repo.git
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Ready"* ]]
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" remote set-url origin git@github.com-work:owner/repo.git
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+}
+
+@test "item labels: a malformed labels value is unreadable, never an empty label set (#931)" {
+    run bash -c "source '$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/roadmap_unblock.sh'; _ru_item_labels '{\"labels\": 5}' o/r 1"
+    [ "$status" -ne 0 ]
+}
+
+@test "unblock: a plain dir under a parent repo does not borrow the parent's origin (#931)" {
+    local parent="$TEST_TMP/parent"
+    mkdir -p "$parent"
+    git -C "$parent" init -q
+    git -C "$parent" remote add origin https://github.com/owner/repo.git
+    ROADMAP_CHECKOUT_ROOT="$parent"
+    mkdir -p "$parent/repo"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "unblock: a host that merely ends in github.com does not verify (#931)" {
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" remote set-url origin https://notgithub.com/owner/repo.git
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+}
+
+@test "unblock: an @github.com inside the path is not the host (#931)" {
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" remote set-url origin https://evil.example/path@github.com/owner/repo.git
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+    refute_gh 'item-edit'
+    refute_gh 'issue edit'
+}
+
+@test "unblock: https with userinfo on github.com still verifies (#931)" {
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" remote set-url origin https://user:tok@github.com/owner/repo.git
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Ready"* ]]
+}
+
+@test "unblock: a comma inside a reason is kept as written (#931)" {
+    mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
+    printf '**Why**\n\n## What / Why\n' >"$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"
+    publish_checkout repo
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(printf 'Blocked by: owner/repo#2\n\n## What / Why\n\nx\n')")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (a bold first line, like: **Why**, no surface block)"* ]]
+}
+
+@test "unblock: origin casing differs from the board name and still verifies (#931)" {
+    git -C "$ROADMAP_CHECKOUT_ROOT/repo" remote set-url origin https://github.com/Owner/Repo.git
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Ready"* ]]
+}
+
+@test "unblock: a null body is readable and routes to Backlog, a missing body key is UNKNOWN (#931)" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "x" | jq -c '.content.body = null')"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (What / Why, no surface block)"* ]]
+}
+
+@test "unblock: if-label rules read labels from the issue when the board read lacks them (#931)" {
+    mkdir -p "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE"
+    printf '## What / Why\n<!-- issue-template-guard: require "Risk assessment" if-label risk:high -->\n' \
+        > "$ROADMAP_CHECKOUT_ROOT/repo/.github/ISSUE_TEMPLATE/t.md"
+    publish_checkout repo
+    printf 'risk:high\nstate:blocked\n' > "$TEST_TMP/labels-3.txt"
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)" | jq -c "del(.labels)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"-> Backlog (Risk assessment)"* ]]
+}
+
+@test "unblock: unreadable labels on the unblock path are UNKNOWN, no edit (#931)" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "$(spec_body owner/repo#2)" | jq -c "del(.labels)")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#3"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "round trip: a Backlog card moved to Blocked by its label is reported, not edited, next sweep (#931)" {
+    write_items "$(item "owner/repo" 8 "Blocked" "state:blocked" "" | jq -c '. + {labels: ["state:blocked"]}')"
+    write_blockers 8
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"still blocked owner/repo#8: recorded blocker state:blocked"* ]]
+    refute_gh 'item-edit'
+    refute_gh 'issue edit'
 }
 
 @test "re-block: a Ready item whose only blocker is closed is left alone" {

@@ -12,7 +12,7 @@ setup() {
     export PATH="$BIN:$PATH"
     head -n -1 "$SWEEP_SRC" > "$REPO/sweep_funcs.sh"
     local f
-    for f in review_thread_gate free_surface kanban_reconcile kanban_reconcile_done kanban_reconcile_stale dispatch_claims gh_budget roadmap_unblock; do
+    for f in review_thread_gate free_surface kanban_reconcile kanban_reconcile_done kanban_reconcile_stale dispatch_claims gh_budget roadmap_unblock issue_spec_complete; do
         cp "$(dirname "$SWEEP_SRC")/lib/$f.sh" "$REPO/lib/"
     done
     source "$REPO/sweep_funcs.sh"

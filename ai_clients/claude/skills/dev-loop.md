@@ -257,8 +257,18 @@ Report **one line per declared board**, clean or not — `$RECONCILE_BOARDS_REPO
 board's indented item lines: unblocked, still blocked, re-blocked, decision blocker, blocked by
 nothing, UNKNOWN). The reconcile runs both ways (dotfiles-linux-dev#812): beyond unblocking, a
 `Ready` card whose issue gained an open native or prose blocker is moved to `Blocked` and reported
-`re-blocked: <repo>#N by <repo>#M [blocker-kind: …]` (`Backlog` cards are not scanned: research,
-prototype and grilling cards wait there on purpose). A board that reconciled clean and a board nobody swept must never look the same. Add or
+`re-blocked: <repo>#N by <repo>#M [blocker-kind: …]`. `Backlog` is scanned too (#931): a card with
+an open blocker, or the `state:blocked` label, moves to `Blocked` and is reported
+`blocked: <repo>#N by <repo>#M [blocker-kind: …]`. When the last blocker closes the destination
+depends on the spec, not always `Ready`: `Ready` when the body fills every section of the repo's
+issue template (`What / Why` when it ships none) and has a non-empty `surface` block, else `Backlog`
+with the reason on the line (`unblocked <repo>#N … -> Backlog (no surface block)`). The test is
+`hooks/lib/issue_spec_complete.sh`, shared with `issue_template_guard.sh`. An unreadable body is
+UNKNOWN and the card is untouched. So is a repo with no verified local checkout: templates are read
+at `origin/HEAD` of `~/github/<name>` (`$ROADMAP_CHECKOUT_ROOT`), whose `origin` must name the repo
+and whose `origin/HEAD` must resolve (`git remote set-head origin -a` sets it), at the freshness of
+its last fetch. A Backlog card moved by the `state:blocked` label records that label as its
+"Blocked by", so it waits for a person to clear it. A board that reconciled clean and a board nobody swept must never look the same. Add or
 drop a board by editing `ROADMAP_BOARDS`, not this prose.
 
 **The kanban reconcile covers the same boards (dotfiles-linux-dev#887).** The sweep's items `[7]`
