@@ -169,40 +169,90 @@ command_has_git_commit() {
 
 _MSG_SEP=$'\x1f'
 
-# commit_expand_script COMMAND
-# Echo COMMAND; when a segment of it runs `bash|sh [flags] <file>.sh` and that file is a readable
-# regular file of at most 256 KiB, append the file's text so the caller can scan the commits inside.
-# One level only, no recursion. Anything unreadable, oversized or built from expansion is skipped
-# (fail open): the caller just sees the original command.
-commit_expand_script() {
-    local command="$1" segment file w out="$1"
-    local -a words
+# _for_each_command COMMAND CALLBACK
+# Tokenize COMMAND once with the quote-aware split mode and call CALLBACK with `_CMD_WORDS` set to
+# each simple command in turn. Quoted `;`/`&`/`|` never split, and nothing is evaluated.
+_for_each_command() {
+    local w cb="$2"
+    local -a all
+    _CMD_WORDS=()
+    _tokenize_segment "$1" split
+    all=("${_SEGMENT_WORDS[@]:-}")
+    for w in "${all[@]}" "$_BOUNDARY"; do
+        if [[ "$w" == "$_BOUNDARY" ]]; then
+            "$cb"
+            _CMD_WORDS=()
+        else
+            _CMD_WORDS+=("$w")
+        fi
+    done
+}
 
-    while IFS= read -r segment; do
-        _tokenize_segment "$segment"
-        words=("${_SEGMENT_WORDS[@]:-}")
-        [[ "${words[0]##*/}" == "bash" || "${words[0]##*/}" == "sh" ]] || continue
-        file=''
-        for w in "${words[@]:1}"; do
-            [[ "$w" == -* ]] && continue
+# command_has_cd COMMAND
+# Return 0 if any simple command of COMMAND is `cd` or `pushd`: a relative path in it can no longer
+# be trusted to resolve against the hook's own working directory, so callers fail open.
+command_has_cd() {
+    _HAS_CD=0
+    _note_cd() { [[ "${_CMD_WORDS[0]:-}" == "cd" || "${_CMD_WORDS[0]:-}" == "pushd" ]] && _HAS_CD=1; return 0; }
+    _for_each_command "$1" _note_cd
+    ((_HAS_CD))
+}
+
+# _strip_heredoc_bodies FILE
+# Print FILE without the lines between a `<<TAG` opener and its closing TAG (opener line kept).
+_strip_heredoc_bodies() {
+    awk '
+        tag != "" { t = $0; sub(/^\t+/, "", t); if (t == tag) tag = ""; next }
+        match($0, /<<-?[ \t]*[\047"]?[A-Za-z_][A-Za-z0-9_]*[\047"]?/) {
+            tag = substr($0, RSTART, RLENGTH); gsub(/^<<-?[ \t]*[\047"]?|[\047"]$/, "", tag)
+        }
+        { print }
+    ' "$1"
+}
+
+# commit_expand_script COMMAND
+# Echo COMMAND; when a simple command of it runs `bash|sh [flags] <file>.sh` and that file is a
+# readable regular file of at most 256 KiB, append the file's text so the caller can scan the
+# commits inside. One level only, no recursion. Skipped (fail open, the caller sees the original
+# command): syntax-only runs (`-n`), a relative path after a preceding `cd`, a path built from
+# expansion, and an unreadable or oversized file. Heredoc bodies are dropped (they are data, so a
+# `git commit` example inside one is not a commit).
+commit_expand_script() {
+    _EXPANDED="$1"
+    _seen_cd=0
+    _expand_one() {
+        local file='' w syntax_only=0 first="${_CMD_WORDS[0]:-}"
+        if [[ "$first" == "cd" || "$first" == "pushd" ]]; then _seen_cd=1; return 0; fi
+        [[ "${first##*/}" == "bash" || "${first##*/}" == "sh" ]] || return 0
+        for w in "${_CMD_WORDS[@]:1}"; do
+            if [[ "$w" == -* ]]; then
+                [[ "$w" != --* && "$w" == *n* ]] && syntax_only=1
+                continue
+            fi
             file="$w"
             break
         done
-        [[ "$file" == *.sh && "$file" != *'$'* && "$file" != *'`'* ]] || continue
-        [[ -f "$file" && -r "$file" ]] || continue
-        (($(wc -c < "$file") <= 262144)) || continue
-        out+=$'\n'"$(cat "$file")"
-    done <<< "$(printf '%s' "$command" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
-
-    printf '%s' "$out"
+        ((syntax_only)) && return 0
+        [[ "$file" == *.sh && "$file" != *'$'* && "$file" != *'`'* ]] || return 0
+        ((_seen_cd)) && [[ "$file" != /* ]] && return 0
+        [[ -f "$file" && -r "$file" ]] || return 0
+        (($(wc -c < "$file") <= 262144)) || return 0
+        _EXPANDED+=$'\n'"$(_strip_heredoc_bodies "$file")"
+    }
+    _for_each_command "$1" _expand_one
+    printf '%s' "$_EXPANDED"
 }
 
 # _collect_commit_messages
 # For the global `_CMD_WORDS`: when it is a `git commit` with inline messages, append one element to
-# COMMIT_MESSAGE_SETS holding its -m / --message values joined by `_MSG_SEP`. A commit that also
-# reads a message from a file (-F/--file) is skipped: its source is ambiguous. A value built from
-# shell expansion cannot be measured statically, so it is recorded as empty (fail open for that
+# COMMIT_MESSAGE_SETS holding its -m / --message values joined by `_MSG_SEP`, and that commit's
+# `git -C` directory to COMMIT_MESSAGE_DIRS. A commit that also reads a message from a file
+# (-F/--file) is skipped: its source is ambiguous. Option parsing stops at `--`, and the value of a
+# non-message option that takes one (`--author -mx`) is consumed, not read as a message. A literal
+# empty message is dropped (git ignores it when choosing the subject); one built from shell
+# expansion cannot be measured statically, so it is recorded as empty (fail open for that
 # paragraph only, never counting the literal `$(...)` text).
+_VALUE_OPTS=' --author --date -C --reuse-message -c --reedit-message -t --template --fixup --squash --cleanup --pathspec-from-file -S '
 _collect_commit_messages() {
     local i w val skip=0
     local -a msgs=()
@@ -211,6 +261,8 @@ _collect_commit_messages() {
     for ((i = _COMMIT_ARGS_FROM; i < ${#_CMD_WORDS[@]}; i++)); do
         w="${_CMD_WORDS[i]}"
         val=''
+        [[ "$w" == "--" ]] && break
+        if [[ "$_VALUE_OPTS" == *" $w "* ]]; then i=$((i + 1)); continue; fi
         case "$w" in
             -F | --file | --file=* | -F?*) skip=1; continue ;;
             -m | --message) val="${_CMD_WORDS[i + 1]:-}"; i=$((i + 1)) ;;
@@ -219,6 +271,7 @@ _collect_commit_messages() {
             -[A-Za-z]*m) val="${_CMD_WORDS[i + 1]:-}"; i=$((i + 1)) ;;   # a cluster such as -am
             *) continue ;;
         esac
+        [[ -n "$val" ]] || continue
         [[ "$val" == *'$'* || "$val" == *'`'* ]] && val=''
         msgs+=("$val")
     done
@@ -226,29 +279,19 @@ _collect_commit_messages() {
     ((skip)) && return 0
     ((${#msgs[@]})) || return 0
     COMMIT_MESSAGE_SETS+=("$(IFS="$_MSG_SEP"; printf '%s' "${msgs[*]}")")
+    COMMIT_MESSAGE_DIRS+=("$COMMIT_COMMAND_GIT_DIR")
 }
 
 # commit_inline_messages COMMAND
 # Fill the global array COMMIT_MESSAGE_SETS with one element per `git commit` in COMMAND (a script
 # body included) that carries inline -m messages: the messages joined by `_MSG_SEP` (\x1f). The
-# first message is the title, the rest are body paragraphs. COMMIT_COMMAND_GIT_DIR is preserved.
+# first message is the title, the rest are body paragraphs. COMMIT_MESSAGE_DIRS holds each commit's
+# `git -C` directory in the same order; COMMIT_COMMAND_GIT_DIR is preserved.
 commit_inline_messages() {
-    local saved_dir="$COMMIT_COMMAND_GIT_DIR" w
-    local -a all
+    local saved_dir="$COMMIT_COMMAND_GIT_DIR"
     COMMIT_MESSAGE_SETS=()
-    _CMD_WORDS=()
-
-    _tokenize_segment "$1" split
-    all=("${_SEGMENT_WORDS[@]:-}")
-    for w in "${all[@]}" "$_BOUNDARY"; do
-        if [[ "$w" == "$_BOUNDARY" ]]; then
-            _collect_commit_messages
-            _CMD_WORDS=()
-        else
-            _CMD_WORDS+=("$w")
-        fi
-    done
-
+    COMMIT_MESSAGE_DIRS=()
+    _for_each_command "$1" _collect_commit_messages
     COMMIT_COMMAND_GIT_DIR="$saved_dir"
     return 0
 }

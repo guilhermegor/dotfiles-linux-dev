@@ -62,6 +62,10 @@ main() {
         msg_file="$COMMIT_COMMAND_GIT_DIR/$msg_file"
     fi
 
+    # A `cd` earlier in the command or script moves where git resolves a relative path, and a script
+    # may commit in several directories: fail open rather than rewrite the wrong file (#961).
+    if [[ "$msg_file" != /* ]] && command_has_cd "$command"; then exit 0; fi
+
     [[ -f "$msg_file" && -w "$msg_file" ]] || exit 0
 
     reflowed="$(reflow_body "$msg_file")" || exit 0
@@ -104,7 +108,7 @@ block_long_inline_bodies() {
     # Exit 2 when any BODY line of an inline `-m` commit exceeds BODY_MAX_LENGTH. The body is every
     # line after the title line of the first -m, plus every further -m paragraph. A line that cannot
     # be wrapped (one token, e.g. a URL) and a trailer line are exempt, as in reflow_body().
-    local set text line offenders=''
+    local set text line trimmed offenders=''
     local trailer_re='^[A-Za-z][A-Za-z-]*:[[:space:]]'
 
     commit_inline_messages "$1"
@@ -115,7 +119,9 @@ block_long_inline_bodies() {
         while IFS= read -r line; do
             (( ${#line} > BODY_MAX_LENGTH )) || continue
             [[ "$line" =~ $trailer_re ]] && continue
-            [[ "${line#"${line%%[![:space:]]*}"}" == *[[:space:]]* ]] || continue
+            trimmed="${line#"${line%%[![:space:]]*}"}"
+            trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+            [[ "$trimmed" == *[[:space:]]* ]] || continue
             offenders+="  ${#line} chars: ${line}"$'\n'
         done <<< "$text"
     done

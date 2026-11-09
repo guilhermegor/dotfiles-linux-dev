@@ -37,8 +37,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh"
 DEFAULT_TITLE_MAX_LENGTH=72
 
 main() {
-    local payload tool command title max_len set
-    local -a titles
+    local payload tool command title max_len set idx
+    local -a titles dirs
 
     payload="$(cat)"
     tool="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
@@ -57,21 +57,29 @@ main() {
     command_has_git_commit "$command" || exit 0
 
     titles=()
+    dirs=()
     if printf '%s' "$command" | grep -q '<<' && title="$(extract_heredoc_title "$command")"; then
         # `-F-`/`--file=-` fed by exactly one heredoc (issue #140): its body is in the raw string.
-        titles=("$title")
-    else
-        # Inline `-m`: the title is the FIRST -m of each commit, however many follow (#961).
-        # `-F <path>` commits carry no inline message, so they yield nothing and pass.
-        commit_inline_messages "$command"
-        for set in ${COMMIT_MESSAGE_SETS[@]+"${COMMIT_MESSAGE_SETS[@]}"}; do
-            title="${set%%"$_MSG_SEP"*}"
-            titles+=("${title%%$'\n'*}")   # first line only
-        done
+        titles+=("$title")
+        dirs+=("$COMMIT_COMMAND_GIT_DIR")
     fi
-    max_len="$(read_title_max_length)"
+    # Inline `-m`: the title is the FIRST -m of each commit, however many follow (#961). Checked
+    # independently of a heredoc title, so a script mixing both is measured in full. `-F <path>`
+    # commits carry no inline message, so they yield nothing and pass.
+    commit_inline_messages "$command"
+    idx=0
+    for set in ${COMMIT_MESSAGE_SETS[@]+"${COMMIT_MESSAGE_SETS[@]}"}; do
+        title="${set%%"$_MSG_SEP"*}"
+        titles+=("${title%%$'\n'*}")   # first line only
+        dirs+=("${COMMIT_MESSAGE_DIRS[idx]}")
+        idx=$((idx + 1))
+    done
 
+    idx=0
     for title in ${titles[@]+"${titles[@]}"}; do
+        # Each title is judged against ITS commit's repository (`git -C <dir>`), not the cwd's.
+        max_len="$(read_title_max_length "${dirs[idx]}")"
+        idx=$((idx + 1))
         (( ${#title} > max_len )) && block_title "$title" "$max_len"
     done
     exit 0
@@ -124,8 +132,12 @@ read_title_max_length() {
     # Echo the repo's gitlint title-max-length, or the default when absent/unparseable. The option
     # name `line-length` is shared with [body-max-line-length], so it MUST be read only inside the
     # [title-max-length] section.
-    local root gitlint val
-    root="$(git rev-parse --show-toplevel 2>/dev/null)"
+    local root gitlint val dir="${1:-}"
+    if [[ -n "$dir" ]]; then
+        root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"
+    else
+        root="$(git rev-parse --show-toplevel 2>/dev/null)"
+    fi
     gitlint="$root/.gitlint"
     if [[ -n "$root" && -r "$gitlint" ]]; then
         val="$(awk '

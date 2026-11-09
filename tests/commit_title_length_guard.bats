@@ -268,3 +268,32 @@ TOO_LONG_TITLE='docs(backlog): every zero-review notice fails, including the suc
     run run_guard "gh pr create --body \"run git commit first, then push\" --title \"$TOO_LONG_TITLE\""
     [ "$status" -eq 0 ]
 }
+
+@test "#961: BLOCKS an over-limit -am title that follows a short heredoc title in one script" {
+    printf 'git commit -F- <<MSG\nfeat: short\nMSG\ngit commit -am "%s"\n' "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: judges each title against the limit of its own git -C repository" {
+    mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
+    printf '[title-max-length]\nline-length=100\n' > "$TEST_TMP/other/.gitlint"
+    run run_guard "git -C $TEST_TMP/other commit -m '$LONG_TITLE' -m body"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: bash -n does not block a script holding a long title" {
+    printf 'git commit -m "%s"\n' "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "bash -n $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a literal empty first -m is skipped, the second -m is the title" {
+    run run_guard "git commit -m '' -m '$LONG_TITLE'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: a --author value that looks like -m is not the title" {
+    run run_guard "git commit --author '-m $LONG_TITLE' -m 'feat: x'"
+    [ "$status" -eq 0 ]
+}
