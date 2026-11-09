@@ -55,16 +55,19 @@ main() {
 
     msg_file="$(extract_message_file "$command")" || exit 0
 
-    # `git -C <dir> commit -F <relative>` resolves the path against <dir>, because git chdirs
-    # there first — so a relative path must be re-anchored or this rewrites the wrong file (or,
-    # more often, silently finds nothing and no-ops). COMMIT_COMMAND_GIT_DIR is set by the matcher.
-    if [[ -n "$COMMIT_COMMAND_GIT_DIR" && "$msg_file" != /* ]]; then
-        msg_file="$COMMIT_COMMAND_GIT_DIR/$msg_file"
-    fi
-
     # A `cd` earlier in the command or script moves where git resolves a relative path, and a script
     # may commit in several directories: fail open rather than rewrite the wrong file (#961).
     if [[ "$msg_file" != /* ]] && command_has_cd "$command"; then exit 0; fi
+
+    # `git -C <dir> commit -F <relative>` resolves the path against <dir>, because git chdirs
+    # there first — so a relative path must be re-anchored or this rewrites the wrong file. The dir
+    # is that of the commit that carries THIS `-F` (not the first commit of a multi-commit script);
+    # when that link cannot be established, fail open.
+    if [[ "$msg_file" != /* ]]; then
+        commit_source_dir "$command" file
+        ((COMMIT_SOURCE_FOUND)) || exit 0
+        [[ -z "$COMMIT_SOURCE_DIR" ]] || msg_file="$COMMIT_SOURCE_DIR/$msg_file"
+    fi
 
     [[ -f "$msg_file" && -w "$msg_file" ]] || exit 0
 

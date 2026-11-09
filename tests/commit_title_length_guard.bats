@@ -297,3 +297,56 @@ TOO_LONG_TITLE='docs(backlog): every zero-review notice fails, including the suc
     run run_guard "git commit --author '-m $LONG_TITLE' -m 'feat: x'"
     [ "$status" -eq 0 ]
 }
+
+@test "#961: BLOCKS a long -F- heredoc title inside bash <script>.sh (heredoc kept for titles)" {
+    printf 'git commit -F- <<MSG\n%s\n\nbody\nMSG\n' "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: a git commit -m example inside a heredoc is not parsed as a commit" {
+    run run_guard "git commit -F- <<MSG
+feat: short
+
+git commit -m '$LONG_TITLE'
+MSG"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: heredoc with a digits-only delimiter: title measured, body example ignored" {
+    run run_guard "git commit -F- <<'123'
+$LONG_TITLE
+123"
+    [ "$status" -eq 2 ]
+    printf "cat <<'123'\ngit commit -m \"%s\"\n123\n" "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: heredoc title limit comes from the commit that reads stdin (other repo allows 100)" {
+    mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
+    printf '[title-max-length]\nline-length=100\n' > "$TEST_TMP/other/.gitlint"
+    run run_guard "git commit -m x; git -C $TEST_TMP/other commit -F- <<MSG
+$LONG_TITLE
+MSG"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: heredoc title limit comes from the stdin commit (cwd repo allows 100, target default 72)" {
+    mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
+    printf '[title-max-length]\nline-length=100\n' > .gitlint
+    run run_guard "git commit -m x; git -C $TEST_TMP/other commit -F- <<MSG
+$LONG_TITLE
+MSG"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: BLOCKS an attached non-empty -am<title> even when a later -m follows" {
+    run run_guard "git commit -am'$LONG_TITLE' -m body"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: an attached -am value is the title, so a short -am title with a long later -m passes" {
+    run run_guard "git commit -am'feat: x' -m '$LONG_TITLE'"
+    [ "$status" -eq 0 ]
+}

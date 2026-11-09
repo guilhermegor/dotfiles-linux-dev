@@ -186,3 +186,29 @@ $LONG_BODY'"
     run run_guard "cd /tmp && bash c.sh"
     [ "$status" -eq 0 ]
 }
+
+@test "#961: -F <relative> is anchored to ITS OWN commit's git -C dir, not the first commit's" {
+    mkdir "$TEST_TMP/a" "$TEST_TMP/b"
+    for d in a b; do
+        printf 'subject\n\n%s\n' "$LONG_BODY" > "$TEST_TMP/$d/msg.txt"
+    done
+    decoy="$(cat "$TEST_TMP/a/msg.txt")"
+    run run_guard "git -C $TEST_TMP/a commit -m first; git -C $TEST_TMP/b commit -F msg.txt"
+    [ "$status" -eq 0 ]
+    [ "$decoy" = "$(cat "$TEST_TMP/a/msg.txt")" ]
+    run grep -c '.\{73,\}' "$TEST_TMP/b/msg.txt"
+    [ "$output" -eq 0 ]
+}
+
+@test "#961: a git commit -m example inside a heredoc in a command is data, not a commit" {
+    run run_guard "cat <<'123'
+git commit -m 'feat: x' -m '$LONG_BODY'
+123"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a heredoc with a digits-only delimiter is stripped from a script" {
+    printf "cat <<'123'\ngit commit -m \"feat: x\" -m \"%s\"\n123\n" "$LONG_BODY" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+}

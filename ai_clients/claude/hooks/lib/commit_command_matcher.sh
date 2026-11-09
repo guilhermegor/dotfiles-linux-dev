@@ -198,16 +198,17 @@ command_has_cd() {
     ((_HAS_CD))
 }
 
-# _strip_heredoc_bodies FILE
-# Print FILE without the lines between a `<<TAG` opener and its closing TAG (opener line kept).
+# _strip_heredoc_bodies [FILE]
+# Print FILE (or stdin) without the lines between a `<<TAG` opener and its closing TAG (opener line
+# kept). The delimiter is any run of characters git/the shell would accept, digits-only included.
 _strip_heredoc_bodies() {
     awk '
         tag != "" { t = $0; sub(/^\t+/, "", t); if (t == tag) tag = ""; next }
-        match($0, /<<-?[ \t]*[\047"]?[A-Za-z_][A-Za-z0-9_]*[\047"]?/) {
+        match($0, /<<-?[ \t]*[\047"]?[^ \t\047"<>|&;()]+[\047"]?/) {
             tag = substr($0, RSTART, RLENGTH); gsub(/^<<-?[ \t]*[\047"]?|[\047"]$/, "", tag)
         }
         { print }
-    ' "$1"
+    ' "${1:--}"
 }
 
 # commit_expand_script COMMAND
@@ -215,8 +216,8 @@ _strip_heredoc_bodies() {
 # readable regular file of at most 256 KiB, append the file's text so the caller can scan the
 # commits inside. One level only, no recursion. Skipped (fail open, the caller sees the original
 # command): syntax-only runs (`-n`), a relative path after a preceding `cd`, a path built from
-# expansion, and an unreadable or oversized file. Heredoc bodies are dropped (they are data, so a
-# `git commit` example inside one is not a commit).
+# expansion, and an unreadable or oversized file. Heredoc bodies are KEPT here (the title guard reads
+# a `-F-` heredoc title from them); commit_inline_messages() drops them before parsing commands.
 commit_expand_script() {
     _EXPANDED="$1"
     _seen_cd=0
@@ -237,10 +238,42 @@ commit_expand_script() {
         ((_seen_cd)) && [[ "$file" != /* ]] && return 0
         [[ -f "$file" && -r "$file" ]] || return 0
         (($(wc -c < "$file") <= 262144)) || return 0
-        _EXPANDED+=$'\n'"$(_strip_heredoc_bodies "$file")"
+        _EXPANDED+=$'\n'"$(cat "$file")"
     }
     _for_each_command "$1" _expand_one
     printf '%s' "$_EXPANDED"
+}
+
+# commit_source_dir COMMAND MODE
+# MODE is `file` (a `-F <path>` commit) or `stdin` (a `-F -` commit). Sets COMMIT_SOURCE_DIR to the
+# `git -C` directory of the commit that carries that flag, and COMMIT_SOURCE_FOUND=1; when no
+# commit carries it (or the flag is spelled in a form this does not read) COMMIT_SOURCE_FOUND=0 and
+# the caller must fail open: the link between the message source and its commit is uncertain.
+commit_source_dir() {
+    COMMIT_SOURCE_DIR=''
+    COMMIT_SOURCE_FOUND=0
+    _SRC_MODE="$2"
+    _find_source() {
+        local i w v
+        ((COMMIT_SOURCE_FOUND)) && return 0
+        _words_invoke_commit || return 0
+        for ((i = _COMMIT_ARGS_FROM; i < ${#_CMD_WORDS[@]}; i++)); do
+            w="${_CMD_WORDS[i]}"
+            case "$w" in
+                -F | --file) v="${_CMD_WORDS[i + 1]:-}" ;;
+                --file=*) v="${w#--file=}" ;;
+                -F?*) v="${w#-F}" ;;
+                *) continue ;;
+            esac
+            if [[ ( "$_SRC_MODE" == stdin && "$v" == "-" ) || ( "$_SRC_MODE" == file && "$v" != "-" ) ]]; then
+                # shellcheck disable=SC2034  # read by the hooks that source this file
+                COMMIT_SOURCE_DIR="$COMMIT_COMMAND_GIT_DIR"
+                COMMIT_SOURCE_FOUND=1
+                return 0
+            fi
+        done
+    }
+    _for_each_command "$(printf '%s' "$1" | _strip_heredoc_bodies)" _find_source
 }
 
 # _collect_commit_messages
@@ -252,6 +285,29 @@ commit_expand_script() {
 # empty message is dropped (git ignores it when choosing the subject); one built from shell
 # expansion cannot be measured statically, so it is recorded as empty (fail open for that
 # paragraph only, never counting the literal `$(...)` text).
+# _short_cluster_message WORD NEXT
+# Read a short-option cluster such as -am, -amTEXT or -sm. Walks the letters like git's parser:
+# boolean flags are skipped, `m` takes the rest of the word as its value (`-am'long title'` reaches
+# here as `-amlong title`) or, when nothing follows it, the NEXT word. Sets _CLUSTER_VAL and
+# _CLUSTER_EATS (1 when NEXT was consumed). Returns 1 when the cluster carries no message, or when
+# a value-taking letter other than `m` comes first (its value hides everything after it).
+_short_cluster_message() {
+    local rest="${1#-}" ch
+    _CLUSTER_VAL=''
+    _CLUSTER_EATS=0
+    while [[ -n "$rest" ]]; do
+        ch="${rest:0:1}"
+        rest="${rest:1}"
+        case "$ch" in
+            m)
+                if [[ -n "$rest" ]]; then _CLUSTER_VAL="$rest"; else _CLUSTER_VAL="$2"; _CLUSTER_EATS=1; fi
+                return 0 ;;
+            C | c | t | S) return 1 ;;
+        esac
+    done
+    return 1
+}
+
 _VALUE_OPTS=' --author --date -C --reuse-message -c --reedit-message -t --template --fixup --squash --cleanup --pathspec-from-file -S '
 _collect_commit_messages() {
     local i w val skip=0
@@ -267,8 +323,9 @@ _collect_commit_messages() {
             -F | --file | --file=* | -F?*) skip=1; continue ;;
             -m | --message) val="${_CMD_WORDS[i + 1]:-}"; i=$((i + 1)) ;;
             --message=*) val="${w#--message=}" ;;
-            -m?*) val="${w#-m}" ;;
-            -[A-Za-z]*m) val="${_CMD_WORDS[i + 1]:-}"; i=$((i + 1)) ;;   # a cluster such as -am
+            --*) continue ;;
+            -?*) _short_cluster_message "$w" "${_CMD_WORDS[i + 1]:-}" || continue
+                 val="$_CLUSTER_VAL"; i=$((i + _CLUSTER_EATS)) ;;
             *) continue ;;
         esac
         [[ -n "$val" ]] || continue
@@ -283,6 +340,7 @@ _collect_commit_messages() {
 }
 
 # commit_inline_messages COMMAND
+# Heredoc bodies are data, never commands, so they are dropped before parsing.
 # Fill the global array COMMIT_MESSAGE_SETS with one element per `git commit` in COMMAND (a script
 # body included) that carries inline -m messages: the messages joined by `_MSG_SEP` (\x1f). The
 # first message is the title, the rest are body paragraphs. COMMIT_MESSAGE_DIRS holds each commit's
@@ -291,7 +349,7 @@ commit_inline_messages() {
     local saved_dir="$COMMIT_COMMAND_GIT_DIR"
     COMMIT_MESSAGE_SETS=()
     COMMIT_MESSAGE_DIRS=()
-    _for_each_command "$1" _collect_commit_messages
+    _for_each_command "$(printf '%s' "$1" | _strip_heredoc_bodies)" _collect_commit_messages
     COMMIT_COMMAND_GIT_DIR="$saved_dir"
     return 0
 }

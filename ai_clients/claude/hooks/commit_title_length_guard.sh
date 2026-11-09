@@ -60,8 +60,13 @@ main() {
     dirs=()
     if printf '%s' "$command" | grep -q '<<' && title="$(extract_heredoc_title "$command")"; then
         # `-F-`/`--file=-` fed by exactly one heredoc (issue #140): its body is in the raw string.
-        titles+=("$title")
-        dirs+=("$COMMIT_COMMAND_GIT_DIR")
+        # The title belongs to the commit that reads stdin, so its limit comes from THAT commit's
+        # `git -C` directory; if that commit cannot be identified, skip rather than guess.
+        commit_source_dir "$command" stdin
+        if ((COMMIT_SOURCE_FOUND)); then
+            titles+=("$title")
+            dirs+=("$COMMIT_SOURCE_DIR")
+        fi
     fi
     # Inline `-m`: the title is the FIRST -m of each commit, however many follow (#961). Checked
     # independently of a heredoc title, so a script mixing both is measured in full. `-F <path>`
@@ -113,7 +118,7 @@ extract_heredoc_title() {
         || return 1
     printf '%s' " $s" | grep -Eq '[[:space:]](-m|--message)([[:space:]=]|$)' && return 1
 
-    opener_re=$'<<-?[[:space:]]*[\'"]?[A-Za-z_][A-Za-z0-9_]*[\'"]?'
+    opener_re=$'<<-?[[:space:]]*[\'"]?[^[:space:]\'"<>|&;()]+[\'"]?'
     count="$(printf '%s' "$s" | grep -oE "$opener_re" | wc -l)"
     [[ "$count" -eq 1 ]] || return 1
 
