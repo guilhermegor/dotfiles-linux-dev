@@ -160,6 +160,25 @@ _board_throttled() {
 	printf '%s' "$probe" | grep -qiE 'rate.?limit'
 }
 
+# _board_gql ARGS...
+# `gh api graphql ARGS...`, stdout = the result. Returns 0 ok, 2 when GitHub itself refused with a
+# rate-limit message (stderr, or an `errors` body), 1 for any other failure. The refusal is read off
+# the REAL request, not only the `_board_throttled` probe: a secondary limit (#901) refuses the board
+# reads while the minimal `rateLimit{remaining}` probe still succeeds, so the probe alone reported a
+# throttled board as "unreadable".
+_board_gql() {
+	local err out rc=0
+	err="$(mktemp)"
+	out="$(gh api graphql "$@" 2>"$err")" || rc=1
+	printf '%s' "$out" | jq -e '.errors' >/dev/null 2>&1 && rc=1
+	if ((rc != 0)) && cat "$err" <(printf '%s' "$out") | grep -qiE 'rate.?limit'; then
+		rc=2
+	fi
+	rm -f "$err"
+	printf '%s' "$out"
+	return "$rc"
+}
+
 # _board_item_list_graphql OWNER PROJECT
 # One-shot `gh api graphql` read of a project's items, translated into the same `{"items": [...]}`
 # shape `gh project item-list --format json` prints — id, content.{type,number,repository,url,body},
@@ -178,8 +197,7 @@ _board_item_list_graphql() {
 	local owner="$1" project="$2" query result
 	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){items(first:100,query:"-status:Done"){pageInfo{hasNextPage}nodes{id content{__typename ... on Issue{number url body repository{nameWithOwner}} ... on PullRequest{number url body repository{nameWithOwner}}}fieldValues(first:100){pageInfo{hasNextPage}nodes{__typename ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}}'
 	gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
-	result="$(gh api graphql -f query="$query" -f login="$owner" -F num="$project" 2>/dev/null)" || return 1
-	printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
+	result="$(_board_gql -f query="$query" -f login="$owner" -F num="$project")" || return $?
 	printf '%s' "$result" \
 		| jq -e '.data.repositoryOwner.projectV2.items.nodes | type == "array"' >/dev/null 2>&1 \
 		|| return 1
@@ -235,7 +253,7 @@ _board_item_list() {
 
 	_board_throttled && return 2
 
-	json="$(_board_item_list_graphql "$owner" "$project")" || return 1
+	json="$(_board_item_list_graphql "$owner" "$project")" || return $?
 	printf '%s' "$json"
 }
 
@@ -263,8 +281,7 @@ _kr_status_names() {
 
 	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){fields(first:50){nodes{... on ProjectV2SingleSelectField{name options{name}}}}}}}}'
 	gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
-	result="$(gh api graphql -f query="$query" -f login="$owner" -F num="$project" 2>/dev/null)" || return 1
-	printf '%s' "$result" | jq -e '.errors' >/dev/null 2>&1 && return 1
+	result="$(_board_gql -f query="$query" -f login="$owner" -F num="$project")" || return $?
 	out="$(printf '%s' "$result" \
 		| jq -r '.data.repositoryOwner.projectV2.fields.nodes[] | select(.name=="Status") | .options[].name' 2>/dev/null)"
 	[[ -n "$out" ]] || return 1

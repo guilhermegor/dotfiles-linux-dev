@@ -206,11 +206,13 @@ case "\$1 \$2" in
             f="$TEST_TMP/item-fallback.json"
             [ -f "\$f" ] || exit 1
             [ "\$(cat "\$f")" = "FAIL" ] && exit 1
+            if [ "\$(cat "\$f")" = "REFUSED" ]; then echo 'GraphQL: API rate limit already exceeded for user ID 1' >&2; exit 1; fi
             cat "\$f"
         elif printf '%s' "\$full" | grep -q 'fields(first'; then
             f="$TEST_TMP/status-fallback.json"
             [ -f "\$f" ] || exit 1
             [ "\$(cat "\$f")" = "FAIL" ] && exit 1
+            if [ "\$(cat "\$f")" = "REFUSED" ]; then echo 'GraphQL: API rate limit already exceeded for user ID 1' >&2; exit 1; fi
             cat "\$f"
         else
             exit 1
@@ -891,4 +893,32 @@ run_stale_rest() {
     run_boards in_review "$TEST_TMP" "owner|1|repo" -- "source '$LIB'"
     [[ "$output" == *"is project unknown (the refresh lookup failed)"* ]]
     [ "$(jq -r .project_number "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json")" = 5 ]
+}
+
+# #901: a secondary limit refuses the board reads while the minimal rateLimit probe still
+# succeeds (write_throttled is NOT called), so the refusal text on the real read must count.
+@test "Status column read: GraphQL refuses with a rate limit while the probe succeeds: throttled (#901)" {
+    write_board_cache
+    write_prs 10
+    write_items "$(item ITEM_42 Backlog 42)"
+    echo REFUSED > "$TEST_TMP/status-fallback.json"
+    write_fake_gh
+    touch "$TEST_TMP/fail-field-list"
+    run_reconcile
+    [[ "$output" == *"UNKNOWN (throttled)"* ]]
+    [[ "$output" != *"board unreadable"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "project items read: GraphQL refuses with a rate limit while the probe succeeds: throttled (#901)" {
+    write_board_cache
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    echo REFUSED > "$TEST_TMP/item-fallback.json"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run_reconcile
+    [[ "$output" == *"UNKNOWN (throttled)"* ]]
+    [[ "$output" != *"board unreadable"* ]]
+    refute_gh 'item-edit'
 }
