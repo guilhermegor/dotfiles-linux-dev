@@ -1034,3 +1034,28 @@ guard_cmd() {
         [ "$status" -eq 0 ]
     done
 }
+
+@test "GraphQL: a read selected by operationName ignores a sibling createIssue (#908)" {
+    run guard_cmd "gh api graphql -f query='query R{viewer{login}} mutation M{createIssue(input:{title:\"t\"}){clientMutationId}}' -f operationName=R"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: the createIssue operation selected by operationName is still blocked (#908)" {
+    run guard_cmd "gh api graphql -f query='query R{viewer{login}} mutation M{createIssue(input:{title:\"t\"}){clientMutationId}}' -f operationName=M"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: several operations and no operationName still fail closed (#908)" {
+    run guard_cmd "gh api graphql -f query='query R{viewer{login}} mutation M{createIssue(input:{title:\"t\"}){clientMutationId}}'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: createIssue named only in a comment or string is not a write (#908)" {
+    run guard_cmd "gh api graphql -f query='query{search(query:\"createIssue(x)\"){issueCount}} # createIssue(y)'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: -f on a pull-request merge endpoint is not an issue write (#908)" {
+    run guard_cmd "gh api -X PUT repos/guilhermegor/dotfiles-linux-dev/pulls/967/merge -f merge_method=squash -f sha=abc123"
+    [ "$status" -eq 0 ]
+}
