@@ -843,11 +843,14 @@ write_pr_json() {
     cd "$TEST_TMP/elsewhere"
     run bash -c 'jq -nc --arg c "$1" --arg d "$2" "{tool_name:\"Bash\",cwd:\$d,tool_input:{command:\$c}}" | "$3"' \
         _ "gh pr create --title x --body y" "$TEST_TMP/wt" "$HOOK"
-    [[ "$output" == *"moved issue"*"131"* ]]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"moved issue #131's card"* ]]
 }
 
 @test "checkout/switch to an existing branch whose name holds -b or -c moves nothing" {
     write_fake_gh "OPEN"
+    git branch feat/131-bugfix
+    git branch fix/12-cleanup
     run run_hook "git checkout feat/131-bugfix"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
