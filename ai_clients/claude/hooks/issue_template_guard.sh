@@ -55,6 +55,12 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/gh_body_guard_common.sh
 source "$SCRIPT_DIR/lib/gh_body_guard_common.sh"
+# A missing helper (partial deploy) must not read as "every body is compliant": without
+# evaluate_template nothing is checked. This runs on EVERY Bash call, so only a matched issue
+# write is refused (below), never unrelated commands.
+SPEC_LIB_OK=1
+# shellcheck source=lib/issue_spec_complete.sh
+source "$SCRIPT_DIR/lib/issue_spec_complete.sh" 2>/dev/null || SPEC_LIB_OK=0
 
 # Fail open if jq (used to parse the hook payload) is unavailable.
 command -v jq >/dev/null 2>&1 || exit 0
@@ -62,7 +68,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 main() {
     local payload tool command root body_source labels
     local -a json_labels=()
-    local -a templates=() best_missing=()
+    local -a templates=() best_missing=() missing=()
     local template best_template="" best_count=-1
 
     payload="$(cat)"
@@ -123,6 +129,12 @@ main() {
 
     mapfile -t templates < <(find_issue_templates "$root")
     [[ ${#templates[@]} -gt 0 ]] || exit 0   # no issue template anywhere → nothing to enforce
+    # Only now: a missing lib must not block a repo that has nothing to enforce.
+    if [[ "$SPEC_LIB_OK" != 1 ]]; then
+        echo "BLOCKED: issue_spec_complete.sh is missing next to issue_template_guard.sh, so this" >&2
+        echo "issue body cannot be verified. Re-run \`make ai_clients\` to deploy hooks/lib/ in full." >&2
+        exit 2
+    fi
 
     if [[ "$GH_HAS_BODY_FILE" == "true" ]]; then
         if [[ -r "$GH_BODY_FILE" ]]; then
@@ -187,76 +199,6 @@ find_issue_templates() {
     local root="$1"
     [[ -n "$root" && -d "$root/.github/ISSUE_TEMPLATE" ]] || return 0
     find "$root/.github/ISSUE_TEMPLATE" -maxdepth 1 -iname '*.md' 2>/dev/null | sort
-}
-
-# Strip a template's YAML frontmatter and HTML comment blocks, leaving only the structural
-# markdown content the required-headers/checklist/lead-line rules read from.
-strip_frontmatter_and_comments() {
-    awk '
-        NR==1 && $0=="---" { fm=1; next }
-        fm==1 { if ($0=="---") fm=0; next }
-        /<!--/ { incomment=1 }
-        incomment==1 { if ($0 ~ /-->/) incomment=0; next }
-        { print }
-    ' "$1"
-}
-
-# True if $1 (a multi-line block of text) has a `##`/`###` header matching $2 (case-insensitive
-# substring) whose section (up to the next such header, or EOF) contains a `- [ ]`/`- [x]` item.
-section_has_checklist() {
-    local text="$1" header_substr="$2" start_line next_line section
-    start_line="$(grep -n -i -F -- "$header_substr" <<<"$text" | head -n1 | cut -d: -f1)"
-    [[ -n "$start_line" ]] || return 1
-    next_line="$(tail -n "+$((start_line + 1))" <<<"$text" | grep -n -E '^#{2,3}[[:space:]]' | head -n1 | cut -d: -f1)"
-    if [[ -n "$next_line" ]]; then
-        section="$(sed -n "$((start_line + 1)),$((start_line + next_line - 1))p" <<<"$text")"
-    else
-        section="$(sed -n "$((start_line + 1)),\$p" <<<"$text")"
-    fi
-    grep -Eq '^[[:space:]]*[-*][[:space:]]+\[[ xX]\]' <<<"$section"
-}
-
-# Populate the global `missing` array with every requirement of $1 (a template file) that $2 (the
-# body) fails to satisfy, given $3 (newline-separated labels positively known on this command).
-evaluate_template() {
-    local template="$1" body="$2" labels="$3"
-    local stripped first_tmpl_line first_body_line line header literal cond
-    missing=()
-
-    stripped="$(strip_frontmatter_and_comments "$template")"
-
-    first_tmpl_line="$(grep -m1 -v '^[[:space:]]*$' <<<"$stripped")"
-    if [[ -n "$first_tmpl_line" ]]; then
-        first_body_line="$(grep -m1 -v '^[[:space:]]*$' <<<"$body")"
-        if [[ "$first_tmpl_line" == '**'* && "$first_body_line" != '**'* ]]; then
-            missing+=("a bold first line, like: $first_tmpl_line")
-        fi
-        if [[ "$first_tmpl_line" == *'·'* && "$first_body_line" != *'·'* ]]; then
-            missing+=("a '·'-separated first line, like: $first_tmpl_line")
-        fi
-    fi
-
-    while IFS= read -r line; do
-        header="$(sed -E 's/^#+[[:space:]]*//; s/[[:space:]]+$//' <<<"$line")"
-        [[ -n "$header" ]] || continue
-        if ! grep -qiF -- "$header" <<<"$body"; then
-            missing+=("$header")
-            continue
-        fi
-        if section_has_checklist "$stripped" "$header" && ! section_has_checklist "$body" "$header"; then
-            missing+=("$header (needs at least one - [ ] item)")
-        fi
-    done < <(grep -E '^#{2,3}[[:space:]]' <<<"$stripped")
-
-    while IFS= read -r line; do
-        [[ "$line" =~ issue-template-guard:[[:space:]]*require[[:space:]]+\"([^\"]+)\"([[:space:]]+if-label[[:space:]]+([^[:space:]]+))? ]] || continue
-        literal="${BASH_REMATCH[1]}"
-        cond="${BASH_REMATCH[3]:-}"
-        if [[ -n "$cond" ]]; then
-            grep -qxF -- "$cond" <<<"$labels" || continue   # label not positively known → fail open
-        fi
-        grep -qiF -- "$literal" <<<"$body" || missing+=("$literal")
-    done < <(grep -E 'issue-template-guard:' "$template")
 }
 
 block_unresolved_repo() {

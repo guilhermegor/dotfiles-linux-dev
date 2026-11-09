@@ -36,6 +36,7 @@ cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile_stale.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/dispatch_claims.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/gh_budget.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/roadmap_unblock.sh" "$REPO/lib/"
+    cp "$(dirname "$SWEEP_SRC")/lib/issue_spec_complete.sh" "$REPO/lib/"
     source "$FUNCS"
 
     # Every gh_budget_gate test below sets its own GH_BUDGET_LATCH_FILE to stay isolated from

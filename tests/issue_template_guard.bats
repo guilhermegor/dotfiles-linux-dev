@@ -355,3 +355,112 @@ EOF"
     [[ "$output" == *"Sign-off"* ]]
     rm -rf "$fake_home"
 }
+
+# --- #931: the completeness check is one shared helper, never a second copy ----------------------
+
+@test "the guard takes evaluate_template from issue_spec_complete.sh, defining none itself" {
+    local hooks="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks"
+    grep -q 'lib/issue_spec_complete.sh' "$hooks/issue_template_guard.sh"
+    run grep -E '^(evaluate_template|section_has_checklist|strip_frontmatter_and_comments)\(\)' \
+        "$hooks/issue_template_guard.sh"
+    [ "$status" -ne 0 ]
+    grep -q '^evaluate_template()' "$hooks/lib/issue_spec_complete.sh"
+}
+
+@test "section lookup: whole heading only, and a ### subsection stays inside its ## section" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
+    run bash -c "source '$lib'; _spec_section \"\$(printf '## Out of scope\n\nx\n')\" Scope"
+    [ "$status" -ne 0 ]
+    run bash -c "source '$lib'; spec_section_filled \"\$(printf '## Scope\n\n### Part\n\ntext\n\n## Next\n')\" Scope"
+    [ "$status" -eq 0 ]
+    run bash -c "source '$lib'; spec_section_filled \"\$(printf '## Scope\n\n\`\`\`\n## fake\n\`\`\`\n')\" Scope"
+    [ "$status" -eq 0 ]
+}
+
+@test "section lookup: UTF-8 headings fold case on both sides (mawk tolower is ASCII-only)" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
+    run bash -c "source '$lib'; spec_section_filled \"\$(printf '## AÇÃO\n\ntexto\n')\" 'Ação'"
+    [ "$status" -eq 0 ]
+}
+
+@test "spec_incomplete_reasons: a heading-less template does not waive What / Why" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh" t
+    t="$(mktemp)"
+    printf 'Free-form report, write anything.\n' >"$t"
+    run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf 'just prose\n\n\`\`\`surface\na.sh\n\`\`\`\n')\" '$t'"
+    rm -f "$t"
+    [[ "$output" == *"What / Why"* ]]
+}
+
+@test "spec_incomplete_reasons: the surface heading is required, prose mentioning it is not enough" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh" t
+    t="$(mktemp)"
+    printf '## What / Why\n\n## File surface\n\n```surface\n```\n' >"$t"
+    run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## What / Why\n\nx; see the File surface below\n\n\`\`\`surface\na.sh\n\`\`\`\n')\" '$t'"
+    rm -f "$t"
+    [[ "$output" == *"File surface"* ]]
+}
+
+@test "CRLF bodies: headings, fences and the surface block still match" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
+    run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## What / Why\r\n\r\nx\r\n\r\n\`\`\`surface\r\na.sh\r\n\`\`\`\r\n')\""
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    run bash -c "source '$lib'; section_has_checklist \"\$(printf '## Definition of Done\r\n- [ ] a\r\n')\" 'Definition of Done'"
+    [ "$status" -eq 0 ]
+}
+
+@test "section filled: a subheading alone is not text; prose between two inline comments is" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
+    run bash -c "source '$lib'; spec_section_filled \"\$(printf '## Scope\n### Part\n## Next\n')\" Scope"
+    [ "$status" -ne 0 ]
+    run bash -c "source '$lib'; spec_section_filled \"\$(printf '## Scope\n<!-- a --> real prose <!-- b -->\n')\" Scope"
+    [ "$status" -eq 0 ]
+    run bash -c "source '$lib'; spec_section_filled \"\$(printf '## Scope\n<!-- a --> <!-- b -->\n')\" Scope"
+    [ "$status" -ne 0 ]
+}
+
+@test "spec_incomplete_reasons: only the section holding the surface fence is exempt, not any 'surface' name" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh" t
+    t="$(mktemp)"
+    printf '## Attack surface\n\n## File surface\n\n```surface\n```\n' >"$t"
+    run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## Attack surface\n\n## File surface\n\n\`\`\`surface\na.sh\n\`\`\`\n')\" '$t'"
+    rm -f "$t"
+    [[ "$output" == *"empty Attack surface"* ]]
+    [[ "$output" != *"empty File surface"* ]]
+}
+
+@test "a missing issue_spec_complete.sh does not block a repo that ships no issue template" {
+    local copy repo
+    copy="$(mktemp -d)"
+    repo="$(mktemp -d)"
+    cp -r "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/." "$copy/"
+    rm "$copy/lib/issue_spec_complete.sh"
+    git -C "$repo" init -q
+    run bash -c "cd '$repo' && payload 'gh issue create --title x --body \"$NO_DOD_BODY\"' | '$copy/issue_template_guard.sh'"
+    rm -rf "$copy" "$repo"
+    [ "$status" -eq 0 ]
+}
+
+@test "a missing issue_spec_complete.sh blocks an issue write instead of approving it" {
+    local copy
+    copy="$(mktemp -d)"
+    cp -r "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/." "$copy/"
+    rm "$copy/lib/issue_spec_complete.sh"
+    run bash -c "payload 'gh issue create --title x --body \"$NO_DOD_BODY\"' | '$copy/issue_template_guard.sh'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"issue_spec_complete.sh is missing"* ]]
+    run bash -c "payload 'ls -la' | '$copy/issue_template_guard.sh'"
+    [ "$status" -eq 0 ]
+    rm -rf "$copy"
+}
+
+@test "spec_incomplete_reasons: a complete spec prints nothing; empty section and no surface say why" {
+    local lib="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/issue_spec_complete.sh"
+    run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## What / Why\n\nx\n\n\`\`\`surface\na.sh\n\`\`\`\n')\""
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    run bash -c "source '$lib'; spec_incomplete_reasons \"\$(printf '## What / Why\n\n<!-- todo -->\n')\""
+    [[ "$output" == *"empty What / Why"* ]]
+    [[ "$output" == *"no surface block"* ]]
+}
