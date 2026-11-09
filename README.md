@@ -494,7 +494,7 @@ Run `make help` to see all available commands, or check these common recipes:
 - `make ubuntu_workspace` - Configure Ubuntu workspace
 - `make set_shortcuts` - Set custom keyboard shortcuts
 - `make irpf_download` - Download Brazilian tax software
-- `make vscode_setup` - Configure VS Code
+- `make vscode_setup` - Configure VS Code (also pins the editor/terminal divider at 113 px when VS Code is closed; override with `PANEL_DIVIDER_PX`)
 - `make vscode_restore` - Restore VS Code configuration
 - `make install_espanso_packages` - Install Espanso packages
 
