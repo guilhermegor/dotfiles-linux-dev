@@ -269,6 +269,12 @@ commit_source_dir() {
                 # shellcheck disable=SC2034  # read by the hooks that source this file
                 COMMIT_SOURCE_DIR="$COMMIT_COMMAND_GIT_DIR"
                 COMMIT_SOURCE_FOUND=1
+                # shellcheck disable=SC2034  # read by the hooks that source this file
+                COMMIT_SOURCE_HAS_M=0
+                for v in "${_CMD_WORDS[@]:_COMMIT_ARGS_FROM}"; do
+                    # shellcheck disable=SC2034  # read by the title guard
+                    [[ "$v" == -m || "$v" == --message || "$v" == --message=* || "$v" == -m?* ]] && COMMIT_SOURCE_HAS_M=1
+                done
                 return 0
             fi
         done
