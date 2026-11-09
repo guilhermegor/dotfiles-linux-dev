@@ -207,7 +207,7 @@ prune_git_remote() {
 			envp=(env GIT_SSH_COMMAND='ssh -oBatchMode=yes')
 		fi
 	fi
-	GIT_TERMINAL_PROMPT=0 timeout -k 5 "${WORKTREE_PRUNE_REMOTE_TIMEOUT:-60}" ${envp[@]+"${envp[@]}"} git -C "$repo" "$@"
+	GIT_TERMINAL_PROMPT=0 timeout -k 5 "${WORKTREE_PRUNE_REMOTE_TIMEOUT:-60}" ${envp[@]+"${envp[@]}"} "${PRUNE_GIT_BIN:-git}" -C "$repo" "$@"
 }
 
 # Removes worktree, local branch, then origin branch; each step only if the one before succeeded.
