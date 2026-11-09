@@ -27,6 +27,8 @@ _PRUNE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$_PRUNE_DIR/worktree_fanout.sh"
 # shellcheck source=free_surface.sh
 source "$_PRUNE_DIR/free_surface.sh"
+# shellcheck source=branch_prune.sh
+source "$_PRUNE_DIR/branch_prune.sh"
 
 PRUNE_NOISE_GLOBS=('__pycache__' '.venv' '.pytest_cache' 'node_modules')
 
@@ -316,7 +318,13 @@ main() {
 		*) cwd="$a" ;;
 		esac
 	done
-	prune_worktrees "$cwd" "$apply"
+	local rc=0 brc=0
+	prune_worktrees "$cwd" "$apply" || rc=1
+	# Branches with no worktree (#948), after the worktrees so theirs are already gone.
+	# brc 2 = pass skipped on an unreadable forge/remote: kept, not a failure.
+	prune_branches "$cwd" "$apply" || brc=$?
+	[ "$brc" = 0 ] || [ "$brc" = 2 ] || rc=1
+	return "$rc"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
