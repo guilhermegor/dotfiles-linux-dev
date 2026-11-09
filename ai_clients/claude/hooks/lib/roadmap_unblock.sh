@@ -79,6 +79,8 @@ fi
 
 # shellcheck source=kanban_reconcile.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/kanban_reconcile.sh"
+# shellcheck source=issue_spec_complete.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/issue_spec_complete.sh"
 
 _ru_is_decision() {
 	# Case-insensitive "decision:" anywhere in the text — checked against both the project's
@@ -184,7 +186,95 @@ _ru_write() {
 	return "$rc"
 }
 
-# _ru_unblock OWNER PROJECT REPO NUMBER URL DETAIL
+# _ru_origin_names_repo ROOT REPO
+# True when checkout ROOT's `origin` is github.com's REPO (https or ssh, `.git` optional), compared
+# as lowercase literals: GitHub names are case-insensitive and a `.` in one is not a wildcard.
+_ru_origin_names_repo() {
+	local url top
+	# ROOT must itself be the checkout's top level: inside a plain directory under a parent repo,
+	# git would answer with the PARENT's origin.
+	top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || return 1
+	[[ "$(cd "$1" && pwd -P)" == "$(cd "$top" && pwd -P)" ]] || return 1
+	url="$(git -C "$1" remote get-url origin 2>/dev/null)" || return 1
+	# The host must be exactly github.com (https, ssh://, or scp-like git@), not `notgithub.com`.
+	# The authority is the text between `scheme://` and the FIRST `/`, so an `@github.com` further
+	# along the path (`https://evil.example/x@github.com/o/r`) never counts as the host.
+	local authority
+	case "$url" in
+		git@github.com:*) url="${url#git@github.com:}" ;;
+		https://* | ssh://*)
+			authority="${url#*://}"
+			authority="${authority%%/*}"
+			[[ "${authority##*@}" == "github.com" ]] || return 1
+			url="${url#*://"$authority"/}"
+			;;
+		*) return 1 ;;
+	esac
+	url="${url%/}"
+	url="${url%.git}"
+	[[ -n "$url" && "${url,,}" == "${2,,}" ]]
+}
+
+# _ru_unblock_dest REPO ITEM_JSON
+# Decides where an unblocked card goes (dotfiles-linux-dev#931): Ready when its body is a complete
+# spec, Backlog otherwise. "Complete" = the template rules issue_template_guard.sh also applies
+# (shared via issue_spec_complete.sh) PLUS routing checks the guard does not make: every section
+# filled and a closed, non-empty surface block. Sets
+# UNBLOCK_DEST, UNBLOCK_WHY (what is missing, "" when complete) and UNBLOCK_LABELS. Returns 1 for
+# UNKNOWN, never "complete": no `body` key at all (a present-but-null body is readable and empty,
+# so it routes to Backlog), unreadable labels, or no verified template source.
+#
+# Templates are read at an EXPLICIT ref, `origin/HEAD` of the local checkout
+# (`$ROADMAP_CHECKOUT_ROOT/<name>`, default ~/github/<name>), never its working tree, which may sit
+# on a stale feature branch (same implicit-HEAD class as #229/#410). The checkout must exist, its
+# origin must name REPO, and `origin/HEAD` must resolve; its freshness is that of the last fetch
+# (no network call here). The `What / Why` skeleton is the fallback only when that ref ships no
+# template. Labels (minus `state:blocked`, which the unblock removes) feed `if-label` rules.
+_ru_unblock_dest() {
+	local repo="$1" item="$2" body reasons root labels number tdir file listing
+	local -a templates=()
+	UNBLOCK_DEST="" UNBLOCK_WHY="" UNBLOCK_LABELS=""
+	jq -e '.content | has("body")' <<<"$item" >/dev/null 2>&1 || return 1
+	body="$(jq -r '.content.body // ""' <<<"$item")"
+	number="$(jq -r '.content.number' <<<"$item")"
+	root="${ROADMAP_CHECKOUT_ROOT:-$HOME/github}/${repo##*/}"
+	_ru_origin_names_repo "$root" "$repo" || return 1
+	git -C "$root" rev-parse --verify -q origin/HEAD >/dev/null 2>&1 || return 1
+	tdir="$(mktemp -d)" || return 1
+	# A failed listing must be UNKNOWN, never an empty list that selects the fallback skeleton.
+	listing="$(git -C "$root" ls-tree --name-only origin/HEAD .github/ISSUE_TEMPLATE/ 2>/dev/null)" \
+		|| { rm -rf "$tdir"; return 1; }
+	while IFS= read -r file; do
+		[[ "${file,,}" == *.md ]] || continue
+		git -C "$root" show "origin/HEAD:$file" >"$tdir/$(basename "$file")" 2>/dev/null \
+			|| { rm -rf "$tdir"; return 1; }
+		templates+=("$tdir/$(basename "$file")")
+	done < <(sort <<<"$listing")
+	labels="$(_ru_item_labels "$item" "$repo" "$number")" || { rm -rf "$tdir"; return 1; }
+	UNBLOCK_LABELS="$labels"
+	labels="$(grep -vxF 'state:blocked' <<<"$labels" || true)"
+	reasons="$(SPEC_LABELS="$labels" spec_incomplete_reasons "$body" "${templates[@]+"${templates[@]}"}")" \
+		|| { rm -rf "$tdir"; return 1; }
+	rm -rf "$tdir"
+	if [[ -z "$reasons" ]]; then
+		UNBLOCK_DEST="Ready"
+		return 0
+	fi
+	UNBLOCK_DEST="Backlog"
+	UNBLOCK_WHY="$(printf '%s\n' "$reasons" | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')"
+}
+
+# _ru_dest_phrase
+# The report-line tail for the destination decided by _ru_unblock_dest.
+_ru_dest_phrase() {
+	if [[ "$UNBLOCK_DEST" == "Ready" ]]; then
+		printf 'Ready'
+	else
+		printf 'Backlog (%s)' "$UNBLOCK_WHY"
+	fi
+}
+
+# _ru_unblock OWNER PROJECT REPO NUMBER URL DETAIL DEST
 # The one mutation path, in order: labels, board "Blocked by", audit comment, board Status LAST.
 # The comment is the audit trail (dotfiles-linux-dev#369): a status that changes silently is
 # indistinguishable from one someone fat-fingered.
@@ -200,17 +290,24 @@ _ru_write() {
 #
 # ponytail: still no rollback — the caller reports FAILED and the next round re-runs it.
 _ru_unblock() {
-	local owner="$1" project="$2" repo="$3" number="$4" url="$5" detail="$6"
-	local note="Unblocked: $detail. Status set to Ready."
-	_ru_write "label swap" gh issue edit "$number" --repo "$repo" \
-		--add-label "state:ready" --remove-label "state:blocked" || return 1
+	local owner="$1" project="$2" repo="$3" number="$4" url="$5" detail="$6" dest="${7:-Ready}"
+	local note="Unblocked: $detail. Status set to $dest."
+	local -a label_args=(--remove-label "state:blocked")
+	if [[ "$dest" == "Ready" ]]; then
+		label_args=(--add-label "state:ready" "${label_args[@]}")
+	elif grep -qxF 'state:ready' <<<"${UNBLOCK_LABELS:-}"; then
+		# An incomplete spec must not advertise readiness. Only when the label is on the issue:
+		# removing one that is absent may error and fail the whole write.
+		label_args+=(--remove-label "state:ready")
+	fi
+	_ru_write "label swap" gh issue edit "$number" --repo "$repo" "${label_args[@]}" || return 1
 	_ru_write "Blocked-by clear" gh project item-edit "$project" --owner "$owner" --url "$url" \
 		--field "Blocked by" --clear || return 1
 	if ! _ru_has_comment "$repo" "$number" "$note"; then
 		_ru_write "audit comment" gh issue comment "$number" --repo "$repo" --body "$note" || return 1
 	fi
-	_ru_write "Status=Ready" gh project item-edit "$project" --owner "$owner" --url "$url" \
-		--field "Status" --value "Ready" || return 1
+	_ru_write "Status=$dest" gh project item-edit "$project" --owner "$owner" --url "$url" \
+		--field "Status" --value "$dest" || return 1
 }
 
 # _ru_write_failed_line VERB IDENT
@@ -263,9 +360,11 @@ _ru_process_item() {
 		if [[ -z "$open_list" ]]; then
 			local detail
 			detail="$(printf '%s' "$closed_list" | paste -sd, -)"
-			if _ru_unblock "$owner" "$project" "$repo" "$number" "$url" "$detail"; then
-				printf 'unblocked %s: all native blockers closed (%s) -> Ready%s\n' \
-					"$ident" "$detail" "$(_ru_kind_tag "$kind")"
+			if ! _ru_unblock_dest "$repo" "$item"; then
+				printf 'UNKNOWN %s: could not read the issue body or the repo template checkout to judge the spec — left untouched\n' "$ident"
+			elif _ru_unblock "$owner" "$project" "$repo" "$number" "$url" "$detail" "$UNBLOCK_DEST"; then
+				printf 'unblocked %s: all native blockers closed (%s) -> %s%s\n' \
+					"$ident" "$detail" "$(_ru_dest_phrase)" "$(_ru_kind_tag "$kind")"
 			else
 				_ru_write_failed_line unblock "$ident"
 			fi
@@ -308,9 +407,11 @@ _ru_process_item() {
 		if [[ -z "$open_refs" ]]; then
 			local detail
 			detail="$(printf '%s' "$closed_refs" | paste -sd, -)"
-			if _ru_unblock "$owner" "$project" "$repo" "$number" "$url" "$detail"; then
-				printf 'unblocked %s: prose blocker(s) closed (%s) -> Ready%s\n' \
-					"$ident" "$detail" "$(_ru_kind_tag "$kind")"
+			if ! _ru_unblock_dest "$repo" "$item"; then
+				printf 'UNKNOWN %s: could not read the issue body or the repo template checkout to judge the spec — left untouched\n' "$ident"
+			elif _ru_unblock "$owner" "$project" "$repo" "$number" "$url" "$detail" "$UNBLOCK_DEST"; then
+				printf 'unblocked %s: prose blocker(s) closed (%s) -> %s%s\n' \
+					"$ident" "$detail" "$(_ru_dest_phrase)" "$(_ru_kind_tag "$kind")"
 			else
 				_ru_write_failed_line unblock "$ident"
 			fi
@@ -364,15 +465,32 @@ _ru_reblock() {
 		--field "Status" --value "Blocked" || return 1
 }
 
+# _ru_item_labels ITEM_JSON REPO NUMBER
+# Prints the issue's labels, one per line. The porcelain read carries `labels`; the GraphQL
+# fallback read does not, so a missing key is read from the issue. Returns 1 when unreadable.
+_ru_item_labels() {
+	if jq -e 'has("labels")' <<<"$1" >/dev/null 2>&1; then
+		# jq's own status is the answer: a failed parse is "unreadable", never "no labels".
+		jq -r '(.labels // [])[] | if type == "object" then .name else . end' <<<"$1" 2>/dev/null
+		return
+	fi
+	gh issue view "$3" --repo "$2" --json labels --jq '.labels[].name' 2>/dev/null
+}
+
 # _ru_process_open_item OWNER PROJECT ITEM_JSON
-# The reverse direction (dotfiles-linux-dev#812) for an item in Ready. Prints one line
-# only when something happened or could not be read: a re-block, FAILED, or UNKNOWN. An item
+# The reverse direction (dotfiles-linux-dev#812) for an item in Ready, and (#931) in Backlog, where
+# it prints `blocked:` instead of `re-blocked:`. A Backlog card's way back is _ru_unblock_dest, so
+# moving it is no longer a one-way promotion to Ready. A Backlog card carrying the `state:blocked`
+# label with no open blocker is also moved (detail `state:blocked`). Prints one line
+# only when something happened or could not be read: a (re-)block, FAILED, or UNKNOWN. An item
 # with no open blocker (none recorded, or all closed) is left alone silently — it is where it
 # should be. A `decision:` blocker is left alone too: this direction only acts on a blocker it
 # can verify as open.
 _ru_process_open_item() {
 	local owner="$1" project="$2" item="$3"
-	local number repo url body field_text body_line ident open rc=0
+	local number repo url body field_text body_line ident open rc=0 status verb="re-blocked"
+	status="$(jq -r '.status // ""' <<<"$item")"
+	[[ "$status" != "Backlog" ]] || verb="blocked"
 	number="$(jq -r '.content.number' <<<"$item")"
 	repo="$(jq -r '.content.repository' <<<"$item")"
 	url="$(jq -r '.content.url' <<<"$item")"
@@ -380,6 +498,11 @@ _ru_process_open_item() {
 	field_text="$(jq -r '."blocked by" // ""' <<<"$item")"
 	ident="$repo#$number"
 	body_line="$(_ru_body_blocked_line "$body")"
+	# A body-only `decision:` blocker would be invisible without the body: unreadable is UNKNOWN.
+	if ! jq -e '.content | has("body")' <<<"$item" >/dev/null 2>&1; then
+		printf 'UNKNOWN %s: could not read the issue body — left untouched\n' "$ident"
+		return 0
+	fi
 
 	if _ru_is_decision "$field_text" || _ru_is_decision "$body_line"; then
 		return 0
@@ -390,14 +513,26 @@ _ru_process_open_item() {
 		printf 'UNKNOWN %s: could not read blockers — left untouched\n' "$ident"
 		return 0
 	fi
-	[[ -n "$open" ]] || return 0
-	local detail kind
-	detail="$(printf '%s' "$open" | paste -sd, -)"
-	kind="$(_ru_refs_kind "$repo" "$open")"
-	if _ru_reblock "$owner" "$project" "$repo" "$number" "$url" "$detail"; then
-		printf 're-blocked: %s by %s%s\n' "$ident" "$detail" "$(_ru_kind_tag "$kind")"
+	local detail kind=""
+	if [[ -n "$open" ]]; then
+		detail="$(printf '%s' "$open" | paste -sd, -)"
+		kind="$(_ru_refs_kind "$repo" "$open")"
+	elif [[ "$status" == "Backlog" ]]; then
+		local labels lrc=0
+		labels="$(_ru_item_labels "$item" "$repo" "$number")" || lrc=1
+		if ((lrc != 0)); then
+			printf 'UNKNOWN %s: could not read labels — left untouched\n' "$ident"
+			return 0
+		fi
+		grep -qxF 'state:blocked' <<<"$labels" || return 0
+		detail="state:blocked"
 	else
-		_ru_write_failed_line re-block "$ident"
+		return 0
+	fi
+	if _ru_reblock "$owner" "$project" "$repo" "$number" "$url" "$detail"; then
+		printf '%s: %s by %s%s\n' "$verb" "$ident" "$detail" "$(_ru_kind_tag "$kind")"
+	else
+		_ru_write_failed_line "${verb%ed}" "$ident"
 	fi
 }
 
@@ -435,10 +570,10 @@ reconcile_roadmap_unblock() {
 		[[ -n "$line" ]] && report="$(printf '%s\n%s' "$report" "$line")"
 	done <<<"$blocked"
 
-	# The reverse direction (dotfiles-linux-dev#812): a Ready card that gained an open blocker. Backlog is deliberately NOT scanned: research/prototype/grilling cards sit there on purpose, and `_ru_unblock` always writes Ready, so re-blocking one would promote it to Ready when its blocker closed.
+	# The reverse direction (#812, Backlog added in #931): a Ready or Backlog card that gained an open blocker. Backlog is safe to scan now that unblocking picks Ready or Backlog by spec completeness instead of always writing Ready.
 	local open_items
 	open_items="$(printf '%s' "$items_json" \
-		| jq -c '.items[] | select(.status == "Ready" and .content.type == "Issue")' \
+		| jq -c '.items[] | select((.status == "Ready" or .status == "Backlog") and .content.type == "Issue")' \
 			2>/dev/null)" \
 		|| { RECONCILE_REPORT="UNKNOWN (board unreadable): could not parse project $owner/$project"; return 1; }
 	while IFS= read -r item; do
