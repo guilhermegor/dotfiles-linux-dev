@@ -477,35 +477,55 @@ def read_graphql_file(path, shifted):
     return text if len(text) <= 1 << 20 else None  # over the cap: the tail is unseen
 
 
-GRAPHQL_OP_HEAD = re.compile(r"\s*(query|mutation|subscription)\b\s*(\w*)")
+GRAPHQL_OP_HEAD = re.compile(r"\s*(query|mutation|subscription|fragment)\b\s*(\w*)")
+GRAPHQL_SPREAD = re.compile(r"\.\.\.\s*(?!on\b)(\w+)")
+
+
+def split_graphql_definitions(masked):
+    """Return (start, end) spans of the top-level definitions, or None when they do not tile.
+
+    Braces inside `( ... )` (a variable default such as `$i: In = {body: "x"}`) belong to the
+    definition's header, so only a `}` outside every paren closes a definition (#908 review).
+    """
+    spans, braces, parens, start = [], 0, 0, 0
+    for i, ch in enumerate(masked):
+        parens += {"(": 1, ")": -1}.get(ch, 0)
+        braces += 0 if parens else {"{": 1, "}": -1}.get(ch, 0)
+        if ch == "}" and not parens and braces == 0:
+            spans.append((start, i + 1))
+            start = i + 1
+    return None if parens or braces or masked[start:].strip() else spans
 
 
 def select_graphql_operation(query, operation_name):
     """Return the query text GitHub would execute: the operation `operationName` selects.
 
     A document may hold several operations; a read selected by name must not be judged by a
-    `createIssue` mutation sitting beside it (#908). Fragments always stay (a selected
-    operation may spread one). No name, no match, or a lone operation keeps the whole text:
-    over-blocking is the only error this may make.
+    `createIssue` mutation sitting beside it (#908). Fragments stay only when the selected
+    operation reaches them, directly or through other fragments, so a sibling mutation's
+    fragment cannot taint the read. No name, no match, an anonymous operation or a document
+    that does not parse keeps the whole text: over-blocking is the only error this may make.
     """
     masked = mask_graphql_strings(query)
-    defs, depth, start = [], 0, 0
-    for i, ch in enumerate(masked):
-        depth += {"{": 1, "}": -1}.get(ch, 0)
-        if ch == "}" and depth == 0:
-            defs.append((start, i + 1))
-            start = i + 1
-    if not operation_name or len(defs) < 2 or masked[start:].strip():
+    spans = split_graphql_definitions(masked)
+    if not operation_name or not spans or len(spans) < 2:
         return query
-    kept, named = [], False
-    for a, b in defs:
-        head = GRAPHQL_OP_HEAD.match(masked, a)
-        if head is None or head.group(1) == "fragment":
-            kept.append(query[a:b])  # anonymous shorthand or non-operation: judge it
-        elif head.group(2) == operation_name:
-            kept.append(query[a:b])
-            named = True
-    return " ".join(kept) if named else query
+    heads = [GRAPHQL_OP_HEAD.match(masked, a) for a, _ in spans]
+    if any(h is None for h in heads):
+        return query  # shorthand `{...}`: anonymous, cannot be told apart from the selection
+    fragments = {h.group(2): spans[i] for i, h in enumerate(heads) if h.group(1) == "fragment"}
+    chosen = [spans[i] for i, h in enumerate(heads)
+              if h.group(1) != "fragment" and h.group(2) == operation_name]
+    if not chosen:
+        return query
+    pending, reached = list(chosen), set()
+    while pending:
+        a, b = pending.pop()
+        for name in GRAPHQL_SPREAD.findall(masked[a:b]):
+            if name in fragments and name not in reached:
+                reached.add(name)
+                pending.append(fragments[name])
+    return " ".join(query[a:b] for a, b in chosen + [fragments[n] for n in sorted(reached)])
 
 
 def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False), quoted=frozenset()):
@@ -700,8 +720,13 @@ def ungrouped_graphql_fields(fields):
     for typed, field in fields:
         key, eq, val = field.partition("=")
         m = GRAPHQL_RAW_VARIABLE.match(key)
-        if key == "query" or m:
-            out.append((typed, (m.group(1) + m.group(2) if m else key) + eq + val))
+        if key in ("query", "operationName"):
+            out.append((typed, field))  # top-level members: the selector stays the selector
+        elif m:
+            name = m.group(1) + m.group(2)
+            # a variable called operationName must not be read as the selector (#908 review)
+            out.append((typed, ("variables[operationName]" if name == "operationName" else name)
+                        + eq + val))
     return out
 
 
