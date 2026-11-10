@@ -194,7 +194,11 @@ RUNG_TIMEOUT = int(os.environ.get("REVIEW_FANOUT_RUNG_TIMEOUT", str(RUNG_TIMEOUT
 # ladder whatever the primary rung's slot reads (dotfiles-linux-dev#616): slot_classify.py read
 # FREE for a week on a 50-PR backlog because "the slot is free" and "PRs are getting reviewed"
 # are different facts. A default, not a measurement -- move it when there is one.
+# On an ASK-ONLY repo (slot_classify.py) a push triggers no review at all, so waiting 6h for
+# one that is never coming only idles the PR (#965): there the default is 1h. The env var
+# still wins on both.
 LADDER_BACKLOG_HOURS = float(os.environ.get("REVIEW_FANOUT_BACKLOG_HOURS", "6"))
+LADDER_BACKLOG_HOURS_ASK_ONLY = float(os.environ.get("REVIEW_FANOUT_BACKLOG_HOURS_ASK_ONLY", "1"))
 
 # Channel 1 reads the same reviewer roster the review-thread gate does (review_thread_gate.sh,
 # `_gate_roster_logins`): same file, same `- login:` line shape -- not a second hard-coded list.
@@ -835,7 +839,12 @@ def ladder_reason(pr: dict, now: datetime.datetime) -> str | None:
 	if bot_skipped(pr):
 		return "bot-skipped"
 	head_time = head_commit_time(pr)
-	if head_time is not None and (now - head_time).total_seconds() > LADDER_BACKLOG_HOURS * 3600:
+	if head_time is None:
+		return None
+	hours = LADDER_BACKLOG_HOURS
+	if "REVIEW_FANOUT_BACKLOG_HOURS" not in os.environ and slot_is_ask_only():
+		hours = LADDER_BACKLOG_HOURS_ASK_ONLY
+	if (now - head_time).total_seconds() > hours * 3600:
 		return "backlog"
 	return None
 
@@ -1146,15 +1155,50 @@ def merge_is_serial(base: str) -> bool:
 	return strict
 
 
-def drain_serially(dispatchable: list[dict], excluded: list[dict]) -> None:
+def gate_carries_forward(prs: list[dict]) -> bool | None:
+	"""True/False when the target repo's review gate carries reviews forward, None if unknown (#965).
+
+	``REVIEW_FANOUT_CARRY=1|0`` declares it. Otherwise only POSITIVE evidence counts: an open PR
+	whose gate (``REVIEW_GATE_CHECK``) is green on a head that no review names, while an older
+	head has one -- the review was carried forward (blueprintx#698/#699). A red gate proves
+	nothing (the patch may have changed), so absence of evidence is None, never False.
+	"""
+	declared = os.environ.get("REVIEW_FANOUT_CARRY", "")
+	if declared in ("0", "1"):
+		return declared == "1"
+	for pr in prs:
+		# The CURRENT head must be unreviewed: a green gate on a reviewed head proves nothing.
+		head_time = head_commit_time(pr)
+		if head_time is None or reviewed_at_head(pr) or ladder_covered_at_head(pr, head_time):
+			continue
+		if not reviewed_heads(pr):
+			continue
+		if any(
+			(e.get("name") or e.get("context") or "") == REVIEW_GATE_CHECK and _entry_verdict(e) == "pass"
+			for e in _clean_checks(pr)
+		):
+			return True
+	return None
+
+
+def drain_serially(dispatchable: list[dict], excluded: list[dict], carries: bool | None = None) -> None:
 	"""Per base branch, keep only the queue head (lowest PR number); exclude the rest, by name.
 
 	In place. Only PRs whose ``base`` is serial are touched; PRs on a non-serial base stay
-	parallel. Each drained PR gets a named reason -- the plan still judges every PR, it just
-	refuses to buy a review that the next merge into that base will void. The legitimate state
-	is "the next PR in the queue has a review in flight", which ``review_fanout_guard.sh``
-	already honours.
+	parallel. Seriality belongs to MERGE order (``merge_ready``), not reviewer allocation:
+	when the gate carries reviews forward (``carries`` True) an update-branch does not void a
+	review, so no PR is drained and every one keeps its reviewer (#965). ``carries`` None
+	(undetermined) keeps the drain and says so in the reason; False keeps it too. Each drained
+	PR gets a named reason. The legitimate state is "the next PR in the queue has a review in
+	flight", which ``review_fanout_guard.sh`` already honours.
 	"""
+	if carries:
+		return
+	why = (
+		"this repo's review gate is not known to carry reviews forward"
+		if carries is None
+		else "this repo's review gate does not carry reviews forward"
+	)
 	heads: dict[str, int] = {}
 	kept: list[dict] = []
 	for item in sorted(dispatchable, key=lambda c: c["pr"]):
@@ -1172,7 +1216,7 @@ def drain_serially(dispatchable: list[dict], excluded: list[dict]) -> None:
 				"reason": (
 					f"serial drain: merges into {base} are strict-serial, so a review of "
 					f"this head is voided by the merge ahead of it -- #{heads[base]} is "
-					"next in the queue and gets the reviewer"
+					f"next in the queue and gets the reviewer ({why})"
 				),
 			}
 		)
@@ -1253,7 +1297,7 @@ def build_plan() -> dict:
 			}
 		)
 
-	drain_serially(dispatchable, excluded)
+	drain_serially(dispatchable, excluded, gate_carries_forward(prs))
 	serial = any(merge_is_serial(c["base"]) for c in dispatchable)
 	dispatchable.sort(key=lambda c: c["pr"])
 	excluded.sort(key=lambda c: c["pr"])

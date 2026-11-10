@@ -701,7 +701,7 @@ $(idle_envelope review-pr-520 '{"type":"idle_notification","from":"review-pr-520
 @test "a PR number with a collision suffix is still one review name" {
     # The `-<k>` suffix cannot be told apart from more PR digits; both are review names.
     loop_invoked
-    agent_dispatched a1 "review-pr-12-3"
+    agent_dispatched a1 "review-pr-520-3"
     plan_with_work
     run_guard
     [ "$status" -eq 0 ]
@@ -1213,6 +1213,39 @@ PLAN_EOF
     run_guard
     [[ "$output" != *"RESCUE case"* ]]
     [[ "$output" != *"Agents in flight"* ]]
+}
+
+plan_two_prs() {
+    jq -n '{rung: {status: "ok", runtime: "qwen", model: "m", signal: "s"},
+        dispatchable: [{pr: 520, head: "e1319925c49d", checks: {}}, {pr: 521, head: "f2420a36d5ae", checks: {}}],
+        excluded: []}' >"$PLAN"
+}
+
+@test "a review running for one PR does not cover another dispatchable PR (#965)" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    plan_two_prs
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#521"* ]]
+    [[ "$output" != *"#520  head"* ]]
+}
+
+@test "every dispatchable PR with its own review dispatch passes (#965)" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    agent_dispatched a2 "review-pr-521"
+    plan_two_prs
+    run_guard
+    [ "$status" -eq 0 ]
+}
+
+@test "a review running and an unreadable plan still fails open (#965)" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    echo 'not json' >"$PLAN"
+    run_guard
+    [ "$status" -eq 0 ]
 }
 
 @test "default planner timeout exceeds the planner rung budget (#877)" {

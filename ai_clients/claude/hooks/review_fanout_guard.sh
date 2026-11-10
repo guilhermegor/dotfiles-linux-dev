@@ -316,6 +316,8 @@ review_dispatch_running() {
 	local LC_ALL=C
 	FAILED_BACKGROUND_AGENTS=""
 	OTHER_AGENTS_IN_FLIGHT=""
+	# PR numbers (space-padded) of the review dispatches still in flight: coverage is per PR (#965).
+	REVIEW_PRS_IN_FLIGHT=" "
 	[ -r "$transcript" ] || return 1
 
 	local -A agent_name=() agent_label=() agent_result=() agent_note=() agent_ts=()
@@ -445,6 +447,9 @@ review_dispatch_running() {
 		# Still in flight. Which question it answers depends on what it was dispatched for.
 		if [ "$is_review" -eq 1 ]; then
 			review_running=0
+			# `-<k>` cannot be told from more PR digits (see the suffix test): cover both readings.
+			[[ "${agent_name[$id]}" =~ ^review-pr-([0-9]+)(-([0-9]+))?$ ]] \
+				&& REVIEW_PRS_IN_FLIGHT="$REVIEW_PRS_IN_FLIGHT${BASH_REMATCH[1]} ${BASH_REMATCH[1]}${BASH_REMATCH[3]} "
 		else
 			OTHER_AGENTS_IN_FLIGHT="$(printf '%s\n%s' \
 				"$OTHER_AGENTS_IN_FLIGHT" "${agent_label[$id]}")"
@@ -507,6 +512,9 @@ publish_cache() {
 # "there is work to do" message on purpose: an operator must be able to tell "the planner
 # broke" from "you skipped the fan-out", because the two need opposite next actions.
 block_unreadable() {
+	# A review in flight and a plan that cannot be read: coverage cannot be disproved, so pass
+	# as before (#965 keeps the fail-open case).
+	[ "${REVIEW_PRS_IN_FLIGHT:- }" = " " ] || exit 0
 	{
 		echo "review_fanout_guard: $1"
 		echo
@@ -600,7 +608,7 @@ unknown_rung() {
 }
 
 main() {
-	local payload active cwd transcript session_id plan rung_status dispatchable excluded
+	local payload active cwd transcript session_id plan rung_status dispatchable excluded covered
 
 	payload="$(cat)"
 
@@ -617,9 +625,10 @@ main() {
 	$GIT -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
 	dev_loop_invoked "$transcript" || exit 0
-	# Only an unresolved REVIEW dispatch suppresses. An unrelated agent in flight does not —
-	# see review_dispatch_running's own header for the fails-open defect that was.
-	review_dispatch_running "$transcript" && exit 0
+	# Only an unresolved REVIEW dispatch counts, and only for ITS OWN PR (#965): one running
+	# review-pr-N no longer silences the guard for every other dispatchable PR. An unrelated
+	# agent in flight counts for nothing — see review_dispatch_running's own header.
+	review_dispatch_running "$transcript" || true
 
 	# Budget low => pass, never block a turn on a board that cannot be read (#814). Above the
 	# cache on purpose: the cache key needs open_pr_heads, itself a gh call.
@@ -700,6 +709,10 @@ main() {
 		;;
 	esac
 
+	# Drop the PRs that already have their own unresolved review-pr-<PR> dispatch.
+	covered="$(jq -cn '$ARGS.positional | map(tonumber)' --args $REVIEW_PRS_IN_FLIGHT)"
+	plan="$(printf '%s' "$plan" | jq -c --argjson covered "$covered" \
+		'.dispatchable |= map(select(.pr as $p | $covered | index($p) | not))')"
 	dispatchable="$(printf '%s' "$plan" | jq -r '
 		.dispatchable[]?
 		| "  #\(.pr)  head \((.head // "")[0:8])"

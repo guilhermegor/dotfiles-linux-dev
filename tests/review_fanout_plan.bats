@@ -60,7 +60,7 @@ ROSTER
     # reason (which is checked on purpose by its own tests below).
     export REVIEW_FANOUT_RUNG="qwen|qwen3-coder-plus|configured-default"
     unset REVIEW_FANOUT_RECENT_PUSH_SECONDS REVIEW_FANOUT_BACKLOG_HOURS
-    unset REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED GH_PAGING_FAIL GH_COMPARE_FAIL GH_PARENTS_FAIL GH_SLOT_FAIL
+    unset REVIEW_FANOUT_CARRY REVIEW_FANOUT_BACKLOG_HOURS_ASK_ONLY REVIEW_FANOUT_SERIAL GH_STRICT_RULESET GH_STRICT_CLASSIC GH_GRAPHQL_FAIL GH_REST_FAIL GH_GRAPHQL_MALFORMED GH_PAGING_FAIL GH_COMPARE_FAIL GH_PARENTS_FAIL GH_SLOT_FAIL
 }
 
 teardown() {
@@ -1869,4 +1869,91 @@ EOF
     export GH_SLOT_FAIL=1
     run python3 "$PLANNER"
     [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "875" ]
+}
+
+# --- #965: serial drain governs merge order, not reviewer allocation -------------------------
+
+# carried_pr -- PR 9: a roster review of an OLDER head, gate green on the current one.
+carried_pr() {
+    behind_pr 9 oldhead SUCCESS | jq '.reviews = [{commit: {oid: "oldhead"}, state: "COMMENTED",
+        body: "x", author: {login: "coderabbitai", __typename: "Bot"}}]'
+}
+
+@test "carry-forward declared: serial drain keeps every PR dispatchable (#965)" {
+    stub_gh_prs <<<"$(board_of 3)"
+    export REVIEW_FANOUT_SERIAL=1 REVIEW_FANOUT_CARRY=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1,2,3]" ]
+    [ "$(jq -r '.excluded | length' <<<"$output")" -eq 0 ]
+}
+
+@test "carry-forward evidenced by a green gate on an unreviewed head: no drain (#965)" {
+    stub_gh_prs <<<"$(board_of 3 | jq --argjson c "$(carried_pr)" '. + [$c]')"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1,2,3]" ]
+}
+
+@test "carry-forward undetermined: drain kept, reason says so (#965)" {
+    stub_gh_prs <<<"$(board_of 3)"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1]" ]
+    [[ "$(reason_for 3)" == *"not known to carry reviews forward"* ]]
+}
+
+@test "carry-forward declared off: drain kept, reason says so (#965)" {
+    stub_gh_prs <<<"$(board_of 3 | jq --argjson c "$(carried_pr)" '. + [$c]')"
+    export REVIEW_FANOUT_SERIAL=1 REVIEW_FANOUT_CARRY=0
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1]" ]
+    [[ "$(reason_for 3)" == *"does not carry reviews forward"* ]]
+}
+
+@test "carry-forward: a green gate on an already-reviewed head is no evidence (#965)" {
+    # PR 9 has reviews of an older head AND of its current head; gate green proves nothing.
+    reviewed_now="$(carried_pr | jq '.reviews += [{commit: {oid: "head9"}, state: "COMMENTED",
+        body: "x", author: {login: "coderabbitai", __typename: "Bot"}}]')"
+    stub_gh_prs <<<"$(board_of 3 | jq --argjson c "$reviewed_now" '. + [$c]')"
+    export REVIEW_FANOUT_SERIAL=1
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.dispatchable[].pr]' <<<"$output")" = "[1]" ]
+    [[ "$(reason_for 3)" == *"not known to carry reviews forward"* ]]
+}
+
+@test "an explicit backlog window beats the ASK-ONLY default (#965)" {
+    stub_gh_prs <<EOF
+[{"number":700,"headRefOid":"aaaa7000","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa7000","committedDate":"$(ago 7200)"}],"statusCheckRollup":[]}]
+EOF
+    cat >"$TEST_TMP/slot.json" <<EOS
+[{"user":{"login":"coderabbitai[bot]"},"created_at":"$(ago 30)",
+  "body":"> [!IMPORTANT]\n> ## Review skipped\n> This repository does not receive automatic reviews because it has fewer than 10 stars."}]
+EOS
+    export REVIEW_FANOUT_BACKLOG_HOURS=24
+    run python3 "$PLANNER"
+    [ "$(jq -r '.dispatchable[0].ladder' <<<"$output")" = "null" ]
+}
+
+@test "backlog window is 1h on an ASK-ONLY repo, 6h elsewhere (#965)" {
+    stub_gh_prs <<EOF
+[{"number":700,"headRefOid":"aaaa7000","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa7000","committedDate":"$(ago 7200)"}],"statusCheckRollup":[]}]
+EOF
+    echo '[]' >"$TEST_TMP/slot.json"
+    run python3 "$PLANNER"
+    [ "$(jq -r '.dispatchable[0].ladder' <<<"$output")" = "null" ]
+    cat >"$TEST_TMP/slot.json" <<EOS
+[{"user":{"login":"coderabbitai[bot]"},"created_at":"$(ago 30)",
+  "body":"> [!IMPORTANT]\n> ## Review skipped\n> This repository does not receive automatic reviews because it has fewer than 10 stars."}]
+EOS
+    run python3 "$PLANNER"
+    [ "$(jq -r '.dispatchable[0].ladder' <<<"$output")" = "backlog" ]
 }

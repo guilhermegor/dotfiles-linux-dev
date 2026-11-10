@@ -856,6 +856,9 @@ next. Measured 2026-09-23: **22 open PRs, 19 at zero reviews, oldest 64h**, with
 adding more. DRAIN is opportunistic, exactly like step 4b (dotfiles-linux-dev#432's priority order
 applies unchanged) — it never gates DISPATCH, and DISPATCH never waits for it.
 
+Serial drain governs **merge order only**, never reviewer allocation (#965): where the repo's gate is
+declared (`REVIEW_FANOUT_CARRY=1`) or evidenced to carry reviews forward, every dispatchable PR gets its review-pr-<N> agent now, not just the queue head.
+
 1. **Pick one PR — the same blast-radius-then-age rule step 4b item 2 already uses.** Do not invent
    a second ranking.
 2. **Obtain a review: the primary rung if the slot is free, otherwise fall through to
