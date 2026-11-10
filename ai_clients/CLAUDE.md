@@ -613,7 +613,9 @@ gate pages every PR the repo ever had (100 per serial GraphQL request), so it gr
 history. The Stop guards kill the whole planner at `ROUND_DISPATCH_PLANNER_TIMEOUT`
 (`round_dispatch_guard.sh`) / `DISPATCH_GUARD_PLANNER_TIMEOUT` (`dispatch_free_surface_guard.sh`),
 60s each, so each gate call is capped to what is left of that budget minus a 3s reserve; a gate that
-times out is `UNKNOWN` for every issue, never a crash. Raising the gate override cannot outlive
+times out is `UNKNOWN` for every issue, never a crash. When under 1s of that budget is left the
+gate is skipped (UNKNOWN) rather than run on a floor, and the hot-pattern git read is skipped on
+the UNKNOWN path, so nothing slow runs between the deadline and the emit. Raising the gate override cannot outlive
 the guard's kill, raise the guard's too.
 
 ## Worktree rescue fan-out: two callers, one implementation

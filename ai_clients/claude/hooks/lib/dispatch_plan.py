@@ -124,9 +124,13 @@ _STARTED = time.monotonic()
 
 
 def gate_timeout() -> float:
-	"""The gate's own timeout, capped to the planner budget still unspent (never below 1s)."""
+	"""The gate's own timeout, capped to the planner budget still unspent.
+
+	Returns ``0.0`` when under 1s is left: the gate is then SKIPPED (UNKNOWN), because running it
+	on a floor would let the guard's kill land before the plan is emitted (PR #973 review).
+	"""
 	remaining = PLANNER_BUDGET - PLAN_EMIT_RESERVE - (time.monotonic() - _STARTED)
-	return max(1.0, min(GATE_TIMEOUT, remaining))
+	return min(GATE_TIMEOUT, remaining) if remaining >= 1.0 else 0.0
 # One `_ru_native_blockers` call per open issue, sequential inside a single subprocess (same
 # reasoning as GATE_TIMEOUT for the free-surface gate) — generous because a 500-issue repo would
 # otherwise need this to scale, but LATENT at this repo's ~33 open issues like the other caps.
@@ -337,12 +341,15 @@ def live_agent_held_paths(root: Path) -> tuple[bool, list[str]]:
 	itself returning non-zero, a timeout, or a malformed reply) — never silently read as zero
 	held paths, i.e. free.
 	"""
+	timeout = gate_timeout()
+	if timeout == 0.0:
+		return False, []
 	try:
 		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
 			["bash", "-c", _LIVE_AGENT_GATE_SCRIPT, "dispatch_plan", str(root), str(FREE_SURFACE_SH)],
 			capture_output=True,
 			text=True,
-			timeout=gate_timeout(),
+			timeout=timeout,
 		)
 	except subprocess.TimeoutExpired:
 		return False, []
@@ -711,6 +718,9 @@ def run_gate(
 	False exactly when gate_free_surface itself reported FREE_STATUS=unknown — a recoverable,
 	expected condition (gh rate limit, an unhandled compare error), never a crash.
 	"""
+	timeout = gate_timeout()
+	if timeout == 0.0:
+		return False, set(), {}
 	stdin = "".join(f"{p}\n" for p in held)
 	stdin += "===REQUESTS===\n"
 	stdin += "".join(f"{issue}\t{'|'.join(files)}\n" for issue, files in requests)
@@ -720,7 +730,7 @@ def run_gate(
 			input=stdin,
 			capture_output=True,
 			text=True,
-			timeout=gate_timeout(),
+			timeout=timeout,
 			check=True,
 		)
 	except subprocess.TimeoutExpired:
@@ -896,7 +906,7 @@ def build_plan() -> dict:
 	if live_ok and gate_ok and issue_numbers:
 		native_refs = native_open_blockers(slug, sorted(issue_numbers))
 
-	hot = hot_patterns(root)
+	hot = hot_patterns(root) if live_ok and gate_ok else []  # UNKNOWN path: no git call before emit
 	hot_holders: dict[str, int] | None = None  # read lazily, once: only a hot-touching candidate needs it
 	hot_read_failed = False
 

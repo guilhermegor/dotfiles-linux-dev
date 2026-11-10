@@ -805,13 +805,43 @@ import dispatch_plan as d
 print(d.GATE_TIMEOUT, d.gate_timeout())
 d._STARTED = time.monotonic() - 40  # 40s of the 60s planner budget already spent
 print(round(d.gate_timeout()))
-d._STARTED = time.monotonic() - 100  # overspent: never below 1s
+d._STARTED = time.monotonic() - 100  # under 1s left: 0.0, the gate is skipped
 print(d.gate_timeout())
 PY
     [ "$status" -eq 0 ]
     [ "${lines[0]}" = "45.0 45.0" ]
     [ "${lines[1]}" = "17" ]
-    [ "${lines[2]}" = "1.0" ]
+    [ "${lines[2]}" = "0.0" ]
+}
+
+@test "a nearly spent planner budget skips the gate, UNKNOWN, without running it (#960)" {
+    export GATE_SLEEP=30
+    stub_gh "[$(issue_json 1 free/a.sh)]"
+    start=$SECONDS
+    # Guard deadline 4s: 4 - 3s emit reserve leaves under 1s, so the 30s gate must not run.
+    ROUND_DISPATCH_PLANNER_TIMEOUT=4 run_planner
+    [ "$status" -eq 0 ]
+    [ $((SECONDS - start)) -lt 4 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [[ "$(field '.excluded[0].reason')" == *"UNKNOWN"* ]]
+}
+
+@test "the hot-pattern git read is skipped on the UNKNOWN path (#960)" {
+    run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan as d
+d.live_agent_held_paths = lambda root: (False, [])
+d.repo_slug = lambda: "acme/widgets"
+d.open_issues = lambda slug: [{"number": 1, "body": "```surface\nfree/a.sh\n```"}]
+d.open_prs = lambda slug: []
+def boom(root):
+    raise AssertionError("hot_patterns ran on the UNKNOWN path")
+d.hot_patterns = boom
+d.main()
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
 }
 
 # --- dotfiles-linux-dev#607: no gh call whose answer the planner throws away ----------------------
