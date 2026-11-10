@@ -212,3 +212,21 @@ git commit -m 'feat: x' -m '$LONG_BODY'
     run run_guard "bash $TEST_TMP/c.sh"
     [ "$status" -eq 0 ]
 }
+
+@test "#961: git -C /a, cd /b, then -F msg.txt rewrites neither message file" {
+    mkdir "$TEST_TMP/a" "$TEST_TMP/b"
+    for d in a b; do printf 'subject\n\n%s\n' "$LONG_BODY" > "$TEST_TMP/$d/msg.txt"; done
+    before="$(cat "$TEST_TMP/a/msg.txt")"
+    cd "$TEST_TMP/a"
+    run run_guard "git -C $TEST_TMP/a commit -m first; cd $TEST_TMP/b; git commit -F msg.txt"
+    [ "$status" -eq 0 ]
+    [ "$before" = "$(cat "$TEST_TMP/a/msg.txt")" ]
+    [ "$before" = "$(cat "$TEST_TMP/b/msg.txt")" ]
+}
+
+@test "#961: a quoted heredoc delimiter containing a space hides the body from scanning" {
+    run run_guard "cat <<'END WORD'
+git commit -m 'feat: x' -m '$LONG_BODY'
+END WORD"
+    [ "$status" -eq 0 ]
+}

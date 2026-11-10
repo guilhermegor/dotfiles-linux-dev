@@ -204,8 +204,11 @@ command_has_cd() {
 _strip_heredoc_bodies() {
     awk '
         tag != "" { t = $0; sub(/^\t+/, "", t); if (t == tag) tag = ""; next }
-        match($0, /<<-?[ \t]*[\047"]?[^ \t\047"<>|&;()]+[\047"]?/) {
-            tag = substr($0, RSTART, RLENGTH); gsub(/^<<-?[ \t]*[\047"]?|[\047"]$/, "", tag)
+        match($0, /<<-?[ \t]*(\047[^\047]*\047|"[^"]*")/) {
+            tag = substr($0, RSTART, RLENGTH); sub(/^<<-?[ \t]*./, "", tag); sub(/.$/, "", tag)
+        }
+        tag == "" && match($0, /<<-?[ \t]*[^ \t\047"<>|&;()]+/) {
+            tag = substr($0, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", tag)
         }
         { print }
     ' "${1:--}"
@@ -253,9 +256,11 @@ commit_source_dir() {
     COMMIT_SOURCE_DIR=''
     COMMIT_SOURCE_FOUND=0
     _SRC_MODE="$2"
+    _SRC_SEEN=0
+    _SRC_AMBIGUOUS=0
     _find_source() {
         local i w v
-        ((COMMIT_SOURCE_FOUND)) && return 0
+        ((_SRC_AMBIGUOUS)) && return 0
         _words_invoke_commit || return 0
         for ((i = _COMMIT_ARGS_FROM; i < ${#_CMD_WORDS[@]}; i++)); do
             w="${_CMD_WORDS[i]}"
@@ -266,8 +271,12 @@ commit_source_dir() {
                 *) continue ;;
             esac
             if [[ ( "$_SRC_MODE" == stdin && "$v" == "-" ) || ( "$_SRC_MODE" == file && "$v" != "-" ) ]]; then
+                # A second matching commit makes the association with the heredoc ambiguous: fail open.
+                if ((_SRC_SEEN)); then COMMIT_SOURCE_FOUND=0; _SRC_AMBIGUOUS=1; return 0; fi
+                _SRC_SEEN=1
                 # shellcheck disable=SC2034  # read by the hooks that source this file
                 COMMIT_SOURCE_DIR="$COMMIT_COMMAND_GIT_DIR"
+                # shellcheck disable=SC2034  # read by the hooks that source this file
                 COMMIT_SOURCE_FOUND=1
                 # shellcheck disable=SC2034  # read by the hooks that source this file
                 COMMIT_SOURCE_HAS_M=0

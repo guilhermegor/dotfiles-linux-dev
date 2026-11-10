@@ -350,3 +350,20 @@ MSG"
     run run_guard "git commit -am'feat: x' -m '$LONG_TITLE'"
     [ "$status" -eq 0 ]
 }
+
+@test "#961: two -F- commits make the heredoc association ambiguous, so it fails open" {
+    mkdir "$TEST_TMP/ra" "$TEST_TMP/rb"
+    git -C "$TEST_TMP/ra" init -q; git -C "$TEST_TMP/rb" init -q
+    printf "[title-max-length]\nline-length=100\n" > "$TEST_TMP/rb/.gitlint"
+    run run_guard "git -C $TEST_TMP/ra commit -F- </dev/null; git -C $TEST_TMP/rb commit -F- <<'MSG'
+$LONG_TITLE
+MSG"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a quoted heredoc delimiter with a space hides a commit example from the title guard" {
+    run run_guard "cat <<'END WORD'
+git commit -m '$LONG_TITLE'
+END WORD"
+    [ "$status" -eq 0 ]
+}
