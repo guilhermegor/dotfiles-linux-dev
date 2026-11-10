@@ -162,17 +162,20 @@ _board_throttled() {
 
 # _board_gql ARGS...
 # `gh api graphql ARGS...`, stdout = the result. Returns 0 ok, 2 when GitHub itself refused with a
-# rate-limit message (stderr, or an `errors` body), 1 for any other failure. The refusal is read off
+# rate-limit message (stderr, or an `errors[]` message/type), 1 for any other failure. The refusal is read off
 # the REAL request, not only the `_board_throttled` probe: a secondary limit (#901) refuses the board
 # reads while the minimal `rateLimit{remaining}` probe still succeeds, so the probe alone reported a
 # throttled board as "unreadable".
 _board_gql() {
-	local err out rc=0
-	err="$(mktemp)"
+	local err out rc=0 refusal
+	err="$(mktemp)" || return 1
 	out="$(gh api graphql "$@" 2>"$err")" || rc=1
 	printf '%s' "$out" | jq -e '.errors' >/dev/null 2>&1 && rc=1
-	if ((rc != 0)) && cat "$err" <(printf '%s' "$out") | grep -qiE 'rate.?limit'; then
-		rc=2
+	if ((rc != 0)); then
+		# Only stderr and the error entries' own message/type: `out` also carries item bodies, which
+		# may legitimately say "rate limit" on a partial error.
+		refusal="$(cat "$err"; printf '%s' "$out" | jq -r '.errors[]? | .message, .type' 2>/dev/null)"
+		grep -qiE 'rate.?limit' <<<"$refusal" && rc=2
 	fi
 	rm -f "$err"
 	printf '%s' "$out"

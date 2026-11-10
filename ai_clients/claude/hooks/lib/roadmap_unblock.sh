@@ -182,7 +182,7 @@ _ru_write() {
 	local label="$1" err rc=0
 	shift
 	err="$("$@" 2>&1 >/dev/null)" || rc=$?
-	((rc == 0)) || _RU_FAIL="$label: $(printf '%s' "$err" | head -n1)"
+	((rc == 0)) || _RU_FAIL="$label failed${err:+: $(printf '%s' "$err" | head -n1)}"
 	return "$rc"
 }
 
@@ -322,7 +322,7 @@ _ru_write_failed_line() {
 		printf 'SKIPPED %s %s: GraphQL rate-limited (%s) — retry next round; partial write possible, verify by hand\n' "$1" "$2" "${fail:-no write detail}"
 		return 0
 	fi
-	printf 'FAILED to %s %s: %s failed partway — verify by hand\n' "$1" "$2" "${fail:-a gh write}"
+	printf 'FAILED to %s %s: %s — verify by hand\n' "$1" "$2" "${fail:-a gh write failed}"
 }
 
 # _ru_process_item OWNER PROJECT ITEM_JSON

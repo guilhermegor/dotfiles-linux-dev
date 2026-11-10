@@ -1204,6 +1204,6 @@ run_boards() {
     write_fake_gh
     touch "$TEST_TMP/fail-item-edit"
     run_reconcile
-    [[ "$output" == *"FAILED to unblock owner/repo#3: Blocked-by clear: GraphQL: stub item-edit refused failed partway"* ]]
+    [[ "$output" == *"FAILED to unblock owner/repo#3: Blocked-by clear failed: GraphQL: stub item-edit refused — verify by hand"* ]]
     [[ "$output" != *"a gh write failed"* ]]
 }
