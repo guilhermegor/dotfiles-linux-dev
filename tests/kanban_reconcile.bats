@@ -922,3 +922,26 @@ run_stale_rest() {
     [[ "$output" != *"board unreadable"* ]]
     refute_gh 'item-edit'
 }
+
+@test "project items read: a partial error whose item body says 'rate limit' stays unreadable (#901)" {
+    write_board_cache
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    echo '{"errors":[{"type":"NOT_FOUND","message":"gone"}],"data":{"x":"the rate limit docs"}}' > "$TEST_TMP/item-fallback.json"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run_reconcile
+    [[ "$output" == *"UNKNOWN (board unreadable)"* ]]
+    [[ "$output" != *"throttled"* ]]
+}
+
+@test "project items read: a RATE_LIMITED errors[].type on the real read is throttled (#901)" {
+    write_board_cache
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    echo '{"errors":[{"type":"RATE_LIMITED","message":"slow down"}]}' > "$TEST_TMP/item-fallback.json"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-list"
+    run_reconcile
+    [[ "$output" == *"UNKNOWN (throttled)"* ]]
+}
