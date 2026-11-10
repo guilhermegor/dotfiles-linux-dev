@@ -27,6 +27,8 @@ _PRUNE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$_PRUNE_DIR/worktree_fanout.sh"
 # shellcheck source=free_surface.sh
 source "$_PRUNE_DIR/free_surface.sh"
+# shellcheck source=branch_prune.sh
+source "$_PRUNE_DIR/branch_prune.sh"
 
 PRUNE_NOISE_GLOBS=('__pycache__' '.venv' '.pytest_cache' 'node_modules')
 
@@ -93,7 +95,10 @@ prune_pr_state() {
 	owner="${slug%%/*}"
 	local enc
 	enc="$(jq -rn --arg b "$owner:$branch" '$b|@uri')" || return 1
-	out="$(gh api "repos/$slug/pulls?state=all&per_page=100&head=$enc" \
+	# OPEN is what blocks a delete, so ask for it directly: never lost to a page limit on state=all.
+	out="$(gh api "repos/$slug/pulls?state=open&per_page=1&head=$enc" --jq 'length' 2>/dev/null)" || return 1
+	[ "$out" = 0 ] || { [[ "$out" =~ ^[0-9]+$ ]] && echo open && return 0; return 1; }
+	out="$(gh api --paginate "repos/$slug/pulls?state=all&per_page=100&head=$enc" \
 		--jq 'map(if .state=="open" then "open" elif .merged_at then "merged" else "closed" end) | unique | join(" ")' 2>/dev/null)" || return 1
 	case " $out " in
 	*" open "*) echo open ;;
@@ -205,7 +210,7 @@ prune_git_remote() {
 			envp=(env GIT_SSH_COMMAND='ssh -oBatchMode=yes')
 		fi
 	fi
-	GIT_TERMINAL_PROMPT=0 timeout -k 5 "${WORKTREE_PRUNE_REMOTE_TIMEOUT:-60}" ${envp[@]+"${envp[@]}"} git -C "$repo" "$@"
+	GIT_TERMINAL_PROMPT=0 timeout -k 5 "${WORKTREE_PRUNE_REMOTE_TIMEOUT:-60}" ${envp[@]+"${envp[@]}"} "${PRUNE_GIT_BIN:-git}" -C "$repo" "$@"
 }
 
 # Removes worktree, local branch, then origin branch; each step only if the one before succeeded.
@@ -316,7 +321,13 @@ main() {
 		*) cwd="$a" ;;
 		esac
 	done
-	prune_worktrees "$cwd" "$apply"
+	local rc=0 brc=0
+	prune_worktrees "$cwd" "$apply" || rc=1
+	# Branches with no worktree (#948), after the worktrees so theirs are already gone.
+	# brc 2 = pass skipped on an unreadable forge/remote: kept, not a failure.
+	prune_branches "$cwd" "$apply" || brc=$?
+	[ "$brc" = 0 ] || [ "$brc" = 2 ] || rc=1
+	return "$rc"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

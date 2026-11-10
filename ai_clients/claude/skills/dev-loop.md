@@ -196,6 +196,14 @@ the probe keeps the worktree and prints `KEEP`. A `PARTIAL` line means a step fa
 worktree was removed; a failed remote delete names the deleted local branch's sha, for recovery.
 Never prune by hand what it kept.
 
+The same run then makes a branch pass (`branch_prune.sh`, #948) over branches with no worktree.
+It fetches with `--prune` plus `refs/pull/*/head` (dropped again afterwards) and reads the PR list
+over REST. A local branch goes when its tip is on `origin/<default>` or inside a PR head merged
+into it. An origin branch with an OPEN PR is kept; a MERGED PR head holding the tip, or a branch
+whose every added line is already on `origin/<default>`, is deleted. A closed or PR-less branch
+with lines missing is `REPORT-REMOTE`, listing them: a person decides, it is never auto-deleted.
+Any unreadable state skips the pass. Dry run unless `--apply`.
+
 ### The stash stack is shared — read it too
 
 `git stash` is scoped to the **repository**, not the worktree. Agents in separate worktrees push
