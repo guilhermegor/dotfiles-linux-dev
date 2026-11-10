@@ -783,12 +783,15 @@ install_terminal_font() {
 
 # VS Code has no settings.json key for the editor/terminal divider: the panel
 # size is window UI state in globalStorage/state.vscdb (ItemTable, key/value).
-# With the panel on the right (workbench.panel.defaultLocation) the size is its
-# width in px. Seeding that row is reproducible and exact; the rejected
+# With the panel on the right (read from workbench.panel.position, never
+# assumed) the size is its width in px; any other or unreadable position skips
+# the pin because the same value would then be a height. Seeding that row is reproducible and exact; the rejected
 # alternative, workbench.action.increaseViewSize/decreaseViewSize, moves in
 # fixed steps and cannot land on an exact px value. The key format is
 # undocumented, so a failed write only warns. VS Code rewrites this state on
-# exit, so the pin is skipped while an instance is running.
+# exit, so the pin is skipped while an instance is running. VSCODE_STATE_DB
+# only overrides the DB path (non-default installs, tests); the running check
+# still applies.
 PANEL_DIVIDER_PX="${PANEL_DIVIDER_PX:-113}"
 
 pin_panel_divider() {
@@ -802,8 +805,18 @@ pin_panel_divider() {
         print_status "warning" "sqlite3 not found — divider not pinned"
         return 0
     fi
-    if [[ -z "${VSCODE_STATE_DB:-}" ]] && pgrep -x code > /dev/null; then
+    if pgrep -u "$USER" -x code > /dev/null; then
         print_status "warning" "VS Code is running — close it and re-run to pin the divider"
+        return 0
+    fi
+    if [[ ! "$PANEL_DIVIDER_PX" =~ ^[1-9][0-9]*$ ]]; then
+        print_status "warning" "PANEL_DIVIDER_PX='$PANEL_DIVIDER_PX' is not a positive integer — divider not pinned"
+        return 0
+    fi
+    local position
+    position=$(sqlite3 "$db" "SELECT value FROM ItemTable WHERE key='workbench.panel.position';" 2> /dev/null || true)
+    if [[ "$position" != "right" && "$position" != "1" ]]; then
+        print_status "warning" "Panel position is '${position:-unreadable}', not right — divider not pinned"
         return 0
     fi
 

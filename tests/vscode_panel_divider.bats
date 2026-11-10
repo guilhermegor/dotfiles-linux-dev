@@ -8,10 +8,17 @@ setup() {
     REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
     DB="$BATS_TEST_TMPDIR/state.vscdb"
     export VSCODE_STATE_DB="$DB"
+    command -v sqlite3 > /dev/null || skip "sqlite3 not installed"
     sqlite3 "$DB" "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
-                   INSERT INTO ItemTable VALUES ('workbench.panel.size', '1167');"
+                   INSERT INTO ItemTable VALUES ('workbench.panel.size', '1167');
+                   INSERT INTO ItemTable VALUES ('workbench.panel.position', 'right');"
     # shellcheck source=/dev/null
     source "$REPO_ROOT/code_editors/vscode.sh"
+    pgrep() { return 1; }
+}
+
+panel_size() {
+    sqlite3 "$DB" "SELECT value FROM ItemTable WHERE key='workbench.panel.size'"
 }
 
 @test "pin_panel_divider seeds 113 px over a hand-dragged size" {
@@ -34,7 +41,41 @@ setup() {
     [ ! -e "$DB" ]
 }
 
-@test "main invokes pin_panel_divider" {
-    run grep -c '^    pin_panel_divider$' "$REPO_ROOT/code_editors/vscode.sh"
-    [ "$output" = "1" ]
+@test "pin_panel_divider rejects a non-integer PANEL_DIVIDER_PX" {
+    PANEL_DIVIDER_PX="1'); DROP TABLE ItemTable;--" run pin_panel_divider
+    [ "$status" -eq 0 ]
+    [ "$(panel_size)" = "1167" ]
+    PANEL_DIVIDER_PX=113px run pin_panel_divider
+    [ "$(panel_size)" = "1167" ]
+}
+
+@test "pin_panel_divider skips when the panel is not on the right" {
+    sqlite3 "$DB" "UPDATE ItemTable SET value='bottom' WHERE key='workbench.panel.position'"
+    run pin_panel_divider
+    [ "$status" -eq 0 ]
+    [ "$(panel_size)" = "1167" ]
+}
+
+@test "pin_panel_divider skips when the panel position is unreadable" {
+    sqlite3 "$DB" "DELETE FROM ItemTable WHERE key='workbench.panel.position'"
+    run pin_panel_divider
+    [ "$(panel_size)" = "1167" ]
+}
+
+@test "pin_panel_divider skips while VS Code runs, even with VSCODE_STATE_DB set" {
+    pgrep() { return 0; }
+    run pin_panel_divider
+    [ "$status" -eq 0 ]
+    [ "$(panel_size)" = "1167" ]
+}
+
+@test "pin_panel_divider warns without failing when the write fails" {
+    sqlite3 "$DB" "DROP TABLE ItemTable; CREATE TABLE ItemTable (k TEXT)"
+    run pin_panel_divider
+    [ "$status" -eq 0 ]
+}
+
+@test "main calls pin_panel_divider" {
+    run sed -n '/^main() {/,/^}/p' "$REPO_ROOT/code_editors/vscode.sh"
+    [[ "$output" == *"pin_panel_divider"* ]]
 }
