@@ -402,7 +402,7 @@ API_OTHER_VALUE_FLAGS = {"-H", "--header", "-q", "--jq", "-t", "--template", "--
                          "--cache", "-p", "--preview"}
 
 
-def only_repo_segment_is_dynamic(path):
+def only_repo_segment_is_dynamic(path, may_write_body=False):
     """True when every `$`/backtick in a `repos/...` path sits in the owner/repo segment(s)
     and the resource after them is a literal other than `issues` (dotfiles-linux-dev#822).
 
@@ -419,7 +419,9 @@ def only_repo_segment_is_dynamic(path):
     var_at = [i for i, seg in enumerate(segs) if "$" in seg or "`" in seg]
     if not var_at:
         return False
-    if (DYNAMIC_REPO_BODYLESS_SUBRESOURCE.match("/".join(segs))
+    # The variable may also expand to `o/r/issues/5?x=`, making the real path `issues/5` itself
+    # (#976 review): the exemption holds only for a call that cannot carry a title or body.
+    if (not may_write_body and DYNAMIC_REPO_BODYLESS_SUBRESOURCE.match("/".join(segs))
             and not {".", ".."} & set(segs)):
         return True  # the variable stands for owner/name; the tail is a bodyless sub-resource (#963)
     if min(var_at) > 3 and "issues" not in path.lower() and not {".", ".."} & set(segs):
@@ -889,7 +891,10 @@ def api_issue_match(segments):
             continue
         dynamic = ("$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
                    or any("$" in t or "`" in t for t in stray))  # stray may be the real endpoint
-        if dynamic and endpoint and only_repo_segment_is_dynamic(path):
+        field_keys = [re.split(r"[\[=]", f, maxsplit=1)[0] for _, f in fields]
+        may_write_body = bool(input_file) or any(
+            k in ("body", "title") or "$" in k or "`" in k for k in field_keys)
+        if dynamic and endpoint and only_repo_segment_is_dynamic(path, may_write_body):
             dynamic = False  # judged by its literal resource, like the unparameterised twin
         m = API_ISSUE_ENDPOINT.match(path)
         # Endpoint path only: a `-f body=...issues...` value or an --input file never decides

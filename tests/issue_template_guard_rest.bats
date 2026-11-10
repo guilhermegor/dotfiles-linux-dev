@@ -1109,6 +1109,18 @@ guard_cmd() {
     [ "$status" -eq 2 ]
 }
 
+@test "REST: a variable repo before a bodyless sub-resource still blocks a body field (#976 review)" {
+    # R='o/r/issues/5?x=' makes the real request PATCH issues/5 with the body.
+    run guard_cmd 'gh api "repos/$R/issues/5/sub_issues" -X PATCH -f body=x'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api repos/$R/issues/5/labels -f title=x'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api repos/$R/issues/5/sub_issues --input payload.json'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api repos/$R/issues/5/sub_issues -F "$K=x"'
+    [ "$status" -eq 2 ]
+}
+
 @test "REST: -f on a pull-request merge endpoint is not an issue write (#908)" {
     run guard_cmd "gh api -X PUT repos/guilhermegor/dotfiles-linux-dev/pulls/967/merge -f merge_method=squash -f sha=abc123"
     [ "$status" -eq 0 ]
