@@ -1167,6 +1167,10 @@ def gate_carries_forward(prs: list[dict]) -> bool | None:
 	if declared in ("0", "1"):
 		return declared == "1"
 	for pr in prs:
+		# The CURRENT head must be unreviewed: a green gate on a reviewed head proves nothing.
+		head_time = head_commit_time(pr)
+		if head_time is None or reviewed_at_head(pr) or ladder_covered_at_head(pr, head_time):
+			continue
 		if not reviewed_heads(pr):
 			continue
 		if any(
