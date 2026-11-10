@@ -582,15 +582,58 @@ kanban_fanout_cost() {
 	echo $((n * 3 * KANBAN_CALLS_PER_RECONCILE))
 }
 
+# #921: boards a round SKIPPED (throttle or latch) are retried FIRST on the next round, so a latch that
+# trips midway cannot starve the same tail of ROADMAP_BOARDS every time. One TSV line `KIND<TAB>ENTRY`
+# per skipped board, in the claims registry's dir (shared by every worktree, never tracked). Only an
+# ORDER hint: an unreadable or unwritable file means registry order, never a lost or skipped board.
+_kb_skipped_file() {
+	local common
+	if [[ -n "${KANBAN_SKIPPED_FILE:-}" ]]; then
+		printf '%s' "$KANBAN_SKIPPED_FILE"
+		return 0
+	fi
+	common="$($_KB_GIT -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+	printf '%s/kanban-skipped-boards.tsv' "$common"
+}
+
+# _kb_ordered_boards KIND FILE — the registry entries, those FILE lists as skipped for KIND first.
+_kb_ordered_boards() {
+	local kind="$1" file="$2" entry first=() rest=()
+	for entry in "${ROADMAP_BOARDS[@]}"; do
+		if [[ -n "$file" ]] && grep -qxF "$kind"$'\t'"$entry" "$file" 2>/dev/null; then
+			first+=("$entry")
+		else
+			rest+=("$entry")
+		fi
+	done
+	printf '%s\n' "${first[@]}" "${rest[@]}"
+}
+
+# _kb_save_skipped KIND FILE ENTRY... — replaces KIND's lines in FILE with ENTRYs; other kinds stay.
+_kb_save_skipped() {
+	local kind="$1" file="$2" entry tmp
+	shift 2
+	[[ -n "$file" ]] || return 0
+	(($# == 0)) && [[ ! -e "$file" ]] && return 0   # nothing skipped, nothing recorded: no file
+	tmp="$(mktemp "$file.XXXXXX" 2>/dev/null)" || return 0
+	{
+		grep -v "^$kind"$'\t' "$file" 2>/dev/null
+		for entry in "$@"; do printf '%s\t%s\n' "$kind" "$entry"; done
+	} >"$tmp" 2>/dev/null
+	mv -f "$tmp" "$file" 2>/dev/null || rm -f "$tmp"
+}
+
 reconcile_kanban_boards() {
 	local kind="$1" cwd="${2:-.}" lines="" status=0 entry owner project repo rc moved detail num
-	local entry_shape='^[^|]+\|[0-9]+\|[^|]+$'
+	local entry_shape='^[^|]+\|[0-9]+\|[^|]+$' skipped_file="" skipped=()
 	KANBAN_BOARDS_REPORT=""
 	if ! declare -p ROADMAP_BOARDS >/dev/null 2>&1 || ((${#ROADMAP_BOARDS[@]} == 0)); then
 		KANBAN_BOARDS_REPORT="UNKNOWN: ROADMAP_BOARDS is empty or not loaded — no board was swept"
 		return 1
 	fi
-	for entry in "${ROADMAP_BOARDS[@]}"; do
+	skipped_file="$(_kb_skipped_file "$cwd")" || skipped_file=""
+	# fd 3, not stdin: a `gh` call inside the loop must not swallow the remaining entries.
+	while IFS= read -r entry <&3; do
 		if [[ ! "$entry" =~ $entry_shape ]]; then
 			status=1
 			lines+="board ${entry:-<empty>}: UNKNOWN — malformed registry entry (want owner|project|repo)"$'\n'
@@ -600,6 +643,7 @@ reconcile_kanban_boards() {
 		project=$((10#$project))
 		if command -v gh_budget_latch_active >/dev/null 2>&1 && gh_budget_latch_active; then
 			status=1
+			skipped+=("$entry")
 			lines+="board $owner/$project ($repo): SKIPPED — GraphQL rate-limited (budget latch active), board not swept"$'\n'
 			continue
 		fi
@@ -625,6 +669,7 @@ reconcile_kanban_boards() {
 			# #921: a throttled board is SKIPPED (retry next round), not "unknown": the two want
 			# different responses from a reader. Throttle is only named by a confirmed probe.
 			if [[ "$_KB_REPORT" == *"UNKNOWN (throttled)"* ]]; then
+				skipped+=("$entry")
 				lines+="board $owner/$project ($repo): SKIPPED — GraphQL rate-limited, retry next round"$'\n'
 			else
 				lines+="board $owner/$project ($repo): UNKNOWN — $_KB_REPORT"$'\n'
@@ -642,7 +687,8 @@ reconcile_kanban_boards() {
 		while IFS= read -r detail; do
 			[[ -n "$detail" ]] && lines+="  $detail"$'\n'
 		done <<<"$_KB_REPORT"
-	done
+	done 3< <(_kb_ordered_boards "$kind" "$skipped_file")
+	_kb_save_skipped "$kind" "$skipped_file" "${skipped[@]}"
 	# shellcheck disable=SC2034 # read by callers
 	KANBAN_BOARDS_REPORT="$(printf '%s' "$lines" | sed '/^$/d')"
 	return "$status"
