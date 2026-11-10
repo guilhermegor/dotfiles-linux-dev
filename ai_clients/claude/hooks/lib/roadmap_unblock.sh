@@ -174,6 +174,18 @@ _ru_has_comment() {
 		| grep -qxF "$3"
 }
 
+# _ru_write LABEL CMD...
+# Runs one write; on failure records "LABEL: <first stderr line>" in _RU_FAIL so the report line can
+# name the write that failed instead of a generic "a gh write failed" (#901).
+_RU_FAIL=""
+_ru_write() {
+	local label="$1" err rc=0
+	shift
+	err="$("$@" 2>&1 >/dev/null)" || rc=$?
+	((rc == 0)) || _RU_FAIL="$label failed${err:+: $(printf '%s' "$err" | head -n1)}"
+	return "$rc"
+}
+
 # _ru_origin_names_repo ROOT REPO
 # True when checkout ROOT's `origin` is github.com's REPO (https or ssh, `.git` optional), compared
 # as lowercase literals: GitHub names are case-insensitive and a `.` in one is not a wildcard.
@@ -288,14 +300,14 @@ _ru_unblock() {
 		# removing one that is absent may error and fail the whole write.
 		label_args+=(--remove-label "state:ready")
 	fi
-	gh issue edit "$number" --repo "$repo" "${label_args[@]}" >/dev/null 2>&1 || return 1
-	gh project item-edit "$project" --owner "$owner" --url "$url" \
-		--field "Blocked by" --clear >/dev/null 2>&1 || return 1
+	_ru_write "label swap" gh issue edit "$number" --repo "$repo" "${label_args[@]}" || return 1
+	_ru_write "Blocked-by clear" gh project item-edit "$project" --owner "$owner" --url "$url" \
+		--field "Blocked by" --clear || return 1
 	if ! _ru_has_comment "$repo" "$number" "$note"; then
-		gh issue comment "$number" --repo "$repo" --body "$note" >/dev/null 2>&1 || return 1
+		_ru_write "audit comment" gh issue comment "$number" --repo "$repo" --body "$note" || return 1
 	fi
-	gh project item-edit "$project" --owner "$owner" --url "$url" \
-		--field "Status" --value "$dest" >/dev/null 2>&1 || return 1
+	_ru_write "Status=$dest" gh project item-edit "$project" --owner "$owner" --url "$url" \
+		--field "Status" --value "$dest" || return 1
 }
 
 # _ru_write_failed_line VERB IDENT
@@ -304,11 +316,13 @@ _ru_unblock() {
 # wrong: the probe doesn't prove why the write failed, and a retry doesn't repair every partial state
 # (a cleared "Blocked by" reads as "blocked by nothing"; a re-block whose blocker closes keeps its label).
 _ru_write_failed_line() {
+	local fail="$_RU_FAIL"
+	_RU_FAIL=""
 	if _board_throttled; then
-		printf 'SKIPPED %s %s: GraphQL rate-limited — retry next round; partial write possible, verify by hand\n' "$1" "$2"
+		printf 'SKIPPED %s %s: GraphQL rate-limited (%s) — retry next round; partial write possible, verify by hand\n' "$1" "$2" "${fail:-no write detail}"
 		return 0
 	fi
-	printf 'FAILED to %s %s: a gh write failed partway — verify by hand\n' "$1" "$2"
+	printf 'FAILED to %s %s: %s — verify by hand\n' "$1" "$2" "${fail:-a gh write failed}"
 }
 
 # _ru_process_item OWNER PROJECT ITEM_JSON
@@ -440,15 +454,15 @@ _ru_open_blockers() {
 _ru_reblock() {
 	local owner="$1" project="$2" repo="$3" number="$4" url="$5" detail="$6"
 	local note="Blocked: open blocker(s) $detail. Status set to Blocked."
-	gh issue edit "$number" --repo "$repo" \
-		--add-label "state:blocked" --remove-label "state:ready" >/dev/null 2>&1 || return 1
-	gh project item-edit "$project" --owner "$owner" --url "$url" \
-		--field "Blocked by" --text "$detail" >/dev/null 2>&1 || return 1
+	_ru_write "label swap" gh issue edit "$number" --repo "$repo" \
+		--add-label "state:blocked" --remove-label "state:ready" || return 1
+	_ru_write "Blocked-by write" gh project item-edit "$project" --owner "$owner" --url "$url" \
+		--field "Blocked by" --text "$detail" || return 1
 	if ! _ru_has_comment "$repo" "$number" "$note"; then
-		gh issue comment "$number" --repo "$repo" --body "$note" >/dev/null 2>&1 || return 1
+		_ru_write "audit comment" gh issue comment "$number" --repo "$repo" --body "$note" || return 1
 	fi
-	gh project item-edit "$project" --owner "$owner" --url "$url" \
-		--field "Status" --value "Blocked" >/dev/null 2>&1 || return 1
+	_ru_write "Status=Blocked" gh project item-edit "$project" --owner "$owner" --url "$url" \
+		--field "Status" --value "Blocked" || return 1
 }
 
 # _ru_item_labels ITEM_JSON REPO NUMBER

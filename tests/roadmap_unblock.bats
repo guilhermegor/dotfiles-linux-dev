@@ -235,7 +235,7 @@ case "\$1 \$2" in
         fi
         ;;
     "project item-edit")
-        [ -f "$TEST_TMP/fail-item-edit" ] && exit 1
+        if [ -f "$TEST_TMP/fail-item-edit" ]; then echo "GraphQL: stub item-edit refused" >&2; exit 1; fi
         echo ok
         ;;
     "issue comment")
@@ -1196,4 +1196,14 @@ run_boards() {
     run_reconcile
     [[ "$output" != *"re-blocked"* ]]
     refute_gh 'item-edit'
+}
+
+@test "a failed unblock names the write that failed and its error (#901)" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    touch "$TEST_TMP/fail-item-edit"
+    run_reconcile
+    [[ "$output" == *"FAILED to unblock owner/repo#3: Blocked-by clear failed: GraphQL: stub item-edit refused — verify by hand"* ]]
+    [[ "$output" != *"a gh write failed"* ]]
 }
