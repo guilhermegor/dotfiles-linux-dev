@@ -21,6 +21,15 @@ setup() {
     # Isolate the board-id cache from any real ~/.claude/kanban-boards on a dev machine.
     export CLAUDE_CONFIG_DIR="$TEST_TMP/claude-home"
 
+    # Never write the skipped-boards hint into a real checkout's git dir (#921).
+    export KANBAN_SKIPPED_FILE="$TEST_TMP/skipped.tsv"
+
+    # The GraphQL budget latch is a file under XDG_RUNTIME_DIR; a live latch on the dev machine
+    # made every "ok" board test fail with SKIPPED. Point it at an empty dir.
+    unset GH_BUDGET_LATCH_FILE   # an inherited override would bypass XDG_RUNTIME_DIR below
+    export XDG_RUNTIME_DIR="$TEST_TMP/run"
+    mkdir -p "$XDG_RUNTIME_DIR"
+
     # Default board: Backlog < In progress < In review < Done (order is what the reconcile ranks
     # against — never hardcoded in the lib itself).
     cat > "$TEST_TMP/fields.json" <<'JSON'
@@ -673,6 +682,50 @@ STUB_IN_REVIEW='reconcile_kanban() {
         -- 'reconcile_kanban() { case "$2" in limited) RECONCILE_KANBAN_REPORT="UNKNOWN (throttled): GitHub GraphQL rate limit — retry next round";; *) RECONCILE_KANBAN_REPORT="UNKNOWN: nope";; esac; return 1; }'
     [[ "$output" == *"board owner/17 (limited): SKIPPED — GraphQL rate-limited"* ]]
     [[ "$output" == *"board owner/13 (broken): UNKNOWN — UNKNOWN: nope"* ]]
+}
+
+@test "boards: a SKIPPED board is retried first next round, then forgotten once it succeeds (#921)" {
+    export TEST_TMP
+    # Round 1: the latch trips after the first board, so 13|busy is SKIPPED and recorded.
+    run_boards in_review "$TEST_TMP" "owner|17|clean" "owner|13|busy" \
+        -- "gh_budget_latch_active() { [ -e \"\$TEST_TMP/calls\" ]; }; $STUB_IN_REVIEW"
+    [[ "$output" == *"board owner/13 (busy): SKIPPED"* ]]
+    [ "$(cat "$KANBAN_SKIPPED_FILE")" = "$(printf 'in_review\towner|13|busy')" ]
+    rm -f "$TEST_TMP/calls"
+    # Round 2 has budget: the skipped board goes FIRST, though the registry lists it second.
+    run_boards in_review "$TEST_TMP" "owner|17|clean" "owner|13|busy" -- "$STUB_IN_REVIEW"
+    [[ "$output" == *"board owner/13 (busy): ok — 1 moved"* ]]
+    [ "$(head -n1 "$TEST_TMP/calls")" = "in_review owner/busy" ]
+    [ ! -s "$KANBAN_SKIPPED_FILE" ]
+}
+
+@test "boards: with 4 boards and a latch after the first, every board is swept within 4 rounds (#921)" {
+    export TEST_TMP
+    local round
+    for round in 1 2 3 4; do
+        rm -f "$TEST_TMP/calls"
+        run_boards in_review "$TEST_TMP" "owner|1|a" "owner|2|b" "owner|3|c" "owner|4|d" \
+            -- "gh_budget_latch_active() { [ -e \"\$TEST_TMP/calls\" ]; }; reconcile_kanban() { echo \"\$2\" >> \"\$TEST_TMP/calls\"; RECONCILE_KANBAN_REPORT=\"\"; }"
+        cat "$TEST_TMP/calls" >> "$TEST_TMP/all_calls"
+    done
+    # One board per round (the latch trips after it): the skipped tail is served first each round.
+    [ "$(sort -u "$TEST_TMP/all_calls" | wc -l)" -eq 4 ]
+}
+
+@test "boards: an unreadable skipped file is left alone, other kinds are not wiped (#921)" {
+    export TEST_TMP
+    printf 'closed\towner|13|busy\n' > "$KANBAN_SKIPPED_FILE"
+    chmod 000 "$KANBAN_SKIPPED_FILE"
+    run_boards in_review "$TEST_TMP" "owner|17|clean" -- "$STUB_IN_REVIEW"
+    chmod 600 "$KANBAN_SKIPPED_FILE"
+    [ "$(cat "$KANBAN_SKIPPED_FILE")" = "$(printf 'closed\towner|13|busy')" ]
+}
+
+@test "boards: another kind's skipped boards survive a round of this kind (#921)" {
+    export TEST_TMP
+    printf 'closed\towner|13|busy\n' > "$KANBAN_SKIPPED_FILE"
+    run_boards in_review "$TEST_TMP" "owner|17|clean" -- "$STUB_IN_REVIEW"
+    [ "$(cat "$KANBAN_SKIPPED_FILE")" = "$(printf 'closed\towner|13|busy')" ]
 }
 
 FIELDS_FIXTURE='[{"id":11,"name":"Title"},{"id":99,"name":"Status"}]'
