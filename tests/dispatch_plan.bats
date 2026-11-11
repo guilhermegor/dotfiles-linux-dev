@@ -844,6 +844,26 @@ PY
     [[ "$output" == *"UNKNOWN"* ]]
 }
 
+@test "a glob listing with no planner budget left is UNKNOWN, never a crash (#973 review)" {
+    run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan as d
+d.live_agent_held_paths = lambda root: (True, [])
+d.repo_slug = lambda: "acme/widgets"
+d.open_issues = lambda slug: [{"number": 1, "body": "```surface\nfree/*.sh\n```"}]
+d.open_prs = lambda slug: []
+def boom(*args):
+    raise AssertionError("the gate ran after the listing timed out")
+d.run_gate = boom
+d.hot_patterns = boom
+d._STARTED = time.monotonic() - 1000  # the live-agent gate passed at the deadline
+d.main()
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"free surface gate UNKNOWN"* ]]
+}
+
 @test "a glob surface is not expanded (no git read) on the UNKNOWN path (#973 review)" {
     run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
 import sys

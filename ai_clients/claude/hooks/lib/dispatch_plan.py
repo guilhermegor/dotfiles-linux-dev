@@ -651,7 +651,9 @@ def _walk_repo_files(root: Path) -> list[str]:
 		["git", "-C", str(root), "ls-files", "-z"],
 		capture_output=True,
 		text=True,
-		timeout=GH_TIMEOUT,
+		# Capped to the planner budget left, like the gate (PR #973 review): a 20s listing started
+		# near the deadline would outlive the guard's kill. build_plan treats the timeout as UNKNOWN.
+		timeout=min(GH_TIMEOUT, gate_timeout()),
 		check=True,
 		env=env,
 	).stdout
@@ -885,6 +887,9 @@ def build_plan() -> dict:
 
 	surfaces: dict[int, list[str]] = {}
 	expanded: dict[int, list[str]] = {}
+	# UNKNOWN path: a glob token runs `git ls-files`, which must not run past the deadline. A
+	# listing that times out (its timeout is the budget left) makes the gate UNKNOWN, not a crash.
+	expand_ok = live_ok
 	for issue in issues:
 		# A surface of only bare globs is UNDECLARED, not an empty surface that collides with
 		# nothing (#725): expand_tokens drops those tokens, so filter before deciding "declared".
@@ -892,11 +897,15 @@ def build_plan() -> dict:
 		if tokens:
 			number = issue["number"]
 			surfaces[number] = tokens
-			# UNKNOWN path: a glob token runs `git ls-files`, which must not run past the deadline.
-			expanded[number] = expand_tokens(tokens, root, live_held) if live_ok else tokens
+			expanded[number] = tokens
+			if expand_ok:
+				try:
+					expanded[number] = expand_tokens(tokens, root, live_held)
+				except subprocess.TimeoutExpired:
+					expand_ok = False
 
 	requests = list(expanded.items())
-	if live_ok:
+	if expand_ok:
 		gate_ok, unclaimed, verdicts = run_gate(owner, name, requests, live_held)
 	else:
 		gate_ok, unclaimed, verdicts = False, set(), {}
