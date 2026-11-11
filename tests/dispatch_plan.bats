@@ -201,6 +201,7 @@ $issues_json
 JSON
     ;;
 "issue list --repo acme/widgets --state open --limit 500 --json number --jq .[].number")
+    [ -n "\${GATE_SLEEP:-}" ] && sleep "\$GATE_SLEEP"
     # A QUOTED heredoc, exactly like the --json number,body branch above. Interpolating
     # \$issues_json into a double-quoted printf argument instead breaks the generated stub:
     # the JSON's own double quotes end the quoting and its \`\`\`surface fence becomes command
@@ -487,6 +488,31 @@ print(dispatch_plan.native_open_blockers("acme/widget", [3, 7]))
 PY
     [ "$status" -eq 0 ]
     [ "$output" = "{3: None, 7: None}" ]
+}
+
+@test "the native-blocker read is capped to the planner budget left, skipped when none (#973)" {
+    run env -u ROUND_DISPATCH_PLANNER_TIMEOUT -u DISPATCH_GUARD_PLANNER_TIMEOUT \
+        python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan as d
+seen = []
+def fake_run(*_args, **kwargs):
+    seen.append(kwargs["timeout"])
+    raise AssertionError("must not run")
+d.subprocess.run = fake_run
+d._STARTED = time.monotonic() - 100  # budget spent: skipped, no subprocess
+print(d.native_open_blockers("acme/widget", [3]), seen)
+d._STARTED = time.monotonic() - 50  # ~7s left of 60 - 3 reserve
+try:
+    d.native_open_blockers("acme/widget", [3])
+except AssertionError:
+    pass
+print(round(seen[0]))
+PY
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "{3: None} []" ]
+    [ "${lines[1]}" = "7" ]
 }
 
 @test "a claimed-by-PR read that times out excludes by name, never a crash (#939 review)" {
@@ -782,6 +808,105 @@ print(len(prs), sorted(p["number"] for p in prs) == list(range(1, 46)), prs[0]["
     [ "$(field '.excluded | length')" -eq 2 ]
     [[ "$(field '.excluded[0].reason')" == *"UNKNOWN"* ]]
     [[ "$(field '.excluded[1].reason')" == *"UNKNOWN"* ]]
+}
+
+@test "a gate slower than DISPATCH_PLAN_GATE_TIMEOUT is UNKNOWN; raising it lets it finish (#960)" {
+    export GATE_SLEEP=3
+    stub_gh "[$(issue_json 1 free/a.sh)]"
+    DISPATCH_PLAN_GATE_TIMEOUT=1 run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [[ "$(field '.excluded[0].reason')" == *"UNKNOWN"* ]]
+    DISPATCH_PLAN_GATE_TIMEOUT=20 run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 1 ]
+}
+
+@test "the gate timeout defaults to 45s and is capped by what is left of the planner budget (#960)" {
+    run env -u DISPATCH_PLAN_GATE_TIMEOUT -u ROUND_DISPATCH_PLANNER_TIMEOUT -u DISPATCH_GUARD_PLANNER_TIMEOUT \
+        python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan as d
+print(d.GATE_TIMEOUT, d.gate_timeout())
+d._STARTED = time.monotonic() - 40  # 40s of the 60s planner budget already spent
+print(round(d.gate_timeout()))
+d._STARTED = time.monotonic() - 100  # under 1s left: 0.0, the gate is skipped
+print(d.gate_timeout())
+PY
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "45.0 45.0" ]
+    [ "${lines[1]}" = "17" ]
+    [ "${lines[2]}" = "0.0" ]
+}
+
+@test "a nearly spent planner budget skips the gate, UNKNOWN, without running it (#960)" {
+    export GATE_SLEEP=30
+    stub_gh "[$(issue_json 1 free/a.sh)]"
+    start=$SECONDS
+    # Guard deadline 4s: 4 - 3s emit reserve leaves under 1s, so the 30s gate must not run.
+    ROUND_DISPATCH_PLANNER_TIMEOUT=4 run_planner
+    [ "$status" -eq 0 ]
+    [ $((SECONDS - start)) -lt 4 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [[ "$(field '.excluded[0].reason')" == *"UNKNOWN"* ]]
+}
+
+@test "the hot-pattern git read is skipped on the UNKNOWN path (#960)" {
+    run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan as d
+d.live_agent_held_paths = lambda root: (False, [])
+d.repo_slug = lambda: "acme/widgets"
+d.open_issues = lambda slug: [{"number": 1, "body": "```surface\nfree/a.sh\n```"}]
+d.open_prs = lambda slug: []
+def boom(root):
+    raise AssertionError("hot_patterns ran on the UNKNOWN path")
+d.hot_patterns = boom
+d.main()
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+}
+
+@test "a glob listing with no planner budget left is UNKNOWN, never a crash (#973 review)" {
+    run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan as d
+d.live_agent_held_paths = lambda root: (True, [])
+d.repo_slug = lambda: "acme/widgets"
+d.open_issues = lambda slug: [{"number": 1, "body": "```surface\nfree/*.sh\n```"}]
+d.open_prs = lambda slug: []
+def boom(*args):
+    raise AssertionError("the gate ran after the listing timed out")
+d.run_gate = boom
+d.hot_patterns = boom
+d._STARTED = time.monotonic() - 1000  # the live-agent gate passed at the deadline
+d.main()
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"free surface gate UNKNOWN"* ]]
+}
+
+@test "a glob surface is not expanded (no git read) on the UNKNOWN path (#973 review)" {
+    run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan as d
+d.live_agent_held_paths = lambda root: (False, [])
+d.repo_slug = lambda: "acme/widgets"
+d.open_issues = lambda slug: [{"number": 1, "body": "```surface\nfree/*.sh\n```"}]
+d.open_prs = lambda slug: []
+def boom(*args):
+    raise AssertionError("a git read ran on the UNKNOWN path")
+d.expand_tokens = boom
+d.hot_patterns = boom
+d.main()
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
 }
 
 # --- dotfiles-linux-dev#607: no gh call whose answer the planner throws away ----------------------

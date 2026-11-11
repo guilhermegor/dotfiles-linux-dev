@@ -106,7 +106,36 @@ GH_TIMEOUT = 20
 # it lets the existing hot_read_failed path exclude the affected candidates by name instead.
 # DISPATCH_HOT_READ_BUDGET overrides it (tests).
 HOT_READ_BUDGET = 30.0
-GATE_TIMEOUT = 25
+# The gate pages EVERY PR the repo has ever had (open and closed, 100 per serial GraphQL request),
+# so its cost grows with PR history, not the open board: filings-cvm (218 PRs, 3 pages) timed out
+# three runs in a row at the old 25s (#960). 45s stays under round_dispatch_guard's 60s kill.
+# DISPATCH_PLAN_GATE_TIMEOUT overrides it, like DISPATCH_PLAN_GH_TIMEOUT does for each gh call.
+GATE_TIMEOUT = float(os.environ.get("DISPATCH_PLAN_GATE_TIMEOUT", "45"))
+# The Stop guards kill this process at ROUND_DISPATCH_PLANNER_TIMEOUT / DISPATCH_GUARD_PLANNER_TIMEOUT
+# (60s each), and the reads before the gate already spent part of that. A gate that outlives the
+# kill never gets to report UNKNOWN, so each gate call is capped to what is left of the planner's
+# budget minus PLAN_EMIT_RESERVE for printing the plan (PR #973 review).
+PLANNER_BUDGET = min(
+	float(os.environ.get("ROUND_DISPATCH_PLANNER_TIMEOUT", "60")),
+	float(os.environ.get("DISPATCH_GUARD_PLANNER_TIMEOUT", "60")),
+)
+PLAN_EMIT_RESERVE = 3.0
+_STARTED = time.monotonic()
+
+
+def budget_timeout(cap: float) -> float:
+	"""``cap``, capped to the planner budget still unspent (minus ``PLAN_EMIT_RESERVE``).
+
+	Returns ``0.0`` when under 1s is left: the caller then SKIPS its read (UNKNOWN), because running
+	it on a floor would let the guard's kill land before the plan is emitted (PR #973 review).
+	"""
+	remaining = PLANNER_BUDGET - PLAN_EMIT_RESERVE - (time.monotonic() - _STARTED)
+	return min(cap, remaining) if remaining >= 1.0 else 0.0
+
+
+def gate_timeout() -> float:
+	"""The gate's own timeout, capped to the planner budget still unspent."""
+	return budget_timeout(GATE_TIMEOUT)
 # One `_ru_native_blockers` call per open issue, sequential inside a single subprocess (same
 # reasoning as GATE_TIMEOUT for the free-surface gate) — generous because a 500-issue repo would
 # otherwise need this to scale, but LATENT at this repo's ~33 open issues like the other caps.
@@ -317,12 +346,15 @@ def live_agent_held_paths(root: Path) -> tuple[bool, list[str]]:
 	itself returning non-zero, a timeout, or a malformed reply) — never silently read as zero
 	held paths, i.e. free.
 	"""
+	timeout = gate_timeout()
+	if timeout == 0.0:
+		return False, []
 	try:
 		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
 			["bash", "-c", _LIVE_AGENT_GATE_SCRIPT, "dispatch_plan", str(root), str(FREE_SURFACE_SH)],
 			capture_output=True,
 			text=True,
-			timeout=GATE_TIMEOUT,
+			timeout=timeout,
 		)
 	except subprocess.TimeoutExpired:
 		return False, []
@@ -496,6 +528,11 @@ def native_open_blockers(slug: str, numbers: list[int]) -> dict[int, list[str] |
 	"""
 	if not numbers:
 		return {}
+	# Runs after the gate, so it gets only the budget the gate left (PR #973 review); none left
+	# is the same UNKNOWN-for-every-issue answer as a read that timed out.
+	timeout = budget_timeout(BLOCKED_TIMEOUT)
+	if timeout == 0.0:
+		return dict.fromkeys(numbers, None)
 	stdin = "".join(f"{n}\n" for n in numbers)
 	try:
 		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
@@ -503,7 +540,7 @@ def native_open_blockers(slug: str, numbers: list[int]) -> dict[int, list[str] |
 			input=stdin,
 			capture_output=True,
 			text=True,
-			timeout=BLOCKED_TIMEOUT,
+			timeout=timeout,
 		)
 	except subprocess.TimeoutExpired:
 		# Uncaught, this killed build_plan and printed no plan at all (#569 review) — a slow read
@@ -624,7 +661,9 @@ def _walk_repo_files(root: Path) -> list[str]:
 		["git", "-C", str(root), "ls-files", "-z"],
 		capture_output=True,
 		text=True,
-		timeout=GH_TIMEOUT,
+		# Capped to the planner budget left, like the gate (PR #973 review): a 20s listing started
+		# near the deadline would outlive the guard's kill. build_plan treats the timeout as UNKNOWN.
+		timeout=min(GH_TIMEOUT, gate_timeout()),
 		check=True,
 		env=env,
 	).stdout
@@ -691,17 +730,23 @@ def run_gate(
 	False exactly when gate_free_surface itself reported FREE_STATUS=unknown — a recoverable,
 	expected condition (gh rate limit, an unhandled compare error), never a crash.
 	"""
+	timeout = gate_timeout()
+	if timeout == 0.0:
+		return False, set(), {}
 	stdin = "".join(f"{p}\n" for p in held)
 	stdin += "===REQUESTS===\n"
 	stdin += "".join(f"{issue}\t{'|'.join(files)}\n" for issue, files in requests)
-	proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
-		["bash", "-c", _GATE_SCRIPT, "dispatch_plan", owner, repo, str(FREE_SURFACE_SH)],
-		input=stdin,
-		capture_output=True,
-		text=True,
-		timeout=GATE_TIMEOUT,
-		check=True,
-	)
+	try:
+		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
+			["bash", "-c", _GATE_SCRIPT, "dispatch_plan", owner, repo, str(FREE_SURFACE_SH)],
+			input=stdin,
+			capture_output=True,
+			text=True,
+			timeout=timeout,
+			check=True,
+		)
+	except subprocess.TimeoutExpired:
+		return False, set(), {}
 	lines = proc.stdout.splitlines()
 	if not lines or lines[0] != "GATE_STATUS:ok":
 		return False, set(), {}
@@ -745,7 +790,8 @@ def open_pr_hot_holders(slug: str, prs: list[dict], patterns: list[str]) -> dict
 	read so the caller can exclude by name rather than treat a partial read as "no holder".
 	"""
 	holders: dict[str, int] = {}
-	budget = float(os.environ.get("DISPATCH_HOT_READ_BUDGET", HOT_READ_BUDGET))
+	# Same late-read hazard as native_open_blockers: capped to the planner budget left (#973).
+	budget = budget_timeout(float(os.environ.get("DISPATCH_HOT_READ_BUDGET", HOT_READ_BUDGET)))
 	deadline = time.monotonic() + budget
 	for pr in sorted(prs, key=lambda p: p["number"]):
 		remaining = deadline - time.monotonic()
@@ -852,6 +898,9 @@ def build_plan() -> dict:
 
 	surfaces: dict[int, list[str]] = {}
 	expanded: dict[int, list[str]] = {}
+	# UNKNOWN path: a glob token runs `git ls-files`, which must not run past the deadline. A
+	# listing that times out (its timeout is the budget left) makes the gate UNKNOWN, not a crash.
+	expand_ok = live_ok
 	for issue in issues:
 		# A surface of only bare globs is UNDECLARED, not an empty surface that collides with
 		# nothing (#725): expand_tokens drops those tokens, so filter before deciding "declared".
@@ -859,10 +908,15 @@ def build_plan() -> dict:
 		if tokens:
 			number = issue["number"]
 			surfaces[number] = tokens
-			expanded[number] = expand_tokens(tokens, root, live_held)
+			expanded[number] = tokens
+			if expand_ok:
+				try:
+					expanded[number] = expand_tokens(tokens, root, live_held)
+				except subprocess.TimeoutExpired:
+					expand_ok = False
 
 	requests = list(expanded.items())
-	if live_ok:
+	if expand_ok:
 		gate_ok, unclaimed, verdicts = run_gate(owner, name, requests, live_held)
 	else:
 		gate_ok, unclaimed, verdicts = False, set(), {}
@@ -873,7 +927,7 @@ def build_plan() -> dict:
 	if live_ok and gate_ok and issue_numbers:
 		native_refs = native_open_blockers(slug, sorted(issue_numbers))
 
-	hot = hot_patterns(root)
+	hot = hot_patterns(root) if live_ok and gate_ok else []  # UNKNOWN path: no git call before emit
 	hot_holders: dict[str, int] | None = None  # read lazily, once: only a hot-touching candidate needs it
 	hot_read_failed = False
 
@@ -894,7 +948,7 @@ def build_plan() -> dict:
 			excluded.append(
 				{
 					"issue": number,
-					"reason": "free surface gate UNKNOWN (gh API failure) — "
+					"reason": "free surface gate UNKNOWN (gh API failure or gate timeout) — "
 					"verify non-collision by hand",
 				}
 			)

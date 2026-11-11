@@ -607,6 +607,20 @@ drained the shared GraphQL bucket in minutes. `hooks/lib/stop_budget.sh` is the 
 `review_fanout_guard.sh` keeps its own per-heads cache (#696); it only gained the gate. The
 planners' remaining GraphQL (`closingIssuesReferences`, review threads) was not moved to REST here.
 
+**Planner timeouts (#960).** `dispatch_plan.py` runs the free-surface gate under
+`DISPATCH_PLAN_GATE_TIMEOUT` (default 45s), on top of `DISPATCH_PLAN_GH_TIMEOUT` per `gh` call. The
+gate pages every PR the repo ever had (100 per serial GraphQL request), so it grows with PR
+history. The Stop guards kill the whole planner at `ROUND_DISPATCH_PLANNER_TIMEOUT`
+(`round_dispatch_guard.sh`) / `DISPATCH_GUARD_PLANNER_TIMEOUT` (`dispatch_free_surface_guard.sh`),
+60s each, so each gate call is capped to what is left of that budget minus a 3s reserve; a gate that
+times out is `UNKNOWN` for every issue, never a crash. When under 1s of that budget is left the
+gate is skipped (UNKNOWN) rather than run on a floor, and the hot-pattern git read is skipped on
+the UNKNOWN path, so nothing slow runs between the deadline and the emit. The reads after the gate
+(native blockers, hot-file PR files) are capped the same way, and skipped as UNKNOWN when nothing
+is left. Raising the gate override cannot outlive the guard's kill: the budget is the **minimum**
+of the two guard timeouts, so raise **both** `ROUND_DISPATCH_PLANNER_TIMEOUT` and
+`DISPATCH_GUARD_PLANNER_TIMEOUT`, or the one left at 60s still caps it.
+
 ## Worktree rescue fan-out: two callers, one implementation
 
 `hooks/lib/worktree_fanout.sh` (`fanout_worktrees()` + `classify_worktree_diff()`,
