@@ -27,7 +27,6 @@ failure). Exit code 1 if the command could not be tokenized at all (an unbalance
 unterminated heredoc) — the caller MUST treat this as "unknown" and fail OPEN, never as "no gh
 command found", per this repo's hook contract (a verdict from unparseable input is a guess).
 """
-import inspect
 import json
 import os
 import posixpath
@@ -470,6 +469,70 @@ def mask_graphql_strings(text):
     return GRAPHQL_STRING.sub(lambda m: " " * len(m.group(0)), text)
 
 
+def block_string_value(raw):
+    """Return GraphQL's BlockStringValue of a block string's raw body (spec 2.9.4).
+
+    The common indent counts lines 2..n only and is cut from those lines; the first line keeps
+    its whitespace; leading and trailing blank lines go; tabs are never expanded (#910 review).
+    """
+    lines = re.split(r"\r\n|\n|\r", raw)
+    indents = [len(ln) - len(ln.lstrip(" \t")) for ln in lines[1:] if ln.strip(" \t")]
+    common = min(indents, default=0)
+    lines[1:] = [ln[common:] for ln in lines[1:]]
+    while lines and not lines[0].strip(" \t"):
+        lines.pop(0)
+    while lines and not lines[-1].strip(" \t"):
+        lines.pop()
+    return "\n".join(lines)
+
+
+def graphql_string_value(lit):
+    """Return the text a GraphQL string literal (`"..."` or `\"\"\"...\"\"\"`) denotes."""
+    if lit.startswith('"""'):
+        return block_string_value(lit[3:-3].replace('\\"""', '"""'))
+    try:
+        return json.loads(lit)
+    except ValueError:
+        return lit[1:-1]
+
+
+GRAPHQL_DECL_TYPE_EQ = re.compile(r"[\w!\[\]\s]+?=")
+GRAPHQL_OPERATION_KEYWORD = re.compile(r"(?<![$\w])(query|mutation|subscription)\b")
+
+
+def top_level_operation_starts(masked):
+    """Offsets of operation keywords outside every selection set and argument list.
+
+    `query:createIssue(...)` inside a selection set is a field alias, not an operation (#910).
+    Braces inside `( ... )` (a variable default object) do not open a selection set.
+    """
+    depth, braces, parens = [], 0, 0
+    for ch in masked:
+        depth.append(braces + parens)
+        parens += {"(": 1, ")": -1}.get(ch, 0)
+        braces += 0 if parens else {"{": 1, "}": -1}.get(ch, 0)
+    return [m.start() for m in GRAPHQL_OPERATION_KEYWORD.finditer(masked)
+            if depth[m.start()] == 0]
+
+
+def graphql_variable_default(header, name):
+    """Return the string-literal default of variable `$name` declared in `header`, else None.
+
+    None covers every case that is not one plain string default (no default, a non-string value,
+    a redeclared name): the caller then keeps failing closed (#910).
+    """
+    masked = mask_graphql_strings(header)
+    heads = top_level_operation_starts(masked)
+    if heads:  # only the operation that holds the mutation, never an earlier one
+        header, masked = header[heads[-1]:], masked[heads[-1]:]
+    decls = list(re.finditer(r"\$" + re.escape(name) + r"\s*:", masked))
+    if len(decls) != 1:
+        return None
+    m = GRAPHQL_DECL_TYPE_EQ.match(masked, decls[0].end())  # masked is length-preserving
+    lit = m and GRAPHQL_LEADING_STRING.match(header, m.end())
+    return graphql_string_value(lit.group(1)) if lit else None
+
+
 def read_graphql_file(path, shifted):
     """Return a regular file's text (capped), or None when it cannot be judged statically.
 
@@ -584,6 +647,8 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False),
             operation_name = data.get("operationName")
             variables = data.get("variables") or {}
             values = {k: v for k, v in variables.items() if isinstance(v, str)}  # -f is query-string
+            # an explicit null/number/list overrides a declared default: supplied, and unjudgeable
+            values.update({k: "" for k, v in variables.items() if not isinstance(v, (str, dict))})
             values.update({k + "[body]": v["body"] for k, v in variables.items()
                            if isinstance(v, dict) and isinstance(v.get("body"), str)})
             values.update({k + "[]": "" for k, v in variables.items()
@@ -604,17 +669,12 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False),
     lits = [m.group(1) for k in GRAPHQL_BODY_KEY.finditer(masked)
             if (m := GRAPHQL_LEADING_STRING.match(seg, k.end()))]
     if lits:  # the literal in the mutation itself is what GitHub stores: judge it first
-        lit = lits[0]
-        if lit.startswith('"""'):
-            # ponytail: cleandoc also strips the first line's indent, which GraphQL keeps
-            body = inspect.cleandoc(lit[3:-3].replace('\\"""', '"""'))
-        else:
-            try:
-                body = json.loads(lit)
-            except ValueError:
-                body = lit[1:-1]
+        body = graphql_string_value(lits[0])
     elif refs:
-        body = values.get(refs[0], "")  # unsupplied (a default may apply): fail closed
+        body = values.get(refs[0])
+        if refs[0] not in values:  # unsupplied: the declared literal default applies, else closed
+            default = graphql_variable_default(query[:muts[0].start()], refs[0])
+            body = "" if default is None else default
     elif inp:
         name = inp.group(1)
         body = values.get(name + "[body]")
