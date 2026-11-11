@@ -615,8 +615,11 @@ history. The Stop guards kill the whole planner at `ROUND_DISPATCH_PLANNER_TIMEO
 60s each, so each gate call is capped to what is left of that budget minus a 3s reserve; a gate that
 times out is `UNKNOWN` for every issue, never a crash. When under 1s of that budget is left the
 gate is skipped (UNKNOWN) rather than run on a floor, and the hot-pattern git read is skipped on
-the UNKNOWN path, so nothing slow runs between the deadline and the emit. Raising the gate override cannot outlive
-the guard's kill, raise the guard's too.
+the UNKNOWN path, so nothing slow runs between the deadline and the emit. The reads after the gate
+(native blockers, hot-file PR files) are capped the same way, and skipped as UNKNOWN when nothing
+is left. Raising the gate override cannot outlive the guard's kill: the budget is the **minimum**
+of the two guard timeouts, so raise **both** `ROUND_DISPATCH_PLANNER_TIMEOUT` and
+`DISPATCH_GUARD_PLANNER_TIMEOUT`, or the one left at 60s still caps it.
 
 ## Worktree rescue fan-out: two callers, one implementation
 

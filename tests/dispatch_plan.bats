@@ -489,6 +489,31 @@ PY
     [ "$output" = "{3: None, 7: None}" ]
 }
 
+@test "the native-blocker read is capped to the planner budget left, skipped when none (#973)" {
+    run env -u ROUND_DISPATCH_PLANNER_TIMEOUT -u DISPATCH_GUARD_PLANNER_TIMEOUT \
+        python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan as d
+seen = []
+def fake_run(*_args, **kwargs):
+    seen.append(kwargs["timeout"])
+    raise AssertionError("must not run")
+d.subprocess.run = fake_run
+d._STARTED = time.monotonic() - 100  # budget spent: skipped, no subprocess
+print(d.native_open_blockers("acme/widget", [3]), seen)
+d._STARTED = time.monotonic() - 50  # ~7s left of 60 - 3 reserve
+try:
+    d.native_open_blockers("acme/widget", [3])
+except AssertionError:
+    pass
+print(round(seen[0]))
+PY
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "{3: None} []" ]
+    [ "${lines[1]}" = "7" ]
+}
+
 @test "a claimed-by-PR read that times out excludes by name, never a crash (#939 review)" {
     run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
 import subprocess, sys

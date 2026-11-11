@@ -123,14 +123,19 @@ PLAN_EMIT_RESERVE = 3.0
 _STARTED = time.monotonic()
 
 
-def gate_timeout() -> float:
-	"""The gate's own timeout, capped to the planner budget still unspent.
+def budget_timeout(cap: float) -> float:
+	"""``cap``, capped to the planner budget still unspent (minus ``PLAN_EMIT_RESERVE``).
 
-	Returns ``0.0`` when under 1s is left: the gate is then SKIPPED (UNKNOWN), because running it
-	on a floor would let the guard's kill land before the plan is emitted (PR #973 review).
+	Returns ``0.0`` when under 1s is left: the caller then SKIPS its read (UNKNOWN), because running
+	it on a floor would let the guard's kill land before the plan is emitted (PR #973 review).
 	"""
 	remaining = PLANNER_BUDGET - PLAN_EMIT_RESERVE - (time.monotonic() - _STARTED)
-	return min(GATE_TIMEOUT, remaining) if remaining >= 1.0 else 0.0
+	return min(cap, remaining) if remaining >= 1.0 else 0.0
+
+
+def gate_timeout() -> float:
+	"""The gate's own timeout, capped to the planner budget still unspent."""
+	return budget_timeout(GATE_TIMEOUT)
 # One `_ru_native_blockers` call per open issue, sequential inside a single subprocess (same
 # reasoning as GATE_TIMEOUT for the free-surface gate) — generous because a 500-issue repo would
 # otherwise need this to scale, but LATENT at this repo's ~33 open issues like the other caps.
@@ -523,6 +528,11 @@ def native_open_blockers(slug: str, numbers: list[int]) -> dict[int, list[str] |
 	"""
 	if not numbers:
 		return {}
+	# Runs after the gate, so it gets only the budget the gate left (PR #973 review); none left
+	# is the same UNKNOWN-for-every-issue answer as a read that timed out.
+	timeout = budget_timeout(BLOCKED_TIMEOUT)
+	if timeout == 0.0:
+		return dict.fromkeys(numbers, None)
 	stdin = "".join(f"{n}\n" for n in numbers)
 	try:
 		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
@@ -530,7 +540,7 @@ def native_open_blockers(slug: str, numbers: list[int]) -> dict[int, list[str] |
 			input=stdin,
 			capture_output=True,
 			text=True,
-			timeout=BLOCKED_TIMEOUT,
+			timeout=timeout,
 		)
 	except subprocess.TimeoutExpired:
 		# Uncaught, this killed build_plan and printed no plan at all (#569 review) — a slow read
@@ -780,7 +790,8 @@ def open_pr_hot_holders(slug: str, prs: list[dict], patterns: list[str]) -> dict
 	read so the caller can exclude by name rather than treat a partial read as "no holder".
 	"""
 	holders: dict[str, int] = {}
-	budget = float(os.environ.get("DISPATCH_HOT_READ_BUDGET", HOT_READ_BUDGET))
+	# Same late-read hazard as native_open_blockers: capped to the planner budget left (#973).
+	budget = budget_timeout(float(os.environ.get("DISPATCH_HOT_READ_BUDGET", HOT_READ_BUDGET)))
 	deadline = time.monotonic() + budget
 	for pr in sorted(prs, key=lambda p: p["number"]):
 		remaining = deadline - time.monotonic()
