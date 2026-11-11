@@ -387,6 +387,12 @@ API_ISSUE_SUBRESOURCE = re.compile(
     r"^repos/[^/]+/[^/]+/issues/(?:\d+/(?:comments|labels|assignees|events|timeline|reactions|"
     r"lock|sub_issues|dependencies)(?:/.*)?|comments(?:/\d+(?:/reactions)?)?|events(?:/\d+)?)$"
 )
+# Issue sub-resources that never carry an issue title/body (so no `comments`), reached through a
+# one- or two-segment dynamic repo prefix: `repos/$R/issues/5/sub_issues` (dotfiles-linux-dev#963).
+DYNAMIC_REPO_BODYLESS_SUBRESOURCE = re.compile(
+    r"^repos/(?:[^/]+/)?[^/]+/issues/\d+/(?:labels|assignees|events|timeline|reactions|lock|"
+    r"sub_issues|dependencies)(?:/[^/$`]+)*$"
+)
 API_VALUE_FLAGS = {
     "-X": "method", "--method": "method",
     "-f": "field", "--raw-field": "field", "-F": "field", "--field": "field",
@@ -396,7 +402,7 @@ API_OTHER_VALUE_FLAGS = {"-H", "--header", "-q", "--jq", "-t", "--template", "--
                          "--cache", "-p", "--preview"}
 
 
-def only_repo_segment_is_dynamic(path):
+def only_repo_segment_is_dynamic(path, may_write_body=False):
     """True when every `$`/backtick in a `repos/...` path sits in the owner/repo segment(s)
     and the resource after them is a literal other than `issues` (dotfiles-linux-dev#822).
 
@@ -413,6 +419,11 @@ def only_repo_segment_is_dynamic(path):
     var_at = [i for i, seg in enumerate(segs) if "$" in seg or "`" in seg]
     if not var_at:
         return False
+    # The variable may also expand to `o/r/issues/5?x=`, making the real path `issues/5` itself
+    # (#976 review): the exemption holds only for a call that cannot carry a title or body.
+    if (not may_write_body and DYNAMIC_REPO_BODYLESS_SUBRESOURCE.match("/".join(segs))
+            and not {".", ".."} & set(segs)):
+        return True  # the variable stands for owner/name; the tail is a bodyless sub-resource (#963)
     if min(var_at) > 3 and "issues" not in path.lower() and not {".", ".."} & set(segs):
         return True  # literal repos/O/R/<resource>/...: the variable is a loop id (#870)
     verdicts = []
@@ -880,7 +891,10 @@ def api_issue_match(segments):
             continue
         dynamic = ("$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
                    or any("$" in t or "`" in t for t in stray))  # stray may be the real endpoint
-        if dynamic and endpoint and only_repo_segment_is_dynamic(path):
+        field_keys = [re.split(r"[\[=]", f, maxsplit=1)[0] for _, f in fields]
+        may_write_body = bool(input_file) or any(
+            k in ("body", "title") or "$" in k or "`" in k for k in field_keys)
+        if dynamic and endpoint and only_repo_segment_is_dynamic(path, may_write_body):
             dynamic = False  # judged by its literal resource, like the unparameterised twin
         m = API_ISSUE_ENDPOINT.match(path)
         # Endpoint path only: a `-f body=...issues...` value or an --input file never decides
@@ -897,7 +911,8 @@ def api_issue_match(segments):
         # Understood as NOT an issue write only when the endpoint is a literal that either does
         # not mention `issues` at all or is a known issue sub-resource (comments, labels, ...).
         # Anything else that mentions `issues` is judged as a write (unknown never means allowed).
-        if not m and not dynamic and (not mentions or API_ISSUE_SUBRESOURCE.match(path)):
+        if not m and not dynamic and (not mentions or API_ISSUE_SUBRESOURCE.match(path)
+                                      or DYNAMIC_REPO_BODYLESS_SUBRESOURCE.match(path)):
             continue
         # A shell-built endpoint is not statically known: with any body field/--input or a
         # non-GET method it is judged as a write even when `issues` appears nowhere (deliberate
