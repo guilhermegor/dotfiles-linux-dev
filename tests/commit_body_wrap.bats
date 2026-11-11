@@ -230,3 +230,14 @@ git commit -m 'feat: x' -m '$LONG_BODY'
 END WORD"
     [ "$status" -eq 0 ]
 }
+
+@test "#961: BLOCKS a long body after a here-string (<<< is not a heredoc)" {
+    run run_guard "read x <<< \"\$y\"
+git commit -m 'feat: x' -m '$LONG_BODY'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: BLOCKS git commit -S -m <title> -m <long body> (-S takes no separate value)" {
+    run run_guard "git commit -S -m 'feat: x' -m '$LONG_BODY'"
+    [ "$status" -eq 2 ]
+}

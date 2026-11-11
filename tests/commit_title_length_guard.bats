@@ -367,3 +367,33 @@ git commit -m '$LONG_TITLE'
 END WORD"
     [ "$status" -eq 0 ]
 }
+
+@test "#961: BLOCKS a long title after a quoted here-string (<<< is not a heredoc)" {
+    run run_guard "read x <<< \"\$y\"
+git commit -m '$LONG_TITLE'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: BLOCKS a long title after a bare here-string word" {
+    run run_guard "cat <<< hello
+git commit -m '$LONG_TITLE'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: a real heredoc after a here-string is still stripped" {
+    run run_guard "cat <<< hi
+cat <<'EOT'
+git commit -m '$LONG_TITLE'
+EOT"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: BLOCKS git commit -S -m <long title> (-S takes no separate value)" {
+    run run_guard "git commit -S -m '$LONG_TITLE'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: BLOCKS git commit --gpg-sign -m <long title>" {
+    run run_guard "git commit --gpg-sign -m '$LONG_TITLE'"
+    [ "$status" -eq 2 ]
+}

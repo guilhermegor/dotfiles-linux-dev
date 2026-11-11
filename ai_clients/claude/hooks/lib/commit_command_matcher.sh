@@ -204,11 +204,12 @@ command_has_cd() {
 _strip_heredoc_bodies() {
     awk '
         tag != "" { t = $0; sub(/^\t+/, "", t); if (t == tag) tag = ""; next }
-        match($0, /<<-?[ \t]*(\047[^\047]*\047|"[^"]*")/) {
-            tag = substr($0, RSTART, RLENGTH); sub(/^<<-?[ \t]*./, "", tag); sub(/.$/, "", tag)
+        { line = $0; gsub(/<<</, "   ", line) }
+        match(line, /<<-?[ \t]*(\047[^\047]*\047|"[^"]*")/) {
+            tag = substr(line, RSTART, RLENGTH); sub(/^<<-?[ \t]*./, "", tag); sub(/.$/, "", tag)
         }
-        tag == "" && match($0, /<<-?[ \t]*[^ \t\047"<>|&;()]+/) {
-            tag = substr($0, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", tag)
+        tag == "" && match(line, /<<-?[ \t]*[^ \t\047"<>|&;()]+/) {
+            tag = substr(line, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", tag)
         }
         { print }
     ' "${1:--}"
@@ -323,7 +324,7 @@ _short_cluster_message() {
     return 1
 }
 
-_VALUE_OPTS=' --author --date -C --reuse-message -c --reedit-message -t --template --fixup --squash --cleanup --pathspec-from-file -S '
+_VALUE_OPTS=' --author --date -C --reuse-message -c --reedit-message -t --template --fixup --squash --cleanup --pathspec-from-file '
 _collect_commit_messages() {
     local i w val skip=0
     local -a msgs=()
