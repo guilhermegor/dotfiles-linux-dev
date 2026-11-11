@@ -254,3 +254,25 @@ gh() {
     run gate_free_surface o r
     [ "$status" -eq 1 ]
 }
+
+# CodeRabbit on #978: a non-positive FREE_SURFACE_PARALLEL made the throttle loop spin forever
+# (`wait -n` has no child to wait on), so a bad env value hung the gate instead of failing.
+@test "gate_free_surface: a 0, negative or non-numeric FREE_SURFACE_PARALLEL falls back to 8" {
+    gh() {
+        case "$*" in
+            "api repos/o/r --jq .default_branch") echo master ;;
+            "pr list"*) echo '[]' ;;
+            "api repos/o/r/branches"*) echo master; echo wt1; echo wt2 ;;
+            "api repos/o/r/compare/"*) echo f.sh ;;
+            "api graphql -f query="*) echo '{"data":{"search":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}' ;;
+            "issue list"*) echo 1 ;;
+            *) return 1 ;;
+        esac
+    }
+    local v
+    for v in 0 -3 abc ""; do
+        FREE_SURFACE_PARALLEL="$v" run timeout 10 bash -c "$(declare -f gh); source '$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/free_surface.sh'; gate_free_surface o r; echo \$FREE_STATUS"
+        [ "$status" -eq 0 ]
+        [[ "$output" == *ok ]]
+    done
+}

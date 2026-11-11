@@ -175,11 +175,16 @@ _free_held_paths() {
 		jobs_list="$jobs_list$(printf 'br %s' "$b")"$'\n'
 	done <<<"$branches"
 
+	# A 0, negative or non-numeric limit would spin the throttle below forever (`wait -n` with no
+	# child returns at once); fall back to the default instead.
+	local par="${FREE_SURFACE_PARALLEL:-8}"
+	[[ "$par" =~ ^[1-9][0-9]*$ ]] || par=8
+
 	local kind arg
 	while read -r kind arg; do
 		[ -n "$kind" ] || continue
 		i=$((i + 1))
-		while [ "$(jobs -rp | wc -l)" -ge "${FREE_SURFACE_PARALLEL:-8}" ]; do wait -n; done
+		while [ "$(jobs -rp | wc -l)" -ge "$par" ]; do wait -n; done
 		(
 			if [ "$kind" = pr ]; then
 				gh pr view "$arg" --repo "$slug" --json files --jq '.files[].path' >"$tmp/$i" 2>/dev/null
