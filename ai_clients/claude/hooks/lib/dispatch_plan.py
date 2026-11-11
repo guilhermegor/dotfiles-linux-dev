@@ -892,7 +892,8 @@ def build_plan() -> dict:
 		if tokens:
 			number = issue["number"]
 			surfaces[number] = tokens
-			expanded[number] = expand_tokens(tokens, root, live_held)
+			# UNKNOWN path: a glob token runs `git ls-files`, which must not run past the deadline.
+			expanded[number] = expand_tokens(tokens, root, live_held) if live_ok else tokens
 
 	requests = list(expanded.items())
 	if live_ok:

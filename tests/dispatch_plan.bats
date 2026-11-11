@@ -844,6 +844,25 @@ PY
     [[ "$output" == *"UNKNOWN"* ]]
 }
 
+@test "a glob surface is not expanded (no git read) on the UNKNOWN path (#973 review)" {
+    run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan as d
+d.live_agent_held_paths = lambda root: (False, [])
+d.repo_slug = lambda: "acme/widgets"
+d.open_issues = lambda slug: [{"number": 1, "body": "```surface\nfree/*.sh\n```"}]
+d.open_prs = lambda slug: []
+def boom(*args):
+    raise AssertionError("a git read ran on the UNKNOWN path")
+d.expand_tokens = boom
+d.hot_patterns = boom
+d.main()
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+}
+
 # --- dotfiles-linux-dev#607: no gh call whose answer the planner throws away ----------------------
 
 @test "the planner never reads per-PR files or per-branch compares it overwrites" {
