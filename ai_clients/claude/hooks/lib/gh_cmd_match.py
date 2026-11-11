@@ -481,6 +481,7 @@ def graphql_string_value(lit):
         return lit[1:-1]
 
 
+GRAPHQL_DECL_TYPE_EQ = re.compile(r"[\w!\[\]\s]+?=")
 GRAPHQL_OPERATION_KEYWORD = re.compile(r"(?<![$\w])(query|mutation|subscription)\b")
 
 
@@ -497,7 +498,7 @@ def graphql_variable_default(header, name):
     decls = list(re.finditer(r"\$" + re.escape(name) + r"\s*:", masked))
     if len(decls) != 1:
         return None
-    m = re.compile(r"[\w!\[\]\s]+?=").match(masked, decls[0].end())
+    m = GRAPHQL_DECL_TYPE_EQ.match(masked, decls[0].end())  # masked is length-preserving
     lit = m and GRAPHQL_LEADING_STRING.match(header, m.end())
     return graphql_string_value(lit.group(1)) if lit else None
 

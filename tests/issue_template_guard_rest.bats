@@ -1170,6 +1170,20 @@ GOOD_BODY='**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [
 # \"\"\" \$b:String=\"$GOOD_BODY\"
 )$tail'"
     [ "$status" -eq 2 ]
+    # a commented `mutation(` carrying a fake compliant default must not move the header slice
+    run guard_cmd "gh api graphql -f query='mutation(\$b:String
+# mutation(\$b:String=\"$GOOD_BODY\"
+)$tail'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -f query='mutation(\$b:String=\"bad\"
+# mutation(\$b:String=\"$GOOD_BODY\"
+)$tail'"
+    [ "$status" -eq 2 ]
+    # an explicit -F null/number/bool is sent as JSON, so the compliant default is not what applies
+    for v in null 123 true; do
+        run guard_cmd "gh api graphql -F b=$v -f query='mutation(\$b:String=\"$GOOD_BODY\")$tail'"
+        [ "$status" -eq 2 ]
+    done
     # a block-string default and a named operation
     run guard_cmd "gh api graphql -f query='mutation M(\$b:String=\"\"\"$GOOD_BODY\"\"\")$tail'"
     [ "$status" -eq 0 ]
