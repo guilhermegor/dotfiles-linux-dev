@@ -609,8 +609,16 @@ install_faster_whisper() {
     # faster-whisper is a Python *library* (CTranslate2 backend, ~4x faster than
     # openai-whisper) with no CLI of its own. whisper-ctranslate2 is the
     # maintained command-line frontend built directly on it, so installing it
-    # yields both the engine and a usable `whisper-ctranslate2` command. Audio is
-    # decoded via PyAV (bundled ffmpeg), so no system ffmpeg package is required.
+    # yields both the engine and a usable `whisper-ctranslate2` command.
+    # faster-whisper's own PyAV decoder breaks on the av version pip resolves
+    # today (`open() got an unexpected keyword argument 'metadata_errors'`), so
+    # bin/transcribe.sh decodes with the system ffmpeg and feeds the engine's
+    # venv a numpy array instead (dotfiles-linux-dev#980). Use that wrapper, not
+    # the bare CLI, for .ogg/.m4a voice notes.
+    if ! command_exists ffmpeg; then
+        print_status "warning" "ffmpeg not found — bin/transcribe.sh needs it (install the system package)"
+    fi
+
     if command_exists whisper-ctranslate2; then
         print_status "info" "whisper-ctranslate2 already installed"
         return 0
@@ -635,7 +643,7 @@ install_faster_whisper() {
         print_status "success" "faster-whisper installed (command: whisper-ctranslate2)"
         # --device auto probes CUDA and fails without libcublas; cpu is the
         # portable default. Drop --device for GPU once CUDA libs are present.
-        print_status "config" "Usage: whisper-ctranslate2 audio.m4a --language pt --model small --device cpu --compute_type int8"
+        print_status "config" "Usage: bin/transcribe.sh [--lang pt] [--model small] audio.ogg"
     else
         print_status "error" "whisper-ctranslate2 installation failed — check $LOG_FILE"
         return 1

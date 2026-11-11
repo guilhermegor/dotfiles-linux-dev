@@ -232,6 +232,19 @@ bash storage/format_neat.sh
 bash storage/storage_hiato.sh
 ```
 
+##### Voice-note Transcription
+
+After installing `faster-whisper` from the AI clients menu (it needs the system
+`ffmpeg` too), transcribe a local audio file; the text goes to stdout:
+
+```bash
+bin/transcribe.sh note.ogg                       # Portuguese, `small` model, CPU
+bin/transcribe.sh --lang en --model tiny note.m4a
+```
+
+The wrapper decodes through `ffmpeg` because `faster-whisper`'s own decoder
+fails with the `av` version pip resolves today.
+
 #### Configuration Workflow
 
 ##### Recommended Workflow (Using `make run`)
@@ -440,6 +453,7 @@ dotfiles-linux-dev/
 │
 ├── 📁 bin/                       # README structure gate (vendored from BlueprintX)
 │   ├── ✅ check_readme_structure.sh # Fails when README.md leaves the house layout
+│   ├── 🎙️ transcribe.sh          # Local voice-note transcription (ffmpeg + faster-whisper)
 │   └── 📚 lib/md_structure.sh    # Markdown heading parser the gate sources
 │
 ├── 📁 assets/                    # Committed images
