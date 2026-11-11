@@ -27,7 +27,6 @@ failure). Exit code 1 if the command could not be tokenized at all (an unbalance
 unterminated heredoc) — the caller MUST treat this as "unknown" and fail OPEN, never as "no gh
 command found", per this repo's hook contract (a verdict from unparseable input is a guess).
 """
-import inspect
 import json
 import os
 import posixpath
@@ -470,11 +469,27 @@ def mask_graphql_strings(text):
     return GRAPHQL_STRING.sub(lambda m: " " * len(m.group(0)), text)
 
 
+def block_string_value(raw):
+    """Return GraphQL's BlockStringValue of a block string's raw body (spec 2.9.4).
+
+    The common indent counts lines 2..n only and is cut from those lines; the first line keeps
+    its whitespace; leading and trailing blank lines go; tabs are never expanded (#910 review).
+    """
+    lines = re.split(r"\r\n|\n|\r", raw)
+    indents = [len(ln) - len(ln.lstrip(" \t")) for ln in lines[1:] if ln.strip(" \t")]
+    common = min(indents, default=0)
+    lines[1:] = [ln[common:] for ln in lines[1:]]
+    while lines and not lines[0].strip(" \t"):
+        lines.pop(0)
+    while lines and not lines[-1].strip(" \t"):
+        lines.pop()
+    return "\n".join(lines)
+
+
 def graphql_string_value(lit):
     """Return the text a GraphQL string literal (`"..."` or `\"\"\"...\"\"\"`) denotes."""
     if lit.startswith('"""'):
-        # ponytail: cleandoc also strips the first line's indent, which GraphQL keeps
-        return inspect.cleandoc(lit[3:-3].replace('\\"""', '"""'))
+        return block_string_value(lit[3:-3].replace('\\"""', '"""'))
     try:
         return json.loads(lit)
     except ValueError:
@@ -485,6 +500,21 @@ GRAPHQL_DECL_TYPE_EQ = re.compile(r"[\w!\[\]\s]+?=")
 GRAPHQL_OPERATION_KEYWORD = re.compile(r"(?<![$\w])(query|mutation|subscription)\b")
 
 
+def top_level_operation_starts(masked):
+    """Offsets of operation keywords outside every selection set and argument list.
+
+    `query:createIssue(...)` inside a selection set is a field alias, not an operation (#910).
+    Braces inside `( ... )` (a variable default object) do not open a selection set.
+    """
+    depth, braces, parens = [], 0, 0
+    for ch in masked:
+        depth.append(braces + parens)
+        parens += {"(": 1, ")": -1}.get(ch, 0)
+        braces += 0 if parens else {"{": 1, "}": -1}.get(ch, 0)
+    return [m.start() for m in GRAPHQL_OPERATION_KEYWORD.finditer(masked)
+            if depth[m.start()] == 0]
+
+
 def graphql_variable_default(header, name):
     """Return the string-literal default of variable `$name` declared in `header`, else None.
 
@@ -492,9 +522,9 @@ def graphql_variable_default(header, name):
     a redeclared name): the caller then keeps failing closed (#910).
     """
     masked = mask_graphql_strings(header)
-    heads = list(GRAPHQL_OPERATION_KEYWORD.finditer(masked))
+    heads = top_level_operation_starts(masked)
     if heads:  # only the operation that holds the mutation, never an earlier one
-        header, masked = header[heads[-1].start():], masked[heads[-1].start():]
+        header, masked = header[heads[-1]:], masked[heads[-1]:]
     decls = list(re.finditer(r"\$" + re.escape(name) + r"\s*:", masked))
     if len(decls) != 1:
         return None

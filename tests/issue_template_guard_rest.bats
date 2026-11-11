@@ -1187,6 +1187,15 @@ GOOD_BODY='**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [
     # a block-string default and a named operation
     run guard_cmd "gh api graphql -f query='mutation M(\$b:String=\"\"\"$GOOD_BODY\"\"\")$tail'"
     [ "$status" -eq 0 ]
+    # a block string keeps the first line's whitespace (GraphQL BlockStringValue), so a default
+    # starting with spaces is not a bold first line; the same text without them is
+    run guard_cmd "gh api graphql -f query='mutation(\$b:String=\"\"\"    $GOOD_BODY\"\"\")$tail'"
+    [ "$status" -eq 2 ]
+    # a field alias named like an operation keyword is not an operation boundary
+    run guard_cmd "gh api graphql -f query='mutation(\$b:String=\"$GOOD_BODY\"){query:createIssue(input:{repositoryId:\"X\",title:\"t\",body:\$b}){issue{id}}}'"
+    [ "$status" -eq 0 ]
+    run guard_cmd "gh api graphql -f query='mutation(\$b:String=\"nope\"){mutation:createIssue(input:{repositoryId:\"X\",title:\"t\",body:\$b}){issue{id}}}'"
+    [ "$status" -eq 2 ]
     # a redeclared variable is ambiguous
     run guard_cmd "gh api graphql -f query='mutation(\$b:String=\"$GOOD_BODY\",\$b:String=\"bad\")$tail'"
     [ "$status" -eq 2 ]
