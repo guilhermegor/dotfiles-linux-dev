@@ -1267,6 +1267,33 @@ GOOD_BODY='**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [
     [ "$status" -eq 2 ]
 }
 
+# --- #915: block-string dedent, non-string body, relative paths -------------------------------------
+
+@test "GraphQL: an indented compliant block-string body passes, a bad one blocks (#915)" {
+    local nl=$'\n'
+    run guard_cmd "gh api graphql -f query='mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"\"\"${nl}    **Python · PyPI · public repo**${nl}${nl}    x${nl}${nl}    ### Definition of done${nl}    - [ ] a${nl}    \"\"\"}){issue{id}}}'"
+    [ "$status" -eq 0 ]
+    run guard_cmd "gh api graphql -f query='mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"\"\"${nl}    nope${nl}    \"\"\"}){issue{id}}}'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL --input: a non-string body (list, int, object) is judged blind, not passed (#915)" {
+    local q='mutation($i:CreateIssueInput!){createIssue(input:$i){issue{id}}}' b
+    for b in '["x"]' '5' '{"a":1}' 'null'; do
+        jq -nc --arg q "$q" --argjson b "$b" '{query: $q, variables: {i: {repositoryId: "R", title: "t", body: $b}}}' \
+            > "$REPO/ns915.json"
+        run guard_cmd "gh api graphql --input $REPO/ns915.json"
+        [ "$status" -eq 2 ]
+    done
+}
+
+@test "GraphQL: a relative -F @file resolves against the payload cwd (#915)" {
+    # a compliant file passes only if it was actually read (an unread file is judged blind: blocked)
+    printf '%s' "mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"$GOOD_BODY\"}){issue{id}}}" > "$REPO/rel915.graphql"
+    run bash -c "jq -nc --arg c 'gh api graphql -F query=@rel915.graphql' --arg d '$REPO' '{tool_name:\"Bash\",cwd:\$d,tool_input:{command:\$c}}' | (cd / && '$GUARD')"
+    [ "$status" -eq 0 ]
+}
+
 # --- #919: every issue write in a chain is judged, in both orders -----------------------------------
 
 @test "REST: compliant then bad create in one chain is blocked, both orders (#919)" {
