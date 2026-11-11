@@ -2353,6 +2353,19 @@ drained the shared GraphQL bucket in minutes. <code>hooks/lib/stop_budget.sh</co
 </ul>
 <p><code>review_fanout_guard.sh</code> keeps its own per-heads cache (#696); it only gained the gate. The
 planners' remaining GraphQL (<code>closingIssuesReferences</code>, review threads) was not moved to REST here.</p>
+<p><strong>Planner timeouts (#960).</strong> <code>dispatch_plan.py</code> runs the free-surface gate under
+<code>DISPATCH_PLAN_GATE_TIMEOUT</code> (default 45s), on top of <code>DISPATCH_PLAN_GH_TIMEOUT</code> per <code>gh</code> call. The
+gate pages every PR the repo ever had (100 per serial GraphQL request), so it grows with PR
+history. The Stop guards kill the whole planner at <code>ROUND_DISPATCH_PLANNER_TIMEOUT</code>
+(<code>round_dispatch_guard.sh</code>) / <code>DISPATCH_GUARD_PLANNER_TIMEOUT</code> (<code>dispatch_free_surface_guard.sh</code>),
+60s each, so each gate call is capped to what is left of that budget minus a 3s reserve; a gate that
+times out is <code>UNKNOWN</code> for every issue, never a crash. When under 1s of that budget is left the
+gate is skipped (UNKNOWN) rather than run on a floor, and the hot-pattern git read is skipped on
+the UNKNOWN path, so nothing slow runs between the deadline and the emit. The reads after the gate
+(native blockers, hot-file PR files) are capped the same way, and skipped as UNKNOWN when nothing
+is left. Raising the gate override cannot outlive the guard's kill: the budget is the <strong>minimum</strong>
+of the two guard timeouts, so raise <strong>both</strong> <code>ROUND_DISPATCH_PLANNER_TIMEOUT</code> and
+<code>DISPATCH_GUARD_PLANNER_TIMEOUT</code>, or the one left at 60s still caps it.</p>
 <h2 id="worktree-rescue-fan-out-two-callers-one-implementation">Worktree rescue fan-out: two callers, one implementation<a class="headerlink" href="#worktree-rescue-fan-out-two-callers-one-implementation" title="Permanent link">&para;</a></h2>
 <p><code>hooks/lib/worktree_fanout.sh</code> (<code>fanout_worktrees()</code> + <code>classify_worktree_diff()</code>,
 dotfiles-linux-dev#383) is the shared implementation of "walk every worktree of this
