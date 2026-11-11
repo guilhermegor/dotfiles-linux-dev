@@ -212,3 +212,45 @@ gh() {
     [ "$status" -eq 0 ]
     [[ "$output" == *gh_budget_log_spend* ]]
 }
+
+# --- #962: a large board must finish inside the planner's gate budget ---------------------------
+# Every per-item gh call costs ~0.65 s live; 10 PR views + 40 branch compares run serially took
+# 44 s on filings-cvm (budget: GATE_TIMEOUT 25 s). The stub sleeps 0.3 s per call, so a serial
+# walk needs >= 15 s and a bounded fan-out well under 6 s.
+
+@test "gate_free_surface: 10 PRs + 40 PR-less branches finish fast and keep every path" {
+    gh() {
+        case "$*" in
+            "api repos/o/r --jq .default_branch") echo master ;;
+            "pr list --repo o/r --state open"*)
+                printf '['; for i in $(seq 1 10); do printf '%s{"number":%s,"headRefName":"pr%s"}' "$([ "$i" -gt 1 ] && echo ,)" "$i" "$i"; done; printf ']' ;;
+            "api repos/o/r/branches --paginate --jq .[].name")
+                echo master; for i in $(seq 1 10); do echo "pr$i"; done; for i in $(seq 1 40); do echo "wt$i"; done ;;
+            "pr view "*) sleep 0.3; echo "pr-file-${3}.sh" ;;
+            "api repos/o/r/compare/master...wt"*) sleep 0.3; echo "branch-file-${2##*...}.sh" ;;
+            "api graphql -f query="*) echo '{"data":{"search":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}' ;;
+            "issue list"*) echo 1 ;;
+            *) return 1 ;;
+        esac
+    }
+    local start=$SECONDS
+    gate_free_surface o r
+    [ "$FREE_STATUS" = ok ]
+    [ $((SECONDS - start)) -lt 6 ]
+    [ "$(printf '%s\n' "$FREE_HELD_PATHS" | wc -l)" -eq 50 ]
+}
+
+@test "gate_free_surface: one failing compare among many still fails closed" {
+    gh() {
+        case "$*" in
+            "api repos/o/r --jq .default_branch") echo master ;;
+            "pr list"*) echo '[]' ;;
+            "api repos/o/r/branches"*) echo master; for i in $(seq 1 20); do echo "wt$i"; done ;;
+            "api repos/o/r/compare/master...wt13"*) echo "gh: API rate limit exceeded" >&2; return 1 ;;
+            "api repos/o/r/compare/"*) echo f.sh ;;
+            *) return 1 ;;
+        esac
+    }
+    run gate_free_surface o r
+    [ "$status" -eq 1 ]
+}
