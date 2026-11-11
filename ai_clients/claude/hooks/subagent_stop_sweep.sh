@@ -540,7 +540,7 @@ sweep_roadmap_boards() {
 # sweep_kanban_boards KIND CWD REPO
 # Prints reconcile_kanban_boards' per-board report for KIND (in_review|closed|stale): every declared
 # board, never only the repo the sweep runs in (dotfiles-linux-dev#887). A repo absent from the
-# registry is named, not swept silently out of existence.
+# registry is a `finding:` (dotfiles-linux-dev#921), not a `note:` the round report can skim past.
 sweep_kanban_boards() {
 	local kind="$1" cwd="$2" repo="$3" entry
 	reconcile_kanban_boards "$kind" "$cwd" || true
@@ -548,7 +548,7 @@ sweep_kanban_boards() {
 	for entry in "${ROADMAP_BOARDS[@]}"; do
 		[[ "${entry%%|*}/${entry##*|}" == "$repo" ]] && return 0
 	done
-	echo "note: $repo has no ROADMAP_BOARDS entry — its kanban board was not swept"
+	echo "finding: $repo has no ROADMAP_BOARDS entry — its kanban board (if it has one) was not swept; add \"<owner>|<N>|<repo>\" to lib/roadmap_unblock.sh"
 }
 
 # sweep_issue_hygiene REPO — report-only backstop for issue_template_guard.sh (#714): open issues

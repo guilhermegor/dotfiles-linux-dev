@@ -879,7 +879,7 @@ declared_board_numbers() {
     declared_board_numbers
     run sweep_kanban_boards in_review "$REPO" "o/undeclared"
     [[ "$output" == *"board o/13 (declared): ok — nothing to change"* ]]
-    [[ "$output" == *"note: o/undeclared has no ROADMAP_BOARDS entry"* ]]
+    [[ "$output" == *"finding: o/undeclared has no ROADMAP_BOARDS entry"* ]]
 }
 
 @test "sweep_kanban_boards: an active latch reports every board SKIPPED, no gh call" {
@@ -923,5 +923,5 @@ declared_board_numbers() {
     reconcile_kanban() { RECONCILE_KANBAN_REPORT=""; }
     ROADMAP_BOARDS=("o|13|greenfield")
     run sweep_kanban_boards in_review "$REPO" "other/greenfield"
-    [[ "$output" == *"note: other/greenfield has no ROADMAP_BOARDS entry"* ]]
+    [[ "$output" == *"finding: other/greenfield has no ROADMAP_BOARDS entry"* ]]
 }
