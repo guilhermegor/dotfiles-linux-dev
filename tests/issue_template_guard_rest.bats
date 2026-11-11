@@ -1211,3 +1211,22 @@ GOOD_BODY='**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [
     run guard_cmd "gh api graphql --input $REPO/def910.json"
     [ "$status" -eq 0 ]
 }
+
+# --- #914: convert-to-issue mutations also create an issue -----------------------------------------
+
+@test "GraphQL: convertProjectV2DraftIssueItemToIssue is blind to the draft's body, so it blocks (#914)" {
+    run guard_cmd "gh api graphql -f query='mutation{convertProjectV2DraftIssueItemToIssue(input:{itemId:\"I\",repositoryId:\"R\"}){item{id}}}'"
+    [ "$status" -eq 2 ]
+    # the mutation has no `body` input: a decoy literal must not pass it
+    run guard_cmd "gh api graphql -f query='mutation{convertProjectV2DraftIssueItemToIssue(input:{itemId:\"I\",repositoryId:\"R\",body:\"$GOOD_BODY\"}){item{id}}}'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: convertProjectCardNoteToIssue has its body judged (#914)" {
+    run guard_cmd "gh api graphql -f query='mutation{convertProjectCardNoteToIssue(input:{projectCardId:\"C\",repositoryId:\"R\",body:\"nope\"}){projectCard{id}}}'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -f query='mutation{convertProjectCardNoteToIssue(input:{projectCardId:\"C\",repositoryId:\"R\"}){projectCard{id}}}'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -f query='mutation{convertProjectCardNoteToIssue(input:{projectCardId:\"C\",repositoryId:\"R\",body:\"$GOOD_BODY\"}){projectCard{id}}}'"
+    [ "$status" -eq 0 ]
+}
