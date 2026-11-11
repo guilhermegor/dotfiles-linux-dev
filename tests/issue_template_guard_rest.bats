@@ -1249,3 +1249,49 @@ GOOD_BODY='**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [
 (input:{projectCardId:\"C\",body:\"nope\"}){projectCard{id}}}'"
     [ "$status" -eq 2 ]
 }
+
+# --- #911: replies and body-less PATCH never write an issue body ------------------------------------
+
+@test "REST: PR review-comment reply with a free-form body passes (#911)" {
+    run guard_cmd "gh api repos/o/r/pulls/902/comments/55/replies -f body='fixed in abc'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: milestone-only PATCH (-F milestone=1) passes (#911)" {
+    run guard_cmd "gh api -X PATCH repos/o/r/issues/908 -F milestone=1"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: PATCH that DOES carry a bad body is still blocked (#911)" {
+    run guard_cmd "gh api -X PATCH repos/o/r/issues/908 -F milestone=1 -f body='nope'"
+    [ "$status" -eq 2 ]
+}
+
+# --- #919: every issue write in a chain is judged, in both orders -----------------------------------
+
+@test "REST: compliant then bad create in one chain is blocked, both orders (#919)" {
+    local good bad
+    good="gh api repos/o/r/issues -f title=a -f body='$GOOD_BODY'"
+    bad="gh api repos/o/r/issues -f title=b -f body='nope'"
+    run guard_cmd "$good; $bad"
+    [ "$status" -eq 2 ]
+    run guard_cmd "$bad; $good"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: compliant then bad createIssue in one chain is blocked, both orders (#919)" {
+    local good bad
+    good="gh api graphql -f query='mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"$GOOD_BODY\"}){issue{id}}}'"
+    bad="gh api graphql -f query='mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"nope\"}){issue{id}}}'"
+    run guard_cmd "$good; $bad"
+    [ "$status" -eq 2 ]
+    run guard_cmd "$bad; $good"
+    [ "$status" -eq 2 ]
+}
+
+@test "mixed chain: a compliant REST create then a bad gh issue create is blocked (#919)" {
+    run guard_cmd "gh api repos/o/r/issues -f title=a -f body='$GOOD_BODY'; gh issue create --title b --body nope"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh issue create --title b --body nope; gh api repos/o/r/issues -f title=a -f body='$GOOD_BODY'"
+    [ "$status" -eq 2 ]
+}
