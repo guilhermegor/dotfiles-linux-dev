@@ -592,21 +592,27 @@ _kb_skipped_file() {
 		printf '%s' "$KANBAN_SKIPPED_FILE"
 		return 0
 	fi
-	common="$($_KB_GIT -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+	# No --path-format (git 2.31+): older git would fail and silently disable the retry order.
+	common="$($_KB_GIT -C "$1" rev-parse --git-common-dir 2>/dev/null)" || return 1
+	[[ "$common" == /* ]] || common="$1/$common"
 	printf '%s/kanban-skipped-boards.tsv' "$common"
 }
 
 # _kb_ordered_boards KIND FILE — the registry entries, those FILE lists as skipped for KIND first.
 _kb_ordered_boards() {
-	local kind="$1" file="$2" entry first=() rest=()
+	local kind="$1" file="$2" entry k first=() rest=()
+	# The skipped group keeps FILE order (the order the last round skipped them in), NOT registry
+	# order: registry order let the early entries of the group win every round and starve the rest.
+	if [[ -n "$file" && -r "$file" ]]; then
+		while IFS=$'\t' read -r k entry; do
+			[[ "$k" == "$kind" && " ${ROADMAP_BOARDS[*]} " == *" $entry "* ]] && first+=("$entry")
+		done <"$file"
+	fi
 	for entry in "${ROADMAP_BOARDS[@]}"; do
-		if [[ -n "$file" ]] && grep -qxF "$kind"$'\t'"$entry" "$file" 2>/dev/null; then
-			first+=("$entry")
-		else
-			rest+=("$entry")
-		fi
+		[[ " ${first[*]-} " == *" $entry "* ]] || rest+=("$entry")
 	done
-	printf '%s\n' "${first[@]}" "${rest[@]}"
+	# ${a[@]+...}: an empty array is an unbound variable under `set -u` on bash < 4.4.
+	printf '%s\n' ${first[@]+"${first[@]}"} ${rest[@]+"${rest[@]}"}
 }
 
 # _kb_save_skipped KIND FILE ENTRY... — replaces KIND's lines in FILE with ENTRYs; other kinds stay.
@@ -615,12 +621,22 @@ _kb_save_skipped() {
 	shift 2
 	[[ -n "$file" ]] || return 0
 	(($# == 0)) && [[ ! -e "$file" ]] && return 0   # nothing skipped, nothing recorded: no file
-	tmp="$(mktemp "$file.XXXXXX" 2>/dev/null)" || return 0
-	{
-		grep -v "^$kind"$'\t' "$file" 2>/dev/null
-		for entry in "$@"; do printf '%s\t%s\n' "$kind" "$entry"; done
-	} >"$tmp" 2>/dev/null
-	mv -f "$tmp" "$file" 2>/dev/null || rm -f "$tmp"
+	# An unreadable file would read as empty and wipe the other kinds' lines: leave it alone.
+	[[ ! -e "$file" || -r "$file" ]] || return 0
+	# Lock the whole read-filter-replace (same `.lock`-file pattern as dispatch_claims.sh), so two
+	# concurrent sweeps cannot overwrite each other. No flock or no lock in 5s: skip the save, the
+	# file is only an order hint and the sweep must go on.
+	(
+		command -v flock >/dev/null 2>&1 || exit 0
+		exec 9>"$file.lock" 2>/dev/null || exit 0
+		flock -w 5 9 || exit 0
+		tmp="$(mktemp "$file.XXXXXX" 2>/dev/null)" || exit 0
+		{
+			grep -v "^$kind"$'\t' "$file" 2>/dev/null
+			for entry in "$@"; do printf '%s\t%s\n' "$kind" "$entry"; done
+		} >"$tmp" 2>/dev/null
+		mv -f "$tmp" "$file" 2>/dev/null || rm -f "$tmp"
+	)
 }
 
 reconcile_kanban_boards() {
@@ -688,7 +704,7 @@ reconcile_kanban_boards() {
 			[[ -n "$detail" ]] && lines+="  $detail"$'\n'
 		done <<<"$_KB_REPORT"
 	done 3< <(_kb_ordered_boards "$kind" "$skipped_file")
-	_kb_save_skipped "$kind" "$skipped_file" "${skipped[@]}"
+	_kb_save_skipped "$kind" "$skipped_file" ${skipped[@]+"${skipped[@]}"}
 	# shellcheck disable=SC2034 # read by callers
 	KANBAN_BOARDS_REPORT="$(printf '%s' "$lines" | sed '/^$/d')"
 	return "$status"
