@@ -1125,3 +1125,34 @@ guard_cmd() {
     run guard_cmd "gh api -X PUT repos/guilhermegor/dotfiles-linux-dev/pulls/967/merge -f merge_method=squash -f sha=abc123"
     [ "$status" -eq 0 ]
 }
+
+# --- #910: variable defaults and same-command file writes ------------------------------------------
+
+GOOD_BODY='**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [ ] a'
+
+@test "GraphQL: an unsupplied variable is judged by its literal default (#910)" {
+    run guard_cmd "gh api graphql -f query='mutation(\$b:String=\"$GOOD_BODY\"){createIssue(input:{repositoryId:\"X\",title:\"t\",body:\$b}){issue{id}}}'"
+    [ "$status" -eq 0 ]
+    run guard_cmd "gh api graphql -f query='mutation(\$b:String=\"nope\"){createIssue(input:{repositoryId:\"X\",title:\"t\",body:\$b}){issue{id}}}'"
+    [ "$status" -eq 2 ]
+    # no default or a non-literal default: still fail closed
+    run guard_cmd "gh api graphql -f query='mutation(\$b:String){createIssue(input:{repositoryId:\"X\",title:\"t\",body:\$b}){issue{id}}}'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -f query='mutation(\$b:String=\$c){createIssue(input:{repositoryId:\"X\",title:\"t\",body:\$b}){issue{id}}}'"
+    [ "$status" -eq 2 ]
+    # a supplied variable overrides the default
+    run guard_cmd "gh api graphql -f b=nope -f query='mutation(\$b:String=\"$GOOD_BODY\"){createIssue(input:{repositoryId:\"X\",title:\"t\",body:\$b}){issue{id}}}'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a file rewritten or reached after cd in the same command is blind (#910)" {
+    printf '%s' "{\"query\":\"mutation{createIssue(input:{repositoryId:\\\"X\\\",title:\\\"t\\\",body:\\\"$GOOD_BODY\\\"}){issue{id}}}\"}" > "$REPO/q910.json"
+    run guard_cmd "gh api graphql --input $REPO/q910.json"
+    [ "$status" -eq 0 ]
+    run guard_cmd "printf '{}' > $REPO/q910.json && gh api graphql --input $REPO/q910.json"
+    [ "$status" -eq 2 ]
+    run guard_cmd "cd /tmp && gh api graphql --input q910.json"
+    [ "$status" -eq 2 ]
+    run guard_cmd "cd /tmp && gh api graphql -F query=@q910.json"
+    [ "$status" -eq 2 ]
+}

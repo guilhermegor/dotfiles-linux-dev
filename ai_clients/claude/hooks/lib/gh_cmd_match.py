@@ -470,6 +470,32 @@ def mask_graphql_strings(text):
     return GRAPHQL_STRING.sub(lambda m: " " * len(m.group(0)), text)
 
 
+def graphql_string_value(lit):
+    """Return the text a GraphQL string literal (`"..."` or `\"\"\"...\"\"\"`) denotes."""
+    if lit.startswith('"""'):
+        # ponytail: cleandoc also strips the first line's indent, which GraphQL keeps
+        return inspect.cleandoc(lit[3:-3].replace('\\"""', '"""'))
+    try:
+        return json.loads(lit)
+    except ValueError:
+        return lit[1:-1]
+
+
+def graphql_variable_default(header, name):
+    """Return the string-literal default of variable `$name` declared in `header`, else None.
+
+    None covers every case that is not one plain string default (no default, a non-string value,
+    a redeclared name): the caller then keeps failing closed (#910).
+    """
+    masked = mask_graphql_strings(header)
+    decls = [m for m in re.finditer(r"\$" + re.escape(name) + r"\s*:", masked)]
+    if len(decls) != 1:
+        return None
+    m = re.compile(r"\s*[\w!\[\]]+\s*=").match(masked, decls[0].end())
+    lit = m and GRAPHQL_LEADING_STRING.match(header, m.end())
+    return graphql_string_value(lit.group(1)) if lit else None
+
+
 def read_graphql_file(path, shifted):
     """Return a regular file's text (capped), or None when it cannot be judged statically.
 
@@ -604,17 +630,12 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False),
     lits = [m.group(1) for k in GRAPHQL_BODY_KEY.finditer(masked)
             if (m := GRAPHQL_LEADING_STRING.match(seg, k.end()))]
     if lits:  # the literal in the mutation itself is what GitHub stores: judge it first
-        lit = lits[0]
-        if lit.startswith('"""'):
-            # ponytail: cleandoc also strips the first line's indent, which GraphQL keeps
-            body = inspect.cleandoc(lit[3:-3].replace('\\"""', '"""'))
-        else:
-            try:
-                body = json.loads(lit)
-            except ValueError:
-                body = lit[1:-1]
+        body = graphql_string_value(lits[0])
     elif refs:
-        body = values.get(refs[0], "")  # unsupplied (a default may apply): fail closed
+        body = values.get(refs[0])
+        if body is None:  # unsupplied: the declared literal default applies, else fail closed
+            default = graphql_variable_default(query[:muts[0].start()], refs[0])
+            body = "" if default is None else default
     elif inp:
         name = inp.group(1)
         body = values.get(name + "[body]")
