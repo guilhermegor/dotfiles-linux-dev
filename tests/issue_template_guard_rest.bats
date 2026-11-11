@@ -1146,13 +1146,45 @@ GOOD_BODY='**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [
 }
 
 @test "GraphQL: a file rewritten or reached after cd in the same command is blind (#910)" {
-    printf '%s' "{\"query\":\"mutation{createIssue(input:{repositoryId:\\\"X\\\",title:\\\"t\\\",body:\\\"$GOOD_BODY\\\"}){issue{id}}}\"}" > "$REPO/q910.json"
+    mkdir "$REPO/sub"
+    jq -nc --arg q "mutation{createIssue(input:{repositoryId:\"X\",title:\"t\",body:\"$GOOD_BODY\"}){issue{id}}}" \
+        '{query: $q}' > "$REPO/q910.json"
+    cp "$REPO/q910.json" "$REPO/sub/other.json"
     run guard_cmd "gh api graphql --input $REPO/q910.json"
     [ "$status" -eq 0 ]
+    # the file exists and is compliant at the hook's cwd, so only the same-command logic can block
     run guard_cmd "printf '{}' > $REPO/q910.json && gh api graphql --input $REPO/q910.json"
     [ "$status" -eq 2 ]
-    run guard_cmd "cd /tmp && gh api graphql --input q910.json"
+    run guard_cmd "cd sub && gh api graphql --input q910.json"
     [ "$status" -eq 2 ]
-    run guard_cmd "cd /tmp && gh api graphql -F query=@q910.json"
+    run guard_cmd "cd sub && gh api graphql -F query=@q910.json"
     [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: default parsing resists comments, nulls, block strings, earlier operations (#910)" {
+    local tail='{createIssue(input:{repositoryId:"X",title:"t",body:$b}){issue{id}}}'
+    # a commented `"""` must not blank the real declaration (real default "bad")
+    run guard_cmd "gh api graphql -f query='mutation(
+# \"\"\"
+\$b:String=\"bad\"
+# \"\"\" \$b:String=\"$GOOD_BODY\"
+)$tail'"
+    [ "$status" -eq 2 ]
+    # a block-string default and a named operation
+    run guard_cmd "gh api graphql -f query='mutation M(\$b:String=\"\"\"$GOOD_BODY\"\"\")$tail'"
+    [ "$status" -eq 0 ]
+    # a redeclared variable is ambiguous
+    run guard_cmd "gh api graphql -f query='mutation(\$b:String=\"$GOOD_BODY\",\$b:String=\"bad\")$tail'"
+    [ "$status" -eq 2 ]
+    # an earlier operation's declaration is not the mutation's
+    run guard_cmd "gh api graphql -f query='query Q(\$b:String=\"$GOOD_BODY\"){viewer{login}} mutation M$tail'"
+    [ "$status" -eq 2 ]
+    # an explicit null in --input overrides the default
+    jq -nc --arg q "mutation(\$b:String=\"$GOOD_BODY\")$tail" '{query: $q, variables: {b: null}}' \
+        > "$REPO/null910.json"
+    run guard_cmd "gh api graphql --input $REPO/null910.json"
+    [ "$status" -eq 2 ]
+    jq -nc --arg q "mutation(\$b:String=\"$GOOD_BODY\")$tail" '{query: $q}' > "$REPO/def910.json"
+    run guard_cmd "gh api graphql --input $REPO/def910.json"
+    [ "$status" -eq 0 ]
 }

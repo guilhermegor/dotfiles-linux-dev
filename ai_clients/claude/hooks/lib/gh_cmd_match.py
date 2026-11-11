@@ -481,6 +481,9 @@ def graphql_string_value(lit):
         return lit[1:-1]
 
 
+GRAPHQL_OPERATION_KEYWORD = re.compile(r"(?<![$\w])(query|mutation|subscription)\b")
+
+
 def graphql_variable_default(header, name):
     """Return the string-literal default of variable `$name` declared in `header`, else None.
 
@@ -488,10 +491,13 @@ def graphql_variable_default(header, name):
     a redeclared name): the caller then keeps failing closed (#910).
     """
     masked = mask_graphql_strings(header)
-    decls = [m for m in re.finditer(r"\$" + re.escape(name) + r"\s*:", masked)]
+    heads = list(GRAPHQL_OPERATION_KEYWORD.finditer(masked))
+    if heads:  # only the operation that holds the mutation, never an earlier one
+        header, masked = header[heads[-1].start():], masked[heads[-1].start():]
+    decls = list(re.finditer(r"\$" + re.escape(name) + r"\s*:", masked))
     if len(decls) != 1:
         return None
-    m = re.compile(r"\s*[\w!\[\]]+\s*=").match(masked, decls[0].end())
+    m = re.compile(r"[\w!\[\]\s]+?=").match(masked, decls[0].end())
     lit = m and GRAPHQL_LEADING_STRING.match(header, m.end())
     return graphql_string_value(lit.group(1)) if lit else None
 
@@ -610,6 +616,8 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False),
             operation_name = data.get("operationName")
             variables = data.get("variables") or {}
             values = {k: v for k, v in variables.items() if isinstance(v, str)}  # -f is query-string
+            # an explicit null/number/list overrides a declared default: supplied, and unjudgeable
+            values.update({k: "" for k, v in variables.items() if not isinstance(v, (str, dict))})
             values.update({k + "[body]": v["body"] for k, v in variables.items()
                            if isinstance(v, dict) and isinstance(v.get("body"), str)})
             values.update({k + "[]": "" for k, v in variables.items()
@@ -633,7 +641,7 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False),
         body = graphql_string_value(lits[0])
     elif refs:
         body = values.get(refs[0])
-        if body is None:  # unsupplied: the declared literal default applies, else fail closed
+        if refs[0] not in values:  # unsupplied: the declared literal default applies, else closed
             default = graphql_variable_default(query[:muts[0].start()], refs[0])
             body = "" if default is None else default
     elif inp:
