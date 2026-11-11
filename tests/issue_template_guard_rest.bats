@@ -1267,6 +1267,64 @@ GOOD_BODY='**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [
     [ "$status" -eq 2 ]
 }
 
+# --- #937: bypasses deferred from #906 ---------------------------------------------------------------
+
+BAD_MUT937='mutation{createIssue(input:{repositoryId:"R",title:"t",body:"nope"}){issue{id}}}'
+
+good_file_937() {
+    printf '%s' "mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"$GOOD_BODY\"}){issue{id}}}" \
+        > "$REPO/q937.graphql"
+}
+
+@test "GraphQL: a writer running alongside the gh read (| or &) makes the file read blind (#937)" {
+    good_file_937
+    cd "$REPO"
+    run guard_cmd "gh api graphql -F query=@q937.graphql | cp evil q937.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -F query=@q937.graphql & cp evil q937.graphql"
+    [ "$status" -eq 2 ]
+    # a read-only consumer of the output does not blind it
+    run guard_cmd "gh api graphql -F query=@q937.graphql | jq -r .data"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: a brace-range endpoint is blind, like a brace list (#937)" {
+    good_file_937
+    cd "$REPO"
+    run guard_cmd "gh api graphq{l..l} -F query=@q937.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api gr{a..a}phql -F query=@q937.graphql"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: digits glued to a flag before a redirect belong to the flag (#937)" {
+    printf '%s' "$BAD_MUT937" > "$REPO/bad937.graphql"
+    cd "$REPO"
+    # `-t1>/dev/null` is the flag `-t1` plus a redirect, so `-t` does not swallow the query field
+    run guard_cmd "gh api graphql -t1>/dev/null -Fquery=@bad937.graphql"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a shell-built gh subcommand is blind (#937)" {
+    run guard_cmd 'gh a${E}pi graphql -f query=x'
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: an unquoted glob in a field or flag is blind (#937)" {
+    run guard_cmd 'gh api graphql -f query=*'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -F*'
+    [ "$status" -eq 2 ]
+    # a glob inside a --jq value is only a value, not a field
+    run guard_cmd 'gh api graphql -f query="{viewer{login}}" --jq .data[0]'
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: an env -iS cluster hides no nested gh api (#937)" {
+    run guard_cmd "env -iS 'gh api graphql -f query=\$X'"
+    [ "$status" -eq 2 ]
+}
+
 # --- #915: block-string dedent, non-string body, relative paths -------------------------------------
 
 @test "GraphQL: an indented compliant block-string body passes, a bad one blocks (#915)" {

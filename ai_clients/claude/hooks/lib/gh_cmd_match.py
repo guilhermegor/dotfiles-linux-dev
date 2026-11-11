@@ -178,7 +178,7 @@ def gh_sub(argv, idx):
 # Stand-ins for a `$`/backtick the shell expands: inside double quotes (one word, but the shell
 # writes its text) and unquoted (the shell also word-splits it into extra arguments). Private-use
 # code points are ordinary word characters to shlex, so the marked text splits into the same words.
-SHELL_QUOTED, SHELL_SPLIT, QUOTED_GT = "\ue000", "\ue001", "\ue002"
+SHELL_QUOTED, SHELL_SPLIT, QUOTED_GT, SHELL_GLOB = "\ue000", "\ue001", "\ue002", "\ue003"
 
 
 def mark_expansions(segment):
@@ -208,6 +208,8 @@ def mark_expansions(segment):
             c = QUOTED_GT
         elif c == "{" and not quote and re.match(r"\{[^{}]*(,|\.\.)", segment[i:]):
             c = SHELL_SPLIT  # `-t {x,-Fquery=@f}`: bash brace-expands it into extra arguments
+        elif c in "*?[" and not quote:
+            c = SHELL_GLOB  # `-f query=*`, `-F*`: bash swaps in a file name the hook never saw (#937)
         out.append(c)
         i += 1
     return "".join(out)
@@ -228,7 +230,8 @@ def _nested_script(argv):
             # command line: nested shell text, like `bash -c`.
             for j in range(i + 1, len(argv)):
                 a = argv[j]
-                if a in ("-S", "--split-string") and j + 1 < len(argv) and argv[j + 1]:
+                if (a in ("-S", "--split-string") or re.fullmatch(r"-[A-Za-z]*S", a)) \
+                        and j + 1 < len(argv) and argv[j + 1]:  # `-iS 'cmd'` clusters too (#937)
                     return j + 1, j + 2, 0
                 if a.startswith("--split-string=") and len(a) > len("--split-string="):
                     return j, j + 1, len("--split-string=")
@@ -261,7 +264,7 @@ def _iter_marked(segments, marked, depth):
         inner = " ".join(argv[start:stop])[prefix:]
         # Text the outer shell wrote is re-parsed by the inner one, which may split it anywhere.
         minner = (" ".join(marks[start:stop])[prefix:].replace(SHELL_QUOTED, SHELL_SPLIT)
-                  .replace(QUOTED_GT, ">"))
+                  .replace(SHELL_GLOB, SHELL_SPLIT).replace(QUOTED_GT, ">"))
         # `eval "... \"\$Q\""`: the outer shell turns `\$` into the `$` the inner shell expands.
         minner = re.sub(r"\\[$`]", SHELL_SPLIT, minner)
         try:
@@ -718,7 +721,7 @@ def without_redirects(words):
     return kept
 
 
-ATTACHED_REDIRECT = re.compile(r"^([^<>]*?)[0-9&]*[<>]+[|&]?(?!\()(.*)$", re.S)
+ATTACHED_REDIRECT = re.compile(r"^([^<>]*)[<>]+[|&]?(?!\()(.*)$", re.S)
 
 
 def strip_redirects(words, marked):
@@ -737,7 +740,9 @@ def strip_redirects(words, marked):
             out_w.append(word)
             out_m.append(mark)
             continue
-        head = len(m.group(1))
+        # Digits (or `&`) are a file descriptor only when they ARE the whole word before the
+        # operator: `1>f` redirects fd 1, but `-t1>f` is the flag `-t1` plus `>f` (#937).
+        head = 0 if re.fullmatch(r"[0-9&]*", m.group(1)) else len(m.group(1))
         if head:
             out_w.append(word[:head])
             out_m.append(mark[:head])
@@ -768,6 +773,11 @@ def graphql_shell_built(rest, mrest):
     endpoint, _, fields, input_file, stray = parse_api_args(mrest)
     if stray or "?" in (endpoint or "") or any(
             unread_short_flag(t) or (t.startswith("-") and SHELL_QUOTED in t) for t in mrest):
+        return True
+    # An unquoted glob matters only where it can become a field, flag, endpoint or path; inside a
+    # value flag's operand (`--jq .data[0]`) it is just that value (#937).
+    if any(SHELL_GLOB in t for t in (endpoint or "", input_file or "", *stray, *(f for _, f in fields))
+           ) or any(t.startswith("-") and SHELL_GLOB in t for t in mrest):
         return True
     pairs = [f.partition("=") for _, f in fields]
     if any("{" in key or (val.startswith("@") and "{" in val) for key, _, val in pairs):
@@ -814,6 +824,10 @@ HARMLESS_BEFORE_GH = {"export", "echo", "printf", "set", "true", "false", ":", "
                       "local", "readonly", "test", "[", "[["}
 
 
+READ_ONLY_AFTER_GH = {"jq", "head", "tail", "cat", "grep", "wc", "sort", "cut", "less", "echo",
+                      "printf", "true", "false", ":", "test", "[", "[["}
+
+
 def chain_moves_files(segments):
     """Return (directory changed, real paths the chain may write, opaque): files a hook read may
     predate.
@@ -832,6 +846,7 @@ def chain_moves_files(segments):
         moved = moved or any(w in DIR_CHANGERS for w in words) or ("env" in words and any(
             t in ("-C", "--chdir") or t.startswith(("--chdir=", "-C")) for t in argv))
         is_gh = gh_start(argv) >= 0
+        command = None if is_gh else next((w for w in words if not re.match(r"^\w+=", w)), None)
         if is_gh:
             last_gh = n
             # `gh release download -O q`, `gh pr checkout`, `gh repo sync`, an extension: all can
@@ -839,12 +854,12 @@ def chain_moves_files(segments):
             if (argv[gh_sub(argv, gh_start(argv)):][:1] or [""])[0] not in GH_NO_FILE_WRITE:
                 opaque_at.append(n)
         else:
-            command = next((w for w in words if not re.match(r"^\w+=", w)), None)
             substitutes = any(m in t for t in argv for m in ("$(", "`", "<(", ">("))
             if substitutes or (command is not None and command not in HARMLESS_BEFORE_GH):
                 opaque_at.append(n)  # `X=$(cp evil q)` runs a writer inside a "harmless" word
         for i, tok in enumerate(argv):
             m = REDIRECT.search(tok)
+            redirected = bool(m)
             if m:
                 target = m.group(1) or (argv[i + 1] if i + 1 < len(argv) else "")
             elif is_gh or (tok.startswith("-") and "=" not in tok):
@@ -855,10 +870,16 @@ def chain_moves_files(segments):
                 opaque_at.append(n)  # `>&q`, `> "${F}x"`, `> q.gr*`: the real path is the shell's
             elif target:
                 try:
-                    writes.append((n, os.path.realpath(target)))
+                    writes.append((n, os.path.realpath(target), redirected, command))
                 except ValueError:  # an embedded NUL: never let it fail the hook open
                     opaque_at.append(n)
-    return moved, {w for n, w in writes if n < last_gh}, any(n < last_gh for n in opaque_at)
+    # A writer after the last gh may run beside it (`gh ... | cp evil q`, `gh ... & cp evil q`;
+    # the segments no longer say which separator joined them), so it counts too, except a command
+    # that only reads its operands and has no redirect (`| jq .data`) (#937).
+    trusted = lambda n, redirected, command: (  # noqa: E731
+        n > last_gh and not redirected and command in READ_ONLY_AFTER_GH)
+    return (moved, {w for n, w, red, cmd in writes if not trusted(n, red, cmd)},
+            any(n < last_gh for n in opaque_at))
 
 
 def parse_api_args(rest):
@@ -927,6 +948,8 @@ def api_issue_match(segments):
         if gh_at < 0:
             continue
         sub = gh_sub(argv, gh_at)
+        if any(c in marks[sub] for c in (SHELL_QUOTED, SHELL_SPLIT)) if sub < len(marks) else False:
+            return graphql_issue_write([], "-")  # `gh a${E}pi ...`: the subcommand is the shell's (#937)
         if argv[sub:sub + 1] != ["api"]:
             continue
         rest, mrest = argv[sub + 1:], marks[sub + 1:]
@@ -935,7 +958,7 @@ def api_issue_match(segments):
         path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0],
                       flags=re.I)
         path = path.rstrip("/")
-        if (re.search(r"[*\[]|\?(?!\w+=)|\{[^}]*,[^}]*\}", endpoint or "")
+        if (re.search(r"[*\[]|\?(?!\w+=)|\{[^}]*(?:,|\.\.)[^}]*\}", endpoint or "")
                 and (fields or input_file or (method or "GET") != "GET")):
             return graphql_issue_write([], "-")  # `{graphql,}`, `gr[a]phql`: bash picks the endpoint
         if posixpath.normpath("/" + urllib.parse.unquote(path)).strip("/").lower() in (
