@@ -180,6 +180,7 @@ stub_gh() {
     cat >"$BIN/gh" <<STUB
 #!/bin/bash
 echo "\$*" >>"$BIN/gh.calls"
+[ -n "\${GH_STUB_SLEEP:-}" ] && sleep "\$GH_STUB_SLEEP" # per-call latency (#962)
 case "\$*" in
 "repo view --json nameWithOwner -q .nameWithOwner") echo "acme/widgets" ;;
 "api --paginate repos/acme/widgets/issues"*)
@@ -1167,4 +1168,24 @@ hot_list() {
     [ "$status" -eq 0 ]
     [ "$(field '.dispatchable[0].issue')" = "13" ]
     [[ "$(field '[.excluded[] | select(.issue==12)][0].reason')" == "HOT-FILE: "*"UNREADABLE"* ]]
+}
+
+# --- dotfiles-linux-dev#962: a large board must still plan inside the Stop guard's budget ---------
+# Real latency is ~0.65 s per gh call (measured on filings-cvm: 38 branches, 8 PRs); the stub
+# sleeps 0.3 s per call. 45 real worktrees + 10 open PRs must produce a usable plan, not a
+# timeout, in well under GATE_TIMEOUT (25 s).
+
+@test "962: 45 worktrees and 10 open PRs still yield a plan inside the gate budget" {
+    local i
+    for i in $(seq 1 45); do
+        mk_agent_worktree "agent-$i" "other/file$i.sh"
+    done
+    stub_gh "[$(issue_json 1 free/a.sh), $(issue_json 2 free/b.sh)]" held/file.sh "" 0 frozen/file.sh "$(mention_board 10 0)"
+    export GH_STUB_SLEEP=0.3
+    local start=$SECONDS
+    run_planner
+    [ "$status" -eq 0 ]
+    [ $((SECONDS - start)) -lt 20 ]
+    [ "$(field '.dispatchable | length')" -eq 2 ]
+    [ "$(field '.excluded | length')" -eq 0 ]
 }

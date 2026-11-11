@@ -123,6 +123,22 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	exit 1
 fi
 
+# _free_branch_diff SLUG DEFAULT_BRANCH BRANCH
+# Paths a pushed branch changes vs the default branch. A branch with NO MERGE BASE (an orphan
+# like `gh-pages`) makes compare 404; that is not a read failure and must not fail the gate
+# closed (aborting disabled DISPATCH entirely on any repo with a docs-site branch — measured on
+# blueprintx: 1 of 33 branches, 49 open issues invisible). Skip ONLY on GitHub's own "No common
+# ancestor" 404 — a rate limit, auth or 5xx error must still fail closed, or the gate returns an
+# incomplete held set and reports ok.
+_free_branch_diff() {
+	local slug="$1" db="$2" b="$3" out
+	if out="$(gh api "repos/$slug/compare/$db...$b" --jq '.files[]?.filename' 2>/dev/null)"; then
+		printf '%s\n' "$out"
+		return 0
+	fi
+	[[ "$(gh api "repos/$slug/compare/$db...$b" 2>&1)" == *"No common ancestor"* ]]
+}
+
 # _free_held_paths OWNER REPO
 # Exact paths from every open PR, unioned with exact paths on any pushed branch that has no
 # open PR (the "running agent, no PR yet" case) — compared via the GitHub compare API so no
@@ -132,7 +148,7 @@ fi
 _free_held_paths() {
 	local owner="$1" repo="$2"
 	local slug="$owner/$repo"
-	local db prs_json pr_numbers pr_heads paths n f branches b diff
+	local db prs_json pr_numbers pr_heads paths n branches b
 
 	db="$(gh api "repos/$slug" --jq '.default_branch' 2>/dev/null)" || return 1
 	[ -n "$db" ] || return 1
@@ -141,33 +157,51 @@ _free_held_paths() {
 	pr_numbers="$(printf '%s' "$prs_json" | jq -r '.[].number' 2>/dev/null)" || return 1
 	pr_heads="$(printf '%s' "$prs_json" | jq -r '.[].headRefName' 2>/dev/null)" || return 1
 
-	paths=""
+	# #962: one `gh` call per open PR and per PR-less branch, ~0.65 s each, run serially took
+	# 44 s on a 38-branch/8-PR repo (> the 25 s planner budget, so the surface read UNREADABLE).
+	# REST has no batch endpoint for either, so fan the calls out (bounded) instead. Any single
+	# failure still fails the whole read closed.
+	local tmp i=0 jobs_list=""
+	tmp="$(mktemp -d)" || return 1
 	while read -r n; do
 		[ -n "$n" ] || continue
-		f="$(gh pr view "$n" --repo "$slug" --json files --jq '.files[].path' 2>/dev/null)" || return 1
-		paths="$(printf '%s\n%s' "$paths" "$f")"
+		jobs_list="$jobs_list$(printf 'pr %s\n' "$n")"$'\n'
 	done <<<"$pr_numbers"
-
-	branches="$(gh api "repos/$slug/branches" --paginate --jq '.[].name' 2>/dev/null)" || return 1
+	branches="$(gh api "repos/$slug/branches" --paginate --jq '.[].name' 2>/dev/null)" || { rm -rf "$tmp"; return 1; }
 	while read -r b; do
 		[ -n "$b" ] || continue
 		[ "$b" = "$db" ] && continue
 		printf '%s\n' "$pr_heads" | grep -qxF "$b" && continue
-		# A branch with NO MERGE BASE (an orphan like `gh-pages`) makes compare 404.
-		# That is not a read failure and must not fail the gate closed: such a branch
-		# shares no history with the default branch, so it holds no paths against it.
-		# Aborting here disabled DISPATCH entirely on any repo with a docs-site branch
-		# — the sweep reported "free surface UNKNOWN" every round and no agent was ever
-		# dispatched (dotfiles-dev, measured on blueprintx: 1 of 33 branches, 49 open
-		# issues invisible). Skip ONLY on GitHub's own "No common ancestor" 404 — a
-		# rate limit, auth or 5xx error must still fail closed, or the gate returns an
-		# incomplete held set and reports ok.
-		if ! diff="$(gh api "repos/$slug/compare/$db...$b" --jq '.files[]?.filename' 2>/dev/null)"; then
-			[[ "$(gh api "repos/$slug/compare/$db...$b" 2>&1)" == *"No common ancestor"* ]] || return 1
-			continue
-		fi
-		[ -n "$diff" ] && paths="$(printf '%s\n%s' "$paths" "$diff")"
+		jobs_list="$jobs_list$(printf 'br %s' "$b")"$'\n'
 	done <<<"$branches"
+
+	# A 0, negative or non-numeric limit would spin the throttle below forever (`wait -n` with no
+	# child returns at once); fall back to the default instead.
+	local par="${FREE_SURFACE_PARALLEL:-8}"
+	[[ "$par" =~ ^[1-9][0-9]*$ ]] || par=8
+
+	local kind arg
+	while read -r kind arg; do
+		[ -n "$kind" ] || continue
+		i=$((i + 1))
+		while [ "$(jobs -rp | wc -l)" -ge "$par" ]; do wait -n; done
+		(
+			if [ "$kind" = pr ]; then
+				gh pr view "$arg" --repo "$slug" --json files --jq '.files[].path' >"$tmp/$i" 2>/dev/null
+			else
+				_free_branch_diff "$slug" "$db" "$arg" >"$tmp/$i"
+			fi
+			echo $? >"$tmp/$i.rc"
+		) &
+	done <<<"$jobs_list"
+	wait
+
+	paths=""
+	for ((n = 1; n <= i; n++)); do
+		[ "$(cat "$tmp/$n.rc" 2>/dev/null)" = 0 ] || { rm -rf "$tmp"; return 1; }
+		paths="$paths"$'\n'"$(cat "$tmp/$n")"
+	done
+	rm -rf "$tmp"
 
 	printf '%s\n' "$paths" | sed '/^$/d' | sort -u
 }
