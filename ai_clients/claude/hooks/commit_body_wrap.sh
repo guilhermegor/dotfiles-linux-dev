@@ -40,18 +40,33 @@ main() {
     command="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
     [[ -n "$command" ]] || exit 0
 
+    # A `bash|sh <file>.sh` command runs its commits out of sight of the payload (#961): append the
+    # script's text so the matcher, the -m check and the -F lookup all see the commits inside it.
+    command="$(commit_expand_script "$command")"
+
     # Only act on an actual `git commit`. Every accepted spelling — and the per-segment anchor
     # that keeps a mere *mention* of "git commit" from tripping this — lives in the shared
     # matcher; see its header for the four shapes the old inline regex missed.
     command_has_git_commit "$command" || exit 0
 
+    # Inline `-m` bodies cannot be reflowed in place (that would mean re-quoting the shell command),
+    # so an over-long one is BLOCKED instead (#961). Runs before the -F path: a script may hold both.
+    block_long_inline_bodies "$command"
+
     msg_file="$(extract_message_file "$command")" || exit 0
 
+    # A `cd` earlier in the command or script moves where git resolves a relative path, and a script
+    # may commit in several directories: fail open rather than rewrite the wrong file (#961).
+    if [[ "$msg_file" != /* ]] && command_has_cd "$command"; then exit 0; fi
+
     # `git -C <dir> commit -F <relative>` resolves the path against <dir>, because git chdirs
-    # there first — so a relative path must be re-anchored or this rewrites the wrong file (or,
-    # more often, silently finds nothing and no-ops). COMMIT_COMMAND_GIT_DIR is set by the matcher.
-    if [[ -n "$COMMIT_COMMAND_GIT_DIR" && "$msg_file" != /* ]]; then
-        msg_file="$COMMIT_COMMAND_GIT_DIR/$msg_file"
+    # there first — so a relative path must be re-anchored or this rewrites the wrong file. The dir
+    # is that of the commit that carries THIS `-F` (not the first commit of a multi-commit script);
+    # when that link cannot be established, fail open.
+    if [[ "$msg_file" != /* ]]; then
+        commit_source_dir "$command" file
+        ((COMMIT_SOURCE_FOUND)) || exit 0
+        [[ -z "$COMMIT_SOURCE_DIR" ]] || msg_file="$COMMIT_SOURCE_DIR/$msg_file"
     fi
 
     [[ -f "$msg_file" && -w "$msg_file" ]] || exit 0
@@ -68,7 +83,7 @@ extract_message_file() {
     # only handles the file-fed form, which is what /commit-code emits (`git commit -F
     # /tmp/commit_msg.txt`). An inline `-m "<body>"` would have to be rewritten through the hook's
     # `updatedInput`, i.e. re-quoting a shell command from a regex match — not worth the blast
-    # radius; gitlint still catches those. Add it only if inline bodies start showing up.
+    # radius, so block_long_inline_bodies() blocks those instead of reflowing them (#961).
     local s=" $1" re raw matched val
     local files=()
     re='[[:space:]](-F|--file)[[:space:]=]*("[^"]*"|'\''[^'\'']*'\''|[^[:space:]]+)'
@@ -90,6 +105,41 @@ extract_message_file() {
     esac
 
     printf '%s' "${files[0]}"
+}
+
+block_long_inline_bodies() {
+    # Exit 2 when any BODY line of an inline `-m` commit exceeds BODY_MAX_LENGTH. The body is every
+    # line after the title line of the first -m, plus every further -m paragraph. A line that cannot
+    # be wrapped (one token, e.g. a URL) and a trailer line are exempt, as in reflow_body().
+    local set text line trimmed offenders=''
+    local trailer_re='^[A-Za-z][A-Za-z-]*:[[:space:]]'
+
+    commit_inline_messages "$1"
+    for set in ${COMMIT_MESSAGE_SETS[@]+"${COMMIT_MESSAGE_SETS[@]}"}; do
+        text="${set//"$_MSG_SEP"/$'\n\n'}"
+        [[ "$text" == *$'\n'* ]] || continue
+        text="${text#*$'\n'}"                      # drop the title line
+        while IFS= read -r line; do
+            (( ${#line} > BODY_MAX_LENGTH )) || continue
+            [[ "$line" =~ $trailer_re ]] && continue
+            trimmed="${line#"${line%%[![:space:]]*}"}"
+            trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+            [[ "$trimmed" == *[[:space:]]* ]] || continue
+            offenders+="  ${#line} chars: ${line}"$'\n'
+        done <<< "$text"
+    done
+    [[ -n "$offenders" ]] || return 0
+
+    {
+        echo "BLOCKED: an inline -m commit body has line(s) over ${BODY_MAX_LENGTH} characters (gitlint B1 / body-max-line-length)."
+        echo
+        printf '%s' "$offenders"
+        echo
+        echo "gitlint's B1 fails at the commit-msg stage, AFTER the full pre-commit gate. An inline -m body"
+        echo "cannot be reflowed in place: wrap each line to <= ${BODY_MAX_LENGTH} characters and re-run the SAME"
+        echo "commit, or write the message to a file and use -F (that form is reflowed for you)."
+    } >&2
+    exit 2
 }
 
 reflow_body() {

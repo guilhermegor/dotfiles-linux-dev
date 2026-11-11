@@ -176,8 +176,56 @@ CMD
     [ "$status" -eq 0 ]
 }
 
-@test "fails open on more than one -m (multi-paragraph, ambiguous title)" {
+@test "PASSES more than one -m when the first (title) -m is short" {
     run run_guard 'git commit -m title -m body'
+    [ "$status" -eq 0 ]
+}
+
+# --- issue #961: multi -m, -am cluster, and commits inside bash <script>.sh ---------------------
+
+LONG_TITLE="docs(backlog): every zero-review notice fails, including the successful one"
+
+@test "#961: BLOCKS a long FIRST -m even when more -m follow" {
+    run run_guard "git commit -m '$LONG_TITLE' -m 'body'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: BLOCKS a long title in a -am cluster" {
+    run run_guard "git commit -am '$LONG_TITLE'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: a long SECOND -m is a body, not a title" {
+    run run_guard "git commit -m 'feat: x' -m '$LONG_TITLE'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: BLOCKS a long title inside bash <script>.sh" {
+    printf 'git add -A\ngit commit -m "%s" -m "body"\n' "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: BLOCKS the long commit when a script holds a short one first" {
+    printf 'git commit -m "feat: x"\ngit commit -m "%s"\n' "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "sh -e $TEST_TMP/c.sh"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: PASSES a script whose commit title is short" {
+    printf 'git commit -m "feat: x" -m "body"\n' > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: PASSES (fails open) when the script is unreadable" {
+    run run_guard "bash $TEST_TMP/does-not-exist.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a script that merely mentions git commit in an echo is not a commit" {
+    printf 'echo "run git commit -m %s"\n' "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
     [ "$status" -eq 0 ]
 }
 
@@ -219,4 +267,133 @@ TOO_LONG_TITLE='docs(backlog): every zero-review notice fails, including the suc
 @test "#324 false positive: a mere mention of 'git commit' in an argument does not trip the guard" {
     run run_guard "gh pr create --body \"run git commit first, then push\" --title \"$TOO_LONG_TITLE\""
     [ "$status" -eq 0 ]
+}
+
+@test "#961: BLOCKS an over-limit -am title that follows a short heredoc title in one script" {
+    printf 'git commit -F- <<MSG\nfeat: short\nMSG\ngit commit -am "%s"\n' "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: judges each title against the limit of its own git -C repository" {
+    mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
+    printf '[title-max-length]\nline-length=100\n' > "$TEST_TMP/other/.gitlint"
+    run run_guard "git -C $TEST_TMP/other commit -m '$LONG_TITLE' -m body"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: bash -n does not block a script holding a long title" {
+    printf 'git commit -m "%s"\n' "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "bash -n $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a literal empty first -m is skipped, the second -m is the title" {
+    run run_guard "git commit -m '' -m '$LONG_TITLE'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: a --author value that looks like -m is not the title" {
+    run run_guard "git commit --author '-m $LONG_TITLE' -m 'feat: x'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: BLOCKS a long -F- heredoc title inside bash <script>.sh (heredoc kept for titles)" {
+    printf 'git commit -F- <<MSG\n%s\n\nbody\nMSG\n' "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: a git commit -m example inside a heredoc is not parsed as a commit" {
+    run run_guard "git commit -F- <<MSG
+feat: short
+
+git commit -m '$LONG_TITLE'
+MSG"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: heredoc with a digits-only delimiter: title measured, body example ignored" {
+    run run_guard "git commit -F- <<'123'
+$LONG_TITLE
+123"
+    [ "$status" -eq 2 ]
+    printf "cat <<'123'\ngit commit -m \"%s\"\n123\n" "$LONG_TITLE" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: heredoc title limit comes from the commit that reads stdin (other repo allows 100)" {
+    mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
+    printf '[title-max-length]\nline-length=100\n' > "$TEST_TMP/other/.gitlint"
+    run run_guard "git commit -m x; git -C $TEST_TMP/other commit -F- <<MSG
+$LONG_TITLE
+MSG"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: heredoc title limit comes from the stdin commit (cwd repo allows 100, target default 72)" {
+    mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
+    printf '[title-max-length]\nline-length=100\n' > .gitlint
+    run run_guard "git commit -m x; git -C $TEST_TMP/other commit -F- <<MSG
+$LONG_TITLE
+MSG"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: BLOCKS an attached non-empty -am<title> even when a later -m follows" {
+    run run_guard "git commit -am'$LONG_TITLE' -m body"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: an attached -am value is the title, so a short -am title with a long later -m passes" {
+    run run_guard "git commit -am'feat: x' -m '$LONG_TITLE'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: two -F- commits make the heredoc association ambiguous, so it fails open" {
+    mkdir "$TEST_TMP/ra" "$TEST_TMP/rb"
+    git -C "$TEST_TMP/ra" init -q; git -C "$TEST_TMP/rb" init -q
+    printf "[title-max-length]\nline-length=100\n" > "$TEST_TMP/rb/.gitlint"
+    run run_guard "git -C $TEST_TMP/ra commit -F- </dev/null; git -C $TEST_TMP/rb commit -F- <<'MSG'
+$LONG_TITLE
+MSG"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a quoted heredoc delimiter with a space hides a commit example from the title guard" {
+    run run_guard "cat <<'END WORD'
+git commit -m '$LONG_TITLE'
+END WORD"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: BLOCKS a long title after a quoted here-string (<<< is not a heredoc)" {
+    run run_guard "read x <<< \"\$y\"
+git commit -m '$LONG_TITLE'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: BLOCKS a long title after a bare here-string word" {
+    run run_guard "cat <<< hello
+git commit -m '$LONG_TITLE'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: a real heredoc after a here-string is still stripped" {
+    run run_guard "cat <<< hi
+cat <<'EOT'
+git commit -m '$LONG_TITLE'
+EOT"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: BLOCKS git commit -S -m <long title> (-S takes no separate value)" {
+    run run_guard "git commit -S -m '$LONG_TITLE'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: BLOCKS git commit --gpg-sign -m <long title>" {
+    run run_guard "git commit --gpg-sign -m '$LONG_TITLE'"
+    [ "$status" -eq 2 ]
 }

@@ -80,3 +80,164 @@ run_guard() {
     after="$(cat "$MSG_FILE")"
     [ "$before" = "$after" ]
 }
+
+# --- issue #961: inline -m bodies are blocked, and commits inside `bash <script>.sh` are seen ----
+# 127 chars of two-letter words: over the 72 target, and wrappable (so not exempt as one token).
+
+LONG_BODY="$(printf 'ab %.0s' $(seq 1 42))"
+
+@test "#961: BLOCKS a multi -m commit whose body paragraph is over the limit" {
+    run run_guard "git commit -m 'feat: x' -m '$LONG_BODY'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"126 chars"* ]]
+    [[ "$output" == *"72"* ]]
+}
+
+@test "#961: BLOCKS a single -m whose own body lines (after the title) are over the limit" {
+    run run_guard "git commit -m 'feat: x
+
+$LONG_BODY'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: PASSES a multi -m commit with a short body" {
+    run run_guard "git commit -m 'feat: x' -m 'short body line'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a long TITLE alone is not a body problem (the title guard owns it)" {
+    run run_guard "git commit -m '$LONG_BODY'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: PASSES an over-long single token (URL) in the body, which cannot be wrapped" {
+    run run_guard "git commit -m 'feat: x' -m 'https://example.com/$(printf 'a%.0s' $(seq 1 90))'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: BLOCKS a long -m body inside bash <script>.sh" {
+    printf 'git add -A\ngit commit -m "feat: x" -m "%s"\n' "$LONG_BODY" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: PASSES a bash <script>.sh whose commit body is short" {
+    printf 'git commit -m "feat: x" -m "short"\n' > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: PASSES (fails open) when the script is unreadable" {
+    run run_guard "bash $TEST_TMP/does-not-exist.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: PASSES a -m body built from shell expansion (cannot be measured)" {
+    run run_guard "git commit -m 'feat: x' -m \"\$(printf '%0100d' 0)\""
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: PASSES a long body line that is one token followed by a trailing space" {
+    run run_guard "git commit -m 'feat: x' -m 'https://example.com/$(printf 'a%.0s' $(seq 1 90)) '"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: stops reading options at --, so a -m-looking pathspec is not a message" {
+    run run_guard "git commit -m 'feat: x' -- '-m $LONG_BODY'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a value-taking option (--author) does not leak into the messages" {
+    run run_guard "git commit --author '-m $LONG_BODY' -m 'feat: x'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a script that does cd before -F <relative> is left untouched (fail open)" {
+    write_long_body
+    before="$(cat "$MSG_FILE")"
+    cd "$TEST_TMP"
+    printf 'cd /tmp\ngit commit -F msg.txt\n' > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+    [ "$before" = "$(cat "$TEST_TMP/msg.txt")" ]
+}
+
+@test "#961: bash -n (syntax check only) does not block a script holding a long body" {
+    printf 'git commit -m "feat: x" -m "%s"\n' "$LONG_BODY" > "$TEST_TMP/c.sh"
+    run run_guard "bash -n $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a script with a heredoc is not scanned (heredoc body is data)" {
+    printf 'cat <<EOF\ngit commit -m "feat: x" -m "%s"\nEOF\n' "$LONG_BODY" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a quoted ; in an unrelated argument does not make a bash invocation" {
+    printf 'git commit -m "feat: x" -m "%s"\n' "$LONG_BODY" > "$TEST_TMP/c.sh"
+    run run_guard "printf '%s' 'a; bash $TEST_TMP/c.sh'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a relative script path after cd is not resolved against the hook cwd (fail open)" {
+    printf 'git commit -m "feat: x" -m "%s"\n' "$LONG_BODY" > "$TEST_TMP/c.sh"
+    cd "$TEST_TMP"
+    run run_guard "cd /tmp && bash c.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: -F <relative> is anchored to ITS OWN commit's git -C dir, not the first commit's" {
+    mkdir "$TEST_TMP/a" "$TEST_TMP/b"
+    for d in a b; do
+        printf 'subject\n\n%s\n' "$LONG_BODY" > "$TEST_TMP/$d/msg.txt"
+    done
+    decoy="$(cat "$TEST_TMP/a/msg.txt")"
+    run run_guard "git -C $TEST_TMP/a commit -m first; git -C $TEST_TMP/b commit -F msg.txt"
+    [ "$status" -eq 0 ]
+    [ "$decoy" = "$(cat "$TEST_TMP/a/msg.txt")" ]
+    run grep -c '.\{73,\}' "$TEST_TMP/b/msg.txt"
+    [ "$output" -eq 0 ]
+}
+
+@test "#961: a git commit -m example inside a heredoc in a command is data, not a commit" {
+    run run_guard "cat <<'123'
+git commit -m 'feat: x' -m '$LONG_BODY'
+123"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: a heredoc with a digits-only delimiter is stripped from a script" {
+    printf "cat <<'123'\ngit commit -m \"feat: x\" -m \"%s\"\n123\n" "$LONG_BODY" > "$TEST_TMP/c.sh"
+    run run_guard "bash $TEST_TMP/c.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: git -C /a, cd /b, then -F msg.txt rewrites neither message file" {
+    mkdir "$TEST_TMP/a" "$TEST_TMP/b"
+    for d in a b; do printf 'subject\n\n%s\n' "$LONG_BODY" > "$TEST_TMP/$d/msg.txt"; done
+    before="$(cat "$TEST_TMP/a/msg.txt")"
+    cd "$TEST_TMP/a"
+    run run_guard "git -C $TEST_TMP/a commit -m first; cd $TEST_TMP/b; git commit -F msg.txt"
+    [ "$status" -eq 0 ]
+    [ "$before" = "$(cat "$TEST_TMP/a/msg.txt")" ]
+    [ "$before" = "$(cat "$TEST_TMP/b/msg.txt")" ]
+}
+
+@test "#961: a quoted heredoc delimiter containing a space hides the body from scanning" {
+    run run_guard "cat <<'END WORD'
+git commit -m 'feat: x' -m '$LONG_BODY'
+END WORD"
+    [ "$status" -eq 0 ]
+}
+
+@test "#961: BLOCKS a long body after a here-string (<<< is not a heredoc)" {
+    run run_guard "read x <<< \"\$y\"
+git commit -m 'feat: x' -m '$LONG_BODY'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#961: BLOCKS git commit -S -m <title> -m <long body> (-S takes no separate value)" {
+    run run_guard "git commit -S -m 'feat: x' -m '$LONG_BODY'"
+    [ "$status" -eq 2 ]
+}
