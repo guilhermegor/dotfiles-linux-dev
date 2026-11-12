@@ -602,11 +602,12 @@ reconcile_roadmap_unblock() {
 # shellcheck disable=SC2034 # read by reconcile_roadmap_boards below and by its callers' tests
 ROADMAP_BOARDS=(
 	"guilhermegor|21|layouts-cvm"
+	"guilhermegor|19|opendata-rfb"
 	"guilhermegor|17|greenfield"
 	"guilhermegor|16|wwdates"
-	"guilhermegor|15|filings-b3"
+	"guilhermegor|15|opendata-b3"
 	"guilhermegor|13|dotfiles-linux-dev"
-	"guilhermegor|9|filings-cvm"
+	"guilhermegor|9|opendata-cvm"
 	"guilhermegor|8|blueprintx"
 )
 

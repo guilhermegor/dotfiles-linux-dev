@@ -426,7 +426,7 @@ name (teams rename states freely): `Backlog` → the first state of type `backlo
 lowest-`position` state of type `unstarted`. Then go to step 8.
 
 **github:** list the owner's projects with `rtk gh project list --owner <owner> --format json`
-and match the project titled exactly **`<repo> kanban`** (e.g. `filings-cvm kanban`).
+and match the project titled exactly **`<repo> kanban`** (e.g. `opendata-cvm kanban`).
 
 - **More than one project with that title → stop and ask which to use** (list them as
   `#<number> — items:<count>`). Never pick one silently: the lifecycle hook matches boards by
