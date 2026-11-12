@@ -38,6 +38,11 @@ stub_forge() {
         [ "$PR_STATE" = unreadable ] && return 1
         echo "$PR_STATE"
     }
+    DETACHED_PR_STATE=none
+    prune_detached_pr_state() {
+        [ "$PR_STATE" = unreadable ] && return 1
+        echo "$DETACHED_PR_STATE"
+    }
     # Emits "<branch><TAB><sha>" for the sha in MERGED_HEAD_SHA (a command); default none.
     MERGED_HEAD_SHA=""
     prune_merged_heads() {
@@ -526,4 +531,101 @@ fake_ssh_setup() {
     [ "$status" -eq 0 ]
     [ ! -d "$wt" ]
     [ -z "$(git -C "$work" rev-parse --verify --quiet refs/heads/lo)" ]
+}
+
+# make_detached <name> <file> : detached worktree one commit past origin/master (never pushed).
+make_detached() {
+    local wt="$BATS_TEST_TMPDIR/wt-$1"
+    git -C "$work" worktree add --quiet --detach "$wt" origin/master
+    echo "content-$2" >"$wt/$2"
+    git -C "$wt" add "$2"
+    git -C "$wt" commit --quiet -m "feat: add $2"
+}
+
+@test "a detached worktree at a merged PR head is prunable once master moved on (#988)" {
+    make_detached d1 fd1.txt
+    land_on_master fd1.txt
+    edit_on_master fd1.txt
+    MERGED_HEAD_SHA="git -C '$BATS_TEST_TMPDIR/wt-d1' rev-parse HEAD"
+    run_prune 0
+    [[ "$output" == *"WOULD-PRUNE $BATS_TEST_TMPDIR/wt-d1 [detached]"* ]]
+}
+
+@test "a detached worktree with no merged PR stays KEEP (#988)" {
+    make_detached d2 fd2.txt
+    land_on_master fd2.txt
+    edit_on_master fd2.txt
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-d2: content not on origin/master"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-d2" ]
+}
+
+@test "a detached worktree at a merged PR head with real untracked work stays KEEP (#988)" {
+    make_detached d3 fd3.txt
+    land_on_master fd3.txt
+    edit_on_master fd3.txt
+    echo mine >"$BATS_TEST_TMPDIR/wt-d3/notes.txt"
+    MERGED_HEAD_SHA="git -C '$BATS_TEST_TMPDIR/wt-d3' rev-parse HEAD"
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-d3: untracked notes.txt"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-d3" ]
+}
+
+@test "a detached worktree at a merged PR head with an open PR over it stays KEEP (#988)" {
+    make_detached d5 fd5.txt
+    land_on_master fd5.txt
+    edit_on_master fd5.txt
+    MERGED_HEAD_SHA="git -C '$BATS_TEST_TMPDIR/wt-d5' rev-parse HEAD"
+    DETACHED_PR_STATE=open
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-d5: PR is OPEN"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-d5" ]
+}
+
+@test "a detached worktree whose content shipped stays KEEP under an open PR (#988)" {
+    make_detached d6 fd6.txt
+    land_on_master fd6.txt
+    DETACHED_PR_STATE=open
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-d6: PR is OPEN"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-d6" ]
+}
+
+@test "prune_detached_pr_state reports open only for an open PR on the sha (#988)" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
+    fanout_repo_slug() { echo o/r; }
+    # Two pages, as --paginate runs --jq once per page: only the second holds an open PR.
+    gh() { [[ " $* " == *" --paginate "* ]] || return 1; printf '\n'; echo open; }
+    run prune_detached_pr_state "$work" abc
+    [ "$output" = open ]
+    gh() { [[ " $* " == *" --paginate "* ]] || return 1; }
+    run prune_detached_pr_state "$work" abc
+    [ "$output" = none ]
+    gh() { echo open; }
+    run prune_detached_pr_state "$work" abc
+    [ "$output" = open ]
+    gh() { return 1; }
+    run prune_detached_pr_state "$work" abc
+    [ "$status" -eq 1 ]
+}
+
+@test "a detached worktree with an unreadable forge stays KEEP (#988)" {
+    make_detached d4 fd4.txt
+    land_on_master fd4.txt
+    edit_on_master fd4.txt
+    PR_STATE=unreadable
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-d4: forge unreadable"* ]]
+}
+
+@test "prune_merged_heads asks the forge by commit sha when given one (#988)" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
+    fanout_repo_slug() { echo o/r; }
+    gh() {
+        [[ "$2" == repos/o/r/commits/abc123/pulls* ]] || return 1
+        echo '[{"merged_at":"2026-01-01T00:00:00Z","base":{"ref":"master"},"head":{"sha":"H1"}}]'
+    }
+    run prune_merged_heads "$work" "(detached)" master abc123
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf '(detached)\tH1')" ]
 }
