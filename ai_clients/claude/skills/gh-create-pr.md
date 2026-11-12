@@ -129,6 +129,16 @@ section headers. Replace every `[placeholder]` with real content.
 - Pay attention to <specific files or logic>
 ````
 
+## 3a. Branch-name issue check
+
+The `close-linked-issues` workflow closes the issue whose number is in a merged
+branch's name, whatever the body says (measured: opendata-cvm#419, opendata-rfb#59).
+If the head branch encodes `#N` (`<type>/N-…`) and the body has only `Refs #N`, no
+`Closes`/`Fixes`/`Resolves`, **warn in the step 4 proposal**: merging will still close
+#N. The fix is to name the branch after a sub-issue for the partial work, never after
+the parent. Apply the same rule when naming a branch or dispatching an agent for
+partial work.
+
 ## 4. Present for approval
 
 Show the proposed title and body to the user:
