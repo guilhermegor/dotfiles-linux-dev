@@ -800,6 +800,15 @@ write_stamp() {
     [[ "$output" == *"#5 in Blocked (closed $ago) — within 60m grace"* ]]
 }
 
+@test "stale cards: a zero-padded grace like 08 is read as decimal, not octal (#989)" {
+    write_stamp "$(date +%s)"
+    local ago
+    ago="$(date -u -d '-5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+    ITEMS_FIXTURE="$(jq -c --arg t "$ago" '.[0].content.closed_at = $t' <<<"$ITEMS_FIXTURE")"
+    KANBAN_STALE_GRACE_MINUTES=08 run_stale_rest ok
+    [[ "$output" == *"#5 in Blocked (closed $ago) — within 8m grace"* ]]
+}
+
 @test "boards: a successful closed reconcile stamps the board; failures and other kinds do not (#989)" {
     export TEST_TMP
     local stamps
