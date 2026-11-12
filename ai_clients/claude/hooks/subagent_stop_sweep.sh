@@ -548,7 +548,7 @@ sweep_kanban_boards() {
 	for entry in "${ROADMAP_BOARDS[@]}"; do
 		[[ "${entry%%|*}/${entry##*|}" == "$repo" ]] && return 0
 	done
-	echo "finding: $repo has no ROADMAP_BOARDS entry — its kanban board (if it has one) was not swept; add \"<owner>|<N>|<repo>\" to lib/roadmap_unblock.sh"
+	echo "finding: $repo has no ROADMAP_BOARDS entry — its kanban board (if it has one) was not swept; add \"<owner>|<N>|<repo>\" to ai_clients/claude/hooks/lib/roadmap_unblock.sh"
 }
 
 # sweep_issue_hygiene REPO — report-only backstop for issue_template_guard.sh (#714): open issues

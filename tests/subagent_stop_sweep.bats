@@ -880,6 +880,8 @@ declared_board_numbers() {
     run sweep_kanban_boards in_review "$REPO" "o/undeclared"
     [[ "$output" == *"board o/13 (declared): ok — nothing to change"* ]]
     [[ "$output" == *"finding: o/undeclared has no ROADMAP_BOARDS entry"* ]]
+    [[ "$output" == *"ai_clients/claude/hooks/lib/roadmap_unblock.sh"* ]]
+    [[ "$output" != *"note: "*"ROADMAP_BOARDS"* ]]
 }
 
 @test "sweep_kanban_boards: an active latch reports every board SKIPPED, no gh call" {
