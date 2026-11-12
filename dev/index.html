@@ -602,6 +602,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#voice-note-transcription" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Voice-note Transcription
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1534,6 +1545,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#voice-note-transcription" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Voice-note Transcription
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1979,14 +2001,22 @@ run <code>make enable_pages</code> to serve Pages from that branch.</p>
 <a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>bash<span class="w"> </span>storage/format_neat.sh
 <a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>bash<span class="w"> </span>storage/storage_hiato.sh
 </code></pre></div></p>
+<h5 id="voice-note-transcription">Voice-note Transcription<a class="headerlink" href="#voice-note-transcription" title="Permanent link">&para;</a></h5>
+<p>After installing <code>faster-whisper</code> from the AI clients menu (it needs the system
+<code>ffmpeg</code> too), transcribe a local audio file; the text goes to stdout:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>bin/transcribe.sh<span class="w"> </span>note.ogg<span class="w">                       </span><span class="c1"># Portuguese, `small` model, CPU</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>bin/transcribe.sh<span class="w"> </span>--lang<span class="w"> </span>en<span class="w"> </span>--model<span class="w"> </span>tiny<span class="w"> </span>note.m4a
+</code></pre></div>
+<p>The wrapper decodes through <code>ffmpeg</code> because <code>faster-whisper</code>'s own decoder
+fails with the <code>av</code> version pip resolves today.</p>
 <h4 id="configuration-workflow">Configuration Workflow<a class="headerlink" href="#configuration-workflow" title="Permanent link">&para;</a></h4>
 <h5 id="recommended-workflow-using-make-run">Recommended Workflow (Using <code>make run</code>)<a class="headerlink" href="#recommended-workflow-using-make-run" title="Permanent link">&para;</a></h5>
 <ol>
 <li>
 <p><strong>Clone and Initialize (One Command)</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="w">   </span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/guilhermegor/dotfiles-linux-dev.git
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">   </span><span class="nb">cd</span><span class="w"> </span>dotfiles-linux-dev
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">   </span>make<span class="w"> </span>run
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="w">   </span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/guilhermegor/dotfiles-linux-dev.git
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">   </span><span class="nb">cd</span><span class="w"> </span>dotfiles-linux-dev
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">   </span>make<span class="w"> </span>run
 </code></pre></div></p>
 </li>
 <li>
@@ -1995,34 +2025,34 @@ run <code>make enable_pages</code> to serve Pages from that branch.</p>
 </ol>
 <p>After <code>make run</code> completes, optionally configure:</p>
 <p><strong>Hardware Configuration</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="w">   </span>make<span class="w"> </span>setup_all_drivers
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">   </span><span class="c1"># Or individually:</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">   </span>make<span class="w"> </span>setup_battery
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">   </span>make<span class="w"> </span>setup_wifi<span class="w">    </span><span class="c1"># only on the PC with the TP-Link adapter</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">   </span>make<span class="w"> </span>setup_bluetooth
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">   </span>make<span class="w"> </span>setup_keyboard
-<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">   </span>make<span class="w"> </span>setup_mouse
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="w">   </span>make<span class="w"> </span>setup_all_drivers
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">   </span><span class="c1"># Or individually:</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">   </span>make<span class="w"> </span>setup_battery
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">   </span>make<span class="w"> </span>setup_wifi<span class="w">    </span><span class="c1"># only on the PC with the TP-Link adapter</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">   </span>make<span class="w"> </span>setup_bluetooth
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">   </span>make<span class="w"> </span>setup_keyboard
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">   </span>make<span class="w"> </span>setup_mouse
 </code></pre></div></p>
 <p><strong>Storage Setup</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="w">   </span>make<span class="w"> </span>storage_setup
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">   </span><span class="c1"># Or individually:</span>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">   </span>make<span class="w"> </span>format_neat
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">   </span>make<span class="w"> </span>vault_setup
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">   </span>make<span class="w"> </span>storage_analysis
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="w">   </span>make<span class="w"> </span>storage_setup
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">   </span><span class="c1"># Or individually:</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">   </span>make<span class="w"> </span>format_neat
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">   </span>make<span class="w"> </span>vault_setup
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">   </span>make<span class="w"> </span>storage_analysis
 </code></pre></div></p>
 <p><strong>Virtualization Environment</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="w">   </span>make<span class="w"> </span>vm_setup
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">   </span><span class="c1"># Or individually:</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">   </span>make<span class="w"> </span>manage_isos
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">   </span>make<span class="w"> </span>create_vm
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">   </span>make<span class="w"> </span>launch_vm
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="w">   </span>make<span class="w"> </span>vm_setup
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">   </span><span class="c1"># Or individually:</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">   </span>make<span class="w"> </span>manage_isos
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">   </span>make<span class="w"> </span>create_vm
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">   </span>make<span class="w"> </span>launch_vm
 </code></pre></div></p>
 <ol>
 <li><strong>Optional: Two-Factor Login (TOTP)</strong></li>
 </ol>
 <p><code>make run</code> installs the TOTP PAM profile, but it is <strong>not enforced until you enroll</strong>
    (the end of <code>make run</code> says so). To turn it on for your user:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="w">   </span>make<span class="w"> </span>totp_enroll
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="w">   </span>make<span class="w"> </span>totp_enroll
 </code></pre></div>
    Scan the QR code with an authenticator app and put the scratch codes in your password manager. From then on,
    <code>sudo</code>, the login and lock screens, TTY login, <code>su</code> and polkit prompts ask for a code.
@@ -2033,12 +2063,12 @@ run <code>make enable_pages</code> to serve Pages from that branch.</p>
 <ol>
 <li>
 <p><strong>Setup Permissions</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="w">   </span>make<span class="w"> </span>permissions
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="w">   </span>make<span class="w"> </span>permissions
 </code></pre></div></p>
 </li>
 <li>
 <p><strong>Complete System Setup (All-in-One)</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="w">   </span>make<span class="w"> </span>full_setup
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="w">   </span>make<span class="w"> </span>full_setup
 </code></pre></div></p>
 </li>
 <li>
@@ -2046,19 +2076,19 @@ run <code>make enable_pages</code> to serve Pages from that branch.</p>
 </li>
 </ol>
 <p><strong>Software Installation</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="w">   </span>make<span class="w"> </span>install_programs
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">   </span>make<span class="w"> </span>ubuntu_workspace
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">   </span>make<span class="w"> </span>set_shortcuts
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">   </span>make<span class="w"> </span>irpf_download
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="w">   </span>make<span class="w"> </span>install_programs
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">   </span>make<span class="w"> </span>ubuntu_workspace
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">   </span>make<span class="w"> </span>set_shortcuts
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">   </span>make<span class="w"> </span>irpf_download
 </code></pre></div></p>
 <p><strong>Hardware Configuration</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="w">   </span>make<span class="w"> </span>setup_all_drivers
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="w">   </span>make<span class="w"> </span>setup_all_drivers
 </code></pre></div></p>
 <p><strong>Storage Setup</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="w">   </span>make<span class="w"> </span>storage_setup
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="w">   </span>make<span class="w"> </span>storage_setup
 </code></pre></div></p>
 <p><strong>Virtualization Environment</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="w">   </span>make<span class="w"> </span>vm_setup
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="w">   </span>make<span class="w"> </span>vm_setup
 </code></pre></div></p>
 <h2 id="machine-secrets-never-in-this-public-repo">Machine Secrets (never in this public repo)<a class="headerlink" href="#machine-secrets-never-in-this-public-repo" title="Permanent link">&para;</a></h2>
 <p>This repo is <strong>public</strong>, so no credential value ever lives in it — only the
@@ -2113,8 +2143,8 @@ not restored):
 <code>plans</code>, <code>issue-trackers.conf</code>) syncs through a <strong>private</strong> GitHub repo
 (<code>AI_STATE_REPO</code>, default <code>guilhermegor/ai-clients-state</code>). Credentials, <code>.env</code>,
 plugins, caches and session transcripts are never included (whitelist, not blacklist).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>gh<span class="w"> </span>repo<span class="w"> </span>create<span class="w"> </span>guilhermegor/ai-clients-state<span class="w"> </span>--private<span class="w">   </span><span class="c1"># once, ever</span>
-<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>./ai_clients/claude/main.sh<span class="w"> </span>hooks<span class="w"> </span>settings<span class="w"> </span>state_sync<span class="w">     </span><span class="c1"># on each machine</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>gh<span class="w"> </span>repo<span class="w"> </span>create<span class="w"> </span>guilhermegor/ai-clients-state<span class="w"> </span>--private<span class="w">   </span><span class="c1"># once, ever</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>./ai_clients/claude/main.sh<span class="w"> </span>hooks<span class="w"> </span>settings<span class="w"> </span>state_sync<span class="w">     </span><span class="c1"># on each machine</span>
 </code></pre></div>
 <p>Sessions then pull on start and commit + push on exit, automatically. Outside a
 session (or from a keyboard shortcut) run <code>ai-state-sync pull</code> / <code>ai-state-sync push</code>.
@@ -2128,72 +2158,73 @@ not a merge: use Codex's memory on one machine at a time (see <code>ai_clients/C
 state beyond the <code>AGENTS.md</code> that <code>make ai_clients</code> deploys.</p>
 <!-- slug: project-structure -->
 <h2 id="project-structure">Project Structure<a class="headerlink" href="#project-structure" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>dotfiles-linux-dev/
-<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>│
-<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>├── 📋 Makefile                   # Automation recipes for all scripts
-<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>│
-<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>├── 📁 distro_config/             # Distribution configuration
-<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>│   ├── 📦 install_programs.sh    # Program installation script
-<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a>│   ├── 🧰 install_toolchains.sh  # Toolchains installation script
-<a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a>│   ├── 📥 irpf_download.sh       # Tax software downloader
-<a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a>│   ├── ⌨️ set_custom_shortcuts.sh # Custom shortcuts configuration
-<a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a>│   └── 🖥️ ubuntu_workspace.sh    # Ubuntu workspace setup
-<a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a>│
-<a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a>├── 📁 code_editors/              # Code editors setup
-<a id="__codelineno-22-13" name="__codelineno-22-13" href="#__codelineno-22-13"></a>│   ├── 🧩 vscode.sh               # VS Code setup
-<a id="__codelineno-22-14" name="__codelineno-22-14" href="#__codelineno-22-14"></a>│   ├── ♻️ vscode_restore.sh       # VS Code restore
-<a id="__codelineno-22-15" name="__codelineno-22-15" href="#__codelineno-22-15"></a>│   ├── 🤖 claude_setup.sh         # Claude Code global settings and plugins
-<a id="__codelineno-22-16" name="__codelineno-22-16" href="#__codelineno-22-16"></a>│   ├── 🐚 bash_profile_snippet.sh # Ensure ~/.bash_profile loads ~/.bashrc
-<a id="__codelineno-22-17" name="__codelineno-22-17" href="#__codelineno-22-17"></a>│   └── ⭐ setup_starship_bash.sh  # Starship prompt + Bash integration
-<a id="__codelineno-22-18" name="__codelineno-22-18" href="#__codelineno-22-18"></a>│
-<a id="__codelineno-22-19" name="__codelineno-22-19" href="#__codelineno-22-19"></a>├── 📁 drivers/                   # Hardware driver configurations
-<a id="__codelineno-22-20" name="__codelineno-22-20" href="#__codelineno-22-20"></a>│   ├── 🔋 battery_threshold.sh   # Laptop battery charge cap
-<a id="__codelineno-22-21" name="__codelineno-22-21" href="#__codelineno-22-21"></a>│   ├── 📡 bluetooth_adapter.sh   # Bluetooth setup
-<a id="__codelineno-22-22" name="__codelineno-22-22" href="#__codelineno-22-22"></a>│   ├── ⌨️ setup_keyboard.sh      # Keyboard configuration
-<a id="__codelineno-22-23" name="__codelineno-22-23" href="#__codelineno-22-23"></a>│   ├── 🖱️ mouse.sh               # Mouse settings
-<a id="__codelineno-22-24" name="__codelineno-22-24" href="#__codelineno-22-24"></a>│   └── 📶 tplink_wifi_adapter.sh # WiFi adapter setup
-<a id="__codelineno-22-25" name="__codelineno-22-25" href="#__codelineno-22-25"></a>│
-<a id="__codelineno-22-26" name="__codelineno-22-26" href="#__codelineno-22-26"></a>├── 📁 espanso/                   # Espanso packages
-<a id="__codelineno-22-27" name="__codelineno-22-27" href="#__codelineno-22-27"></a>│   ├── 📦 datetime/              # Date/time shortcuts
-<a id="__codelineno-22-28" name="__codelineno-22-28" href="#__codelineno-22-28"></a>│   ├── 📦 git_reset/             # Git reset shortcut
-<a id="__codelineno-22-29" name="__codelineno-22-29" href="#__codelineno-22-29"></a>│   ├── 📦 hostname_catcher/      # Hostname shortcuts
-<a id="__codelineno-22-30" name="__codelineno-22-30" href="#__codelineno-22-30"></a>│   ├── 📦 ipv4_catcher/          # IPv4 shortcuts
-<a id="__codelineno-22-31" name="__codelineno-22-31" href="#__codelineno-22-31"></a>│   ├── 📦 shortcuts/             # List shortcuts
-<a id="__codelineno-22-32" name="__codelineno-22-32" href="#__codelineno-22-32"></a>│   └── 📦 ssh_generate/          # SSH key generator
-<a id="__codelineno-22-33" name="__codelineno-22-33" href="#__codelineno-22-33"></a>│
-<a id="__codelineno-22-34" name="__codelineno-22-34" href="#__codelineno-22-34"></a>├── 📁 os/                        # OS management tools
-<a id="__codelineno-22-35" name="__codelineno-22-35" href="#__codelineno-22-35"></a>│   ├── 💿 isos_os_manager.sh     # ISO file management
-<a id="__codelineno-22-36" name="__codelineno-22-36" href="#__codelineno-22-36"></a>│   ├── 🖥️ vm_creator.sh          # VM creation utility
-<a id="__codelineno-22-37" name="__codelineno-22-37" href="#__codelineno-22-37"></a>│   └── 🚀 vm_launcher.sh         # VM management
-<a id="__codelineno-22-38" name="__codelineno-22-38" href="#__codelineno-22-38"></a>│
-<a id="__codelineno-22-39" name="__codelineno-22-39" href="#__codelineno-22-39"></a>├── 📁 storage/                   # Storage management &amp; analytics
-<a id="__codelineno-22-40" name="__codelineno-22-40" href="#__codelineno-22-40"></a>│   ├── 🔍 check_legitimity.sh    # Drive legitimacy verification
-<a id="__codelineno-22-41" name="__codelineno-22-41" href="#__codelineno-22-41"></a>│   ├── 💾 data_recovery.sh       # Data recovery tools
-<a id="__codelineno-22-42" name="__codelineno-22-42" href="#__codelineno-22-42"></a>│   ├── 🗑️ format_hard.sh         # Complete formatting
-<a id="__codelineno-22-43" name="__codelineno-22-43" href="#__codelineno-22-43"></a>│   ├── 🧹 format_neat.sh         # Quick formatting
-<a id="__codelineno-22-44" name="__codelineno-22-44" href="#__codelineno-22-44"></a>│   ├── 💿 mount_disks.sh         # Auto-mount partitions
-<a id="__codelineno-22-45" name="__codelineno-22-45" href="#__codelineno-22-45"></a>│   ├── 🔒 vault.sh               # Secure vault management
-<a id="__codelineno-22-46" name="__codelineno-22-46" href="#__codelineno-22-46"></a>│   └── 📊 storage_hiato.sh       # Storage capacity analysis
-<a id="__codelineno-22-47" name="__codelineno-22-47" href="#__codelineno-22-47"></a>│
-<a id="__codelineno-22-48" name="__codelineno-22-48" href="#__codelineno-22-48"></a>├── 📁 bin/                       # README structure gate (vendored from BlueprintX)
-<a id="__codelineno-22-49" name="__codelineno-22-49" href="#__codelineno-22-49"></a>│   ├── ✅ check_readme_structure.sh # Fails when README.md leaves the house layout
-<a id="__codelineno-22-50" name="__codelineno-22-50" href="#__codelineno-22-50"></a>│   └── 📚 lib/md_structure.sh    # Markdown heading parser the gate sources
-<a id="__codelineno-22-51" name="__codelineno-22-51" href="#__codelineno-22-51"></a>│
-<a id="__codelineno-22-52" name="__codelineno-22-52" href="#__codelineno-22-52"></a>├── 📁 assets/                    # Committed images
-<a id="__codelineno-22-53" name="__codelineno-22-53" href="#__codelineno-22-53"></a>│   └── 🐧 logo.png               # README logo
-<a id="__codelineno-22-54" name="__codelineno-22-54" href="#__codelineno-22-54"></a>│
-<a id="__codelineno-22-55" name="__codelineno-22-55" href="#__codelineno-22-55"></a>└── 📖 README.md                  # Project documentation
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>dotfiles-linux-dev/
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>│
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>├── 📋 Makefile                   # Automation recipes for all scripts
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>│
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>├── 📁 distro_config/             # Distribution configuration
+<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a>│   ├── 📦 install_programs.sh    # Program installation script
+<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a>│   ├── 🧰 install_toolchains.sh  # Toolchains installation script
+<a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a>│   ├── 📥 irpf_download.sh       # Tax software downloader
+<a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a>│   ├── ⌨️ set_custom_shortcuts.sh # Custom shortcuts configuration
+<a id="__codelineno-23-10" name="__codelineno-23-10" href="#__codelineno-23-10"></a>│   └── 🖥️ ubuntu_workspace.sh    # Ubuntu workspace setup
+<a id="__codelineno-23-11" name="__codelineno-23-11" href="#__codelineno-23-11"></a>│
+<a id="__codelineno-23-12" name="__codelineno-23-12" href="#__codelineno-23-12"></a>├── 📁 code_editors/              # Code editors setup
+<a id="__codelineno-23-13" name="__codelineno-23-13" href="#__codelineno-23-13"></a>│   ├── 🧩 vscode.sh               # VS Code setup
+<a id="__codelineno-23-14" name="__codelineno-23-14" href="#__codelineno-23-14"></a>│   ├── ♻️ vscode_restore.sh       # VS Code restore
+<a id="__codelineno-23-15" name="__codelineno-23-15" href="#__codelineno-23-15"></a>│   ├── 🤖 claude_setup.sh         # Claude Code global settings and plugins
+<a id="__codelineno-23-16" name="__codelineno-23-16" href="#__codelineno-23-16"></a>│   ├── 🐚 bash_profile_snippet.sh # Ensure ~/.bash_profile loads ~/.bashrc
+<a id="__codelineno-23-17" name="__codelineno-23-17" href="#__codelineno-23-17"></a>│   └── ⭐ setup_starship_bash.sh  # Starship prompt + Bash integration
+<a id="__codelineno-23-18" name="__codelineno-23-18" href="#__codelineno-23-18"></a>│
+<a id="__codelineno-23-19" name="__codelineno-23-19" href="#__codelineno-23-19"></a>├── 📁 drivers/                   # Hardware driver configurations
+<a id="__codelineno-23-20" name="__codelineno-23-20" href="#__codelineno-23-20"></a>│   ├── 🔋 battery_threshold.sh   # Laptop battery charge cap
+<a id="__codelineno-23-21" name="__codelineno-23-21" href="#__codelineno-23-21"></a>│   ├── 📡 bluetooth_adapter.sh   # Bluetooth setup
+<a id="__codelineno-23-22" name="__codelineno-23-22" href="#__codelineno-23-22"></a>│   ├── ⌨️ setup_keyboard.sh      # Keyboard configuration
+<a id="__codelineno-23-23" name="__codelineno-23-23" href="#__codelineno-23-23"></a>│   ├── 🖱️ mouse.sh               # Mouse settings
+<a id="__codelineno-23-24" name="__codelineno-23-24" href="#__codelineno-23-24"></a>│   └── 📶 tplink_wifi_adapter.sh # WiFi adapter setup
+<a id="__codelineno-23-25" name="__codelineno-23-25" href="#__codelineno-23-25"></a>│
+<a id="__codelineno-23-26" name="__codelineno-23-26" href="#__codelineno-23-26"></a>├── 📁 espanso/                   # Espanso packages
+<a id="__codelineno-23-27" name="__codelineno-23-27" href="#__codelineno-23-27"></a>│   ├── 📦 datetime/              # Date/time shortcuts
+<a id="__codelineno-23-28" name="__codelineno-23-28" href="#__codelineno-23-28"></a>│   ├── 📦 git_reset/             # Git reset shortcut
+<a id="__codelineno-23-29" name="__codelineno-23-29" href="#__codelineno-23-29"></a>│   ├── 📦 hostname_catcher/      # Hostname shortcuts
+<a id="__codelineno-23-30" name="__codelineno-23-30" href="#__codelineno-23-30"></a>│   ├── 📦 ipv4_catcher/          # IPv4 shortcuts
+<a id="__codelineno-23-31" name="__codelineno-23-31" href="#__codelineno-23-31"></a>│   ├── 📦 shortcuts/             # List shortcuts
+<a id="__codelineno-23-32" name="__codelineno-23-32" href="#__codelineno-23-32"></a>│   └── 📦 ssh_generate/          # SSH key generator
+<a id="__codelineno-23-33" name="__codelineno-23-33" href="#__codelineno-23-33"></a>│
+<a id="__codelineno-23-34" name="__codelineno-23-34" href="#__codelineno-23-34"></a>├── 📁 os/                        # OS management tools
+<a id="__codelineno-23-35" name="__codelineno-23-35" href="#__codelineno-23-35"></a>│   ├── 💿 isos_os_manager.sh     # ISO file management
+<a id="__codelineno-23-36" name="__codelineno-23-36" href="#__codelineno-23-36"></a>│   ├── 🖥️ vm_creator.sh          # VM creation utility
+<a id="__codelineno-23-37" name="__codelineno-23-37" href="#__codelineno-23-37"></a>│   └── 🚀 vm_launcher.sh         # VM management
+<a id="__codelineno-23-38" name="__codelineno-23-38" href="#__codelineno-23-38"></a>│
+<a id="__codelineno-23-39" name="__codelineno-23-39" href="#__codelineno-23-39"></a>├── 📁 storage/                   # Storage management &amp; analytics
+<a id="__codelineno-23-40" name="__codelineno-23-40" href="#__codelineno-23-40"></a>│   ├── 🔍 check_legitimity.sh    # Drive legitimacy verification
+<a id="__codelineno-23-41" name="__codelineno-23-41" href="#__codelineno-23-41"></a>│   ├── 💾 data_recovery.sh       # Data recovery tools
+<a id="__codelineno-23-42" name="__codelineno-23-42" href="#__codelineno-23-42"></a>│   ├── 🗑️ format_hard.sh         # Complete formatting
+<a id="__codelineno-23-43" name="__codelineno-23-43" href="#__codelineno-23-43"></a>│   ├── 🧹 format_neat.sh         # Quick formatting
+<a id="__codelineno-23-44" name="__codelineno-23-44" href="#__codelineno-23-44"></a>│   ├── 💿 mount_disks.sh         # Auto-mount partitions
+<a id="__codelineno-23-45" name="__codelineno-23-45" href="#__codelineno-23-45"></a>│   ├── 🔒 vault.sh               # Secure vault management
+<a id="__codelineno-23-46" name="__codelineno-23-46" href="#__codelineno-23-46"></a>│   └── 📊 storage_hiato.sh       # Storage capacity analysis
+<a id="__codelineno-23-47" name="__codelineno-23-47" href="#__codelineno-23-47"></a>│
+<a id="__codelineno-23-48" name="__codelineno-23-48" href="#__codelineno-23-48"></a>├── 📁 bin/                       # README structure gate (vendored from BlueprintX)
+<a id="__codelineno-23-49" name="__codelineno-23-49" href="#__codelineno-23-49"></a>│   ├── ✅ check_readme_structure.sh # Fails when README.md leaves the house layout
+<a id="__codelineno-23-50" name="__codelineno-23-50" href="#__codelineno-23-50"></a>│   ├── 🎙️ transcribe.sh          # Local voice-note transcription (ffmpeg + faster-whisper)
+<a id="__codelineno-23-51" name="__codelineno-23-51" href="#__codelineno-23-51"></a>│   └── 📚 lib/md_structure.sh    # Markdown heading parser the gate sources
+<a id="__codelineno-23-52" name="__codelineno-23-52" href="#__codelineno-23-52"></a>│
+<a id="__codelineno-23-53" name="__codelineno-23-53" href="#__codelineno-23-53"></a>├── 📁 assets/                    # Committed images
+<a id="__codelineno-23-54" name="__codelineno-23-54" href="#__codelineno-23-54"></a>│   └── 🐧 logo.png               # README logo
+<a id="__codelineno-23-55" name="__codelineno-23-55" href="#__codelineno-23-55"></a>│
+<a id="__codelineno-23-56" name="__codelineno-23-56" href="#__codelineno-23-56"></a>└── 📖 README.md                  # Project documentation
 </code></pre></div>
 <!-- slug: development -->
 <h2 id="development">Development<a class="headerlink" href="#development" title="Permanent link">&para;</a></h2>
 <p>Run the bats unit suite locally (CI runs the same suite plus shellcheck, actionlint,
 yamllint, and gitlint):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>make<span class="w"> </span>install_coding<span class="w">   </span><span class="c1"># installs gitlint, bats (among other dev tools)</span>
-<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>make<span class="w"> </span><span class="nb">test</span><span class="w">             </span><span class="c1"># bats unit tests under tests/</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>make<span class="w"> </span>install_coding<span class="w">   </span><span class="c1"># installs gitlint, bats (among other dev tools)</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>make<span class="w"> </span><span class="nb">test</span><span class="w">             </span><span class="c1"># bats unit tests under tests/</span>
 </code></pre></div>
 <p>Enable the local git hooks once so violations are caught <em>before</em> you push (the same
 checks run in CI):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>make<span class="w"> </span>git_hooks<span class="w">        </span><span class="c1"># points core.hooksPath at .githooks</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>make<span class="w"> </span>git_hooks<span class="w">        </span><span class="c1"># points core.hooksPath at .githooks</span>
 </code></pre></div>
 <ul>
 <li><code>commit-msg</code> runs gitlint, so it catches title/body length violations.</li>
@@ -2201,7 +2232,7 @@ checks run in CI):</p>
 </ul>
 <p>The README must keep the BlueprintX <code>toolkit</code> layout (archetype marker, slug-marked
 sections, no emoji in headings, footer). Check it with:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>bash<span class="w"> </span>bin/check_readme_structure.sh<span class="w"> </span>README.md
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>bash<span class="w"> </span>bin/check_readme_structure.sh<span class="w"> </span>README.md
 </code></pre></div>
 <p><code>bin/check_readme_structure.sh</code> and <code>bin/lib/md_structure.sh</code> are vendored from
 <a href="https://github.com/guilhermegor/BlueprintX">BlueprintX</a> (<code>templates/common/bin/</code>).
