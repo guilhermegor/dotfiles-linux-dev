@@ -1211,3 +1211,41 @@ GOOD_BODY='**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [
     run guard_cmd "gh api graphql --input $REPO/def910.json"
     [ "$status" -eq 0 ]
 }
+
+# --- #914: convert-to-issue mutations also create an issue -----------------------------------------
+
+@test "GraphQL: convertProjectV2DraftIssueItemToIssue is blind to the draft's body, so it blocks (#914)" {
+    run guard_cmd "gh api graphql -f query='mutation{convertProjectV2DraftIssueItemToIssue(input:{itemId:\"I\",repositoryId:\"R\"}){item{id}}}'"
+    [ "$status" -eq 2 ]
+    # the mutation has no `body` input: a decoy literal must not pass it
+    run guard_cmd "gh api graphql -f query='mutation{convertProjectV2DraftIssueItemToIssue(input:{itemId:\"I\",repositoryId:\"R\",body:\"$GOOD_BODY\"}){item{id}}}'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: convertProjectCardNoteToIssue has its body judged (#914)" {
+    run guard_cmd "gh api graphql -f query='mutation{convertProjectCardNoteToIssue(input:{projectCardId:\"C\",repositoryId:\"R\",body:\"nope\"}){projectCard{id}}}'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -f query='mutation{convertProjectCardNoteToIssue(input:{projectCardId:\"C\",repositoryId:\"R\"}){projectCard{id}}}'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -f query='mutation{convertProjectCardNoteToIssue(input:{projectCardId:\"C\",repositoryId:\"R\",body:\"$GOOD_BODY\"}){projectCard{id}}}'"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: convert mutations: variable body, --input file, alias, comment, reason (#914)" {
+    local q='mutation($b:String){convertProjectCardNoteToIssue(input:{projectCardId:"C",body:$b}){projectCard{id}}}'
+    run guard_cmd "gh api graphql -f b=nope -f query='$q'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Definition of done"* ]]
+    run guard_cmd "gh api graphql -f b=\"$GOOD_BODY\" -f query='$q'"
+    [ "$status" -eq 0 ]
+    jq -nc '{query: "mutation{convertProjectV2DraftIssueItemToIssue(input:{itemId:\"I\"}){item{id}}}"}' \
+        > "$REPO/conv914.json"
+    run guard_cmd "gh api graphql --input $REPO/conv914.json"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -f query='mutation{a:convertProjectV2DraftIssueItemToIssue(input:{itemId:\"I\"}){item{id}}}'"
+    [ "$status" -eq 2 ]
+    # a GraphQL comment between the field name and its arguments is whitespace
+    run guard_cmd "gh api graphql -f query='mutation{convertProjectCardNoteToIssue #x
+(input:{projectCardId:\"C\",body:\"nope\"}){projectCard{id}}}'"
+    [ "$status" -eq 2 ]
+}

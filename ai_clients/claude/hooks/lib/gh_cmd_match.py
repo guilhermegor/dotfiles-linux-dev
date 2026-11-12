@@ -439,7 +439,9 @@ def only_repo_segment_is_dynamic(path, may_write_body=False):
     return bool(verdicts) and all(verdicts)
 
 
-GRAPHQL_ISSUE_MUTATION = re.compile(r"\b(createIssue|updateIssue)\s*\(")
+GRAPHQL_CREATING = (
+    "createIssue", "convertProjectV2DraftIssueItemToIssue", "convertProjectCardNoteToIssue")
+GRAPHQL_ISSUE_MUTATION = re.compile(r"\b(" + "|".join(GRAPHQL_CREATING + ("updateIssue",)) + r")\s*\(")
 GRAPHQL_STR = r'"""(?:\\"""|(?!""")[\s\S])*"""|"(?:[^"\\]|\\[\s\S])*"'
 GRAPHQL_BODY_KEY = re.compile(r"\bbody\s*:")
 GRAPHQL_LEADING_STRING = re.compile(r"\s*(" + GRAPHQL_STR + ")")
@@ -692,7 +694,9 @@ def graphql_issue_write(fields, input_file, shifted=(False, frozenset(), False),
         body = ""  # a `body` no branch resolved (a list, an object, a bare `$`): fail closed
     if len(muts) > 1 or len(lits) + len(refs) > 1:
         body = ""  # several mutations / decoy `body:` literals: ambiguous, fail closed
-    creating = muts[0].group(1) == "createIssue" or len(muts) > 1
+    if muts[0].group(1) == "convertProjectV2DraftIssueItemToIssue":
+        body = ""  # the issue body is the draft's, never in the call: unjudgeable, fail closed (#914)
+    creating = muts[0].group(1) in GRAPHQL_CREATING or len(muts) > 1
     has_body = body is not None or creating  # a create with no body IS an empty body
     return {"matched": True, "repo": None, "head": None, "has_body": has_body,
             "body": body if body is not None else ("" if creating else None),
