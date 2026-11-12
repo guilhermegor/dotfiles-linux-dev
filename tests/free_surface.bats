@@ -289,7 +289,16 @@ gh() {
     [[ "$output" == "held:held/f1 held/f2 "* ]]
     [ $((SECONDS - start)) -lt 5 ]
     run free_classify_files "${files[@]}" other/free.sh
+    [ "$status" -eq 0 ]
     [[ "$output" == "would-need-a-held-file:held/f1 "* ]]
+}
+
+@test "991: a failing awk fails closed (UNKNOWN), never reads as free" {
+    FREE_HELD_PATHS='a.sh'
+    awk() { return 2; }
+    run free_classify_files a.sh
+    [ "$status" -eq 1 ]
+    [ "$output" = "UNKNOWN" ]
 }
 
 @test "991: a path with a space counts as one file, and an empty held set matches nothing" {

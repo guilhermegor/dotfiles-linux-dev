@@ -285,7 +285,11 @@ _classify_files_against() {
 	if [ "$total" -gt 0 ]; then
 		local hits
 		hits="$(printf '%s\n' "$@" | awk 'NR == FNR { if ($0 != "") h[$0] = 1; next } $0 in h' \
-			<(printf '%s\n' "$held") -)"
+			<(printf '%s\n' "$held") -)" || {
+			# awk/process-substitution failure must fail closed, never read as "no hits" -> free
+			echo "UNKNOWN"
+			return 1
+		}
 		if [ -n "$hits" ]; then
 			held_count="$(printf '%s\n' "$hits" | wc -l)"
 			collided="$(printf '%s\n' "$hits" | paste -sd' ')"
