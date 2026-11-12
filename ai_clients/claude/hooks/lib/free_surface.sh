@@ -278,15 +278,19 @@ _classify_files_against() {
 		return 1
 	fi
 
-	local total=0 held_count=0 f collided=""
-	for f in "$@"; do
-		total=$((total + 1))
-		if printf '%s\n' "$held" | grep -qxF "$f"; then
-			held_count=$((held_count + 1))
-			collided="$collided $f"
+	# One awk pass over the held set, not one `grep` per file: with a large surface and ~10^3 held
+	# paths the per-file form took 20s+ and blew the planner's budget (#991). Exact-line match only
+	# (hash lookup), blank held lines ignored so an empty set can never match.
+	local total=$# held_count=0 collided=""
+	if [ "$total" -gt 0 ]; then
+		local hits
+		hits="$(printf '%s\n' "$@" | awk 'NR == FNR { if ($0 != "") h[$0] = 1; next } $0 in h' \
+			<(printf '%s\n' "$held") -)"
+		if [ -n "$hits" ]; then
+			held_count="$(printf '%s\n' "$hits" | wc -l)"
+			collided="$(printf '%s\n' "$hits" | paste -sd' ')"
 		fi
-	done
-	collided="${collided# }"
+	fi
 	if [ "$held_count" -eq 0 ]; then
 		echo "free"
 	elif [ "$held_count" -eq "$total" ]; then
