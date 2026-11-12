@@ -649,9 +649,10 @@ _kb_stamp_file() {
 	printf '%s/kanban-reconciled-boards.tsv' "$(dirname "$skipped")"
 }
 
-# _kb_stamp_reconciled KIND FILE ENTRY — records "now" as ENTRY's last successful KIND reconcile.
+# _kb_stamp_reconciled KIND FILE ENTRY EPOCH — records EPOCH (taken BEFORE the reconcile read the
+# issues, so one closed mid-run is not blamed on the workflow) as ENTRY's last successful reconcile.
 _kb_stamp_reconciled() {
-	local kind="$1" file="$2" entry="$3" tmp
+	local kind="$1" file="$2" entry="$3" epoch="$4" tmp
 	[[ -n "$file" ]] || return 0
 	[[ ! -e "$file" || -r "$file" ]] || return 0
 	(
@@ -660,8 +661,8 @@ _kb_stamp_reconciled() {
 		flock -w 5 9 || exit 0
 		tmp="$(mktemp "$file.XXXXXX" 2>/dev/null)" || exit 0
 		{
-			grep -vF "$kind"$'\t'"$entry"$'\t' "$file" 2>/dev/null
-			printf '%s\t%s\t%s\n' "$kind" "$entry" "$(date +%s)"
+			awk -F'\t' -v k="$kind" -v e="$entry" '$1 != k || $2 != e' "$file" 2>/dev/null
+			printf '%s\t%s\t%s\n' "$kind" "$entry" "$epoch"
 		} >"$tmp" 2>/dev/null
 		mv -f "$tmp" "$file" 2>/dev/null || rm -f "$tmp"
 	)
@@ -678,7 +679,7 @@ _kb_stamp_epoch() {
 
 reconcile_kanban_boards() {
 	local kind="$1" cwd="${2:-.}" lines="" status=0 entry owner project repo rc moved detail num
-	local entry_shape='^[^|]+\|[0-9]+\|[^|]+$' skipped_file="" skipped=() stamp_file=""
+	local entry_shape='^[^|]+\|[0-9]+\|[^|]+$' skipped_file="" skipped=() stamp_file="" started
 	KANBAN_BOARDS_REPORT=""
 	if ! declare -p ROADMAP_BOARDS >/dev/null 2>&1 || ((${#ROADMAP_BOARDS[@]} == 0)); then
 		KANBAN_BOARDS_REPORT="UNKNOWN: ROADMAP_BOARDS is empty or not loaded — no board was swept"
@@ -717,6 +718,7 @@ reconcile_kanban_boards() {
 			continue
 		fi
 		rc=0
+		started="$(date +%s)"
 		_kb_run_kind "$kind" "$owner" "$repo" "$cwd" || rc=$?
 		if ((rc != 0)); then
 			status=1
@@ -730,7 +732,10 @@ reconcile_kanban_boards() {
 			fi
 			continue
 		fi
-		[[ "$kind" == "closed" ]] && _kb_stamp_reconciled "$kind" "$stamp_file" "$entry"
+		# Only a clean pass is a stamp: a FAILED/UNKNOWN line means some card did not move.
+		if [[ "$kind" == "closed" ]] && ! grep -qE '^(FAILED|UNKNOWN)' <<<"$_KB_REPORT"; then
+			_kb_stamp_reconciled "$kind" "$stamp_file" "$entry" "$started"
+		fi
 		moved="$(printf '%s\n' "$_KB_REPORT" | grep -c '^moved' || true)"
 		if ((moved > 0)); then
 			lines+="board $owner/$project ($repo): ok — $moved moved"$'\n'
@@ -797,6 +802,7 @@ kanban_stale_cards_rest() {
 
 # Minutes a closed issue's card may sit outside Done before it is called stale (#989).
 KANBAN_STALE_GRACE_MINUTES="${KANBAN_STALE_GRACE_MINUTES:-15}"
+[[ "$KANBAN_STALE_GRACE_MINUTES" =~ ^[0-9]+$ ]] || KANBAN_STALE_GRACE_MINUTES=15 # arithmetic context: never eval garbage
 
 # _kb_classify_stale CLOSED_AT STAMP — prints why a closed issue's card is not in Done and sets
 # _KB_STALE_CLASS (workflow | gap | unknown | grace). STAMP is the board's last successful `closed`

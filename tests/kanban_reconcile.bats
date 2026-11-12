@@ -773,6 +773,7 @@ write_stamp() {
     run_stale_rest ok
     [[ "$output" == *"#5 in Blocked (closed 2026-11-05T00:00:00Z) — UNKNOWN (no readable record"* ]]
     [[ "$output" != *"Workflows"* ]]
+    [[ $EUID -ne 0 ]] || skip "root reads a mode-000 file"
     write_stamp "$(date +%s)"
     chmod 000 "$(dirname "$KANBAN_SKIPPED_FILE")/kanban-reconciled-boards.tsv"
     run_stale_rest ok
@@ -810,6 +811,15 @@ write_stamp() {
     [ "$status" -ne 0 ]
     rm -f "$stamps"
     run_boards in_review "$TEST_TMP" "owner|17|clean" -- "$STUB_IN_REVIEW"
+    [ ! -e "$stamps" ]
+}
+
+@test "boards: a partial closed reconcile (FAILED/UNKNOWN line) is not stamped (#989)" {
+    export TEST_TMP
+    local stamps
+    stamps="$(dirname "$KANBAN_SKIPPED_FILE")/kanban-reconciled-boards.tsv"
+    run_boards closed "$TEST_TMP" "owner|17|part" \
+        -- '_kb_run_kind() { _KB_REPORT="FAILED to move issue #5 to Done — verify by hand"; return 0; }'
     [ ! -e "$stamps" ]
 }
 
