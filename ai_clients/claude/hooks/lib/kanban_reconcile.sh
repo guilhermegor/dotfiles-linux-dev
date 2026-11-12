@@ -639,15 +639,53 @@ _kb_save_skipped() {
 	)
 }
 
+# #989: when each board's `closed` reconcile last SUCCEEDED, so a stale card can be told apart as
+# "reconcile never ran since the close" vs "reconcile ran and the card is still stale". One TSV line
+# `KIND<TAB>ENTRY<TAB>epoch` per (kind, board), beside the skipped-boards file. Like that file it is
+# only a hint: an unwritable file loses a stamp (read later as UNKNOWN), never fails a sweep.
+_kb_stamp_file() {
+	local skipped
+	skipped="$(_kb_skipped_file "$1")" || return 1
+	printf '%s/kanban-reconciled-boards.tsv' "$(dirname "$skipped")"
+}
+
+# _kb_stamp_reconciled KIND FILE ENTRY — records "now" as ENTRY's last successful KIND reconcile.
+_kb_stamp_reconciled() {
+	local kind="$1" file="$2" entry="$3" tmp
+	[[ -n "$file" ]] || return 0
+	[[ ! -e "$file" || -r "$file" ]] || return 0
+	(
+		command -v flock >/dev/null 2>&1 || exit 0
+		exec 9>"$file.lock" 2>/dev/null || exit 0
+		flock -w 5 9 || exit 0
+		tmp="$(mktemp "$file.XXXXXX" 2>/dev/null)" || exit 0
+		{
+			grep -vF "$kind"$'\t'"$entry"$'\t' "$file" 2>/dev/null
+			printf '%s\t%s\t%s\n' "$kind" "$entry" "$(date +%s)"
+		} >"$tmp" 2>/dev/null
+		mv -f "$tmp" "$file" 2>/dev/null || rm -f "$tmp"
+	)
+}
+
+# _kb_stamp_epoch KIND FILE ENTRY — prints the stamp, or returns 1 when absent or unreadable.
+_kb_stamp_epoch() {
+	local epoch
+	[[ -n "$2" && -r "$2" ]] || return 1
+	epoch="$(awk -F'\t' -v k="$1" -v e="$3" '$1==k && $2==e {print $3}' "$2" 2>/dev/null | tail -n1)"
+	[[ "$epoch" =~ ^[0-9]+$ ]] || return 1
+	printf '%s' "$epoch"
+}
+
 reconcile_kanban_boards() {
 	local kind="$1" cwd="${2:-.}" lines="" status=0 entry owner project repo rc moved detail num
-	local entry_shape='^[^|]+\|[0-9]+\|[^|]+$' skipped_file="" skipped=()
+	local entry_shape='^[^|]+\|[0-9]+\|[^|]+$' skipped_file="" skipped=() stamp_file=""
 	KANBAN_BOARDS_REPORT=""
 	if ! declare -p ROADMAP_BOARDS >/dev/null 2>&1 || ((${#ROADMAP_BOARDS[@]} == 0)); then
 		KANBAN_BOARDS_REPORT="UNKNOWN: ROADMAP_BOARDS is empty or not loaded — no board was swept"
 		return 1
 	fi
 	skipped_file="$(_kb_skipped_file "$cwd")" || skipped_file=""
+	stamp_file="$(_kb_stamp_file "$cwd")" || stamp_file=""
 	# fd 3, not stdin: a `gh` call inside the loop must not swallow the remaining entries.
 	while IFS= read -r entry <&3; do
 		if [[ ! "$entry" =~ $entry_shape ]]; then
@@ -692,6 +730,7 @@ reconcile_kanban_boards() {
 			fi
 			continue
 		fi
+		[[ "$kind" == "closed" ]] && _kb_stamp_reconciled "$kind" "$stamp_file" "$entry"
 		moved="$(printf '%s\n' "$_KB_REPORT" | grep -c '^moved' || true)"
 		if ((moved > 0)); then
 			lines+="board $owner/$project ($repo): ok — $moved moved"$'\n'
@@ -710,14 +749,15 @@ reconcile_kanban_boards() {
 	return "$status"
 }
 
-# kanban_stale_cards_rest — REST-only (#921): every CLOSED issue whose card is not in Done, one
+# kanban_stale_cards_rest [CWD] — REST-only (#921; CWD locates the reconcile stamps, #989): every CLOSED issue whose card is not in Done, one
 # `stale card: <repo>#N in <status> (closed <ts>)` line each, over every ROADMAP_BOARDS board. Runs
 # on the core REST budget, so it still answers while GraphQL is down. A board REST cannot read is
 # named so the owner checks it by hand, never reported as clean.
 # ponytail: `users/` endpoint (every registered board is the operator's own user board); an org
 # board would need `orgs/`. Add the owner-type probe if one is ever registered.
 kanban_stale_cards_rest() {
-	local entry owner project repo field rows out=""
+	local entry owner project repo field rows out="" stamp stamp_file="" slug num closed_at status workflow_boards=""
+	stamp_file="$(_kb_stamp_file "${1:-.}")" || stamp_file=""
 	if ! declare -p ROADMAP_BOARDS >/dev/null 2>&1 || ((${#ROADMAP_BOARDS[@]} == 0)); then
 		echo "stale cards: UNKNOWN — ROADMAP_BOARDS is empty or not loaded; no board was checked"
 		return 0
@@ -733,7 +773,15 @@ kanban_stale_cards_rest() {
 			out+="stale cards: board $owner/$project ($repo) UNKNOWN — REST could not read card status; check the board by hand"$'\n'
 			continue
 		fi
-		out+="$(printf '%s\n' "$rows" | awk -F'\t' '$1 != "" && $4 != "Done" {printf "stale card: %s#%s in %s (closed %s)\n", $1, $2, $4, $3}')"$'\n'
+		stamp="$(_kb_stamp_epoch closed "$stamp_file" "$entry")" || stamp=""
+		while IFS=$'\t' read -r slug num closed_at status; do
+			[[ -n "$slug" && "$status" != "Done" ]] || continue
+			_kb_classify_stale "$closed_at" "$stamp"
+			out+="stale card: $slug#$num in $status (closed $closed_at) — $_KB_STALE_WHY"$'\n'
+			if [[ "$_KB_STALE_CLASS" == "workflow" && "$workflow_boards" != *"$owner/$project ($repo) "* ]]; then
+				workflow_boards+="$owner/$project ($repo) "
+			fi
+		done <<<"$rows"
 	done
 	out="$(printf '%s' "$out" | sed '/^$/d')"
 	if [[ -z "$out" ]]; then
@@ -741,8 +789,47 @@ kanban_stale_cards_rest() {
 		return 0
 	fi
 	printf '%s\n' "$out"
-	if grep -q '^stale card:' <<<"$out"; then
-		echo "if cards keep missing Done with no reconcile in between: board -> ... -> Workflows -> enable \"Item closed\" and \"Pull request merged\""
+	if [[ -n "$workflow_boards" ]]; then
+		echo "native workflow not firing on: ${workflow_boards% } -> board -> ... -> Workflows -> enable \"Item closed\" and \"Pull request merged\""
 	fi
 	return 0
+}
+
+# Minutes a closed issue's card may sit outside Done before it is called stale (#989).
+KANBAN_STALE_GRACE_MINUTES="${KANBAN_STALE_GRACE_MINUTES:-15}"
+
+# _kb_classify_stale CLOSED_AT STAMP — prints why a closed issue's card is not in Done and sets
+# _KB_STALE_CLASS (workflow | gap | unknown | grace). STAMP is the board's last successful `closed`
+# reconcile epoch, empty when absent/unreadable.
+#   grace    closed less than KANBAN_STALE_GRACE_MINUTES ago: the native workflow or the next sweep
+#            may still move it.
+#   workflow a successful reconcile ran AFTER the close and the card is still not Done, so neither
+#            the native workflow nor the reconcile moved it.
+#   gap      no successful reconcile since the close: a reconcile problem, not a workflow one.
+#   unknown  no readable stamp or unparseable close time: never assumed either way.
+_kb_classify_stale() {
+	local closed_epoch now
+	_KB_STALE_CLASS=unknown
+	closed_epoch="$(date -d "$1" +%s 2>/dev/null)" || closed_epoch=""
+	if [[ ! "$closed_epoch" =~ ^[0-9]+$ ]]; then
+		_KB_STALE_WHY="UNKNOWN (close time unreadable)"
+		return 0
+	fi
+	now="$(date +%s)"
+	if ((now - closed_epoch < KANBAN_STALE_GRACE_MINUTES * 60)); then
+		_KB_STALE_CLASS=grace
+		_KB_STALE_WHY="within ${KANBAN_STALE_GRACE_MINUTES}m grace"
+		return 0
+	fi
+	if [[ -z "$2" ]]; then
+		_KB_STALE_WHY="UNKNOWN (no readable record of a successful reconcile of this board)"
+		return 0
+	fi
+	if (($2 > closed_epoch)); then
+		_KB_STALE_CLASS=workflow
+		_KB_STALE_WHY="reconcile ran after the close, native workflow not firing"
+		return 0
+	fi
+	_KB_STALE_CLASS=gap
+	_KB_STALE_WHY="reconcile gap: no successful reconcile of this board since the close"
 }

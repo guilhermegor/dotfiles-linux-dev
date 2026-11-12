@@ -582,7 +582,7 @@ sweep_stale_cards_gated() {
 	local core
 	core="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)"
 	if [[ "$core" =~ ^[0-9]+$ ]] && ((core >= STALE_CARDS_CORE_FLOOR)); then
-		kanban_stale_cards_rest
+		kanban_stale_cards_rest "${1:-.}"
 	else
 		echo "stale cards: UNKNOWN — REST core quota low or unreadable, not checked"
 	fi
@@ -621,7 +621,7 @@ $BUDGET_GATE_REASON (dotfiles-linux-dev#445) — skipping this sweep, no further
 kanban boards (declared: ROADMAP_BOARDS), none swept:
 $KANBAN_BOARDS_REPORT
 dispatch: UNKNOWN — $BUDGET_GATE_REASON
-$(sweep_stale_cards_gated)"
+$(sweep_stale_cards_gated "$cwd")"
 		exit 1
 	fi
 
@@ -647,7 +647,7 @@ $(sweep_stale_cards_gated)"
 		echo "[9] kanban reconcile, every declared board (closed issues -> Done, No Status -> placed)"
 		sweep_kanban_boards closed "$cwd" "$repo"
 		echo "[9b] closed issues whose card is not in Done (REST only, runs while GraphQL is down)"
-		kanban_stale_cards_rest
+		kanban_stale_cards_rest "$cwd"
 		echo "[10] issue hygiene (surface block + milestone, report only)"
 		sweep_issue_hygiene "$repo"
 		echo "[11] kanban reconcile, every declared board (closed-unmerged PR -> Ready; idle In progress, report only)"
