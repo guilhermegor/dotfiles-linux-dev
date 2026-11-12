@@ -886,7 +886,7 @@ d.open_issues = lambda slug: [{"number": 1, "body": "```surface\nfree/*.sh\n```"
 d.open_prs = lambda slug: []
 def boom(*args):
     raise AssertionError("the gate ran after the listing timed out")
-d.run_gate = boom
+d.classify_requests = boom
 d.hot_patterns = boom
 d._STARTED = time.monotonic() - 1000  # the live-agent gate passed at the deadline
 d.main()
