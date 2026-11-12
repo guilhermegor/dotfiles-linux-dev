@@ -140,9 +140,9 @@ prune_merged_heads() {
 prune_detached_pr_state() {
 	local cwd="$1" sha="$2" slug out
 	slug="$(fanout_repo_slug "$cwd")" || return 1
-	out="$(gh api "repos/$slug/commits/$sha/pulls?per_page=100" --jq '[.[]|select(.state=="open")]|length' 2>/dev/null)" || return 1
-	[[ "$out" =~ ^[0-9]+$ ]] || return 1
-	[ "$out" = 0 ] && echo none || echo open
+	# --paginate runs --jq per page: emit one line per open PR so a later page still counts.
+	out="$(gh api --paginate "repos/$slug/commits/$sha/pulls?per_page=100" --jq '.[]|select(.state=="open")|"open"' 2>/dev/null)" || return 1
+	[ -z "$out" ] && echo none || echo open
 }
 
 prune_recently_touched() {
@@ -165,7 +165,7 @@ prune_recently_touched() {
 
 # Prints "PRUNE|KEEP<TAB>reason" for one worktree; rc 0 = prunable.
 prune_classify() {
-	local cwd="$1" path="$2" branch="$3" db="$4" min_age="$5" why state remote local_sha base
+	local cwd="$1" path="$2" branch="$3" db="$4" min_age="$5" why state remote local_sha base at
 	if prune_recently_touched "$path" "$min_age"; then echo "touched within ${min_age}s (live agent?)"; return 1; fi
 	# branch_content_shipped is vacuously true for a fresh branch at origin tip (empty path list
 	# makes it compare whole trees, which are equal): demand real work to have shipped.
@@ -176,17 +176,14 @@ prune_classify() {
 		# (#946/#947): the forge's MERGED PR head is the proof instead (same predicate the
 		# fan-out uses). A closed-unmerged head proves nothing shipped. A merged-then-reverted
 		# PR still counts: the owner's merge decided it, and refs/pull/<n>/head keeps the commits.
-		local heads label="${branch:-(detached)}" at=""
+		local heads label="${branch:-(detached)}"
+		at=""
 		# A detached worktree has no branch to look PRs up by: ask by its HEAD sha (#988).
 		[ -n "$branch" ] || at="$(git -C "$path" rev-parse HEAD 2>/dev/null)" || at=""
 		[ -n "$branch" ] || [ -n "$at" ] || { echo "content not on origin/$db (or undecidable)"; return 1; }
 		heads="$(prune_merged_heads "$cwd" "$label" "$db" "$at")" || { echo "forge unreadable"; return 1; }
 		merged_pr_covers_head "$path" "$label" "$heads" \
 			|| { echo "content not on origin/$db (or undecidable)"; return 1; }
-		if [ -z "$branch" ]; then
-			state="$(prune_detached_pr_state "$cwd" "$at")" || { echo "forge unreadable"; return 1; }
-			[ "$state" = open ] && { echo "PR is OPEN"; return 1; }
-		fi
 	fi
 	why="$(prune_tree_is_noise_only "$path")" || { echo "$why"; return 1; }
 	if [ -n "$branch" ]; then
@@ -201,6 +198,10 @@ prune_classify() {
 		echo "PR ${state}, content shipped"
 		return 0
 	fi
+	# Same "no PR is OPEN" rule as the branch path, whichever proof of shipping was used (#988).
+	at="$(git -C "$path" rev-parse HEAD 2>/dev/null)" || { echo "undecidable"; return 1; }
+	state="$(prune_detached_pr_state "$cwd" "$at")" || { echo "forge unreadable"; return 1; }
+	[ "$state" = open ] && { echo "PR is OPEN"; return 1; }
 	echo "detached, content shipped"
 }
 

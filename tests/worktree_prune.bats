@@ -582,13 +582,26 @@ make_detached() {
     [ -d "$BATS_TEST_TMPDIR/wt-d5" ]
 }
 
+@test "a detached worktree whose content shipped stays KEEP under an open PR (#988)" {
+    make_detached d6 fd6.txt
+    land_on_master fd6.txt
+    DETACHED_PR_STATE=open
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-d6: PR is OPEN"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-d6" ]
+}
+
 @test "prune_detached_pr_state reports open only for an open PR on the sha (#988)" {
     source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
     fanout_repo_slug() { echo o/r; }
-    gh() { echo "$FAKE_PRS" | jq "${*: -1}" 2>/dev/null; }
-    FAKE_PRS='[{"state":"closed"}]' run prune_detached_pr_state "$work" abc
+    # Two pages, as --paginate runs --jq once per page: only the second holds an open PR.
+    gh() { [[ " $* " == *" --paginate "* ]] || return 1; printf '\n'; echo open; }
+    run prune_detached_pr_state "$work" abc
+    [ "$output" = open ]
+    gh() { [[ " $* " == *" --paginate "* ]] || return 1; }
+    run prune_detached_pr_state "$work" abc
     [ "$output" = none ]
-    gh() { jq -n '1'; }
+    gh() { echo open; }
     run prune_detached_pr_state "$work" abc
     [ "$output" = open ]
     gh() { return 1; }
