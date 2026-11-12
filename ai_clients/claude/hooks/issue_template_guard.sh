@@ -228,6 +228,20 @@ block_unresolved_body_file() {
     # directory, so a generic "check the path" sends the author chasing a bug that isn't there.
     local path="$1" root="${2:-}"
 
+    if [[ "$path" == "-" ]]; then
+        # The matcher's blind marker (stdin, a second write in the chain, a shell-built argument):
+        # no --body-file was passed, so naming one would send the author chasing nothing (#987).
+        {
+            echo "BLOCKED: the issue body could not be read from this command, so it was never verified."
+            echo
+            echo "No --body-file was passed. The body comes from stdin, or the command builds part of"
+            echo "its own arguments (a shell variable, a glob, a command substitution), or it chains"
+            echo "several issue writes. Re-run each write as its own plain \`gh\` command with the"
+            echo "body written out literally."
+        } >&2
+        exit 2
+    fi
+
     {
         echo "BLOCKED: the --body-file could not be read, so the issue body was never verified."
         echo
