@@ -928,7 +928,9 @@ guard_cmd() {
 }
 
 @test "REST: two issue writes in one chain are judged blind (#906 ladder 10)" {
-    run guard_cmd "gh api -X PATCH repos/o/r/issues/1 -f title=a && gh api -X PATCH repos/o/r/issues/2 -f title=b"
+    # both carry a (compliant) body: one verdict cannot cover two writes, so the chain is blind.
+    # (Title-only PATCHes send no body and are no longer writes to judge, #987.)
+    run guard_cmd "gh api -X PATCH repos/o/r/issues/1 -f body='$GOOD_BODY' && gh api -X PATCH repos/o/r/issues/2 -f body='$GOOD_BODY'"
     [ "$status" -eq 2 ]
 }
 
@@ -1247,5 +1249,246 @@ GOOD_BODY='**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [
     # a GraphQL comment between the field name and its arguments is whitespace
     run guard_cmd "gh api graphql -f query='mutation{convertProjectCardNoteToIssue #x
 (input:{projectCardId:\"C\",body:\"nope\"}){projectCard{id}}}'"
+    [ "$status" -eq 2 ]
+}
+
+# --- #911: replies and body-less PATCH never write an issue body ------------------------------------
+
+@test "REST: PR review-comment reply with a free-form body passes (#911)" {
+    run guard_cmd "gh api repos/o/r/pulls/902/comments/55/replies -f body='fixed in abc'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: milestone-only PATCH (-F milestone=1) passes (#911)" {
+    run guard_cmd "gh api -X PATCH repos/o/r/issues/908 -F milestone=1"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: PATCH that DOES carry a bad body is still blocked (#911)" {
+    run guard_cmd "gh api -X PATCH repos/o/r/issues/908 -F milestone=1 -f body='nope'"
+    [ "$status" -eq 2 ]
+}
+
+# --- #937: bypasses deferred from #906 ---------------------------------------------------------------
+
+BAD_MUT937='mutation{createIssue(input:{repositoryId:"R",title:"t",body:"nope"}){issue{id}}}'
+
+good_file_937() {
+    printf '%s' "mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"$GOOD_BODY\"}){issue{id}}}" \
+        > "$REPO/q937.graphql"
+}
+
+@test "GraphQL: a writer running alongside the gh read (| or &) makes the file read blind (#937)" {
+    good_file_937
+    cd "$REPO"
+    run guard_cmd "gh api graphql -F query=@q937.graphql | cp evil q937.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -F query=@q937.graphql & cp evil q937.graphql"
+    [ "$status" -eq 2 ]
+    # a read-only consumer of the output does not blind it
+    run guard_cmd "gh api graphql -F query=@q937.graphql | jq -r .data"
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: a brace-range endpoint is blind, like a brace list (#937)" {
+    good_file_937
+    cd "$REPO"
+    run guard_cmd "gh api graphq{l..l} -F query=@q937.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api gr{a..a}phql -F query=@q937.graphql"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: digits glued to a flag before a redirect belong to the flag (#937)" {
+    printf '%s' "$BAD_MUT937" > "$REPO/bad937.graphql"
+    cd "$REPO"
+    # `-t1>/dev/null` is the flag `-t1` plus a redirect, so `-t` does not swallow the query field
+    run guard_cmd "gh api graphql -t1>/dev/null -Fquery=@bad937.graphql"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a shell-built gh subcommand is blind (#937)" {
+    run guard_cmd 'gh a${E}pi graphql -f query=x'
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: an unquoted glob in a field or flag is blind (#937)" {
+    run guard_cmd 'gh api graphql -f query=*'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -F*'
+    [ "$status" -eq 2 ]
+    # a glob as a separate --jq operand can expand into several words, so it is blind too (#986)
+    run guard_cmd 'gh api graphql -f query="{viewer{login}}" --jq .data[0]'
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: an env -iS cluster hides no nested gh api (#937)" {
+    run guard_cmd "env -iS 'gh api graphql -f query=\$X'"
+    [ "$status" -eq 2 ]
+}
+
+# --- #986 ladder review of #937 --------------------------------------------------------------------
+
+bad_file_986() {
+    printf '%s' "$BAD_MUT937" > "$REPO/bad986.graphql"
+}
+
+@test "GraphQL: sort -o, less -o and LESSOPEN after the gh read are writers, not readers (#986)" {
+    good_file_937
+    cd "$REPO"
+    run guard_cmd "gh api graphql -F query=@q937.graphql | sort -o q937.graphql evil"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -F query=@q937.graphql | less -o q937.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -F query=@q937.graphql | LESSOPEN='|cp evil q937.graphql %s' less x"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: an opaque command after the gh read (python3 -c, eval, a substitution) is blind (#986)" {
+    good_file_937
+    cd "$REPO"
+    run guard_cmd "gh api graphql -F query=@q937.graphql | python3 -c \"open('q937.graphql','w')\""
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -F query=@q937.graphql & eval "$CMD"'
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api graphql -F query=@q937.graphql | X=\$(cp evil q937.graphql) jq ."
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: read-only commands after the gh read keep the file trusted (#986)" {
+    good_file_937
+    cd "$REPO"
+    run guard_cmd "gh api graphql -F query=@q937.graphql | jq -r .data"
+    [ "$status" -eq 0 ]
+    run guard_cmd "gh api graphql -F query=@q937.graphql; echo done"
+    [ "$status" -eq 0 ]
+    # a redirect turns the same reader into a writer
+    run guard_cmd "gh api graphql -F query=@q937.graphql | cat > q937.graphql"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a glob in the gh subcommand is blind, like a variable (#986)" {
+    bad_file_986
+    cd "$REPO"
+    run guard_cmd "gh ap[i] graphql -F query=@bad986.graphql"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh ap? graphql -F query=@bad986.graphql"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: env -S clusters with digits or an attached script are still nested scripts (#986)" {
+    bad_file_986
+    cd "$REPO"
+    run guard_cmd "env -iS'gh api graphql -F query=@bad986.graphql'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "env -0S 'gh api graphql -F query=@bad986.graphql'"
+    [ "$status" -eq 2 ]
+    # -u/-C take an argument: `-uS` unsets S, and the real command is still judged
+    run guard_cmd "env -uS gh api graphql -F query=@bad986.graphql"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: the glob check fires on the marked argv; escaped globs and --jq= values are text (#986)" {
+    # `-f query=*` and `-F*` are blocked by the glob path only (the query text is `*`, no mutation)
+    run guard_cmd 'gh api graphql -f query=*'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query=\*'
+    [ "$status" -eq 0 ]
+    run guard_cmd 'gh api graphql -f query="{viewer{login}}" --jq=.data[0]'
+    [ "$status" -eq 0 ]
+    # `--jq *` can expand to `"x" -f query=<mutation>`: an operand glob is never one known word
+    run guard_cmd 'gh api graphql --jq *'
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: a glued & before a redirect is bash's, not part of the flag (#986)" {
+    bad_file_986
+    cd "$REPO"
+    run guard_cmd "gh api graphql -t&>/dev/null -F query=@bad986.graphql"
+    [ "$status" -eq 2 ]
+}
+
+# --- #987: a write with no body has nothing for the template check to judge --------------------------
+
+@test "REST: state-only PATCH of issue \$n passes, alone, in a loop and chained (#987)" {
+    run guard_cmd 'for n in 911 915; do gh api -X PATCH repos/o/r/issues/$n -f state=closed -f state_reason=completed --jq .state; done'
+    [ "$status" -eq 0 ]
+    run guard_cmd 'gh api -X PATCH repos/o/r/issues/911 -f state=closed --jq .state; gh api -X PATCH repos/o/r/issues/915 -f state=closed; gh api -X PATCH repos/o/r/issues/919 -f state=closed'
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: a body-carrying write is still judged when chained with state-only PATCHes (#987)" {
+    run guard_cmd "gh api -X PATCH repos/o/r/issues/911 -f state=closed; gh api repos/o/r/issues -f title=b -f body='nope'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh api repos/o/r/issues -f title=b -f body='nope'; gh api -X PATCH repos/o/r/issues/911 -f state=closed"
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api -X PATCH repos/o/r/issues/$n -f body=nope'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api -X PATCH repos/o/r/issues/$n -f state=closed -f body=nope'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api -X PATCH repos/o/r/issues/$n --input x.json'
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: an unreadable body is not blamed on a --body-file nobody passed (#987)" {
+    run guard_cmd "gh api repos/o/r/issues -f title=a -f body='$GOOD_BODY'; gh api repos/o/r/issues -f title=b -f body='$GOOD_BODY'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"No --body-file was passed"* ]]
+    [[ "$output" != *"the --body-file could not be read"* ]]
+}
+
+# --- #915: block-string dedent, non-string body, relative paths -------------------------------------
+
+@test "GraphQL: an indented compliant block-string body passes, a bad one blocks (#915)" {
+    local nl=$'\n'
+    run guard_cmd "gh api graphql -f query='mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"\"\"${nl}    **Python · PyPI · public repo**${nl}${nl}    x${nl}${nl}    ### Definition of done${nl}    - [ ] a${nl}    \"\"\"}){issue{id}}}'"
+    [ "$status" -eq 0 ]
+    run guard_cmd "gh api graphql -f query='mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"\"\"${nl}    nope${nl}    \"\"\"}){issue{id}}}'"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL --input: a non-string body (list, int, object) is judged blind, not passed (#915)" {
+    local q='mutation($i:CreateIssueInput!){createIssue(input:$i){issue{id}}}' b
+    for b in '["x"]' '5' '{"a":1}' 'null'; do
+        jq -nc --arg q "$q" --argjson b "$b" '{query: $q, variables: {i: {repositoryId: "R", title: "t", body: $b}}}' \
+            > "$REPO/ns915.json"
+        run guard_cmd "gh api graphql --input $REPO/ns915.json"
+        [ "$status" -eq 2 ]
+    done
+}
+
+@test "GraphQL: a relative -F @file resolves against the payload cwd (#915)" {
+    # a compliant file passes only if it was actually read (an unread file is judged blind: blocked)
+    printf '%s' "mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"$GOOD_BODY\"}){issue{id}}}" > "$REPO/rel915.graphql"
+    run bash -c "jq -nc --arg c 'gh api graphql -F query=@rel915.graphql' --arg d '$REPO' '{tool_name:\"Bash\",cwd:\$d,tool_input:{command:\$c}}' | (cd / && '$GUARD')"
+    [ "$status" -eq 0 ]
+}
+
+# --- #919: every issue write in a chain is judged, in both orders -----------------------------------
+
+@test "REST: compliant then bad create in one chain is blocked, both orders (#919)" {
+    local good bad
+    good="gh api repos/o/r/issues -f title=a -f body='$GOOD_BODY'"
+    bad="gh api repos/o/r/issues -f title=b -f body='nope'"
+    run guard_cmd "$good; $bad"
+    [ "$status" -eq 2 ]
+    run guard_cmd "$bad; $good"
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL: compliant then bad createIssue in one chain is blocked, both orders (#919)" {
+    local good bad
+    good="gh api graphql -f query='mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"$GOOD_BODY\"}){issue{id}}}'"
+    bad="gh api graphql -f query='mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"nope\"}){issue{id}}}'"
+    run guard_cmd "$good; $bad"
+    [ "$status" -eq 2 ]
+    run guard_cmd "$bad; $good"
+    [ "$status" -eq 2 ]
+}
+
+@test "mixed chain: a compliant REST create then a bad gh issue create is blocked (#919)" {
+    run guard_cmd "gh api repos/o/r/issues -f title=a -f body='$GOOD_BODY'; gh issue create --title b --body nope"
+    [ "$status" -eq 2 ]
+    run guard_cmd "gh issue create --title b --body nope; gh api repos/o/r/issues -f title=a -f body='$GOOD_BODY'"
     [ "$status" -eq 2 ]
 }
