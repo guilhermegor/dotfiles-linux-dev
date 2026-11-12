@@ -1347,3 +1347,28 @@ hot_list() {
     [ "$(field '.dispatchable | length')" -eq 0 ]
     [[ "$(field '.excluded[0].reason')" == *"UNKNOWN"* ]]
 }
+
+@test "a failing gate or classifier is UNKNOWN, never a crash (#993 review)" {
+    run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
+import subprocess, sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan as d
+def run_with(effect):
+    def fake(*a, **k):
+        if isinstance(effect, Exception):
+            raise effect
+        return subprocess.CompletedProcess(a, 0, stdout=effect, stderr="")
+    d.subprocess.run = fake
+for exc in (subprocess.CalledProcessError(1, "x"), FileNotFoundError("bash")):
+    run_with(exc)
+    assert d.read_unclaimed("o", "r") == (False, set())
+    assert d.classify_requests([(1, ["a"])], []) is None
+run_with("1\tFREE\nbanner without a tab\n")
+assert d.classify_requests([(1, ["a"])], []) is None
+run_with("x\tFREE\n")
+assert d.classify_requests([(1, ["a"])], []) is None
+run_with("1\tFREE\n")
+assert d.classify_requests([(1, ["a"])], []) == {1: "FREE"}
+PY
+    [ "$status" -eq 0 ]
+}

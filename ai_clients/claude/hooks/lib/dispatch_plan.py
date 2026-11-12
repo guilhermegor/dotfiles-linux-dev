@@ -746,7 +746,7 @@ def read_unclaimed(owner: str, repo: str) -> tuple[bool, set[int]]:
 			timeout=timeout,
 			check=True,
 		)
-	except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+	except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError):
 		return False, set()
 	lines = proc.stdout.splitlines()
 	if not lines or lines[0] != "GATE_STATUS:ok":
@@ -777,7 +777,7 @@ def classify_requests(
 			timeout=timeout,
 			check=True,
 		)
-	except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+	except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError):
 		return None
 	verdicts = {}
 	for line in proc.stdout.splitlines():
