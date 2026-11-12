@@ -84,6 +84,7 @@ parent whose children are all closed is reported "ready to close" — report onl
 
 from __future__ import annotations
 
+import concurrent.futures
 import fnmatch
 import functools
 import json
@@ -202,10 +203,12 @@ HOT_UNKNOWN_REASON = (
 	"declared hot file, never assumed free"
 )
 
-# Classifies every request against a caller-supplied held-paths set (the live-agent set,
-# finding 1) rather than gate_free_surface's own FREE_HELD_PATHS. gate_free_surface still runs,
-# for FREE_UNCLAIMED_ISSUES only.
-_GATE_SCRIPT = r"""
+# #991: the gate is two scripts so the network half can overlap the local worktree walk. The
+# claimed-issues read (serial GraphQL paging over every PR) needs nothing from the walk, and the
+# classification needs nothing from the network, so neither waits for the other.
+#
+# Half 1 (network): gate_free_surface, for FREE_UNCLAIMED_ISSUES only.
+_CLAIMED_SCRIPT = r"""
 set -eu
 owner="$1"; repo="$2"; free_surface_sh="$3"
 # shellcheck source=/dev/null
@@ -215,16 +218,30 @@ source "$free_surface_sh"
 # synchronous and gh has no default request deadline of its own.
 gh() { timeout "${DISPATCH_PLAN_GH_TIMEOUT:-15}" gh "$@"; }
 
-# dotfiles-linux-dev#607: gate_free_surface's agent-vs-open-PR held set is OVERWRITTEN below (#433
-# finding 1) and never read, yet computing it costs one `gh pr view` per open PR plus one compare
-# per pushed branch, so it grows with the board and pushed the planner past the Stop guard's
-# timeout. Only FREE_UNCLAIMED_ISSUES is wanted from the gate, so skip the dead half. The gate's
-# fail-closed path is unchanged: an unreadable claimed-issues read still returns unknown.
+# dotfiles-linux-dev#607: gate_free_surface's agent-vs-open-PR held set was never read here (the
+# live-agent set replaces it, #433 finding 1), yet computing it costs one `gh pr view` per open PR
+# plus one compare per pushed branch. Only FREE_UNCLAIMED_ISSUES is wanted, so skip the dead half.
+# The gate's fail-closed path is unchanged: an unreadable claimed-issues read still returns unknown.
 _free_held_paths() { :; }
 
+if ! gate_free_surface "$owner" "$repo"; then
+	echo "GATE_STATUS:unknown"
+	exit 0
+fi
+echo "GATE_STATUS:ok"
+printf '%s\n' "$FREE_UNCLAIMED_ISSUES"
+"""
+
+# Half 2 (local, no network): classify every request against the caller's live-agent held set
+# (#433 finding 1) rather than gate_free_surface's own.
 # stdin: the live-agent held paths, one per line, then a lone "===REQUESTS===" line, then every
-# classify request as issue<TAB>file1|file2|... . Read before the network call below: neither
-# gate_free_surface nor free_classify_files touches stdin, so this ordering is safe.
+# classify request as issue<TAB>file1|file2|... .
+_CLASSIFY_SCRIPT = r"""
+set -eu
+free_surface_sh="$1"
+# shellcheck source=/dev/null
+source "$free_surface_sh"
+
 live_held=""
 while IFS= read -r line; do
 	[ "$line" = "===REQUESTS===" ] && break
@@ -232,19 +249,9 @@ while IFS= read -r line; do
 done
 mapfile -t requests
 
-if ! gate_free_surface "$owner" "$repo"; then
-	echo "GATE_STATUS:unknown"
-	exit 0
-fi
-echo "GATE_STATUS:ok"
-
-# dotfiles-linux-dev#433 finding 1: overwrite gate_free_surface's own agent-vs-open-PR held set with
-# the caller's agent-vs-agent one before classifying.
+FREE_STATUS="ok"
 FREE_HELD_PATHS="$(printf '%s\n' "$live_held" | sed '/^$/d' | sort -u)"
 
-echo "===UNCLAIMED==="
-printf '%s\n' "$FREE_UNCLAIMED_ISSUES"
-echo "===RESULTS==="
 for line in "${requests[@]}"; do
 	[ -n "$line" ] || continue
 	issue="${line%%$'\t'*}"
@@ -720,46 +727,65 @@ def expand_tokens(tokens: list[str], root: Path, held: list[str]) -> list[str]:
 	return files
 
 
-def run_gate(
-	owner: str, repo: str, requests: list[tuple[int, list[str]]], held: list[str]
-) -> tuple[bool, set[int], dict[int, str]]:
-	"""Run gate_free_surface once (for the claimed-issue answer only) and classify every request
-	against ``held`` — the live-agent-only set, not gate_free_surface's own — in one process.
+def read_unclaimed(owner: str, repo: str) -> tuple[bool, set[int]]:
+	"""Run gate_free_surface once and return ``(gate_ok, unclaimed_issue_numbers)``.
 
-	Returns ``(gate_ok, unclaimed_issue_numbers, {issue: classify_verdict})``. ``gate_ok`` is
-	False exactly when gate_free_surface itself reported FREE_STATUS=unknown — a recoverable,
-	expected condition (gh rate limit, an unhandled compare error), never a crash.
+	``gate_ok`` is False exactly when gate_free_surface itself reported FREE_STATUS=unknown, or the
+	read outlived the planner budget: a recoverable, expected condition (gh rate limit, an
+	unhandled compare error), never a crash. Network only, so ``build_plan`` runs it concurrently
+	with the local worktree walk (#991).
 	"""
 	timeout = gate_timeout()
 	if timeout == 0.0:
-		return False, set(), {}
-	stdin = "".join(f"{p}\n" for p in held)
-	stdin += "===REQUESTS===\n"
-	stdin += "".join(f"{issue}\t{'|'.join(files)}\n" for issue, files in requests)
+		return False, set()
 	try:
 		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
-			["bash", "-c", _GATE_SCRIPT, "dispatch_plan", owner, repo, str(FREE_SURFACE_SH)],
-			input=stdin,
+			["bash", "-c", _CLAIMED_SCRIPT, "dispatch_plan", owner, repo, str(FREE_SURFACE_SH)],
 			capture_output=True,
 			text=True,
 			timeout=timeout,
 			check=True,
 		)
 	except subprocess.TimeoutExpired:
-		return False, set(), {}
+		return False, set()
 	lines = proc.stdout.splitlines()
 	if not lines or lines[0] != "GATE_STATUS:ok":
-		return False, set(), {}
+		return False, set()
+	return True, {int(n) for n in lines[1:] if n.strip()}
 
-	results_at = lines.index("===RESULTS===")
-	unclaimed = {int(n) for n in lines[2:results_at] if n.strip()}
+
+def classify_requests(
+	requests: list[tuple[int, list[str]]], held: list[str]
+) -> dict[int, str] | None:
+	"""Classify every request against ``held`` (the live-agent set) in one bash process.
+
+	Returns ``{issue: verdict}``, or ``None`` when the budget is spent or the classifier failed
+	(the caller reads that as gate UNKNOWN, never as "free").
+	"""
+	timeout = gate_timeout()
+	if timeout == 0.0:
+		return None
+	stdin = "".join(f"{p}\n" for p in held)
+	stdin += "===REQUESTS===\n"
+	stdin += "".join(f"{issue}\t{'|'.join(files)}\n" for issue, files in requests)
+	try:
+		proc = subprocess.run(  # noqa: S603, S607 - fixed argv, script is a module constant
+			["bash", "-c", _CLASSIFY_SCRIPT, "dispatch_plan", str(FREE_SURFACE_SH)],
+			input=stdin,
+			capture_output=True,
+			text=True,
+			timeout=timeout,
+			check=True,
+		)
+	except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+		return None
 	verdicts = {}
-	for line in lines[results_at + 1 :]:
+	for line in proc.stdout.splitlines():
 		if not line.strip():
 			continue
 		issue, verdict = line.split("\t", 1)
 		verdicts[int(issue)] = verdict
-	return True, unclaimed, verdicts
+	return verdicts
 
 
 def hot_patterns(root: Path) -> list[str]:
@@ -841,6 +867,18 @@ def select_disjoint(candidates: list[dict]) -> tuple[list[dict], list[dict]]:
 
 
 def build_plan() -> dict:
+	"""Assemble the plan, overlapping the three independent slow reads (#991).
+
+	The open-PR GraphQL read, the claimed-issues GraphQL read and the local worktree walk need
+	nothing from each other, so they run concurrently and the wall time is the slowest of them
+	rather than their sum. Every fail-closed path is unchanged: each result is judged exactly as
+	before, only started earlier.
+	"""
+	with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+		return _build_plan(pool)
+
+
+def _build_plan(pool: concurrent.futures.ThreadPoolExecutor) -> dict:
 	"""Assemble the {"dispatchable": [...], "excluded": [...]} plan for every open issue."""
 	slug = repo_slug()
 	owner, name = slug.split("/", 1)
@@ -856,6 +894,8 @@ def build_plan() -> dict:
 		)
 
 	issue_numbers = {issue["number"] for issue in issues}
+	unclaimed_future = pool.submit(read_unclaimed, owner, name)
+	live_future = pool.submit(live_agent_held_paths, root)
 	# `closingIssuesReferences` has no REST equivalent, so this one read stays on GraphQL and can be
 	# refused while the rest of the planner is healthy (dotfiles-linux-dev#534). Dying here printed nothing
 	# at all, and both Stop guards then reported the plan UNREADABLE — true, but it hid a plan that
@@ -894,7 +934,7 @@ def build_plan() -> dict:
 		)
 	mention_reasons = mentioned_without_closing(issue_numbers, prs, slug) if issue_numbers else {}
 
-	live_ok, live_held = live_agent_held_paths(root)
+	live_ok, live_held = live_future.result()
 
 	surfaces: dict[int, list[str]] = {}
 	expanded: dict[int, list[str]] = {}
@@ -916,10 +956,14 @@ def build_plan() -> dict:
 					expand_ok = False
 
 	requests = list(expanded.items())
-	if expand_ok:
-		gate_ok, unclaimed, verdicts = run_gate(owner, name, requests, live_held)
-	else:
-		gate_ok, unclaimed, verdicts = False, set(), {}
+	gate_ok, unclaimed = unclaimed_future.result()
+	verdicts: dict[int, str] = {}
+	if gate_ok and expand_ok:
+		classified = classify_requests(requests, live_held)
+		gate_ok = classified is not None
+		verdicts = classified or {}
+	elif not expand_ok:
+		gate_ok = False
 
 	# Only worth reading once the rest of the plan is actually usable — every issue below is
 	# excluded on live_ok/gate_ok alone otherwise, and this read is never consulted for that.

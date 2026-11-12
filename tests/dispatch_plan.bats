@@ -1314,3 +1314,26 @@ hot_list() {
     [ "$(field '.dispatchable | length')" -eq 2 ]
     [ "$(field '.excluded | length')" -eq 0 ]
 }
+
+# --- dotfiles-linux-dev#991: the independent slow reads overlap, they do not add up ---------------
+# With every gh call taking 3 s: slug + open-issues reads (6 s) and the blockers read (3 s) are
+# unavoidable; the open-PR page (3 s) and the gate (claimed + issue list, 6 s) are independent.
+# Serial that is 18 s; overlapped it is 15 s. The bound sits between, and the plan must be intact.
+
+@test "991: the open-PR read and the gate's claimed-issue read run concurrently" {
+    stub_gh "[$(issue_json 1 free/a.sh)]"
+    export GH_STUB_SLEEP=3
+    local start=$SECONDS
+    run_planner
+    [ "$status" -eq 0 ]
+    [ $((SECONDS - start)) -lt 17 ]
+    [ "$(field '.dispatchable | length')" -eq 1 ]
+}
+
+@test "991: a failing claimed-issue read still excludes every issue by name (fail closed)" {
+    stub_gh "[$(issue_json 1 free/a.sh)]" "" "" 1
+    run_planner
+    [ "$status" -eq 0 ]
+    [ "$(field '.dispatchable | length')" -eq 0 ]
+    [[ "$(field '.excluded[0].reason')" == *"UNKNOWN"* ]]
+}
