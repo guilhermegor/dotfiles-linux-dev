@@ -748,7 +748,83 @@ run_stale_rest() {
         kanban_stale_cards_rest"
 }
 
+# write_stamp EPOCH — records a successful `closed` reconcile of owner|13|repo at EPOCH (#989).
+write_stamp() {
+    printf 'closed\towner|13|repo\t%s\n' "$1" > "$(dirname "$KANBAN_SKIPPED_FILE")/kanban-reconciled-boards.tsv"
+}
+
+@test "stale cards: a successful reconcile AFTER the close means the native workflow is not firing (#989)" {
+    write_stamp "$(date +%s)"
+    run_stale_rest ok
+    [[ "$output" == *"stale card: owner/repo#5 in Blocked (closed 2026-11-05T00:00:00Z) — reconcile ran after the close, native workflow not firing"* ]]
+    [[ "$output" == *"native workflow not firing on: owner/13 (repo) -> board"* ]]
+    [[ "$output" == *"Workflows"* ]]
+}
+
+@test "stale cards: no successful reconcile since the close is a reconcile gap, not a workflow problem (#989)" {
+    write_stamp "$(date -d 2026-11-01 +%s)"
+    run_stale_rest ok
+    [[ "$output" == *"#5 in Blocked (closed 2026-11-05T00:00:00Z) — reconcile gap"* ]]
+    [[ "$output" != *"Workflows"* ]]
+    [[ "$output" != *"native workflow not firing"* ]]
+}
+
+@test "stale cards: no readable stamp is UNKNOWN, never assumed either way (#989)" {
+    run_stale_rest ok
+    [[ "$output" == *"#5 in Blocked (closed 2026-11-05T00:00:00Z) — UNKNOWN (no readable record"* ]]
+    [[ "$output" != *"Workflows"* ]]
+    [[ $EUID -ne 0 ]] || skip "root reads a mode-000 file"
+    write_stamp "$(date +%s)"
+    chmod 000 "$(dirname "$KANBAN_SKIPPED_FILE")/kanban-reconciled-boards.tsv"
+    run_stale_rest ok
+    chmod 600 "$(dirname "$KANBAN_SKIPPED_FILE")/kanban-reconciled-boards.tsv"
+    [[ "$output" == *"UNKNOWN (no readable record"* ]]
+}
+
+@test "stale cards: a card closed inside the grace window is not blamed on anything (#989)" {
+    write_stamp "$(date +%s)"
+    local now
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    ITEMS_FIXTURE="$(jq -c --arg t "$now" '.[0].content.closed_at = $t' <<<"$ITEMS_FIXTURE")"
+    run_stale_rest ok
+    [[ "$output" == *"#5 in Blocked (closed $now) — within 15m grace"* ]]
+    [[ "$output" == *"#7 in No Status (closed 2026-11-06T00:00:00Z) — reconcile ran after"* ]]
+}
+
+@test "stale cards: the grace window is overridable by KANBAN_STALE_GRACE_MINUTES (#989)" {
+    write_stamp "$(date +%s)"
+    local ago
+    ago="$(date -u -d '-30 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+    ITEMS_FIXTURE="$(jq -c --arg t "$ago" '.[0].content.closed_at = $t' <<<"$ITEMS_FIXTURE")"
+    KANBAN_STALE_GRACE_MINUTES=60 run_stale_rest ok
+    [[ "$output" == *"#5 in Blocked (closed $ago) — within 60m grace"* ]]
+}
+
+@test "boards: a successful closed reconcile stamps the board; failures and other kinds do not (#989)" {
+    export TEST_TMP
+    local stamps
+    stamps="$(dirname "$KANBAN_SKIPPED_FILE")/kanban-reconciled-boards.tsv"
+    run_boards closed "$TEST_TMP" "owner|17|clean" "owner|13|broken" \
+        -- '_kb_run_kind() { _KB_REPORT=""; [ "$3" = clean ]; }'
+    grep -q $'^closed\towner|17|clean\t[0-9]\+$' "$stamps"
+    run grep -q 'owner|13|broken' "$stamps"
+    [ "$status" -ne 0 ]
+    rm -f "$stamps"
+    run_boards in_review "$TEST_TMP" "owner|17|clean" -- "$STUB_IN_REVIEW"
+    [ ! -e "$stamps" ]
+}
+
+@test "boards: a partial closed reconcile (FAILED/UNKNOWN line) is not stamped (#989)" {
+    export TEST_TMP
+    local stamps
+    stamps="$(dirname "$KANBAN_SKIPPED_FILE")/kanban-reconciled-boards.tsv"
+    run_boards closed "$TEST_TMP" "owner|17|part" \
+        -- '_kb_run_kind() { _KB_REPORT="FAILED to move issue #5 to Done — verify by hand"; return 0; }'
+    [ ! -e "$stamps" ]
+}
+
 @test "stale cards: a closed issue in Blocked is listed with owner; Done, open, PR are not (#921)" {
+    write_stamp "$(date +%s)"
     run_stale_rest ok
     [[ "$output" == *"stale card: owner/repo#5 in Blocked (closed 2026-11-05T00:00:00Z)"* ]]
     [[ "$output" == *"stale card: other/repo#7 in No Status (closed 2026-11-06T00:00:00Z)"* ]]

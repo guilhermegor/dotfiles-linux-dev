@@ -72,6 +72,12 @@ spec_body() {
 # Writes {"items":[...]} to the fixture file the fake gh's `project item-list` reads.
 write_items() {
     printf '%s\n' "$@" | jq -sc '{items: .}' > "$TEST_TMP/items.json"
+    # The re-block path reads the item's own issue state (#989); every fixture item is OPEN
+    # unless a test registers otherwise with write_ref_state (called after write_items).
+    local repo number
+    while IFS=$'\t' read -r repo number; do
+        [ -n "$repo" ] && write_ref_state "$repo" "$number" OPEN
+    done < <(printf '%s\n' "$@" | jq -r '[.content.repository, .content.number] | @tsv' 2>/dev/null)
 }
 
 # blocker NUMBER STATE REPO
@@ -770,6 +776,30 @@ run_boards() {
     grep -q 'project item-edit 17 --owner owner --url .*--field Blocked by --text owner/repo#6' "$GH_LOG"
     grep -q 'issue comment 7 --repo owner/repo' "$GH_LOG"
     grep -q 'project item-edit 17 --owner owner --url .*--field Status --value Blocked' "$GH_LOG"
+}
+
+@test "re-block: a CLOSED issue's card is never moved to Blocked (#989)" {
+    write_items "$(item "owner/repo" 7 "Ready" "" "")"
+    write_blockers 7 "$(blocker 6 open "owner/repo")"
+    write_ref_state owner/repo 7 CLOSED
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=ok"* ]]
+    [[ "$output" != *"blocked"* ]]
+    run grep -q 'item-edit' "$GH_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "re-block: an unreadable issue state is UNKNOWN and nothing is written (#989)" {
+    write_items "$(item "owner/repo" 7 "Ready" "" "")"
+    write_blockers 7 "$(blocker 6 open "owner/repo")"
+    write_ref_state owner/repo 7 FAIL
+    rm -f "$TEST_TMP"/refstate-owner_repo-7.json
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"UNKNOWN owner/repo#7: could not read issue state"* ]]
+    run grep -q 'item-edit' "$GH_LOG"
+    [ "$status" -ne 0 ]
 }
 
 @test "a Backlog item with an open native blocker is moved to Blocked (#931)" {

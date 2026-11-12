@@ -529,6 +529,14 @@ _ru_process_open_item() {
 	else
 		return 0
 	fi
+	# #989: a CLOSED issue's card belongs in Done (the kanban `closed` reconcile moves it); a
+	# re-block here wrote Blocked onto layouts-cvm#63 after it closed. State unreadable is UNKNOWN.
+	local state
+	state="$(_ru_ref_state "$ident")" || {
+		printf 'UNKNOWN %s: could not read issue state — left untouched\n' "$ident"
+		return 0
+	}
+	[[ "$state" == "closed" ]] && return 0
 	if _ru_reblock "$owner" "$project" "$repo" "$number" "$url" "$detail"; then
 		printf '%s: %s by %s%s\n' "$verb" "$ident" "$detail" "$(_ru_kind_tag "$kind")"
 	else
