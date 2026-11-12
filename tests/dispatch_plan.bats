@@ -1333,8 +1333,10 @@ hot_list() {
     local ps pe qs qe _k
     read -r ps pe _k < <(grep ' owner$' "$BIN/gh.times" | head -1)
     read -r qs qe _k < <(grep ' query$' "$BIN/gh.times" | head -1)
-    [ -n "$ps" ] && [ -n "$qs" ]
-    [ "$ps" -lt "$qe" ] && [ "$qs" -lt "$pe" ]
+    [ -n "$ps" ]
+    [ -n "$qs" ]
+    [ "$ps" -lt "$qe" ]
+    [ "$qs" -lt "$pe" ]
     [ "$(field '.dispatchable | length')" -eq 1 ]
 }
 

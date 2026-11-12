@@ -746,7 +746,7 @@ def read_unclaimed(owner: str, repo: str) -> tuple[bool, set[int]]:
 			timeout=timeout,
 			check=True,
 		)
-	except subprocess.TimeoutExpired:
+	except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
 		return False, set()
 	lines = proc.stdout.splitlines()
 	if not lines or lines[0] != "GATE_STATUS:ok":
@@ -783,8 +783,11 @@ def classify_requests(
 	for line in proc.stdout.splitlines():
 		if not line.strip():
 			continue
-		issue, verdict = line.split("\t", 1)
-		verdicts[int(issue)] = verdict
+		try:
+			issue, verdict = line.split("\t", 1)
+			verdicts[int(issue)] = verdict
+		except ValueError:
+			return None  # a stray stdout line: unreadable classifier output is UNKNOWN, not a crash
 	return verdicts
 
 
