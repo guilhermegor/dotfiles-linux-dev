@@ -803,6 +803,7 @@ kanban_stale_cards_rest() {
 # Minutes a closed issue's card may sit outside Done before it is called stale (#989).
 KANBAN_STALE_GRACE_MINUTES="${KANBAN_STALE_GRACE_MINUTES:-15}"
 [[ "$KANBAN_STALE_GRACE_MINUTES" =~ ^[0-9]+$ ]] || KANBAN_STALE_GRACE_MINUTES=15 # arithmetic context: never eval garbage
+KANBAN_STALE_GRACE_MINUTES=$((10#$KANBAN_STALE_GRACE_MINUTES)) # "08" is invalid octal in (( ))
 
 # _kb_classify_stale CLOSED_AT STAMP — prints why a closed issue's card is not in Done and sets
 # _KB_STALE_CLASS (workflow | gap | unknown | grace). STAMP is the board's last successful `closed`
