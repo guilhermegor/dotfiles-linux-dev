@@ -134,6 +134,17 @@ prune_merged_heads() {
 	done <<<"$shas"
 }
 
+# Prints "open" when any OPEN PR contains commit <sha>, else "none"; rc 1 = forge unreadable.
+# A detached worktree has no branch for prune_pr_state, and a merged PR proves nothing while a
+# follow-up PR over the same commit is still open (#988). Overridden by tests.
+prune_detached_pr_state() {
+	local cwd="$1" sha="$2" slug out
+	slug="$(fanout_repo_slug "$cwd")" || return 1
+	out="$(gh api "repos/$slug/commits/$sha/pulls?per_page=100" --jq '[.[]|select(.state=="open")]|length' 2>/dev/null)" || return 1
+	[[ "$out" =~ ^[0-9]+$ ]] || return 1
+	[ "$out" = 0 ] && echo none || echo open
+}
+
 prune_recently_touched() {
 	local path="$1" min_age="$2" now m newest=0 gd f hit
 	now="$(date +%s)"
@@ -172,6 +183,10 @@ prune_classify() {
 		heads="$(prune_merged_heads "$cwd" "$label" "$db" "$at")" || { echo "forge unreadable"; return 1; }
 		merged_pr_covers_head "$path" "$label" "$heads" \
 			|| { echo "content not on origin/$db (or undecidable)"; return 1; }
+		if [ -z "$branch" ]; then
+			state="$(prune_detached_pr_state "$cwd" "$at")" || { echo "forge unreadable"; return 1; }
+			[ "$state" = open ] && { echo "PR is OPEN"; return 1; }
+		fi
 	fi
 	why="$(prune_tree_is_noise_only "$path")" || { echo "$why"; return 1; }
 	if [ -n "$branch" ]; then

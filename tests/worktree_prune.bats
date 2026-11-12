@@ -38,6 +38,11 @@ stub_forge() {
         [ "$PR_STATE" = unreadable ] && return 1
         echo "$PR_STATE"
     }
+    DETACHED_PR_STATE=none
+    prune_detached_pr_state() {
+        [ "$PR_STATE" = unreadable ] && return 1
+        echo "$DETACHED_PR_STATE"
+    }
     # Emits "<branch><TAB><sha>" for the sha in MERGED_HEAD_SHA (a command); default none.
     MERGED_HEAD_SHA=""
     prune_merged_heads() {
@@ -564,6 +569,31 @@ make_detached() {
     run_prune 0
     [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-d3: untracked notes.txt"* ]]
     [ -d "$BATS_TEST_TMPDIR/wt-d3" ]
+}
+
+@test "a detached worktree at a merged PR head with an open PR over it stays KEEP (#988)" {
+    make_detached d5 fd5.txt
+    land_on_master fd5.txt
+    edit_on_master fd5.txt
+    MERGED_HEAD_SHA="git -C '$BATS_TEST_TMPDIR/wt-d5' rev-parse HEAD"
+    DETACHED_PR_STATE=open
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-d5: PR is OPEN"* ]]
+    [ -d "$BATS_TEST_TMPDIR/wt-d5" ]
+}
+
+@test "prune_detached_pr_state reports open only for an open PR on the sha (#988)" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
+    fanout_repo_slug() { echo o/r; }
+    gh() { echo "$FAKE_PRS" | jq "${*: -1}" 2>/dev/null; }
+    FAKE_PRS='[{"state":"closed"}]' run prune_detached_pr_state "$work" abc
+    [ "$output" = none ]
+    gh() { jq -n '1'; }
+    run prune_detached_pr_state "$work" abc
+    [ "$output" = open ]
+    gh() { return 1; }
+    run prune_detached_pr_state "$work" abc
+    [ "$status" -eq 1 ]
 }
 
 @test "a detached worktree with an unreadable forge stays KEEP (#988)" {
