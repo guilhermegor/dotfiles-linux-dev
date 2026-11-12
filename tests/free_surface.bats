@@ -276,3 +276,36 @@ gh() {
         [[ "$output" == *ok ]]
     done
 }
+
+# --- dotfiles-linux-dev#991: classification cost must not scale as files x held --------------------
+
+@test "991: 1500 files against 1500 held paths classify in one pass, verdict unchanged" {
+    FREE_HELD_PATHS="$(seq 1 1500 | sed 's|^|held/f|')"
+    local files=() i
+    for i in $(seq 1 1500); do files+=("held/f$i"); done
+    local start=$SECONDS
+    run free_classify_files "${files[@]}"
+    [ "$status" -eq 0 ]
+    [[ "$output" == "held:held/f1 held/f2 "* ]]
+    [ $((SECONDS - start)) -lt 5 ]
+    run free_classify_files "${files[@]}" other/free.sh
+    [ "$status" -eq 0 ]
+    [[ "$output" == "would-need-a-held-file:held/f1 "* ]]
+}
+
+@test "991: a failing awk fails closed (UNKNOWN), never reads as free" {
+    FREE_HELD_PATHS='a.sh'
+    awk() { return 2; }
+    run free_classify_files a.sh
+    [ "$status" -eq 1 ]
+    [ "$output" = "UNKNOWN" ]
+}
+
+@test "991: a path with a space counts as one file, and an empty held set matches nothing" {
+    FREE_HELD_PATHS='dir/a b.sh'
+    run free_classify_files "dir/a b.sh"
+    [ "$output" = "held:dir/a b.sh" ]
+    FREE_HELD_PATHS=''
+    run free_classify_files x.sh
+    [ "$output" = "free" ]
+}
