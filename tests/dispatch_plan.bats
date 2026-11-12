@@ -180,6 +180,11 @@ stub_gh() {
     cat >"$BIN/gh" <<STUB
 #!/bin/bash
 echo "\$*" >>"$BIN/gh.calls"
+# GH_STUB_STAMP=1 records "<start_ns> <end_ns> <owner=|query=>" per GraphQL call (#991).
+if [ -n "\${GH_STUB_STAMP:-}" ] && [ "\$1 \$2" = "api graphql" ]; then
+    s=\$(date +%s%N)
+    trap 'echo "\$s \$(date +%s%N) \${4%%=*}" >>"$BIN/gh.times"' EXIT
+fi
 [ -n "\${GH_STUB_SLEEP:-}" ] && sleep "\$GH_STUB_SLEEP" # per-call latency (#962)
 case "\$*" in
 "repo view --json nameWithOwner -q .nameWithOwner") echo "acme/widgets" ;;
@@ -1316,17 +1321,20 @@ hot_list() {
 }
 
 # --- dotfiles-linux-dev#991: the independent slow reads overlap, they do not add up ---------------
-# With every gh call taking 3 s: slug + open-issues reads (6 s) and the blockers read (3 s) are
-# unavoidable; the open-PR page (3 s) and the gate (claimed + issue list, 6 s) are independent.
-# Serial that is 18 s; overlapped it is 15 s. The bound sits between, and the plan must be intact.
+# Asserted on the stub's own per-call timestamps, not on wall time: the open-PR page and the
+# claimed-issue read must be in flight at the same moment. A wall-clock bound sits only ~1-2 s
+# from the serial figure and flakes on a slow runner; interval overlap has no such margin.
 
 @test "991: the open-PR read and the gate's claimed-issue read run concurrently" {
     stub_gh "[$(issue_json 1 free/a.sh)]"
-    export GH_STUB_SLEEP=3
-    local start=$SECONDS
+    export GH_STUB_SLEEP=1 GH_STUB_STAMP=1
     run_planner
     [ "$status" -eq 0 ]
-    [ $((SECONDS - start)) -lt 17 ]
+    local ps pe qs qe _k
+    read -r ps pe _k < <(grep ' owner$' "$BIN/gh.times" | head -1)
+    read -r qs qe _k < <(grep ' query$' "$BIN/gh.times" | head -1)
+    [ -n "$ps" ] && [ -n "$qs" ]
+    [ "$ps" -lt "$qe" ] && [ "$qs" -lt "$pe" ]
     [ "$(field '.dispatchable | length')" -eq 1 ]
 }
 
