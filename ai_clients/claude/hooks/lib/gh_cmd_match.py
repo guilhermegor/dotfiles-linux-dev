@@ -439,9 +439,9 @@ def only_repo_segment_is_dynamic(path, may_write_body=False):
     return bool(verdicts) and all(verdicts)
 
 
-GRAPHQL_ISSUE_MUTATION = re.compile(
-    r"\b(createIssue|updateIssue|convertProjectV2DraftIssueItemToIssue|convertProjectCardNoteToIssue)\s*\(")
-GRAPHQL_CREATING = ("createIssue", "convertProjectV2DraftIssueItemToIssue", "convertProjectCardNoteToIssue")
+GRAPHQL_CREATING = (
+    "createIssue", "convertProjectV2DraftIssueItemToIssue", "convertProjectCardNoteToIssue")
+GRAPHQL_ISSUE_MUTATION = re.compile(r"\b(" + "|".join(GRAPHQL_CREATING + ("updateIssue",)) + r")\s*\(")
 GRAPHQL_STR = r'"""(?:\\"""|(?!""")[\s\S])*"""|"(?:[^"\\]|\\[\s\S])*"'
 GRAPHQL_BODY_KEY = re.compile(r"\bbody\s*:")
 GRAPHQL_LEADING_STRING = re.compile(r"\s*(" + GRAPHQL_STR + ")")
