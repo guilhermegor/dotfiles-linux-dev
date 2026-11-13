@@ -471,6 +471,10 @@ def only_repo_segment_is_dynamic(path, may_write_body=False):
     return bool(verdicts) and all(verdicts)
 
 
+# Measured against GitHub's live schema (introspection of `Mutation`, #937): only these create an
+# Issue. `transferIssue` moves an EXISTING issue with its existing title/body (its input has no
+# body), so there is nothing to judge: it is deliberately not listed. `addProjectV2DraftIssue` and
+# `copyProjectV2` make DraftIssues, which become issues only through the converter below.
 GRAPHQL_CREATING = (
     "createIssue", "convertProjectV2DraftIssueItemToIssue", "convertProjectCardNoteToIssue")
 GRAPHQL_ISSUE_MUTATION = re.compile(r"\b(" + "|".join(GRAPHQL_CREATING + ("updateIssue",)) + r")\s*\(")
@@ -1106,6 +1110,61 @@ def looks_like_gh_api(text):
     return bool(re.search(r"\bgh\b[\s\S]*\bapi\b", re.sub(r"['\"\\]", "", text), re.I))
 
 
+BARE_VARIABLE_SCRIPT = re.compile("^\\s*[" + SHELL_QUOTED + SHELL_SPLIT + r"]\{?\w")
+ISSUE_WORD = re.compile(r"^(issue|graphql)$|(^|/)issues(/|$)")
+
+
+def mentions_gh_issue_write(command):
+    """True when the quote-stripped command text names `gh` and an issue-ish word (#937)."""
+    text = re.sub(r"['\"\\]", "", command)
+    return bool(re.search(r"\bgh\b", text) and re.search(r"\b(issues?|graphql|api)\b", text, re.I))
+
+
+def shell_reads_stdin(argv, words):
+    """True for a command word that is a shell with no `-c` and no script file (`bash`, `bash -s`)."""
+    if not words or words[0].rsplit("/", 1)[-1] not in SHELLS:
+        return False
+    skip = False
+    for tok in argv[1:]:
+        if skip:  # the word after a lone `<` / `<<<` is the redirect target, not a script
+            skip = False
+        elif tok in ("<", "<<<"):
+            skip = True
+        elif re.match(r"^-[a-zA-Z]*c", tok) or not tok.startswith(("-", "<")):
+            return False  # `-c` runs its own script; `bash script.sh` is a file operand
+    return True
+
+
+def runs_unseen_gh(command, segments):
+    """True when a shell runs text the hook cannot read and the command is about a gh issue write.
+
+    Three shapes that no tokenizer can see through (#937): `eval "$Q"` / `bash -c "$Q"` of a bare
+    variable, a shell fed on stdin (`... | bash`, `bash <<EOF`, `bash < f`), and a variable
+    command word (`$GH api graphql ...`, `"$cmd" issue create`). They fail CLOSED only when the
+    whole command also names `gh` and an issue/graphql/api word (a variable command word needs the
+    issue/graphql word itself), so `eval "$(ssh-agent)"`, `bash -c "$x"` or `curl u | bash` with no
+    gh context still pass. A `$(...)` script (`eval "$(cat q.sh)"`) and `bash script.sh` stay an
+    accepted ceiling: the first is indistinguishable from `eval "$(ssh-agent)"`, the second runs a
+    file whose content is the read race's problem.
+    """
+    gh_context = mentions_gh_issue_write(command)
+    for argv, marks in iter_argvs_marked(segments):
+        words = [_word(t) for t in argv]
+        at = next((i for i, w in enumerate(words) if not re.match(r"^\w+=", w)
+                   and w not in WRAPPERS and w not in SHELL_KEYWORDS and w), None)
+        if at is None:
+            continue
+        if any(m in marks[at] for m in (SHELL_QUOTED, SHELL_SPLIT)) and any(
+                ISSUE_WORD.search(w) for w in words[at + 1:]):
+            return True
+        if gh_context and shell_reads_stdin(argv[at:], words[at:]):
+            return True
+        spec = _nested_script(argv)
+        if gh_context and spec and BARE_VARIABLE_SCRIPT.match(" ".join(marks[spec[0]:spec[1]])):
+            return True
+    return False
+
+
 def main():
     noun = sys.argv[1] if len(sys.argv) > 1 else ""
     if noun not in ("pr", "issue", "api-issue"):
@@ -1117,7 +1176,8 @@ def main():
         segments = split_segments(command)
         if noun == "api-issue":
             match = api_issue_match(segments)
-            if any(looks_like_gh_api(e) for e in NESTED_ERRORS):
+            if runs_unseen_gh(command, segments) or any(
+                    looks_like_gh_api(e) for e in NESTED_ERRORS):
                 match = {"matched": True, "unparseable": True}
             print(json.dumps(match or {"matched": False}))
             return 0

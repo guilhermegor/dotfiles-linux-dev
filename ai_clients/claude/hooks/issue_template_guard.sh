@@ -17,6 +17,19 @@
 # repos/o/r/pulls/$n/merge -f sha=$sha; done` is a pulls write, not an issue write. A command
 # right after a shell keyword (`do`/`then`/`else`/`if`/`elif`/`while`/`until`/`coproc`) is judged too, so a real `issues -X POST` in that loop stays blocked.
 #
+# Fails CLOSED when a shell runs text the hook cannot read AND the command is about a gh issue
+# write (dotfiles-linux-dev#937): `eval "$Q"` / `bash -c "$Q"` of a bare variable, a shell fed on
+# stdin (`... | bash`, `bash <<EOF`, `bash < f`), a variable command word (`$GH api graphql`).
+# The trigger is the whole command also naming `gh` plus an issue/graphql/api word, so
+# `eval "$(ssh-agent)"` or `curl u | bash` alone still pass.
+# ACCEPTED CEILINGS (documented, not fixable by a PreToolUse hook): (1) the read race — the hook
+# reads an `@file` before `gh` does, and anything that rewrites it in between is invisible; the
+# hook sees one command string and cannot lock a file, and a writer in the same chain is already
+# handled by chain_moves_files, so only a concurrent process remains. (2) `eval "$(cmd)"` and
+# `bash script.sh` hide the text behind a command's output or a file. (3) GraphQL `transferIssue`
+# moves an existing issue (no body in its input) so it is not a create; the creating mutations
+# are listed, with their schema source, at GRAPHQL_CREATING in lib/gh_cmd_match.py.
+#
 # Generic and data-driven: a target repo with no issue template is untouched (exit 0). `/issue`
 # (ai_clients/claude/commands/issue.md) builds its body from the target repo's templates when
 # they exist, and falls back to its own What / Why / Scope / Documentation skeleton only when

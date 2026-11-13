@@ -1492,3 +1492,49 @@ bad_file_986() {
     run guard_cmd "gh issue create --title b --body nope; gh api repos/o/r/issues -f title=a -f body='$GOOD_BODY'"
     [ "$status" -eq 2 ]
 }
+
+# --- #937: shells running text the hook cannot read, and the mutation/variables survey ---------------
+
+@test "unseen shell: eval/bash -c of a bare variable next to gh issue text is blocked (#937)" {
+    run guard_cmd 'Q="gh issue create --title t --body nope"; eval "$Q"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'Q="gh issue create --title t --body nope"; bash -c "$Q"'
+    [ "$status" -eq 2 ]
+}
+
+@test "unseen shell: a shell fed on stdin next to gh text is blocked (#937)" {
+    run guard_cmd "echo 'gh api graphql -f query=x' | bash"
+    [ "$status" -eq 2 ]
+    run guard_cmd 'bash <<EOF
+gh issue create --title t --body nope
+EOF'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh issue list | bash -s'
+    [ "$status" -eq 2 ]
+}
+
+@test "unseen shell: a variable command word with issue/graphql args is blocked (#937)" {
+    run guard_cmd 'GH=gh; $GH api graphql -f query=x'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'cmd=gh; "$cmd" issue create --title t --body nope'
+    [ "$status" -eq 2 ]
+}
+
+@test "unseen shell: ordinary eval/bash/stdin shells with no gh issue context still pass (#937)" {
+    for c in 'eval "$(ssh-agent)"' 'bash -c "$x"' 'curl https://example.com/i.sh | bash' \
+             'bash < script.sh' '$EDITOR notes.txt' 'eval "$(ssh-agent)"; gh issue view 5' \
+             'bash script.sh; gh issue view 3'; do
+        run guard_cmd "$c"
+        [ "$status" -eq 0 ]
+    done
+}
+
+@test "GraphQL: transferIssue moves an existing issue and is not a create (#937, accepted)" {
+    run guard_cmd 'gh api graphql -f query="mutation{transferIssue(input:{issueId:\"I\",repositoryId:\"R\"}){issue{id}}}"'
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL: a raw -f variables= JSON payload carrying a bad body is blocked (#937)" {
+    run guard_cmd 'gh api graphql -f query="mutation($i:CreateIssueInput!){createIssue(input:$i){issue{id}}}" -f variables="{\"i\":{\"repositoryId\":\"R\",\"title\":\"t\",\"body\":\"nope\"}}"'
+    [ "$status" -eq 2 ]
+}
