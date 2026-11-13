@@ -1538,3 +1538,37 @@ EOF'
     run guard_cmd 'gh api graphql -f query="mutation($i:CreateIssueInput!){createIssue(input:$i){issue{id}}}" -f variables="{\"i\":{\"repositoryId\":\"R\",\"title\":\"t\",\"body\":\"nope\"}}"'
     [ "$status" -eq 2 ]
 }
+
+@test "unseen shell: output/numbered-fd redirects on a stdin shell are not script operands (#937)" {
+    local body="echo 'gh issue create --title t --body nope' | bash"
+    for r in '> /dev/null' '2>&1' '2>/dev/null' '>> log' '0< f'; do
+        run guard_cmd "$body $r"
+        [ "$status" -eq 2 ]
+    done
+    run guard_cmd "bash <<< 'gh issue create --title t --body nope'"
+    [ "$status" -eq 2 ]
+}
+
+@test "unseen shell: wrapper options and operands do not hide the shell (#937)" {
+    local q='Q="gh issue create --title t --body nope"; '
+    for w in 'timeout 5' 'sudo -u root' 'env A=b' 'nice -n 5' 'nohup' 'stdbuf -o0'; do
+        run guard_cmd "$q$w bash -c \"\$Q\""
+        [ "$status" -eq 2 ]
+    done
+    run guard_cmd "${q}timeout 5 eval \"\$Q\""
+    [ "$status" -eq 2 ]
+    run guard_cmd 'timeout 5 bash -c "$x"'
+    [ "$status" -eq 0 ]
+}
+
+@test "unseen shell: eval/bash -c expand their own text, quoted or escaped (#937)" {
+    local q="Q='gh issue create --title t --body nope'; "
+    run guard_cmd "$q"'eval '"'"'$Q'"'"
+    [ "$status" -eq 2 ]
+    run guard_cmd "$q"'eval \$Q'
+    [ "$status" -eq 2 ]
+    run guard_cmd "$q"'bash -c '"'"'$Q'"'"
+    [ "$status" -eq 2 ]
+    run guard_cmd 'eval '"'"'$Q'"'"
+    [ "$status" -eq 0 ]
+}

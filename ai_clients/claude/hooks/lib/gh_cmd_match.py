@@ -138,12 +138,13 @@ def _word(tok):
     return (sub.group(1) if sub else tok).lstrip("$({`!\\")
 
 
-def gh_start(argv):
-    """Index of the `gh` token in a simple command, or -1.
+def command_index(argv):
+    """Index of the first real command word of a simple command, or -1 when there is none.
 
     Skips `VAR=x` assignments, wrappers (`rtk [proxy]`, `env`, `command`, `sudo`, ...) together
-    with whatever flags/values follow them, a `$(`/`(`/`{`/backtick group opener, a leading `\\`
-    and accepts an absolute path to gh. With NO wrapper, `gh` must be the first word.
+    with whatever flags/values/operands follow them (`timeout 5`, `sudo -u root`, `nice -n 5`), a
+    `$(`/`(`/`{`/backtick group opener, a leading `\\` and shell keywords. With NO wrapper, the
+    command is the first word.
     """
     wrapped = False
     skip_next = False
@@ -160,11 +161,19 @@ def gh_start(argv):
             continue  # `timeout 5 gh ...`: the duration is timeout's operand, not the command
         elif wrapped and word.startswith("-"):
             skip_next = word in WRAPPER_VALUE_FLAGS.get(wrapper, ())  # `sudo -u root gh`
-        elif word.rsplit("/", 1)[-1] == "gh":
-            return i
         else:
-            return -1  # the real command is not gh (`env echo gh issue create` only prints)
+            return i
     return -1
+
+
+def gh_start(argv):
+    """Index of the `gh` token in a simple command, or -1.
+
+    gh must be the command word itself (after wrappers and assignments, see `command_index`), so
+    `env echo gh issue create` only prints. An absolute path to gh is accepted.
+    """
+    idx = command_index(argv)
+    return idx if idx >= 0 and _word(argv[idx]).rsplit("/", 1)[-1] == "gh" else -1
 
 
 def gh_sub(argv, idx):
@@ -266,9 +275,8 @@ def _nested_script(argv):
                 return spec
         if base == "eval":
             return i + 1, len(argv), 0
-        if (w not in WRAPPERS and w not in SHELL_KEYWORDS
-                and not re.match(r"^\w+=", w) and w != ""):
-            return None
+        if i >= command_index(argv) >= 0:
+            return None  # the command word is neither a shell, env nor eval
     return None
 
 
@@ -1110,7 +1118,8 @@ def looks_like_gh_api(text):
     return bool(re.search(r"\bgh\b[\s\S]*\bapi\b", re.sub(r"['\"\\]", "", text), re.I))
 
 
-BARE_VARIABLE_SCRIPT = re.compile("^\\s*[" + SHELL_QUOTED + SHELL_SPLIT + r"]\{?\w")
+BARE_VARIABLE_SCRIPT = re.compile(r"^\s*\$\{?\w")
+REDIRECT_OPERATOR = re.compile(r"^[0-9]*(?:<<<|<<-?|<>|<&?|>>|>\|?&?|&>>?)(.*)$")
 ISSUE_WORD = re.compile(r"^(issue|graphql)$|(^|/)issues(/|$)")
 
 
@@ -1126,11 +1135,12 @@ def shell_reads_stdin(argv, words):
         return False
     skip = False
     for tok in argv[1:]:
-        if skip:  # the word after a lone `<` / `<<<` is the redirect target, not a script
+        redirect = REDIRECT_OPERATOR.match(tok)
+        if skip:  # the word after a bare redirect operator is its target, not a script
             skip = False
-        elif tok in ("<", "<<<"):
-            skip = True
-        elif re.match(r"^-[a-zA-Z]*c", tok) or not tok.startswith(("-", "<")):
+        elif redirect:
+            skip = not redirect.group(1)  # `> out`, `0< f`, `<<< s` take the next word
+        elif re.match(r"^-[a-zA-Z]*c", tok) or not tok.startswith("-"):
             return False  # `-c` runs its own script; `bash script.sh` is a file operand
     return True
 
@@ -1150,17 +1160,17 @@ def runs_unseen_gh(command, segments):
     gh_context = mentions_gh_issue_write(command)
     for argv, marks in iter_argvs_marked(segments):
         words = [_word(t) for t in argv]
-        at = next((i for i, w in enumerate(words) if not re.match(r"^\w+=", w)
-                   and w not in WRAPPERS and w not in SHELL_KEYWORDS and w), None)
-        if at is None:
+        at = command_index(argv)
+        if at < 0:
             continue
         if any(m in marks[at] for m in (SHELL_QUOTED, SHELL_SPLIT)) and any(
                 ISSUE_WORD.search(w) for w in words[at + 1:]):
             return True
         if gh_context and shell_reads_stdin(argv[at:], words[at:]):
             return True
+        # eval and `bash -c` expand the script's own text, however the outer shell quoted it
         spec = _nested_script(argv)
-        if gh_context and spec and BARE_VARIABLE_SCRIPT.match(" ".join(marks[spec[0]:spec[1]])):
+        if gh_context and spec and BARE_VARIABLE_SCRIPT.match(" ".join(argv[spec[0]:spec[1]])):
             return True
     return False
 
