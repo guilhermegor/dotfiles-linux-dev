@@ -45,8 +45,13 @@ stub_forge() {
     }
     # Emits "<branch><TAB><sha>" for the sha in MERGED_HEAD_SHA (a command); default none.
     MERGED_HEAD_SHA=""
+    MERGED_BY_TIP_SHA=""
     prune_merged_heads() {
         [ "$PR_STATE" = unreadable ] && return 1
+        if [ -n "${4:-}" ] && [ -n "$MERGED_BY_TIP_SHA" ]; then
+            printf '%s\t%s\n' "$2" "$(eval "$MERGED_BY_TIP_SHA")"
+            return 0
+        fi
         [ -z "$MERGED_HEAD_SHA" ] || printf '%s\t%s\n' "$2" "$(eval "$MERGED_HEAD_SHA")"
         return 0
     }
@@ -187,6 +192,84 @@ edit_on_master() {
     run_prune 1
     [[ "$output" == *"KEEP $wt: content not on origin/master"* ]]
     [ -d "$wt" ]
+}
+
+@test "renamed branch whose tip is inside a merged PR head is pruned (#1004)" {
+    make_branch r1 fr1.txt
+    land_on_master fr1.txt
+    edit_on_master fr1.txt
+    MERGED_BY_TIP_SHA="git -C '$BATS_TEST_TMPDIR/wt-r1' rev-parse HEAD"
+    run_prune 0
+    [[ "$output" == *"WOULD-PRUNE $BATS_TEST_TMPDIR/wt-r1 [r1]"* ]]
+}
+
+@test "renamed branch with no PR over the tip stays KEEP (#1004)" {
+    make_branch r2 fr2.txt
+    land_on_master fr2.txt
+    edit_on_master fr2.txt
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-r2: content not on origin/master"* ]]
+}
+
+@test "renamed branch with an OPEN PR over the tip stays KEEP (#1004)" {
+    make_branch r3 fr3.txt
+    land_on_master fr3.txt
+    edit_on_master fr3.txt
+    MERGED_BY_TIP_SHA="git -C '$BATS_TEST_TMPDIR/wt-r3' rev-parse HEAD"
+    DETACHED_PR_STATE=open
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-r3: PR is OPEN"* ]]
+}
+
+@test "renamed branch with an unreadable tip lookup stays KEEP (#1004)" {
+    make_branch r4 fr4.txt
+    land_on_master fr4.txt
+    edit_on_master fr4.txt
+    MERGED_BY_TIP_SHA="git -C '$BATS_TEST_TMPDIR/wt-r4' rev-parse HEAD"
+    prune_merged_heads() { [ -n "${4:-}" ] && return 1; return 0; }
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-r4: forge unreadable"* ]]
+}
+
+@test "renamed branch with an unreadable tip PR-state lookup stays KEEP (#1004)" {
+    make_branch r5 fr5.txt
+    land_on_master fr5.txt
+    edit_on_master fr5.txt
+    MERGED_BY_TIP_SHA="git -C '$BATS_TEST_TMPDIR/wt-r5' rev-parse HEAD"
+    prune_detached_pr_state() { return 1; }
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-r5: forge unreadable"* ]]
+}
+
+@test "prune_detached_pr_state is open when any PR over the sha is open (#1004)" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
+    fanout_repo_slug() { echo o/r; }
+    gh() {
+        printf '%s\n' '[{"state":"closed"},{"state":"open"}]' \
+            | jq -r '.[]|select(.state=="open")|"open"'
+    }
+    run prune_detached_pr_state "$work" TIP
+    [ "$status" -eq 0 ]
+    [ "$output" = open ]
+}
+
+@test "prune_merged_heads by tip drops closed-unmerged and non-default-base PRs (#1004)" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
+    fanout_repo_slug() { echo o/r; }
+    gh() {
+        case "$2" in
+        */commits/TIP/pulls*) ;;
+        *) return 1 ;;
+        esac
+        cat <<'JSON'
+[{"merged_at":null,"base":{"ref":"master"},"head":{"sha":"CLOSED"}},
+ {"merged_at":"2026-01-01T00:00:00Z","base":{"ref":"release"},"head":{"sha":"OTHERBASE"}},
+ {"merged_at":"2026-01-01T00:00:00Z","base":{"ref":"master"},"head":{"sha":"GOOD"}}]
+JSON
+    }
+    run prune_merged_heads "$work" lbl master TIP
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(printf 'lbl\tGOOD')" ]
 }
 
 @test "prune_merged_heads keeps only PRs merged into the default branch" {
