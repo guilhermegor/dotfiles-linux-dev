@@ -165,7 +165,7 @@ prune_recently_touched() {
 
 # Prints "PRUNE|KEEP<TAB>reason" for one worktree; rc 0 = prunable.
 prune_classify() {
-	local cwd="$1" path="$2" branch="$3" db="$4" min_age="$5" why state remote local_sha base at
+	local cwd="$1" path="$2" branch="$3" db="$4" min_age="$5" why state remote local_sha base at tip
 	if prune_recently_touched "$path" "$min_age"; then echo "touched within ${min_age}s (live agent?)"; return 1; fi
 	# branch_content_shipped is vacuously true for a fresh branch at origin tip (empty path list
 	# makes it compare whole trees, which are equal): demand real work to have shipped.
@@ -182,6 +182,16 @@ prune_classify() {
 		[ -n "$branch" ] || at="$(git -C "$path" rev-parse HEAD 2>/dev/null)" || at=""
 		[ -n "$branch" ] || [ -n "$at" ] || { echo "content not on origin/$db (or undecidable)"; return 1; }
 		heads="$(prune_merged_heads "$cwd" "$label" "$db" "$at")" || { echo "forge unreadable"; return 1; }
+		# A worktree renamed away from its PR's head ref matches no PR by branch name: ask by
+		# its tip, and require no OPEN PR over that commit either (#1004).
+		if [ -z "$heads" ] && [ -n "$branch" ]; then
+			tip="$(git -C "$path" rev-parse HEAD 2>/dev/null)" || { echo "undecidable"; return 1; }
+			heads="$(prune_merged_heads "$cwd" "$label" "$db" "$tip")" || { echo "forge unreadable"; return 1; }
+			if [ -n "$heads" ]; then
+				state="$(prune_detached_pr_state "$cwd" "$tip")" || { echo "forge unreadable"; return 1; }
+				[ "$state" = open ] && { echo "PR is OPEN"; return 1; }
+			fi
+		fi
 		merged_pr_covers_head "$path" "$label" "$heads" \
 			|| { echo "content not on origin/$db (or undecidable)"; return 1; }
 	fi
