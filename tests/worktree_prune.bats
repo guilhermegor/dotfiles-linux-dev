@@ -231,6 +231,28 @@ edit_on_master() {
     [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-r4: forge unreadable"* ]]
 }
 
+@test "renamed branch with an unreadable tip PR-state lookup stays KEEP (#1004)" {
+    make_branch r5 fr5.txt
+    land_on_master fr5.txt
+    edit_on_master fr5.txt
+    MERGED_BY_TIP_SHA="git -C '$BATS_TEST_TMPDIR/wt-r5' rev-parse HEAD"
+    prune_detached_pr_state() { return 1; }
+    run_prune 0
+    [[ "$output" == *"KEEP $BATS_TEST_TMPDIR/wt-r5: forge unreadable"* ]]
+}
+
+@test "prune_detached_pr_state is open when any PR over the sha is open (#1004)" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
+    fanout_repo_slug() { echo o/r; }
+    gh() {
+        printf '%s\n' '[{"state":"closed"},{"state":"open"}]' \
+            | jq -r '.[]|select(.state=="open")|"open"'
+    }
+    run prune_detached_pr_state "$work" TIP
+    [ "$status" -eq 0 ]
+    [ "$output" = open ]
+}
+
 @test "prune_merged_heads by tip drops closed-unmerged and non-default-base PRs (#1004)" {
     source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/worktree_prune.sh"
     fanout_repo_slug() { echo o/r; }
