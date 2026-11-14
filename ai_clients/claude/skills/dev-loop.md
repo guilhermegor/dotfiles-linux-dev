@@ -1311,7 +1311,7 @@ Report only what **changed**, plus anything that needs the owner. If a step foun
 If nothing at all changed since the last round, say *"no change"* and stop.
 
 **Idle disarm (#1003).** Last thing in the round, once step 2's roadmap unblock turned no card Ready,
-run `bash ~/.claude/hooks/lib/loop_idle.sh` (never judge idleness by eye). On `ACTIVE` carry on and
+run `bash ~/.claude/hooks/lib/loop_idle.sh <absolute repo path>` (never judge idleness by eye). On `ACTIVE` carry on and
 report as above. On `IDLE`, `CronList` then `CronDelete` all three jobs (any that exist) and report one
 line, built from the predicate's `#N: blocker` lines: `loop disarmed — nothing actionable: <N> blocked
 (<issue: blocker>…); re-arm with /dev-loop`. Any read failure is `ACTIVE (unknown: …)`: never disarm on it.

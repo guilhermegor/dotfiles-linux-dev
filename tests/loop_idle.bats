@@ -144,3 +144,30 @@ run_idle() { run bash "$LIB" "$REPO"; }
     [ "$status" -eq 1 ]
     [[ "${lines[0]}" == "ACTIVE (unknown: "* ]]
 }
+
+@test "loop_idle: an excluded entry with a non-string reason -> ACTIVE (unknown), never IDLE" {
+    export PLAN_JSON='{"dispatchable":[],"live_ok":true,"live_held":[],"excluded":[{"issue":5,"reason":null}]}'
+    run_idle
+    [ "$status" -eq 1 ]
+    [ "${lines[0]}" = "ACTIVE (unknown: dispatch plan unreadable or budget-latched)" ]
+}
+
+@test "loop_idle: live_held not an array -> ACTIVE (unknown)" {
+    export PLAN_JSON='{"dispatchable":[],"live_ok":true,"live_held":{"a":"b"},"excluded":[]}'
+    run_idle
+    [ "$status" -eq 1 ]
+    [[ "${lines[0]}" == "ACTIVE (unknown:"* ]]
+}
+
+@test "loop_idle: UNKNOWN under a blocked: prefix -> ACTIVE (unknown), not a blocker" {
+    export PLAN_JSON='{"dispatchable":[],"live_ok":true,"live_held":[],"excluded":[{"issue":7,"reason":"blocked: native dependency UNKNOWN"}]}'
+    run_idle
+    [ "$status" -eq 1 ]
+    [ "${lines[0]}" = "ACTIVE (unknown: an open issue's state could not be read)" ]
+}
+
+@test "loop_idle: a non-repo dir -> ACTIVE (unknown), never IDLE" {
+    run bash "$LIB" "$BATS_TEST_TMPDIR/bin"
+    [ "$status" -eq 1 ]
+    [[ "${lines[0]}" == "ACTIVE (unknown:"* ]]
+}

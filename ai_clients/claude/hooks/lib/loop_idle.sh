@@ -57,6 +57,11 @@ loop_idle() {
 		_loop_idle_say "ACTIVE (unknown: PR list unreadable for the worktree walk)"
 		return 1
 	fi
+	# fanout_worktrees exits 0 even on a bad dir (measured), so guard its one input directly.
+	if ! git -C "$cwd" worktree list --porcelain >/dev/null 2>&1; then
+		_loop_idle_say "ACTIVE (unknown: worktree list unreadable)"
+		return 1
+	fi
 	rescue="$(fanout_worktrees "$cwd" 1 "$json" 2>/dev/null | grep -v 'stale revert' || true)"
 	if [ -n "$rescue" ]; then
 		_loop_idle_say "ACTIVE" "rescue: $(printf '%s' "$rescue" | head -1)"
@@ -64,7 +69,8 @@ loop_idle() {
 	fi
 
 	if ! plan="$(cd "$cwd" && python3 "$planner" --idle 2>/dev/null)" \
-		|| ! printf '%s' "$plan" | jq -e '(.dispatchable|type=="array") and (.excluded|type=="array")' >/dev/null 2>&1; then
+		|| ! printf '%s' "$plan" | jq -e '(.dispatchable|type=="array") and (.live_held|type=="array") and (.excluded|type=="array")
+			and all(.excluded[]; (.issue|type=="number") and (.reason|type=="string"))' >/dev/null 2>&1; then
 		_loop_idle_say "ACTIVE (unknown: dispatch plan unreadable or budget-latched)"
 		return 1
 	fi
@@ -75,6 +81,11 @@ loop_idle() {
 	held="$(printf '%s' "$plan" | jq -r '.live_held | length')"
 	if [ "$held" -gt 0 ]; then
 		_loop_idle_say "ACTIVE" "live-agent: $held path(s) held by a live worktree"
+		return 1
+	fi
+	# UNKNOWN/UNREADABLE anywhere in .excluded is an unread issue, whatever its prefix.
+	if printf '%s' "$plan" | jq -e '.excluded[] | select(.reason | test("UNKNOWN|UNREADABLE"))' >/dev/null; then
+		_loop_idle_say "ACTIVE (unknown: an open issue's state could not be read)"
 		return 1
 	fi
 	live="$(printf '%s' "$plan" | jq -r '[.dispatchable[].issue | "#\(.)"] | join(", ")')"
@@ -90,11 +101,7 @@ loop_idle() {
 		| "#\(.issue): \(.reason | sub(" [(—].*"; ""))"')"
 	if [ -n "$actionable" ]; then
 		mapfile -t lines <<<"$actionable"
-		if printf '%s' "$plan" | jq -e '.excluded[] | select(.reason | test("UNKNOWN|UNREADABLE"))' >/dev/null; then
-			_loop_idle_say "ACTIVE (unknown: an open issue's state could not be read)" "${lines[@]}"
-		else
-			_loop_idle_say "ACTIVE" "${lines[@]}"
-		fi
+		_loop_idle_say "ACTIVE" "${lines[@]}"
 		return 1
 	fi
 
