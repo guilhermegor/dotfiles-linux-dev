@@ -36,7 +36,6 @@ LB_OWNER="${LB_OWNER:-guilhermegor}"
 LB_MAX_BODY_REFS="${LESSON_BACKFILL_MAX_BODY_REFS:-5}"
 LB_META_RE='^[[:space:]]*([-*][[:space:]]+)?\*\*(Status|PR|Issue|Tracked|Backport tracked):\*\*'
 LB_STATUS_RE='^[[:space:]]*([-*][[:space:]]+)?\*\*Status:\*\*'
-LB_PR_RE='^[[:space:]]*([-*][[:space:]]+)?\*\*PR:\*\*'
 LB_ORIGIN_RE='^[[:space:]]*([-*][[:space:]]+)?\*\*Origin:\*\*'
 # `#123`, `repo#123`, `owner/repo#123`, `pull/123`, `issues/123`, github.com/o/r/pull/123.
 # The lookbehind keeps `&#123;`, anchors and path fragments out of the match.
