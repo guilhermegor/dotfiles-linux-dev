@@ -1315,3 +1315,8 @@ run `bash ~/.claude/hooks/lib/loop_idle.sh <absolute repo path>` (never judge id
 report as above. On `IDLE`, `CronList` then `CronDelete` all three jobs (any that exist) and report one
 line, built from the predicate's `#N: blocker` lines: `loop disarmed — nothing actionable: <N> blocked
 (<issue: blocker>…); re-arm with /dev-loop`. Any read failure is `ACTIVE (unknown: …)`: never disarm on it.
+After the disarm line on `IDLE` only (#1011), load `s:session-closeout` and work it: run
+`session_capture_audit.sh`, fix the mechanical gaps (e.g. `worktree_prune.sh --apply` on shipped
+worktrees), write or refresh the project checkpoint memory, then report the closeout summary right
+below the disarm line. Commit and push stay owner decisions inside the closeout, with one exception: the
+audit's own `push_loop_branches` (#715) pushes loop branches the forge lacks (never merged/closed PRs). `ACTIVE` rounds skip it.
