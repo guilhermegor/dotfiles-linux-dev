@@ -246,9 +246,7 @@ lb_decide() {
 lb_rewrite() {
 	local file="$1" status_value="$2" pr_ref="$3" tmp
 	tmp="$(mktemp "$(dirname -- "$file")/.lesson-backfill.XXXXXX")" || return 1
-	if ! awk -v status_re="$LB_STATUS_RE" -v pr_re="$LB_PR_RE" \
-		-v new_status="$status_value" -v pr_ref="$pr_ref" '
-		# plain index/substr: the old sub() regex left the label in "old" on the CI awk
+	if ! awk -v new_status="$status_value" -v pr_ref="$pr_ref" '
 		function after_label(line, label,   rest) {
 			rest = substr(line, index(line, label) + length(label)); sub(/^[ \t]+/, "", rest); return rest
 		}
@@ -262,8 +260,8 @@ lb_rewrite() {
 			meta = ""
 			for (i = 1; i <= NR; i++) {
 				if (meta == "" && lines[i] ~ /^[ \t]*([-*][ \t]+)?\*\*[A-Za-z ]+:\*\*/) meta = prefix_of(lines[i])
-				if (lines[i] ~ status_re) { s_at = i }
-				if (lines[i] ~ pr_re) { p_at = i }
+				if (lines[i] ~ /^[ \t]*([-*][ \t]+)?\*\*Status:\*\*/) { s_at = i }
+				if (lines[i] ~ /^[ \t]*([-*][ \t]+)?\*\*PR:\*\*/) { p_at = i }
 			}
 			if (s_at) {
 				old = after_label(lines[s_at], "**Status:**")
