@@ -69,7 +69,7 @@ issue_calls() { grep -c 'issues/' "$GH_LOG" || true; }
 	grep -q '^\*\*PR:\*\* o/r#7$' "$STORE/a.md"
 }
 
-@test "a PR ref on the PR line: delivered, placeholder PR value replaced by the merged PR" {
+@test "a PR ref on the PR line: delivered, a non-empty PR value is never clobbered" {
 	forge o/r#7 pr-merged
 	lesson a.md '# A\n\n**Lesson:** x\n\n**PR:** none yet (#7)\n\n**Origin:** o'
 	run_backfill --apply
@@ -276,4 +276,15 @@ issue_calls() { grep -c 'issues/' "$GH_LOG" || true; }
 	done
 	run bash -c "source '$LIB' && lesson_has_ref '$TEST_TMP/5.md'"
 	[ "$status" -ne 0 ]
+}
+
+@test "an Origin-only ref is not a ref, and the first of two Status lines is the one rewritten" {
+	lesson o.md '# O\n\n**Origin:** o/r#12\n'
+	run bash -c 'source "$1"; lesson_has_ref "$2"' _ "$LIB" "$STORE/o.md"
+	[ "$status" -ne 0 ]
+	forge o/r#9 issue-open
+	lesson a.md '# A\n\n**Status:** queued — see o/r#9\n\n```\n**Status:** example\n```\n'
+	run_backfill --apply
+	grep -q '^\*\*Status:\*\* tracked — o/r#9 (was: queued' "$STORE/a.md"
+	grep -q '^\*\*Status:\*\* example$' "$STORE/a.md"
 }

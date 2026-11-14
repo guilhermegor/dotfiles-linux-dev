@@ -43,10 +43,11 @@ LB_ORIGIN_RE='^[[:space:]]*([-*][[:space:]]+)?\*\*Origin:\*\*'
 LB_REF_RE='(?<![\w/.#&-])(?:(?:[A-Za-z0-9_.-]+/)?[A-Za-z][A-Za-z0-9_.-]*)?#\d{1,6}(?!\w)|(?<![\w/.-])(?:pull|issues)/\d+(?!\w)|github\.com/[\w.-]+/[\w.-]+/(?:pull|issues)/\d+'
 
 # lesson_has_ref FILE
-# True when the lesson names any issue/PR ref anywhere. One grep, no fork chain: the audit
+# True when the lesson names any issue/PR ref outside its Origin line. One grep, no fork chain: the audit
 # runs it per lesson at SessionEnd.
 lesson_has_ref() {
-	grep -qP "$LB_REF_RE" "$1" 2>/dev/null
+	# the Origin line says where a problem was seen, not where it was fixed: never a ref
+	grep -vE "$LB_ORIGIN_RE" "$1" 2>/dev/null | grep -qP "$LB_REF_RE"
 }
 
 # lesson_status_word FILE
@@ -260,8 +261,8 @@ lb_rewrite() {
 			meta = ""
 			for (i = 1; i <= NR; i++) {
 				if (meta == "" && lines[i] ~ /^[ \t]*([-*][ \t]+)?\*\*[A-Za-z ]+:\*\*/) meta = prefix_of(lines[i])
-				if (lines[i] ~ /^[ \t]*([-*][ \t]+)?\*\*Status:\*\*/) { s_at = i }
-				if (lines[i] ~ /^[ \t]*([-*][ \t]+)?\*\*PR:\*\*/) { p_at = i }
+				if (lines[i] ~ /^[ \t]*([-*][ \t]+)?\*\*Status:\*\*/) { if (!s_at) s_at = i }
+				if (lines[i] ~ /^[ \t]*([-*][ \t]+)?\*\*PR:\*\*/) { if (!p_at) p_at = i }
 			}
 			if (s_at) {
 				old = after_label(lines[s_at], "**Status:**")
