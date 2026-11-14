@@ -83,7 +83,6 @@ issue_calls() { grep -c 'issues/' "$GH_LOG" || true; }
 	lesson a.md '# A\n\n**Status:** queued — see #7\n**PR:** —\n'
 	run_backfill --apply
 	grep -q '^\*\*PR:\*\* o/r#7$' "$STORE/a.md"
-	{ echo "# DBG $(od -c "$STORE/a.md" | head -8)"; } >&3
 	grep -q '^\*\*Status:\*\* delivered — o/r#7 (was: queued — see #7)$' "$STORE/a.md"
 }
 
