@@ -830,6 +830,10 @@ def graphql_shell_built(rest, mrest):
     mrest = without_redirects(mrest)
     if any(SHELL_SPLIT in t for t in mrest):
         return True
+    # `"$@"` / `"${a[@]}"` split into several arguments even inside double quotes, so in ANY
+    # field value they can add `-f query=...` words the hook never saw (#1008 review).
+    if any(m in t for t in rest for m in ("$@", "${@", "[@]}")):
+        return True
     endpoint, _, fields, input_file, stray = parse_api_args(mrest)
     if stray or "?" in (endpoint or "") or any(
             unread_short_flag(t) or (t.startswith("-") and SHELL_QUOTED in t) for t in mrest):

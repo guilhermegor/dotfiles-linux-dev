@@ -1623,3 +1623,12 @@ EOF'
     run guard_cmd 'gh api graphql -f query="{node(id:`gh issue create --title t --body x`){id}}"'
     [ "$status" -eq 2 ]
 }
+
+@test "GraphQL call with a split \$@ in any field value fails closed (#1000)" {
+    run guard_cmd 'gh api graphql -f '"'"'query={viewer{login}}'"'"' -f other="$@"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f '"'"'query={viewer{login}}'"'"' -f other="${@}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f '"'"'query={viewer{login}}'"'"' -f other="${a[@]}"'
+    [ "$status" -eq 2 ]
+}
