@@ -798,6 +798,24 @@ def unread_short_flag(tok):
             and tok[:2] not in API_VALUE_FLAGS and tok[:2] not in API_OTHER_VALUE_FLAGS)
 
 
+def read_only_query(value, named):
+    """True when expansion marks in a `query=` value can only be argument values (#1000).
+
+    The text opens `{` or `query`, and every mark sits inside a string or right after a `:`
+    (`number:$N`), never before the first `{` or in a selection, so the shell cannot write the
+    operation type; without a literal `mutation` it stays a query. Another operation appended
+    by an expansion makes a second one, which a server rejects unless `operationName` picks one
+    (`named`) or the shorthand `{` form, which must be the only operation.
+    """
+    head = re.match(r"\s*(\{|query\b)", value)
+    masked = mask_graphql_strings(value)
+    first = masked.find("{")
+    marks = [m.start() for m in re.finditer(SHELL_QUOTED, masked)]
+    return bool(head and first >= 0 and "mutation" not in value
+                and (head.group(1) == "{" or not named)
+                and all(at > first and masked[:at].rstrip().endswith(":") for at in marks))
+
+
 def graphql_shell_built(rest, mrest):
     """True when the hook cannot see what a `gh api graphql` call sends.
 
@@ -811,6 +829,10 @@ def graphql_shell_built(rest, mrest):
     """
     mrest = without_redirects(mrest)
     if any(SHELL_SPLIT in t for t in mrest):
+        return True
+    # `"$@"` / `"${a[@]}"` split into several arguments even inside double quotes, so in ANY
+    # field value they can add `-f query=...` words the hook never saw (#1008 review).
+    if any(m in t for t in rest for m in ("$@", "${@", "[@]}")):
         return True
     endpoint, _, fields, input_file, stray = parse_api_args(mrest)
     if stray or "?" in (endpoint or "") or any(
@@ -827,8 +849,13 @@ def graphql_shell_built(rest, mrest):
     reads_file = input_file or any(val.startswith("@") for _, _, val in pairs)
     if reads_file and any(m in t for t in rest for m in ("$(", "`", "<(", ">(")):
         return True
-    keys_and_queries = [f if f.partition("=")[0] == "query" else f.partition("=")[0]
-                        for _, f in fields]
+    named = any(key == "operationName" for key, _, _ in pairs)
+    # `"$@"` splits into arguments and `$(...)`/backticks run commands the hook never sees, even
+    # inside double quotes, so a query next to either is never a read-only value (#1008 review).
+    runs_code = any(m in t for t in rest for m in ("$(", "`", "$@", "${@", "<(", ">("))
+    keys_and_queries = [f if f.partition("=")[0] == "query" and (
+                        runs_code or not read_only_query(f.partition("=")[2], named))
+                        else f.partition("=")[0] for _, f in fields]
     return any(SHELL_QUOTED in t for t in (endpoint or "", input_file or "", *stray,
                                            *keys_and_queries))
 
@@ -1020,7 +1047,8 @@ def api_issue_match(segments):
         if posixpath.normpath("/" + urllib.parse.unquote(path)).strip("/").lower() in (
                 "graphql", "api/graphql"):  # `gr%61phql`, `x/../graphql`: the front end may decode
             if graphql_shell_built(rest, mrest):
-                return graphql_issue_write([], "-")  # the shell writes part of the call: blind
+                # the shell writes part of the call: blind, and the block message says so (#1000)
+                return {**graphql_issue_write([], "-"), "reason": "graphql-expansion"}
             marked = parse_api_args(mrest)[2]
             if endpoint != "graphql":
                 if any(f.startswith("variables[query") for _, f in fields):

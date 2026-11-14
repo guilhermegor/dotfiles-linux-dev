@@ -1572,3 +1572,63 @@ EOF'
     run guard_cmd 'eval '"'"'$Q'"'"
     [ "$status" -eq 0 ]
 }
+
+@test "GraphQL read-only query with a \$var as an argument value passes (#1000)" {
+    run guard_cmd 'gh api graphql -f query="{user(login:\"x\"){projectV2(number:$N){id}}}"'
+    [ "$status" -eq 0 ]
+    run guard_cmd 'for n in 16 15; do gh api graphql -f query="{user(login:\"x\"){projectV2(number:$n){id}}}"; done'
+    [ "$status" -eq 0 ]
+    run guard_cmd 'gh api graphql -f query="{viewer{login}}"'
+    [ "$status" -eq 0 ]
+    run guard_cmd 'gh api graphql -f query="query Q {user(login:\"x\"){projectV2(number:$N){id}}}"'
+    [ "$status" -eq 0 ]
+    run guard_cmd 'gh api graphql -F query="{user(login:\"$OWNER\"){id}}"'
+    [ "$status" -eq 0 ]
+}
+
+@test "GraphQL query a variable could rewrite still fails closed (#1000)" {
+    run guard_cmd 'gh api graphql -f query="$Q"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query=$Q'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query="$X{viewer{login}}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query="query $X {viewer{login}}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query="query Q($id:ID!) {node(id:$id){id}}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -F query=@$f'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query="query Q {a(n:$N){id}}" -f operationName=$OP'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query="{a(n:$N){id}} mutation{createIssue(input:{title:\"t\"}){a}}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query="mutation{createIssue(input:{repositoryId:\"R\",title:\"t\",body:\"x\",n:$N}){a}}"'
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL expansion block names the shell expansion, not a body file (#1000)" {
+    run guard_cmd 'gh api graphql -f query="$Q"'
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"GraphQL"* ]]
+    [[ "$output" == *"shell expansion"* ]]
+    [[ "$output" != *"--body-file could not be read"* ]]
+}
+
+@test "GraphQL query value with \$@ or a command substitution fails closed (#1000)" {
+    run guard_cmd 'gh api graphql -f query="query Safe {node(id:$@){id}}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query="{node(id:$(gh issue create --title t --body x)){id}}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query="{node(id:`gh issue create --title t --body x`){id}}"'
+    [ "$status" -eq 2 ]
+}
+
+@test "GraphQL call with a split \$@ in any field value fails closed (#1000)" {
+    run guard_cmd 'gh api graphql -f '"'"'query={viewer{login}}'"'"' -f other="$@"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f '"'"'query={viewer{login}}'"'"' -f other="${@}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f '"'"'query={viewer{login}}'"'"' -f other="${a[@]}"'
+    [ "$status" -eq 2 ]
+}

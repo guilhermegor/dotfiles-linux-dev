@@ -58,7 +58,7 @@ origin_names_repo() {
 # guess, not a check.
 resolve_gh_command() {
     local command="$1" noun="$2" json rc
-    GH_MATCHED=false GH_REPO="" GH_HAS_BODY=false GH_BODY=""
+    GH_MATCHED=false GH_REPO="" GH_HAS_BODY=false GH_BODY="" GH_BLIND_REASON=""
     GH_HAS_BODY_FILE=false GH_BODY_FILE="" GH_BODY_FILE_JSON=false GH_UNPARSEABLE=false
     GH_LABELS=()
 
@@ -88,6 +88,8 @@ resolve_gh_command() {
     GH_UNPARSEABLE="$(printf '%s' "$json" | jq -r '.unparseable // false')"
     # shellcheck disable=SC2034
     GH_BODY_FILE_JSON="$(printf '%s' "$json" | jq -r '.body_json // false')"
+    # shellcheck disable=SC2034
+    GH_BLIND_REASON="$(printf '%s' "$json" | jq -r '.reason // empty')"
     # shellcheck disable=SC2034
     mapfile -t GH_LABELS < <(printf '%s' "$json" | jq -r '.labels[]?')
     return 0

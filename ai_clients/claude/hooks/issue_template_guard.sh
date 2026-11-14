@@ -241,6 +241,21 @@ block_unresolved_body_file() {
     # directory, so a generic "check the path" sends the author chasing a bug that isn't there.
     local path="$1" root="${2:-}"
 
+    if [[ "$GH_BLIND_REASON" == "graphql-expansion" ]]; then
+        # #1000: the real cause, not a body file nobody passed.
+        {
+            echo "BLOCKED: this gh api graphql call contains a shell expansion the hook cannot resolve,"
+            echo "so what it sends was never verified."
+            echo
+            echo "A variable, command substitution or glob (\$VAR, \$(…), *) in the GraphQL document"
+            echo "or in its field keys is expanded by the shell AFTER this hook reads the command."
+            echo "A \$var used only as an argument VALUE inside a literal \`{ … }\` or \`query … { … }\`"
+            echo "document is allowed; the document itself must not start with, or be built from, one."
+            echo "Write the operation out literally, or inline the value."
+        } >&2
+        exit 2
+    fi
+
     if [[ "$path" == "-" ]]; then
         # The matcher's blind marker (stdin, a second write in the chain, a shell-built argument):
         # no --body-file was passed, so naming one would send the author chasing nothing (#987).
