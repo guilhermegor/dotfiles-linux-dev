@@ -198,6 +198,41 @@ command_has_cd() {
     ((_HAS_CD))
 }
 
+# commit_cd_dir COMMAND
+# Sets COMMIT_CD_OK=1 and COMMIT_CD_DIR to the directory a lone `cd <absolute literal path>` moves
+# into BEFORE the commit (empty when no cd precedes it). COMMIT_CD_OK=0 when the working directory
+# cannot be known statically: several cds, a relative or expanded path, `cd -`, or a cd between two
+# commits. A cd AFTER the last commit cannot change where it ran and is ignored; heredoc bodies are
+# data and never scanned.
+commit_cd_dir() {
+    local saved_dir="$COMMIT_COMMAND_GIT_DIR"
+    COMMIT_CD_DIR=''
+    COMMIT_CD_OK=1
+    _CD_SEEN_COMMIT=0
+    _CD_LATE=0
+    _note_cd_dir() {
+        local first="${_CMD_WORDS[0]:-}" target="${_CMD_WORDS[1]:-}"
+        if [[ "$first" != "cd" && "$first" != "pushd" ]]; then
+            if _words_invoke_commit; then
+                _CD_SEEN_COMMIT=1
+                # shellcheck disable=SC2034  # read by the hooks that source this file
+                ((_CD_LATE)) && COMMIT_CD_OK=0
+            fi
+            return 0
+        fi
+        if ((_CD_SEEN_COMMIT)); then _CD_LATE=1; return 0; fi
+        if [[ -n "$COMMIT_CD_DIR" || "$first" == pushd || ${#_CMD_WORDS[@]} -ne 2 \
+              || "$target" != /* || "$target" == *'$'* || "$target" == *'`'* ]]; then
+            # shellcheck disable=SC2034  # read by the hooks that source this file
+            COMMIT_CD_OK=0
+        else
+            COMMIT_CD_DIR="$target"
+        fi
+    }
+    _for_each_command "$(printf '%s' "$1" | _strip_heredoc_bodies)" _note_cd_dir
+    COMMIT_COMMAND_GIT_DIR="$saved_dir"
+}
+
 # _strip_heredoc_bodies [FILE]
 # Print FILE (or stdin) without the lines between a `<<TAG` opener and its closing TAG (opener line
 # kept). The delimiter is any run of characters git/the shell would accept, digits-only included.
@@ -255,6 +290,7 @@ commit_expand_script() {
 # the caller must fail open: the link between the message source and its commit is uncertain.
 commit_source_dir() {
     COMMIT_SOURCE_DIR=''
+    COMMIT_SOURCE_FILE=''
     COMMIT_SOURCE_FOUND=0
     _SRC_MODE="$2"
     _SRC_SEEN=0
@@ -277,6 +313,8 @@ commit_source_dir() {
                 _SRC_SEEN=1
                 # shellcheck disable=SC2034  # read by the hooks that source this file
                 COMMIT_SOURCE_DIR="$COMMIT_COMMAND_GIT_DIR"
+                # shellcheck disable=SC2034  # read by the hooks that source this file
+                COMMIT_SOURCE_FILE="$v"
                 # shellcheck disable=SC2034  # read by the hooks that source this file
                 COMMIT_SOURCE_FOUND=1
                 # shellcheck disable=SC2034  # read by the hooks that source this file
