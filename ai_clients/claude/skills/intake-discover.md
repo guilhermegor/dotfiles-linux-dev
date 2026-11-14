@@ -51,8 +51,13 @@ cd /absolute/path/to/<repo> && bash ai_clients/claude/hooks/session_capture_audi
 (Or, outside dotfiles-dev, the deployed copy: `bash ~/.claude/hooks/session_capture_audit.sh`.)
 Read the `--- completeness (both directions...) ---` section. Candidates are:
 
-- every lesson listed under **"genuinely unaccounted"** (no PR ref, no
-  delivered/advisory/superseded Status) — a captured finding still owed.
+- every lesson listed under **"genuinely unaccounted"** (no issue/PR ref
+  anywhere in the lesson, and no delivered/advisory/superseded Status) — a
+  captured finding still owed. A ref counts in any form (`#N`, `repo#N`,
+  `pull/N`, a github URL) and on any line, so this list is the true residue,
+  not format drift; the **Origin:** line is where the problem was seen and
+  never counts as delivery. `lib/lesson_status_backfill.sh` (dry run by
+  default) derives the Status of the rest from the forge.
 - every issue listed under **"open issues with no lesson"** is the inverse
   finding (an issue with no captured rationale) — out of scope for this
   skill's "unfiled work" question, but worth surfacing alongside it since
