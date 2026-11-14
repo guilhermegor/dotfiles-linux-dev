@@ -846,8 +846,12 @@ def graphql_shell_built(rest, mrest):
     if reads_file and any(m in t for t in rest for m in ("$(", "`", "<(", ">(")):
         return True
     named = any(key == "operationName" for key, _, _ in pairs)
-    keys_and_queries = [f if f.partition("=")[0] == "query" and not read_only_query(
-                        f.partition("=")[2], named) else f.partition("=")[0] for _, f in fields]
+    # `"$@"` splits into arguments and `$(...)`/backticks run commands the hook never sees, even
+    # inside double quotes, so a query next to either is never a read-only value (#1008 review).
+    runs_code = any(m in t for t in rest for m in ("$(", "`", "$@", "${@", "<(", ">("))
+    keys_and_queries = [f if f.partition("=")[0] == "query" and (
+                        runs_code or not read_only_query(f.partition("=")[2], named))
+                        else f.partition("=")[0] for _, f in fields]
     return any(SHELL_QUOTED in t for t in (endpoint or "", input_file or "", *stray,
                                            *keys_and_queries))
 

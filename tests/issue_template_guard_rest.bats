@@ -1614,3 +1614,12 @@ EOF'
     [[ "$output" == *"shell expansion"* ]]
     [[ "$output" != *"--body-file could not be read"* ]]
 }
+
+@test "GraphQL query value with \$@ or a command substitution fails closed (#1000)" {
+    run guard_cmd 'gh api graphql -f query="query Safe {node(id:$@){id}}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query="{node(id:$(gh issue create --title t --body x)){id}}"'
+    [ "$status" -eq 2 ]
+    run guard_cmd 'gh api graphql -f query="{node(id:`gh issue create --title t --body x`){id}}"'
+    [ "$status" -eq 2 ]
+}
