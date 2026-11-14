@@ -38,7 +38,7 @@ DEFAULT_TITLE_MAX_LENGTH=72
 
 main() {
     local payload tool command title max_len set idx
-    local -a titles dirs
+    local -a titles dirs bodies bdirs
 
     payload="$(cat)"
     tool="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
@@ -58,6 +58,8 @@ main() {
 
     titles=()
     dirs=()
+    bodies=()
+    bdirs=()
     if printf '%s' "$command" | grep -q '<<' && title="$(extract_heredoc_title "$command")"; then
         # `-F-`/`--file=-` fed by exactly one heredoc (issue #140): its body is in the raw string.
         # The title belongs to the commit that reads stdin, so its limit comes from THAT commit's
@@ -66,7 +68,15 @@ main() {
         if ((COMMIT_SOURCE_FOUND && ! COMMIT_SOURCE_HAS_M)); then
             titles+=("$title")
             dirs+=("$COMMIT_SOURCE_DIR")
+            bodies+=("$(heredoc_full_message "$command")")
+            bdirs+=("$COMMIT_SOURCE_DIR")
         fi
+    fi
+    # `-F <path>` (#1002): measured for the body rules only; the title check stays as it was.
+    commit_source_dir "$command" file
+    if ((COMMIT_SOURCE_FOUND && ! COMMIT_SOURCE_HAS_M)) && title="$(read_message_file "$COMMIT_SOURCE_FILE" "$COMMIT_SOURCE_DIR")"; then
+        bodies+=("$title")
+        bdirs+=("$COMMIT_SOURCE_DIR")
     fi
     # Inline `-m`: the title is the FIRST -m of each commit, however many follow (#961). Checked
     # independently of a heredoc title, so a script mixing both is measured in full. `-F <path>`
@@ -77,6 +87,11 @@ main() {
         title="${set%%"$_MSG_SEP"*}"
         titles+=("${title%%$'\n'*}")   # first line only
         dirs+=("${COMMIT_MESSAGE_DIRS[idx]}")
+        # An empty paragraph is shell expansion we could not read: skip the body rules, never guess.
+        if [[ "$set" != "$_MSG_SEP"* && "$set" != *"$_MSG_SEP" && "$set" != *"$_MSG_SEP$_MSG_SEP"* ]]; then
+            bodies+=("${set//"$_MSG_SEP"/$'\n\n'}")
+            bdirs+=("${COMMIT_MESSAGE_DIRS[idx]}")
+        fi
         idx=$((idx + 1))
     done
 
@@ -87,7 +102,101 @@ main() {
         idx=$((idx + 1))
         (( ${#title} > max_len )) && block_title "$title" "$max_len"
     done
+
+    # Body rules B5/B6 need the repo, so a `cd` we cannot resolve statically fails open (#1002).
+    commit_cd_dir "$command"
+    ((COMMIT_CD_OK)) || exit 0
+    idx=0
+    for set in ${bodies[@]+"${bodies[@]}"}; do
+        check_body "$set" "$(effective_dir "${bdirs[idx]}")"
+        idx=$((idx + 1))
+    done
     exit 0
+}
+
+# effective_dir DIR: the directory the commit runs in, from a lone `cd <abs>` and/or `-C DIR`.
+effective_dir() {
+    local dir="$1"
+    [[ -n "$COMMIT_CD_DIR" ]] || { printf '%s' "$dir"; return; }
+    case "$dir" in
+        '') printf '%s' "$COMMIT_CD_DIR" ;;
+        /*) printf '%s' "$dir" ;;
+        *) printf '%s/%s' "$COMMIT_CD_DIR" "$dir" ;;
+    esac
+}
+
+heredoc_full_message() {
+    # Lines between the single heredoc opener and its terminator (see extract_heredoc_title).
+    local opener tag
+    opener="$(printf '%s' "$1" | grep -oE $'<<-?[[:space:]]*[\'"]?[^[:space:]\'"<>|&;()]+[\'"]?')"
+    tag="${opener#<<}"; tag="${tag#-}"; tag="${tag//[[:space:]\'\"]/}"
+    printf '%s\n' "$1" | awk -v tag="$tag" \
+        'go { t = $0; sub(/^\t+/, "", t); if (t == tag) exit; print } /<</ && !go { go = 1 }'
+}
+
+read_message_file() {
+    # Echo the `-F` file's text; return 1 (skip) for stdin, an unreadable/oversized file or a path
+    # built from expansion. A relative path resolves against the commit's directory.
+    local f="$1" dir="$2"
+    [[ -n "$f" && "$f" != - && "$f" != *'$'* && "$f" != *'`'* ]] || return 1
+    [[ "$f" == /* ]] || f="${COMMIT_CD_DIR:+$COMMIT_CD_DIR/}${dir:+$dir/}$f"
+    [[ -f "$f" && -r "$f" ]] && (($(wc -c < "$f") <= 65536)) || return 1
+    cat "$f"
+}
+
+gitlint_value() {
+    # gitlint_value FILE SECTION KEY: first KEY = value inside [SECTION], whitespace removed.
+    awk -v sec="[$2]" -v key="$3" '
+        /^\[/ { in_s = (index($0, sec) == 1) }
+        in_s && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            sub(/^[^=]*=[[:space:]]*/, ""); gsub(/[[:space:]]/, ""); print; exit
+        }' "$1" 2>/dev/null
+}
+
+check_body() {
+    # B5 (body too short) / B6 (body missing), measured the way gitlint 0.19 does: the body is every
+    # line after the title, whitespace-only lines count as empty, and B5's length is the body lines
+    # joined WITHOUT newlines. Fails open without a repo `.gitlint`. Honoured gitlint skips:
+    # [general] ignore= (B5/body-min-length, B6/body-is-missing), [body-min-length] min-length, and
+    # gitlint's default-ignored Merge/Revert/fixup!/squash!/amend! titles.
+    local msg="$1" root cfg title min ignore body line n=0 nonblank=0 first=1
+    root="$(git -C "${2:-.}" rev-parse --show-toplevel 2>/dev/null)" || return 0
+    cfg="$root/.gitlint"
+    [[ -n "$root" && -r "$cfg" ]] || return 0
+
+    title="${msg%%$'\n'*}"
+    case "$title" in
+        'Merge '* | 'Revert '* | 'fixup! '* | 'squash! '* | 'amend! '*) return 0 ;;
+    esac
+
+    ignore=",$(gitlint_value "$cfg" general ignore),"
+    min="$(gitlint_value "$cfg" body-min-length min-length)"
+    [[ "$min" =~ ^[0-9]+$ ]] || min=20
+
+    body="${msg#"$title"}"
+    while IFS= read -r line; do
+        if ((first)); then first=0; continue; fi   # remainder of the title line itself
+        [[ "$line" =~ [^[:space:]] ]] && { nonblank=1; n=$((n + ${#line})); }
+    done <<< "$body"
+
+    if ((! nonblank)); then
+        [[ "$ignore" == *,B6,* || "$ignore" == *,body-is-missing,* ]] && return 0
+        block_body "B6 (body-is-missing): commit has a title but no body message"
+    fi
+    [[ "$ignore" == *,B5,* || "$ignore" == *,body-min-length,* ]] && return 0
+    ((n < min)) && block_body "B5 (body-min-length): body message is too short (${n} < ${min})"
+    return 0
+}
+
+block_body() {
+    {
+        echo "BLOCKED: gitlint $1."
+        echo
+        echo "gitlint fails this at the commit-msg stage, which runs AFTER the full pre-commit gate,"
+        echo "so the whole run would be wasted. Add a real body sentence (a bare 'Closes #N' is too"
+        echo "short) and re-run the SAME commit."
+    } >&2
+    exit 2
 }
 
 block_title() {

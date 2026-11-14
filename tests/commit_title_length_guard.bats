@@ -277,7 +277,7 @@ TOO_LONG_TITLE='docs(backlog): every zero-review notice fails, including the suc
 
 @test "#961: judges each title against the limit of its own git -C repository" {
     mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
-    printf '[title-max-length]\nline-length=100\n' > "$TEST_TMP/other/.gitlint"
+    printf '[general]\nignore=B5,B6\n[title-max-length]\nline-length=100\n' > "$TEST_TMP/other/.gitlint"
     run run_guard "git -C $TEST_TMP/other commit -m '$LONG_TITLE' -m body"
     [ "$status" -eq 0 ]
 }
@@ -325,7 +325,7 @@ $LONG_TITLE
 
 @test "#961: heredoc title limit comes from the commit that reads stdin (other repo allows 100)" {
     mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
-    printf '[title-max-length]\nline-length=100\n' > "$TEST_TMP/other/.gitlint"
+    printf '[general]\nignore=B5,B6\n[title-max-length]\nline-length=100\n' > "$TEST_TMP/other/.gitlint"
     run run_guard "git commit -m x; git -C $TEST_TMP/other commit -F- <<MSG
 $LONG_TITLE
 MSG"
@@ -396,4 +396,156 @@ EOT"
 @test "#961: BLOCKS git commit --gpg-sign -m <long title>" {
     run run_guard "git commit --gpg-sign -m '$LONG_TITLE'"
     [ "$status" -eq 2 ]
+}
+
+# --- #1002: gitlint B5 (body too short) / B6 (body missing) --------------------------------------
+
+gitlint_repo() { printf '%b' "${1:-[general]\n}" > .gitlint; }
+
+@test "#1002: BLOCKS a title-only commit (B6) when .gitlint exists" {
+    gitlint_repo
+    run run_guard "git commit -m 'fix: x'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"B6"* ]]
+}
+
+@test "#1002: BLOCKS a 12-char body (B5) naming '12 < 20'" {
+    gitlint_repo
+    run run_guard "git commit -m 'fix: x' -m 'Closes #1122'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"B5"* && "$output" == *"12 < 20"* ]]
+}
+
+@test "#1002: PASSES a body of 20+ chars" {
+    gitlint_repo
+    run run_guard "git commit -m 'fix: x' -m 'This explains the change well.'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: B5 boundary matches gitlint (19 blocks, 20 passes)" {
+    gitlint_repo
+    run run_guard "git commit -m 'fix: x' -m '1234567890123456789'"
+    [ "$status" -eq 2 ]
+    run run_guard "git commit -m 'fix: x' -m '12345678901234567890'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: gitlint joins body lines without newlines (10+10 passes, 9+9 blocks)" {
+    gitlint_repo
+    run run_guard "git commit -m 'fix: x' -m 'abcdefghij
+abcdefghij'"
+    [ "$status" -eq 0 ]
+    run run_guard "git commit -m 'fix: x' -m 'abcdefghi
+abcdefghi'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#1002: a repo with no .gitlint passes untouched (fail open)" {
+    run run_guard "git commit -m 'fix: x'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: honours a custom [body-min-length] min-length" {
+    gitlint_repo '[body-min-length]\nmin-length=5\n'
+    run run_guard "git commit -m 'fix: x' -m 'abcde'"
+    [ "$status" -eq 0 ]
+    gitlint_repo '[body-min-length]\nmin-length=40\n'
+    run run_guard "git commit -m 'fix: x' -m 'This explains the change well.'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"< 40"* ]]
+}
+
+@test "#1002: B6 ignored via .gitlint skips a missing body but still checks B5" {
+    gitlint_repo '[general]\nignore=body-is-missing\n'
+    run run_guard "git commit -m 'fix: x'"
+    [ "$status" -eq 0 ]
+    run run_guard "git commit -m 'fix: x' -m 'short'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#1002: B6 ignored by rule id in a comma list" {
+    gitlint_repo '[general]\nignore = T3, B6\n'
+    run run_guard "git commit -m 'fix: x'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: B5 ignored via .gitlint" {
+    gitlint_repo '[general]\nignore=body-min-length\n'
+    run run_guard "git commit -m 'fix: x' -m 'short'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: Merge / fixup! titles are skipped like gitlint does" {
+    gitlint_repo
+    run run_guard "git commit -m 'Merge branch x'"
+    [ "$status" -eq 0 ]
+    run run_guard "git commit -m 'fixup! fix: x'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: -F <file> is measured the same way" {
+    gitlint_repo
+    printf 'fix: x\n\nCloses #1122\n' > msg.txt
+    run run_guard "git commit -F msg.txt"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"B5"* && "$output" == *"12 < 20"* ]]
+    printf 'fix: x\n' > msg.txt
+    run run_guard "git commit -F msg.txt"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"B6"* ]]
+    printf 'fix: x\n\nThis explains the change well.\n' > msg.txt
+    run run_guard "git commit -F msg.txt"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: -F - heredoc body is measured" {
+    gitlint_repo
+    cmd="$(printf "git commit -F- <<'MSG'\nfix: x\n\nshort\nMSG")"
+    run run_guard "$cmd"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"B5"* ]]
+    cmd="$(printf "git commit -F- <<'MSG'\nfix: x\n\nThis explains the change well.\nMSG")"
+    run run_guard "$cmd"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: --amend --no-edit with no -m is not judged" {
+    gitlint_repo
+    run run_guard "git commit --amend --no-edit"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: a commit with no message flags (editor) passes" {
+    gitlint_repo
+    run run_guard "git commit"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: a message built from shell expansion is not judged" {
+    gitlint_repo
+    run run_guard 'git commit -m "fix: x" -m "$(cat body.txt)"'
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: uses the .gitlint of the 'git -C' repository" {
+    mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
+    run run_guard "git -C $TEST_TMP/other commit -m 'fix: x'"
+    [ "$status" -eq 0 ]
+    printf '[general]\n' > "$TEST_TMP/other/.gitlint"
+    run run_guard "git -C $TEST_TMP/other commit -m 'fix: x'"
+    [ "$status" -eq 2 ]
+}
+
+@test "#1002: uses the .gitlint of a 'cd <abs> &&' target repo" {
+    mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
+    printf '[general]\n' > "$TEST_TMP/other/.gitlint"
+    run run_guard "cd $TEST_TMP/other && git commit -m 'fix: x'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"B6"* ]]
+}
+
+@test "#1002: an unresolvable cd (relative) fails open" {
+    gitlint_repo
+    run run_guard "cd sub && git commit -m 'fix: x'"
+    [ "$status" -eq 0 ]
 }
