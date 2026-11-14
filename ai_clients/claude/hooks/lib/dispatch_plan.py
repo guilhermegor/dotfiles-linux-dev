@@ -1075,7 +1075,12 @@ def main() -> int:
 	"""Print the dispatch plan as one JSON object and return 0."""
 	if refuse_if_latched("dispatch_plan"):
 		return 3
-	print(json.dumps(build_plan()))
+	plan = build_plan()
+	if "--idle" in sys.argv[1:]:
+		# loop_idle.sh (#1003): the same plan plus the liveness read it needs, so its caller
+		# re-derives neither. The no-argument output stays byte-identical.
+		plan["live_ok"], plan["live_held"] = live_agent_held_paths(repo_root())
+	print(json.dumps(plan))
 	return 0
 
 
