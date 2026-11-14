@@ -269,9 +269,12 @@ guard_at() {
 }
 
 @test "a leading cd with a ~ or a quoted path is expanded (#1013)" {
-    mkdir "$REPO/sub dir"
-    printf '**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [ ] a\n' > "$REPO/sub dir/rel.md"
-    HOME="$REPO" run guard_at "$REPO" 'cd ~/"sub dir" && gh issue create --title x -F rel.md'
+    mkdir "$REPO/sub" "$REPO/sub dir"
+    printf '**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [ ] a\n' > "$REPO/sub/rel.md"
+    cp "$REPO/sub/rel.md" "$REPO/sub dir/rel.md"
+    HOME="$REPO" run guard_at "$REPO" 'cd ~/sub && gh issue create --title x -F rel.md'
+    [ "$status" -eq 0 ]
+    run guard_at "$REPO" "cd \"$REPO/sub dir\" && gh issue create --title x -F rel.md"
     [ "$status" -eq 0 ]
 }
 
