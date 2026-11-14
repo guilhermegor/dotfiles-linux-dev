@@ -51,6 +51,8 @@ que rode?"* is the measurement that it didn't.
   is the only available mechanism here in the first place.
 - **Recurring jobs expire after 7 days.** A session that outlives that window needs to re-arm;
   step 1 above already catches this, because `CronList` will show the gap.
+- **The round can disarm them too** (see Reporting) when nothing is actionable. Re-arming is this
+  step's own `CronList` diff on the next `/dev-loop`; nothing else is needed.
 - **Not GitHub Actions `schedule:`.** Disqualified by measurement, not preference — see step 4b:
   a `*/10` cron ran 6 times in 21 hours, because GitHub throttles scheduled workflows hardest on
   the low-activity repos that need them most.
@@ -455,7 +457,8 @@ hourly round.
 ALONE** — classify the slot, pick one candidate, ask once, stop. Three chances an hour instead of
 one to catch a window that reopens at an arbitrary minute. The full round at `:23` still runs step
 4b too, as part of its seven-step pass; the two cadences share one rule (item 4 below), so which one
-happens to fire does not matter.
+happens to fire does not matter. **With 0 open PRs the tick stops after one REST count**
+(`gh api "repos/{owner}/{repo}/pulls?state=open&per_page=1" --jq length`) and reads nothing else.
 
 ⚠️ **Not a hook.** There is no event for "the reviewer's window reopened" — nothing in the local
 toolchain observes it, so polling is the only available mechanism, and `CronCreate` is its
@@ -1284,7 +1287,7 @@ capture.
 - Do not ask permission to run this, and do not ask before cutting a release — see step 5.
 - Do not arm a host-level timer (systemd, a durable cron) for the round or the reviewer-slot tick.
   `CronCreate` jobs dying with the session is the requirement from step 0, not a gap to fill with
-  something durable.
+  something durable. Disarming them when idle (Reporting) is the loop's own `CronDelete`, not a timer.
 
 ⚠️ **The one standing ask, and it is scoped narrowly on purpose:** an outward-facing action that is
 **hard to reverse and not this loop's own work** — changing branch protection or required checks,
@@ -1306,3 +1309,9 @@ cutting a release" after step 5 had been rewritten to cut.
 
 Report only what **changed**, plus anything that needs the owner. If a step found nothing, one line.
 If nothing at all changed since the last round, say *"no change"* and stop.
+
+**Idle disarm (#1003).** Last thing in the round, once step 2's roadmap unblock turned no card Ready,
+run `bash ~/.claude/hooks/lib/loop_idle.sh` (never judge idleness by eye). On `ACTIVE` carry on and
+report as above. On `IDLE`, `CronList` then `CronDelete` all three jobs (any that exist) and report one
+line, built from the predicate's `#N: blocker` lines: `loop disarmed — nothing actionable: <N> blocked
+(<issue: blocker>…); re-arm with /dev-loop`. Any read failure is `ACTIVE (unknown: …)`: never disarm on it.
