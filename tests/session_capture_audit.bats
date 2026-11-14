@@ -86,7 +86,7 @@ run_report() {
 	lesson "orphan-lesson.md" ""
 	run_report ""
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"lessons → issues : 1 in store, 1 without a PR ref — 0 delivered, 0 advisory, 0 superseded, 1 genuinely unaccounted"* ]]
+	[[ "$output" == *"lessons → issues : 1 in store, 1 without an issue/PR ref — 0 delivered, 0 advisory, 0 superseded, 1 genuinely unaccounted"* ]]
 	[[ "$output" == *"genuinely unaccounted"*"orphan-lesson.md"* ]]
 	[[ "$output" == *"[lessons] 'orphan-lesson.md' has no **Status:** line"* ]]
 }
@@ -94,7 +94,7 @@ run_report() {
 @test "row 1 counts a lesson that references its issue as accounted for" {
 	lesson "tracked-lesson.md" "42"
 	run_report ""
-	[[ "$output" == *"lessons → issues : 1 in store, 0 without a PR ref — 0 delivered, 0 advisory, 0 superseded, 0 genuinely unaccounted"* ]]
+	[[ "$output" == *"lessons → issues : 1 in store, 0 without an issue/PR ref — 0 delivered, 0 advisory, 0 superseded, 0 genuinely unaccounted"* ]]
 	[[ "$output" != *"genuinely unaccounted"*"tracked-lesson.md"* ]]
 }
 
@@ -102,33 +102,90 @@ run_report() {
 	# The whole point of the field: work that shipped before issues existed is not debt.
 	lesson_status "shipped.md" "delivered — pre-PR (abc1234)"
 	run_report ""
-	[[ "$output" == *"lessons → issues : 1 in store, 1 without a PR ref — 1 delivered, 0 advisory, 0 superseded, 0 genuinely unaccounted"* ]]
+	[[ "$output" == *"lessons → issues : 1 in store, 1 without an issue/PR ref — 1 delivered, 0 advisory, 0 superseded, 0 genuinely unaccounted"* ]]
 }
 
 @test "row 1 excludes an advisory Status from the debt count" {
 	lesson_status "judgment.md" "advisory — no scaffold target"
 	run_report ""
-	[[ "$output" == *"lessons → issues : 1 in store, 1 without a PR ref — 0 delivered, 1 advisory, 0 superseded, 0 genuinely unaccounted"* ]]
+	[[ "$output" == *"lessons → issues : 1 in store, 1 without an issue/PR ref — 0 delivered, 1 advisory, 0 superseded, 0 genuinely unaccounted"* ]]
 }
 
 @test "row 1 excludes a superseded Status from the debt count" {
 	lesson_status "old-rule.md" "superseded — replaced by the newer rule"
 	run_report ""
-	[[ "$output" == *"lessons → issues : 1 in store, 1 without a PR ref — 0 delivered, 0 advisory, 1 superseded, 0 genuinely unaccounted"* ]]
+	[[ "$output" == *"lessons → issues : 1 in store, 1 without an issue/PR ref — 0 delivered, 0 advisory, 1 superseded, 0 genuinely unaccounted"* ]]
 }
 
 @test "row 1 negative control: a queued Status with no PR reference still counts as debt" {
 	lesson_status "owed.md" "queued — no issue filed (target absent)"
 	run_report ""
-	[[ "$output" == *"lessons → issues : 1 in store, 1 without a PR ref — 0 delivered, 0 advisory, 0 superseded, 1 genuinely unaccounted"* ]]
+	[[ "$output" == *"lessons → issues : 1 in store, 1 without an issue/PR ref — 0 delivered, 0 advisory, 0 superseded, 1 genuinely unaccounted"* ]]
 	[[ "$output" == *"genuinely unaccounted"*"owed.md"* ]]
 }
 
 @test "row 1 negative control: a tracked Status with no PR reference still counts as debt" {
 	lesson_status "tracked.md" "tracked — awaiting scheduling"
 	run_report ""
-	[[ "$output" == *"lessons → issues : 1 in store, 1 without a PR ref — 0 delivered, 0 advisory, 0 superseded, 1 genuinely unaccounted"* ]]
+	[[ "$output" == *"lessons → issues : 1 in store, 1 without an issue/PR ref — 0 delivered, 0 advisory, 0 superseded, 1 genuinely unaccounted"* ]]
 	[[ "$output" == *"genuinely unaccounted"*"tracked.md"* ]]
+}
+
+# dotfiles-linux-dev#1001: format drift is not debt. A lesson names its issue in a Status line
+# or in prose, in another repo's form, or as a bare `#N` -- all of that is a ref; only a lesson
+# with no ref and no delivered/advisory/superseded Status is the true residue.
+
+# Lesson with a free-form body line (and optional Status), indexed.
+lesson_body() {
+	local name="$1" status="$2" body="$3"
+	printf '# %s\n\n- **Tier:** language-common\n' "$name" >"$STORE/$name"
+	[ -n "$status" ] && printf -- '- **Status:** %s\n' "$status" >>"$STORE/$name"
+	[ -n "$body" ] && printf '%s\n' "$body" >>"$STORE/$name"
+	printf -- '- %s\n' "$name" >>"$STORE/README.md"
+}
+
+@test "row 1 accepts a tracked Status that names another repo's issue" {
+	lesson_body "t.md" "tracked — blueprintx#111" ""
+	run_report ""
+	[[ "$output" == *"1 in store, 0 without an issue/PR ref"* ]]
+	[[ "$output" == *"0 genuinely unaccounted"* ]]
+}
+
+@test "row 1 accepts a bare #N cited in prose, with no Status at all" {
+	lesson_body "p.md" "" "Fixed under #321 last week."
+	run_report ""
+	[[ "$output" == *"0 genuinely unaccounted"* ]]
+	[[ "$output" != *"genuinely unaccounted (no issue/PR ref anywhere"*"p.md"* ]]
+}
+
+@test "row 1 accepts a pull/N path and a github issue URL as refs" {
+	lesson_body "u.md" "" "see https://github.com/someone/else/issues/9 and pull/12"
+	run_report ""
+	[[ "$output" == *"0 genuinely unaccounted"* ]]
+}
+
+@test "row 1 negative control: a tracked Status with no ref anywhere is still the residue" {
+	lesson_body "bare.md" "tracked" "No number here, only words and # Headings and #abc."
+	run_report ""
+	[[ "$output" == *"1 genuinely unaccounted"* ]]
+	[[ "$output" == *"genuinely unaccounted"*"bare.md"* ]]
+}
+
+@test "row 1 negative control: an HTML entity is not a ref" {
+	lesson_body "ent.md" "" "an entity &#123; is not a ref"
+	run_report ""
+	[[ "$output" == *"1 genuinely unaccounted"* ]]
+}
+
+@test "row 1 splits mixed stores: refs and Status accounted, only the residue listed" {
+	lesson_body "a.md" "tracked — blueprintx#1" ""
+	lesson_body "b.md" "" "cited as #2"
+	lesson_status "c.md" "delivered — pre-PR (abc1234)"
+	lesson_body "d.md" "" "nothing"
+	run_report ""
+	[[ "$output" == *"4 in store, 2 without an issue/PR ref — 1 delivered, 0 advisory, 0 superseded, 1 genuinely unaccounted"* ]]
+	[[ "$output" == *"genuinely unaccounted"*"d.md"* ]]
+	[[ "$output" != *"genuinely unaccounted (no issue/PR ref anywhere"*"a.md"* ]]
 }
 
 # --- row 2: issues → lessons (the B-side orphan the old audit could not see) --------------------
@@ -399,7 +456,7 @@ STUB
 	git -C "$REPO" remote set-url origin https://github.com/guilhermegor/dotfiles-linux-dev.git
 	lesson "tracked-lesson.md" "42"
 	run_report ""
-	[[ "$output" == *"lessons → issues : 1 in store, 0 without a PR ref — 0 delivered, 0 advisory, 0 superseded, 0 genuinely unaccounted"* ]]
+	[[ "$output" == *"lessons → issues : 1 in store, 0 without an issue/PR ref — 0 delivered, 0 advisory, 0 superseded, 0 genuinely unaccounted"* ]]
 }
 
 @test "the same run behaves identically for a dotfiles-dev vs dotfiles-linux-dev checkout" {

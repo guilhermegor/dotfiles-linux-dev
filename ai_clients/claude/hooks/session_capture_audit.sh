@@ -39,6 +39,8 @@ set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib/lesson_mirrors.sh"
 # shellcheck source=lib/loop_branch.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/loop_branch.sh"
+# shellcheck source=lib/lesson_status_backfill.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/lesson_status_backfill.sh"
 
 # LESSON_STORES, mirror_path()/mirror_rel_path(), mirror_expected_for_repo(), and
 # lesson_originates_in_repo() all come from lib/lesson_mirrors.sh — shared with
@@ -367,8 +369,14 @@ emit_completeness_store() {
 		[ "$name" = "README.md" ] && continue
 		total=$((total + 1))
 
-		# A direct citation accounts for the lesson regardless of its Status value.
+		# A direct citation accounts for the lesson regardless of its Status value. Any
+		# issue/PR ref counts, anywhere in the lesson (`#NNN`, `pull/NNN`, another repo's
+		# `repo#NNN`), not only a `<this repo>#NNN` or a **PR:** line: a `Status: tracked`
+		# lesson names its issue, and 109 of the toolchain's 118 "unaccounted" lessons cited
+		# theirs in prose (dotfiles-linux-dev#1001). Whether that issue is still open is a
+		# forge fact this offline audit cannot read; lesson_status_backfill.sh derives it.
 		grep -qE "(${citation_re})#[0-9]+" "$file" && continue
+		lesson_has_ref "$file" && continue
 		no_ref=$((no_ref + 1))
 
 		if grep -qE '^[[:space:]]*([-*][[:space:]]+)?\*\*Status:\*\* *delivered' "$file"; then
@@ -384,7 +392,7 @@ emit_completeness_store() {
 			unaccounted+=("$name")
 		fi
 	done
-	printf '    lessons → issues : %d in store, %d without a PR ref — %d delivered, %d advisory, %d superseded, %d genuinely unaccounted\n' \
+	printf '    lessons → issues : %d in store, %d without an issue/PR ref — %d delivered, %d advisory, %d superseded, %d genuinely unaccounted\n' \
 		"$total" "$no_ref" "$delivered" "$advisory" "$superseded" "${#unaccounted[@]}"
 
 	# Row 2 — issues → lessons (live issue list; report mode + gh only, fails open).
@@ -425,7 +433,7 @@ emit_completeness_store() {
 		printf '    ! open issues with no lesson — write one or mark not-lesson-worthy: %s\n' "${orphans[*]}"
 	fi
 	if [ "${#unaccounted[@]}" -gt 0 ]; then
-		printf '    ! lessons genuinely unaccounted (no PR ref, no delivered/advisory/superseded Status): %s\n' \
+		printf '    ! lessons genuinely unaccounted (no issue/PR ref anywhere, no delivered/advisory/superseded Status): %s\n' \
 			"${unaccounted[*]}"
 	fi
 }
@@ -472,7 +480,7 @@ emit_report() {
 	printf '%s\n' "  - [ ] Superseded rules: did this session CHANGE a standing rule? grep tracked docs/README/ledgers for the OLD rule — a tracked doc outranks memory next session."
 	printf '%s\n' "  - [ ] Issues/PRs: every issue created this session is on the board and its card is in the right column; open PRs are accounted for."
 	printf '%s\n' "  - [ ] Completeness BOTH ways (above): resolve each 'orphan' open issue (write its lesson or list it under the store README's 'Issues not born of a lesson') and each 'genuinely unaccounted' lesson (file the issue or record a delivered/advisory/superseded Status:) — a one-directional check hides the B-side orphan."
-	printf '%s\n' "  - [ ] 'genuinely unaccounted' above is the debt that is real: no PR ref and no delivered/advisory/superseded Status. Zero is expected only right after a triage."
+	printf '%s\n' "  - [ ] 'genuinely unaccounted' above is the debt that is real: no issue/PR ref anywhere and no delivered/advisory/superseded Status. Zero is expected only right after a triage."
 	printf '%s\n' "  - [ ] Checkpoint: project memory has a resume point covering this session's work."
 	printf '%s\n' "  - [ ] Lessons: every generalizable finding is captured in the right store (BlueprintX, dotfiles-dev, or lessons-other) — routed by where the fix lands."
 }
