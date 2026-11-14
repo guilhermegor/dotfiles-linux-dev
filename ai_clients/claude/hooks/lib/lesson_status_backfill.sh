@@ -248,6 +248,10 @@ lb_rewrite() {
 	tmp="$(mktemp "$(dirname -- "$file")/.lesson-backfill.XXXXXX")" || return 1
 	if ! awk -v status_re="$LB_STATUS_RE" -v pr_re="$LB_PR_RE" \
 		-v new_status="$status_value" -v pr_ref="$pr_ref" '
+		# plain index/substr: the old sub() regex left the label in "old" on the CI awk
+		function after_label(line, label,   rest) {
+			rest = substr(line, index(line, label) + length(label)); sub(/^[ \t]+/, "", rest); return rest
+		}
 		function prefix_of(line) { match(line, /^[ \t]*([-*][ \t]+)?/); return substr(line, 1, RLENGTH) }
 		function is_placeholder(v) {
 			v = tolower(v); gsub(/^[ \t]+|[ \t]+$/, "", v)
@@ -262,12 +266,12 @@ lb_rewrite() {
 				if (lines[i] ~ pr_re) { p_at = i }
 			}
 			if (s_at) {
-				old = lines[s_at]; sub(/^[^:]*\*\*Status:\*\*[ \t]*/, "", old)
+				old = after_label(lines[s_at], "**Status:**")
 				pfx = prefix_of(lines[s_at])
 				lines[s_at] = pfx "**Status:** " new_status ((old == "" || old == "—") ? "" : " (was: " old ")")
 			}
 			if (pr_ref != "" && p_at) {
-				old = lines[p_at]; sub(/^[^:]*\*\*PR:\*\*[ \t]*/, "", old)
+				old = after_label(lines[p_at], "**PR:**")
 				if (is_placeholder(old)) lines[p_at] = prefix_of(lines[p_at]) "**PR:** " pr_ref
 			}
 			add_pr = (pr_ref != "" && !p_at)
