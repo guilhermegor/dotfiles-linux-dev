@@ -549,3 +549,83 @@ abcdefghi'"
     run run_guard "cd sub && git commit -m 'fix: x'"
     [ "$status" -eq 0 ]
 }
+
+# --- #1005 review: every over-block must fail open ---------------------------------------------
+
+@test "#1002: an UNQUOTED heredoc body with an expansion is not judged" {
+    gitlint_repo
+    cmd="$(printf 'git commit -F- <<MSG\nfix: x\n\n$BODY\nMSG')"
+    run run_guard "$cmd"
+    [ "$status" -eq 0 ]
+    cmd="$(printf 'git commit -F- <<MSG\nfix: x\n\n`cat b`\nMSG')"
+    run run_guard "$cmd"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: a QUOTED heredoc body with a dollar is still judged" {
+    gitlint_repo
+    cmd="$(printf "git commit -F- <<'MSG'\nfix: x\n\n\$BODY\nMSG")"
+    run run_guard "$cmd"
+    [ "$status" -eq 2 ]
+}
+
+@test "#1002: -F with a relative path is read relative to the cd target" {
+    mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
+    printf '[general]\n' > "$TEST_TMP/other/.gitlint"
+    printf 'fix: x\n\nThis explains the change well.\n' > "$TEST_TMP/other/msg.txt"
+    run run_guard "cd $TEST_TMP/other && git commit -F msg.txt"
+    [ "$status" -eq 0 ]
+    printf 'fix: x\n' > "$TEST_TMP/other/msg.txt"
+    run run_guard "cd $TEST_TMP/other && git commit -F msg.txt"
+    [ "$status" -eq 2 ]
+}
+
+@test "#1002: a relative -F with an unresolvable cd fails open" {
+    gitlint_repo
+    printf 'fix: x\n' > msg.txt
+    run run_guard "cd sub && git commit -F msg.txt"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: a lone -m built from shell expansion is not judged" {
+    gitlint_repo
+    run run_guard 'git commit -m "$(cat message.txt)"'
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: ignore=all skips both body checks" {
+    gitlint_repo '[general]\nignore=all\n'
+    run run_guard "git commit -m 'fix: x'"
+    [ "$status" -eq 0 ]
+    run run_guard "git commit -m 'fix: x' -m short"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: ignore ids are case-insensitive like gitlint (b6)" {
+    gitlint_repo '[general]\nignore=b6\n'
+    run run_guard "git commit -m 'fix: x'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: a cd AFTER the commit does not decide the commit's repo" {
+    mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
+    printf '[general]\n' > "$TEST_TMP/other/.gitlint"
+    run run_guard "git commit -m 'fix: x' && cd $TEST_TMP/other"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: a cd between two commits fails open" {
+    mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
+    printf '[general]\n' > "$TEST_TMP/other/.gitlint"
+    run run_guard "git commit -m 'fix: x' && cd $TEST_TMP/other && git commit -m 'fix: y'"
+    [ "$status" -eq 0 ]
+}
+
+@test "#1002: a 'cd' line inside a heredoc body is data, not a command" {
+    mkdir "$TEST_TMP/other" && git -C "$TEST_TMP/other" init -q
+    printf '[body-min-length]\nmin-length=500\n' > "$TEST_TMP/other/.gitlint"
+    gitlint_repo '[general]\nignore=all\n'
+    cmd="$(printf "git commit -F- <<'MSG'\nfix: x\n\nrun this:\ncd $TEST_TMP/other\nMSG")"
+    run run_guard "$cmd"
+    [ "$status" -eq 0 ]
+}

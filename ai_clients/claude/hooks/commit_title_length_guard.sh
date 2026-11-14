@@ -37,7 +37,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh"
 DEFAULT_TITLE_MAX_LENGTH=72
 
 main() {
-    local payload tool command title max_len set idx
+    local payload tool command title max_len set idx hmsg
     local -a titles dirs bodies bdirs
 
     payload="$(cat)"
@@ -60,6 +60,7 @@ main() {
     dirs=()
     bodies=()
     bdirs=()
+    commit_cd_dir "$command"   # before any -F read: a relative path resolves against the commit's dir
     if printf '%s' "$command" | grep -q '<<' && title="$(extract_heredoc_title "$command")"; then
         # `-F-`/`--file=-` fed by exactly one heredoc (issue #140): its body is in the raw string.
         # The title belongs to the commit that reads stdin, so its limit comes from THAT commit's
@@ -68,13 +69,15 @@ main() {
         if ((COMMIT_SOURCE_FOUND && ! COMMIT_SOURCE_HAS_M)); then
             titles+=("$title")
             dirs+=("$COMMIT_SOURCE_DIR")
-            bodies+=("$(heredoc_full_message "$command")")
-            bdirs+=("$COMMIT_SOURCE_DIR")
+            if hmsg="$(heredoc_full_message "$command")"; then
+                bodies+=("$hmsg")
+                bdirs+=("$COMMIT_SOURCE_DIR")
+            fi
         fi
     fi
     # `-F <path>` (#1002): measured for the body rules only; the title check stays as it was.
     commit_source_dir "$command" file
-    if ((COMMIT_SOURCE_FOUND && ! COMMIT_SOURCE_HAS_M)) && title="$(read_message_file "$COMMIT_SOURCE_FILE" "$COMMIT_SOURCE_DIR")"; then
+    if ((COMMIT_SOURCE_FOUND && ! COMMIT_SOURCE_HAS_M && COMMIT_CD_OK)) && title="$(read_message_file "$COMMIT_SOURCE_FILE" "$COMMIT_SOURCE_DIR")"; then
         bodies+=("$title")
         bdirs+=("$COMMIT_SOURCE_DIR")
     fi
@@ -88,7 +91,7 @@ main() {
         titles+=("${title%%$'\n'*}")   # first line only
         dirs+=("${COMMIT_MESSAGE_DIRS[idx]}")
         # An empty paragraph is shell expansion we could not read: skip the body rules, never guess.
-        if [[ "$set" != "$_MSG_SEP"* && "$set" != *"$_MSG_SEP" && "$set" != *"$_MSG_SEP$_MSG_SEP"* ]]; then
+        if [[ -n "$set" && "$set" != "$_MSG_SEP"*&& "$set" != *"$_MSG_SEP" && "$set" != *"$_MSG_SEP$_MSG_SEP"* ]]; then
             bodies+=("${set//"$_MSG_SEP"/$'\n\n'}")
             bdirs+=("${COMMIT_MESSAGE_DIRS[idx]}")
         fi
@@ -104,7 +107,6 @@ main() {
     done
 
     # Body rules B5/B6 need the repo, so a `cd` we cannot resolve statically fails open (#1002).
-    commit_cd_dir "$command"
     ((COMMIT_CD_OK)) || exit 0
     idx=0
     for set in ${bodies[@]+"${bodies[@]}"}; do
@@ -127,11 +129,14 @@ effective_dir() {
 
 heredoc_full_message() {
     # Lines between the single heredoc opener and its terminator (see extract_heredoc_title).
-    local opener tag
+    local opener tag text
     opener="$(printf '%s' "$1" | grep -oE $'<<-?[[:space:]]*[\'"]?[^[:space:]\'"<>|&;()]+[\'"]?')"
     tag="${opener#<<}"; tag="${tag#-}"; tag="${tag//[[:space:]\'\"]/}"
-    printf '%s\n' "$1" | awk -v tag="$tag" \
-        'go { t = $0; sub(/^\t+/, "", t); if (t == tag) exit; print } /<</ && !go { go = 1 }'
+    text="$(printf '%s\n' "$1" | awk -v tag="$tag" \
+        'go { t = $0; sub(/^\t+/, "", t); if (t == tag) exit; print } /<</ && !go { go = 1 }')"
+    # An unquoted delimiter lets the shell expand the body, so its real text is unknowable here.
+    [[ "$opener" == *[\'\"]* || ( "$text" != *'$'* && "$text" != *'`'* ) ]] || return 1
+    printf '%s' "$text"
 }
 
 read_message_file() {
@@ -139,7 +144,8 @@ read_message_file() {
     # built from expansion. A relative path resolves against the commit's directory.
     local f="$1" dir="$2"
     [[ -n "$f" && "$f" != - && "$f" != *'$'* && "$f" != *'`'* ]] || return 1
-    [[ "$f" == /* ]] || f="${COMMIT_CD_DIR:+$COMMIT_CD_DIR/}${dir:+$dir/}$f"
+    dir="$(effective_dir "$dir")"
+    [[ "$f" == /* || -z "$dir" ]] || f="$dir/$f"
     [[ -f "$f" && -r "$f" ]] && (($(wc -c < "$f") <= 65536)) || return 1
     cat "$f"
 }
@@ -170,6 +176,9 @@ check_body() {
     esac
 
     ignore=",$(gitlint_value "$cfg" general ignore),"
+    # gitlint accepts `all`, and rule ids in any case (probed on 0.19.1); rule NAMES are exact-case.
+    [[ "$ignore" == *,all,* ]] && return 0
+    ignore="${ignore//,b5,/,B5,}"; ignore="${ignore//,b6,/,B6,}"
     min="$(gitlint_value "$cfg" body-min-length min-length)"
     [[ "$min" =~ ^[0-9]+$ ]] || min=20
 
