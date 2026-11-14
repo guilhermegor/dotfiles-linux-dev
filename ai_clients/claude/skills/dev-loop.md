@@ -1318,4 +1318,5 @@ line, built from the predicate's `#N: blocker` lines: `loop disarmed — nothing
 After the disarm line on `IDLE` only (#1011), load `s:session-closeout` and work it: run
 `session_capture_audit.sh`, fix the mechanical gaps (e.g. `worktree_prune.sh --apply` on shipped
 worktrees), write or refresh the project checkpoint memory, then report the closeout summary right
-below the disarm line. Commit and push stay owner decisions inside the closeout. `ACTIVE` rounds skip it.
+below the disarm line. Commit and push stay owner decisions inside the closeout, with one exception: the
+audit's own `push_loop_branches` (#715) pushes loop branches the forge lacks (never merged/closed PRs). `ACTIVE` rounds skip it.
