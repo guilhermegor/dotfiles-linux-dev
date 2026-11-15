@@ -162,7 +162,7 @@ main() {
             if [[ "$GH_BODY_FILE_JSON" == "true" ]]; then
                 # `gh api --input`: a JSON payload, the body is its `.body` member.
                 body_source="$(jq -r '.body // ""' "$body_path" 2>/dev/null)" \
-                    || block_unresolved_body_file "$GH_BODY_FILE" "$root" "$body_base"
+                    || block_unresolved_body_file "$GH_BODY_FILE" "$root"   # found, but not valid JSON
                 # The payload's own labels count as positively known labels too.
                 mapfile -t json_labels < <(jq -r '.labels[]? | if type == "object" then .name else . end' \
                     "$body_path" 2>/dev/null)
@@ -244,7 +244,7 @@ block_unresolved_repo() {
 }
 
 # Directory a relative path in $1 resolves against: $PWD moved through each leading
-# `cd <path> &&` (bare, "double" or 'single' quoted; a leading ~ expanded; a path with a shell
+# `cd <path> &&` (bare, "double" or 'single' quoted; a leading bare ~ expanded; a path with a shell
 # variable or substitution ends the walk). Prints the raw join, not a realpath: only a message
 # and a readability test consume it.
 leading_cd_dir() {
@@ -253,11 +253,14 @@ leading_cd_dir() {
     while [[ "$rest" =~ $re ]]; do
         target="${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
         rest="${BASH_REMATCH[5]}"
+        # Only a bare (unquoted) ~ is expanded by the shell, so only group 4 may be.
         # shellcheck disable=SC2088  # matching the literal `~` the command text carries, not expanding it
-        case "$target" in
-            '~')   target="$HOME" ;;
-            '~/'*) target="$HOME/${target#\~/}" ;;
-        esac
+        if [[ -n "${BASH_REMATCH[4]}" ]]; then
+            case "$target" in
+                '~')   target="$HOME" ;;
+                '~/'*) target="$HOME/${target#\~/}" ;;
+            esac
+        fi
         [[ "$target" == /* ]] && dir="$target" || dir="$dir/$target"
     done
     printf '%s' "$dir"

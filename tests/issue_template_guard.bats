@@ -278,6 +278,13 @@ guard_at() {
     [ "$status" -eq 0 ]
 }
 
+@test "a quoted ~ in a leading cd is a literal directory, not expanded (#1013)" {
+    mkdir "$REPO/sub"
+    printf '**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [ ] a\n' > "$REPO/sub/rel.md"
+    HOME="$REPO" run guard_at "$REPO" 'cd "~/sub" && gh issue create --title x -F rel.md'
+    [ "$status" -eq 2 ]
+}
+
 @test "a missing relative body file says what it resolved against, not that the body is empty (#1013)" {
     run guard_at "$REPO" "cd $REPO && gh issue create --title x -F nope.md"
     [ "$status" -eq 2 ]
