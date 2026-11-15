@@ -245,10 +245,13 @@ block_unresolved_repo() {
 
 # Directory a relative path in $1 resolves against: $PWD moved through each leading
 # `cd <path> &&` (bare, "double" or 'single' quoted; a leading bare ~ expanded; a path with a shell
-# variable or substitution ends the walk). Prints the raw join, not a realpath: only a message
-# and a readability test consume it.
+# variable or substitution ends the walk). Each step is a real `cd` in a subshell, so `link/..`
+# follows bash's logical semantics; a step into a missing directory falls back to the raw join,
+# so the not-found message still names where it looked. The walk is trusted only when `gh` follows
+# the chain directly: anything else between them (`cd ..;`, `ls &&`) may move the shell again, so
+# the payload cwd is kept, as before #1013.
 leading_cd_dir() {
-    local rest="$1" dir="$PWD" target
+    local rest="$1" dir="$PWD" target next
     local re='^[[:space:]]*cd[[:space:]]+("([^"$`]*)"|'"'"'([^'"'"']*)'"'"'|([^[:space:];&|$`"'"'"']+))[[:space:]]*&&(.*)$'
     while [[ "$rest" =~ $re ]]; do
         target="${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
@@ -261,8 +264,13 @@ leading_cd_dir() {
                 '~/'*) target="$HOME/${target#\~/}" ;;
             esac
         fi
-        [[ "$target" == /* ]] && dir="$target" || dir="$dir/$target"
+        if next="$(CDPATH='' cd -- "$dir" 2>/dev/null && CDPATH='' cd -- "$target" 2>/dev/null && pwd -L)"; then
+            dir="$next"
+        else
+            [[ "$target" == /* ]] && dir="$target" || dir="$dir/$target"
+        fi
     done
+    [[ "$rest" =~ ^[[:space:]]*gh[[:space:]] ]] || dir="$PWD"
     printf '%s' "$dir"
 }
 
