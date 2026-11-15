@@ -79,7 +79,7 @@ source "$SCRIPT_DIR/lib/issue_spec_complete.sh" 2>/dev/null || SPEC_LIB_OK=0
 command -v jq >/dev/null 2>&1 || exit 0
 
 main() {
-    local payload tool command root body_source labels
+    local payload tool command root body_source labels body_path body_base=""
     local -a json_labels=()
     local -a templates=() best_missing=() missing=()
     local template best_template="" best_count=-1
@@ -150,20 +150,28 @@ main() {
     fi
 
     if [[ "$GH_HAS_BODY_FILE" == "true" ]]; then
-        if [[ -r "$GH_BODY_FILE" ]]; then
+        # A relative path is read by gh from where the command's own leading `cd` left the shell
+        # (dotfiles-linux-dev#1013). Only the body path follows the cd, not `root`: the template
+        # still comes from the session's repo, as before.
+        body_path="$GH_BODY_FILE"
+        if [[ "$body_path" != /* && "$body_path" != "-" && "$body_path" != *'$'* && "$body_path" != *'`'* ]]; then
+            body_base="$(leading_cd_dir "$command")"
+            body_path="$body_base/$GH_BODY_FILE"
+        fi
+        if [[ -r "$body_path" ]]; then
             if [[ "$GH_BODY_FILE_JSON" == "true" ]]; then
                 # `gh api --input`: a JSON payload, the body is its `.body` member.
-                body_source="$(jq -r '.body // ""' "$GH_BODY_FILE" 2>/dev/null)" \
-                    || block_unresolved_body_file "$GH_BODY_FILE" "$root"
+                body_source="$(jq -r '.body // ""' "$body_path" 2>/dev/null)" \
+                    || block_unresolved_body_file "$GH_BODY_FILE" "$root"   # found, but not valid JSON
                 # The payload's own labels count as positively known labels too.
                 mapfile -t json_labels < <(jq -r '.labels[]? | if type == "object" then .name else . end' \
-                    "$GH_BODY_FILE" 2>/dev/null)
+                    "$body_path" 2>/dev/null)
                 GH_LABELS+=("${json_labels[@]}")
             else
-                body_source="$(cat "$GH_BODY_FILE")"
+                body_source="$(cat "$body_path")"
             fi
         else
-            block_unresolved_body_file "$GH_BODY_FILE" "$root"
+            block_unresolved_body_file "$GH_BODY_FILE" "$root" "$body_base"
         fi
     else
         body_source="$GH_BODY"
@@ -235,11 +243,42 @@ block_unresolved_repo() {
     exit 2
 }
 
+# Directory a relative path in $1 resolves against: $PWD moved through each leading
+# `cd <path> &&` (bare, "double" or 'single' quoted; a leading bare ~ expanded; a path with a shell
+# variable or substitution ends the walk). Each step is a real `cd` in a subshell, so `link/..`
+# follows bash's logical semantics; a step into a missing directory falls back to the raw join,
+# so the not-found message still names where it looked. The walk is trusted only when `gh` follows
+# the chain directly: anything else between them (`cd ..;`, `ls &&`) may move the shell again, so
+# the payload cwd is kept, as before #1013.
+leading_cd_dir() {
+    local rest="$1" dir="$PWD" target next
+    local re='^[[:space:]]*cd[[:space:]]+("([^"$`]*)"|'"'"'([^'"'"']*)'"'"'|([^[:space:];&|$`"'"'"']+))[[:space:]]*&&(.*)$'
+    while [[ "$rest" =~ $re ]]; do
+        target="${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
+        rest="${BASH_REMATCH[5]}"
+        # Only a bare (unquoted) ~ is expanded by the shell, so only group 4 may be.
+        # shellcheck disable=SC2088  # matching the literal `~` the command text carries, not expanding it
+        if [[ -n "${BASH_REMATCH[4]}" ]]; then
+            case "$target" in
+                '~')   target="$HOME" ;;
+                '~/'*) target="$HOME/${target#\~/}" ;;
+            esac
+        fi
+        if next="$(CDPATH='' cd -- "$dir" 2>/dev/null && CDPATH='' cd -- "$target" 2>/dev/null && pwd -L)"; then
+            dir="$next"
+        else
+            [[ "$target" == /* ]] && dir="$target" || dir="$dir/$target"
+        fi
+    done
+    [[ "$rest" =~ ^[[:space:]]*gh[[:space:]] ]] || dir="$PWD"
+    printf '%s' "$dir"
+}
+
 block_unresolved_body_file() {
     # Same reasoning as pr_template_guard.sh's block_unresolved_body_file (dotfiles-linux-dev#78/#109):
     # a PreToolUse hook sees the command BEFORE shell expansion and sandboxed to the project
     # directory, so a generic "check the path" sends the author chasing a bug that isn't there.
-    local path="$1" root="${2:-}"
+    local path="$1" root="${2:-}" base="${3:-}"
 
     if [[ "$GH_BLIND_REASON" == "graphql-expansion" ]]; then
         # #1000: the real cause, not a body file nobody passed.
@@ -289,6 +328,10 @@ block_unresolved_body_file() {
             echo "the repo (e.g. $root/.git/, which stays out of the worktree and any commit),"
             echo "then re-run the SAME gh command with the new path."
         else
+            if [[ -n "$base" ]]; then
+                echo
+                echo "relative path $path, resolved against $base, not found."
+            fi
             echo
             echo "If the file is created and consumed in the same command (e.g. \`cat >file &&"
             echo "gh issue create --body-file file\`), this hook still sees the pre-write state —"

@@ -245,6 +245,72 @@ TEMPLATE
     [[ "$output" == *"could not be read"* ]]
 }
 
+# --- a leading `cd <path> &&` also moves a RELATIVE body path (dotfiles-linux-dev#1013) -------------
+
+guard_at() {
+    jq -nc --arg cwd "$1" --arg cmd "$2" '{tool_name: "Bash", cwd: $cwd, tool_input: {command: $cmd}}' | "$GUARD"
+}
+
+@test "a leading cd resolves a relative -F against the cd target, not the payload cwd (#1013)" {
+    mkdir "$REPO/sub"
+    printf '**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [ ] a\n' > "$REPO/sub/rel.md"
+    run guard_at "$REPO" "cd $REPO/sub && gh issue create --title x -F rel.md"
+    [ "$status" -eq 0 ]
+    run guard_at "$REPO" "cd sub && gh issue create --title x --body-file rel.md"
+    [ "$status" -eq 0 ]
+}
+
+@test "a leading cd still judges the body it finds, a bad one is blocked (#1013)" {
+    mkdir "$REPO/sub"
+    printf 'no sections here\n' > "$REPO/sub/rel.md"
+    run guard_at "$REPO" "cd $REPO/sub && gh issue create --title x -F rel.md"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Definition of done"* ]]
+}
+
+@test "a leading cd with a ~ or a quoted path is expanded (#1013)" {
+    mkdir "$REPO/sub" "$REPO/sub dir"
+    printf '**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [ ] a\n' > "$REPO/sub/rel.md"
+    cp "$REPO/sub/rel.md" "$REPO/sub dir/rel.md"
+    HOME="$REPO" run guard_at "$REPO" 'cd ~/sub && gh issue create --title x -F rel.md'
+    [ "$status" -eq 0 ]
+    run guard_at "$REPO" "cd \"$REPO/sub dir\" && gh issue create --title x -F rel.md"
+    [ "$status" -eq 0 ]
+}
+
+@test "a quoted ~ in a leading cd is a literal directory, not expanded (#1013)" {
+    mkdir "$REPO/sub"
+    printf '**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [ ] a\n' > "$REPO/sub/rel.md"
+    HOME="$REPO" run guard_at "$REPO" 'cd "~/sub" && gh issue create --title x -F rel.md'
+    [ "$status" -eq 2 ]
+}
+
+@test "a cd chain that does not lead straight into gh keeps the payload cwd (#1013 review)" {
+    mkdir "$REPO/sub"
+    printf '**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [ ] a\n' > "$REPO/rel.md"
+    printf 'no sections here\n' > "$REPO/sub/rel.md"
+    # The shell is back in $REPO when gh runs, so $REPO/rel.md is the body gh reads.
+    run guard_at "$REPO" "cd sub && cd ..; gh issue create --title x -F rel.md"
+    [ "$status" -eq 0 ]
+}
+
+@test "a leading cd through a symlink then .. resolves logically, like the shell (#1013 review)" {
+    mkdir -p "$REPO/other/child"
+    ln -s "$REPO/other/child" "$REPO/link"
+    printf '**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [ ] a\n' > "$REPO/rel.md"
+    printf 'no sections here\n' > "$REPO/other/rel.md"
+    # bash's logical cd: link/.. is $REPO, not $REPO/other.
+    run guard_at "$REPO" "cd link/.. && gh issue create --title x -F rel.md"
+    [ "$status" -eq 0 ]
+}
+
+@test "a missing relative body file says what it resolved against, not that the body is empty (#1013)" {
+    run guard_at "$REPO" "cd $REPO && gh issue create --title x -F nope.md"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"relative path nope.md, resolved against $REPO, not found"* ]]
+    [[ "$output" != *"Missing required sections"* ]]
+}
+
 @test "a gh issue create mentioned only inside a heredoc body is not executed, not matched" {
     local cmd
     cmd="cat <<'EOF'

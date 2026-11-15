@@ -1632,3 +1632,20 @@ EOF'
     run guard_cmd 'gh api graphql -f '"'"'query={viewer{login}}'"'"' -f other="${a[@]}"'
     [ "$status" -eq 2 ]
 }
+
+guard_at() {
+    jq -nc --arg cwd "$1" --arg cmd "$2" '{tool_name: "Bash", cwd: $cwd, tool_input: {command: $cmd}}' | "$GUARD"
+}
+
+@test "REST: a leading cd resolves a relative -F body=@file against the cd target (#1013)" {
+    mkdir "$REPO/sub"
+    printf '**Python · PyPI · public repo**\n\nx\n\n### Definition of done\n- [ ] a\n' > "$REPO/sub/rel.md"
+    run guard_at "$REPO" "cd $REPO/sub && gh api repos/{owner}/{repo}/issues -F title=x -F body=@rel.md"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: a missing relative body file names the path and what it resolved against (#1013)" {
+    run guard_at "$REPO" "cd $REPO && gh api repos/{owner}/{repo}/issues -F title=x -F body=@nope.md"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"relative path nope.md, resolved against $REPO, not found"* ]]
+}
