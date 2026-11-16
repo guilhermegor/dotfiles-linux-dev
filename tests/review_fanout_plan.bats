@@ -508,6 +508,41 @@ EOF
     [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
 }
 
+@test "a ladder marker posted as a PR REVIEW at the head is coverage (#1016, measured)" {
+    # pure-docs-br#6: the claude rung submits its marker as a review by the PR author, so
+    # channel 1 rightly ignores it and a comments-only channel 2 never saw it.
+    stub_gh_prs <<EOF
+[{"number":1016,"headRefOid":"6ae82c68","mergeStateStatus":"BLOCKED","isDraft":false,
+  "author":{"login":"guilhermegor"},
+  "reviews":[{"state":"COMMENTED","commit":{"oid":"6ae82c68"},"author":{"login":"guilhermegor"},
+    "body":"Fallback review — runtime: claude, model: opus\nReviewed head: 6ae82c68"}],
+  "comments":[],
+  "commits":[{"oid":"6ae82c68","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 1016)" == *"already covered at the current head by a fallback review"* ]]
+}
+
+@test "a ladder review submitted on an OLDER commit is not coverage of the head (#1016)" {
+    # The marker names the head, but the review was submitted on another commit: the
+    # commit.oid binding is what replaces the comment path's time clause, so it must hold.
+    stub_gh_prs <<EOF
+[{"number":1017,"headRefOid":"6ae82c68","mergeStateStatus":"BLOCKED","isDraft":false,
+  "author":{"login":"guilhermegor"},
+  "reviews":[{"state":"COMMENTED","commit":{"oid":"11112222"},"author":{"login":"guilhermegor"},
+    "body":"Fallback review — runtime: claude, model: opus\nReviewed head: 6ae82c68"}],
+  "comments":[],
+  "commits":[{"oid":"6ae82c68","committedDate":"$(ago 3600)"}],
+  "statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "1017" ]
+}
+
 # --- eligibility ------------------------------------------------------------------
 
 @test "a DIRTY pull request is excluded — a review cannot resolve a conflict" {

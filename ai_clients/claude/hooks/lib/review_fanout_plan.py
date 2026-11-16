@@ -792,8 +792,19 @@ def ladder_covered_at_head(pr: dict, head_time: datetime.datetime) -> bool:
 	after the head commit (a comment written before the head existed provably did not
 	review it). A time-only check is defeated by a backdated head whose committer date
 	predates an existing marker for a different commit (dotfiles-linux-dev#564).
+
+	The ``claude`` rung posts the marker as a PR REVIEW, not a comment (#1016). A review
+	carries the commit it was submitted on, so ``commit.oid == head`` replaces the time clause.
 	"""
 	head = pr.get("headRefOid") or ""
+	for review in pr.get("reviews") or []:
+		body = review.get("body") or ""
+		if (
+			LADDER_ATTRIBUTION_RE.search(body)
+			and names_head(body, head)
+			and ((review.get("commit") or {}).get("oid") or "") == head
+		):
+			return True
 	for comment in pr.get("comments") or []:
 		body = comment.get("body") or ""
 		if not LADDER_ATTRIBUTION_RE.search(body) or not names_head(body, head):
