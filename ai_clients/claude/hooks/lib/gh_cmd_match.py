@@ -579,18 +579,21 @@ def graphql_variable_default(header, name):
     return graphql_string_value(lit.group(1)) if lit else None
 
 
+def file_may_differ(path, shifted):
+    """True when the chain may change what `path` holds, or which file it names, before gh reads it."""
+    moved, written, opaque = shifted
+    real = os.path.realpath(path)
+    return bool(opaque or (moved and not os.path.isabs(path)) or any(
+        real == w or real.startswith(w.rstrip(os.sep) + os.sep) for w in written))
+
+
 def read_graphql_file(path, shifted):
     """Return a regular file's text (capped), or None when it cannot be judged statically.
 
     A pipe, tty or device (`/dev/stdin`, `/dev/zero`) is never the file the shell will feed gh,
     and a relative path after a `cd` or a redirect may name a different file than the hook sees.
     """
-    moved, written, opaque = shifted
-    real = os.path.realpath(path)
-    if opaque or (moved and not os.path.isabs(path)) or any(
-            real == w or real.startswith(w.rstrip(os.sep) + os.sep) for w in written):
-        return None
-    if not os.path.isfile(path):
+    if file_may_differ(path, shifted) or not os.path.isfile(path):
         return None
     with open(path, encoding="utf-8") as fh:
         text = fh.read((1 << 20) + 1)
@@ -1112,20 +1115,8 @@ def api_issue_match(segments):
             repo = None if "{" in owner + name or "$" in owner + name else f"{owner}/{name}"
         else:
             repo = None
-        has_body, body, has_body_file, body_file, labels = False, None, False, None, []
-        for typed, field in fields:
-            key, _, val = field.partition("=")
-            if key == "body":
-                # A later body= overwrites an earlier one (gh keeps the last), whatever its kind.
-                if typed and val.startswith("@"):  # only -F/--field reads a file via @
-                    has_body_file, body_file, has_body, body = True, val[1:], False, None
-                else:
-                    has_body, body, has_body_file, body_file = True, val, False, None
-            elif key in ("labels[]", "labels"):
-                labels.extend(p for p in val.split(",") if p)
-        body_json = False
-        if input_file is not None:
-            has_body_file, body_file, body_json, has_body, body = True, input_file, True, False, None
+        has_body, body, has_body_file, body_file, labels, body_json = api_body_fields(
+            fields, input_file)
         no_body = not (has_body or has_body_file)
         if no_body and not (unknown_write or (method in ("POST", "?") and not number)):
             continue  # an edit that sends no body leaves the existing one untouched (#987)
@@ -1137,6 +1128,117 @@ def api_issue_match(segments):
             "matched": True, "repo": repo, "head": None, "has_body": has_body, "body": body,
             "has_body_file": has_body_file, "body_file": body_file, "body_json": body_json,
             "labels": labels, "auto": False, "method": method,
+        }
+    return found
+
+
+def api_body_fields(fields, input_file):
+    """Read the body (inline or `@file`), labels and `--input` payload out of parsed `gh api` fields.
+
+    Shared by the issues and pulls REST matchers so both read a body exactly the same way.
+    Returns (has_body, body, has_body_file, body_file, labels, body_json).
+    """
+    has_body, body, has_body_file, body_file, labels = False, None, False, None, []
+    for typed, field in fields:
+        key, _, val = field.partition("=")
+        if key == "body":
+            # A later body= overwrites an earlier one (gh keeps the last), whatever its kind.
+            if typed and val.startswith("@"):  # only -F/--field reads a file via @
+                has_body_file, body_file, has_body, body = True, val[1:], False, None
+            else:
+                has_body, body, has_body_file, body_file = True, val, False, None
+        elif key in ("labels[]", "labels"):
+            labels.extend(p for p in val.split(",") if p)
+    body_json = False
+    if input_file is not None:
+        has_body_file, body_file, body_json, has_body, body = True, input_file, True, False, None
+    return has_body, body, has_body_file, body_file, labels, body_json
+
+
+API_PULL_ENDPOINT = re.compile(r"^/?repos/([^/]+)/([^/]+)/pulls(?:/([^/]+))?$")
+PULL_BLIND = {"matched": True, "unparseable": True}
+
+
+def pull_endpoint_state(path):
+    """Classify a `gh api` endpoint: ("pulls", owner, repo, number) | "skip" | "blind".
+
+    A `$VAR`/command-substitution that could name a pulls write is blind (fails closed, like the
+    issue guard); a variable only in the owner/repo segment, or a literal non-pulls resource, is
+    judged by its literal resource.
+    """
+    segs = path.strip("/").split("/")
+    dyn = [("$" in t or "`" in t) for t in segs]
+    if not any(dyn):
+        m = API_PULL_ENDPOINT.match(path)
+        if not m or (m.group(3) is not None and not m.group(3).isdigit()):
+            return "skip"
+        return ("pulls", m.group(1), m.group(2), m.group(3))
+    if segs[0] != "repos" or dyn[0] or {".", ".."} & set(segs):
+        return "blind"
+    outcomes = set()
+    for width in (1, 2):  # owner/name segments: `$R` (one) or `$O/$N` / `o/$N` (two)
+        at = 1 + width
+        if at >= len(segs) or dyn[at] or (width == 1 and not dyn[1]):
+            continue  # no resource segment, the variable IS the resource, or `$R` is not there
+        tail = segs[at + 1:]
+        if segs[at] != "pulls" or (tail and not (len(tail) == 1 and (dyn[at + 1] or tail[0].isdigit()))):
+            outcomes.add("skip")  # another resource, or a pulls sub-resource (merge, comments, ...)
+        else:
+            outcomes.add(("pulls", "$" if any(dyn[1:at]) else segs[1], "$" if any(dyn[1:at]) else segs[2],
+                          tail[0] if tail else None))
+    return outcomes.pop() if len(outcomes) == 1 else "blind"
+
+
+def api_pr_match(segments):
+    """Return the match dict for `[rtk] gh api repos/O/R/pulls[/N]` writes, or None.
+
+    The REST twin of `gh pr create|edit` (dotfiles-linux-dev#1015): POST on `pulls` creates,
+    PATCH/PUT on `pulls/N` edits; `pulls/N/merge`, `/comments` and reads are skipped. A PATCH with
+    no body leaves the body alone and passes; a POST with no body counts as an empty one (REST has
+    no editor mode), as for issues. Fails CLOSED (PULL_BLIND) on anything the hook cannot judge:
+    a shell-built endpoint or body, a body file the chain may rewrite, or a second PR write.
+    """
+    shifted = chain_moves_files(segments)
+    found = None
+    for argv, marks in iter_argvs_marked(segments):
+        gh_at = gh_start(argv)
+        if gh_at < 0:
+            continue
+        sub = gh_sub(argv, gh_at)
+        if argv[sub:sub + 1] != ["api"]:
+            continue
+        rest, mrest = strip_redirects(argv[sub + 1:], marks[sub + 1:])
+        endpoint, method, fields, input_file, stray = parse_api_args(rest)
+        path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0],
+                      flags=re.I).rstrip("/")
+        writes = bool(fields or input_file) or (method or "GET") != "GET"
+        state = "blind" if not endpoint or stray else pull_endpoint_state(path)
+        if state == "skip" or (state == "blind" and not writes):
+            continue
+        if state == "blind" or (method and ("$" in method or "`" in method)):
+            return PULL_BLIND
+        _, owner, name, number = state
+        method = method or ("POST" if writes else "GET")
+        if not ((method == "POST" and not number) or (method in ("PATCH", "PUT") and number)):
+            continue
+        marked = parse_api_args(mrest)[2]
+        if any(c in f.partition("=")[2] for _, f in marked if f.startswith("body=")
+               for c in (SHELL_QUOTED, SHELL_SPLIT, SHELL_GLOB)):
+            return PULL_BLIND  # the shell decides the body: the literal text is not what is sent
+        has_body, body, has_body_file, body_file, labels, body_json = api_body_fields(fields, input_file)
+        if has_body_file and (body_file == "-" or file_may_differ(body_file, shifted)):
+            return PULL_BLIND  # stdin, or a file the chain rewrites / re-roots before gh reads it
+        if not (has_body or has_body_file):
+            if number:
+                continue  # an edit that sends no body leaves the existing one untouched
+            has_body, body = True, ""
+        if found:
+            return PULL_BLIND  # one verdict cannot cover two writes
+        repo = None if any(c in owner + name for c in "{$`") else f"{owner}/{name}"
+        found = {
+            "matched": True, "repo": repo, "head": None, "has_body": has_body,
+            "body": body, "has_body_file": has_body_file, "body_file": body_file,
+            "body_json": body_json, "labels": labels, "auto": False, "method": method,
         }
     return found
 
@@ -1205,7 +1307,7 @@ def runs_unseen_gh(command, segments):
 
 def main():
     noun = sys.argv[1] if len(sys.argv) > 1 else ""
-    if noun not in ("pr", "issue", "api-issue"):
+    if noun not in ("pr", "issue", "api-issue", "api-pr"):
         print(json.dumps({"matched": False}))
         return 0
 
@@ -1219,8 +1321,19 @@ def main():
                 match = {"matched": True, "unparseable": True}
             print(json.dumps(match or {"matched": False}))
             return 0
+        if noun == "api-pr":
+            match = api_pr_match(segments)
+            if runs_unseen_gh(command, segments) or any(
+                    looks_like_gh_api(e) for e in NESTED_ERRORS):
+                match = PULL_BLIND
+            print(json.dumps(match or {"matched": False}))
+            return 0
         argv = matching_argv(segments, noun)
     except ValueError:
+        if noun == "api-pr" and looks_like_gh_api(command):
+            print(json.dumps(PULL_BLIND))  # unparseable `gh api`: reported, never allowed
+            return 0
+
         if noun == "api-issue" and looks_like_gh_api(command):
             # Fail CLOSED for `gh api` (#714): text that looks like an issues write but
             # cannot be tokenized is reported, never silently allowed.

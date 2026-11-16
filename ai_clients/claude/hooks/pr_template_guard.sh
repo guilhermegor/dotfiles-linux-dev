@@ -37,8 +37,27 @@ main() {
     # unrelated quoted argument like --title (CodeRabbit review, PR #371). This is ALSO what keeps
     # `gh issue create` untouched (dotfiles-linux-dev#154 defect 1): "pr" is a required argv position
     # here, so an issue command never matches.
-    resolve_gh_command "$command" "pr" || exit 0   # unparseable → unknown, not non-compliant
+    # Both forms are judged INDEPENDENTLY (dotfiles-linux-dev#1015): `gh pr create|edit` and its
+    # REST twin `gh api repos/O/R/pulls[/N]`. Re-invoke once per noun (PTG_NOUN); any exit 2 wins,
+    # the same shape issue_template_guard.sh uses.
+    if [[ -z "${PTG_NOUN:-}" ]]; then
+        local noun rc
+        for noun in pr api-pr; do
+            rc=0
+            printf '%s' "$payload" | PTG_NOUN="$noun" bash "${BASH_SOURCE[0]}" || rc=$?
+            [[ $rc -eq 2 ]] && exit 2
+        done
+        exit 0
+    fi
+    resolve_gh_command "$command" "$PTG_NOUN" || exit 0   # unparseable → unknown, not non-compliant
     [[ "$GH_MATCHED" == "true" ]] || exit 0
+    if [[ "$GH_UNPARSEABLE" == "true" ]]; then
+        echo "BLOCKED: this command may write a PR through \`gh api\` (an endpoint, body or file the" >&2
+        echo "shell builds or rewrites, an unparseable command, or several PR writes in one call), so" >&2
+        echo "its body was never verified. Re-run each PR write as its own plain" >&2
+        echo "\`gh api repos/O/R/pulls[/N] -f body=...\` command with the endpoint and body literal." >&2
+        exit 2
+    fi
     # Only when a body is actually being set (skip title-only edits, editor-mode create, --fill).
     [[ "$GH_HAS_BODY" == "true" || "$GH_HAS_BODY_FILE" == "true" ]] || exit 0
 
@@ -72,7 +91,18 @@ main() {
     # is "unknown", not "approved": fail loud instead.
     if [[ "$GH_HAS_BODY_FILE" == "true" ]]; then
         if [[ -r "$GH_BODY_FILE" ]]; then
-            body_source="$(cat "$GH_BODY_FILE")"
+            if [[ "$GH_BODY_FILE_JSON" == "true" ]]; then
+                # `gh api --input`: a JSON payload, the body is its `.body` member.
+                body_source="$(jq -r '.body // ""' "$GH_BODY_FILE" 2>/dev/null)" \
+                    || block_unresolved_body_file "$GH_BODY_FILE" "$root"
+                # An edit whose payload has no `body` member leaves the body untouched.
+                if [[ "$GH_METHOD" == "PATCH" || "$GH_METHOD" == "PUT" ]] \
+                    && ! jq -e 'has("body")' "$GH_BODY_FILE" >/dev/null 2>&1; then
+                    exit 0
+                fi
+            else
+                body_source="$(cat "$GH_BODY_FILE")"
+            fi
         else
             block_unresolved_body_file "$GH_BODY_FILE" "$root"
         fi
@@ -98,7 +128,12 @@ main() {
             echo "  - $header"
         done
         echo
-        echo "Re-run the SAME gh command with a --body that fills EVERY section below:"
+        if [[ "${PTG_NOUN:-pr}" == "api-pr" ]]; then
+            echo "Re-run the SAME gh api command with a body field (-f body=..., -F body=@file or"
+            echo "--input) that fills EVERY section below:"
+        else
+            echo "Re-run the SAME gh command with a --body that fills EVERY section below:"
+        fi
         echo "-----8<----- PULL_REQUEST_TEMPLATE -----8<-----"
         cat "$template"
         echo "-----8<----------------------------------8<-----"
