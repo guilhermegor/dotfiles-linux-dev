@@ -368,3 +368,69 @@ EOF"
     [[ "$output" == *"Missing required sections"* ]]
     [[ "$output" != *"could not be read"* ]]
 }
+
+# --- REST twin: `gh api repos/O/R/pulls[/N]` (dotfiles-linux-dev#1015) ---------------------------
+# The endpoint names its target repo, so the cwd checkout must be that repo (origin o/r) for the
+# template to resolve here, exactly as for `--repo`.
+
+rest_origin() {
+    git -C "$REPO" remote add origin https://github.com/o/r.git
+}
+
+@test "REST: POST pulls with -F body=@file missing a section is blocked (#1015)" {
+    rest_origin
+    printf '## Description\nonly this\n' > "$REPO/body.md"
+    run bash -c "payload 'gh api -X POST repos/o/r/pulls -f title=x -F body=@$REPO/body.md' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Testing"* ]]
+}
+
+@test "REST: POST pulls with a complete body file is allowed (#1015)" {
+    rest_origin
+    printf '## Description\nx\n## Testing\ny\n' > "$REPO/body.md"
+    run bash -c "payload 'gh api -X POST repos/o/r/pulls -f title=x -F body=@$REPO/body.md' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: POST pulls with an incomplete inline -f body is blocked, --raw-field too (#1015)" {
+    rest_origin
+    run bash -c "payload 'gh api repos/o/r/pulls -f title=x -f body=short' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api repos/o/r/pulls --raw-field body=short' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: PATCH pulls/N with a bad body is checked, a good one passes (#1015)" {
+    rest_origin
+    run bash -c "payload 'gh api -X PATCH repos/o/r/pulls/5 -f body=short' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    printf '## Description\nx\n## Testing\ny\n' > "$REPO/body.md"
+    run bash -c "payload 'gh api -X PATCH repos/o/r/pulls/5 --field body=@$REPO/body.md' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: PATCH pulls/N without a body field (title-only) passes (#1015)" {
+    rest_origin
+    run bash -c "payload 'gh api -X PATCH repos/o/r/pulls/5 -f title=new' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "REST: an rtk / rtk proxy prefix is still checked (#1015)" {
+    rest_origin
+    run bash -c "payload 'rtk proxy gh api -X POST repos/o/r/pulls -f body=short' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'rtk gh api -X PATCH repos/o/r/pulls/5 -f body=short' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: non-pulls gh api calls are untouched (#1015)" {
+    rest_origin
+    run bash -c "payload 'gh api -X PUT repos/o/r/pulls/5/merge -f body=short' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api -X POST repos/o/r/pulls/5/comments -f body=short' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api repos/o/r/pulls/5' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api -X POST repos/o/r/issues -f body=short' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}

@@ -1112,20 +1112,8 @@ def api_issue_match(segments):
             repo = None if "{" in owner + name or "$" in owner + name else f"{owner}/{name}"
         else:
             repo = None
-        has_body, body, has_body_file, body_file, labels = False, None, False, None, []
-        for typed, field in fields:
-            key, _, val = field.partition("=")
-            if key == "body":
-                # A later body= overwrites an earlier one (gh keeps the last), whatever its kind.
-                if typed and val.startswith("@"):  # only -F/--field reads a file via @
-                    has_body_file, body_file, has_body, body = True, val[1:], False, None
-                else:
-                    has_body, body, has_body_file, body_file = True, val, False, None
-            elif key in ("labels[]", "labels"):
-                labels.extend(p for p in val.split(",") if p)
-        body_json = False
-        if input_file is not None:
-            has_body_file, body_file, body_json, has_body, body = True, input_file, True, False, None
+        has_body, body, has_body_file, body_file, labels, body_json = api_body_fields(
+            fields, input_file)
         no_body = not (has_body or has_body_file)
         if no_body and not (unknown_write or (method in ("POST", "?") and not number)):
             continue  # an edit that sends no body leaves the existing one untouched (#987)
@@ -1137,6 +1125,72 @@ def api_issue_match(segments):
             "matched": True, "repo": repo, "head": None, "has_body": has_body, "body": body,
             "has_body_file": has_body_file, "body_file": body_file, "body_json": body_json,
             "labels": labels, "auto": False, "method": method,
+        }
+    return found
+
+
+def api_body_fields(fields, input_file):
+    """Read the body (inline or `@file`), labels and `--input` payload out of parsed `gh api` fields.
+
+    Shared by the issues and pulls REST matchers so both read a body exactly the same way.
+    Returns (has_body, body, has_body_file, body_file, labels, body_json).
+    """
+    has_body, body, has_body_file, body_file, labels = False, None, False, None, []
+    for typed, field in fields:
+        key, _, val = field.partition("=")
+        if key == "body":
+            # A later body= overwrites an earlier one (gh keeps the last), whatever its kind.
+            if typed and val.startswith("@"):  # only -F/--field reads a file via @
+                has_body_file, body_file, has_body, body = True, val[1:], False, None
+            else:
+                has_body, body, has_body_file, body_file = True, val, False, None
+        elif key in ("labels[]", "labels"):
+            labels.extend(p for p in val.split(",") if p)
+    body_json = False
+    if input_file is not None:
+        has_body_file, body_file, body_json, has_body, body = True, input_file, True, False, None
+    return has_body, body, has_body_file, body_file, labels, body_json
+
+
+API_PULL_ENDPOINT = re.compile(r"^/?repos/([^/$`]+)/([^/$`]+)/pulls(?:/(\d+))?$")
+
+
+def api_pr_match(segments):
+    """Return the match dict for `[rtk] gh api repos/O/R/pulls[/N]` writes, or None.
+
+    The REST twin of `gh pr create|edit` (dotfiles-linux-dev#1015). Only a literal endpoint is
+    judged: POST on `pulls` creates, PATCH/PUT on `pulls/N` edits; `pulls/N/merge`, `/comments`
+    and reads never match the pattern. A PATCH with no body leaves the body alone and passes; a
+    POST with no body counts as an empty one (REST has no editor mode), as for issues.
+    """
+    found = None
+    for argv, marks in iter_argvs_marked(segments):
+        gh_at = gh_start(argv)
+        if gh_at < 0:
+            continue
+        sub = gh_sub(argv, gh_at)
+        if argv[sub:sub + 1] != ["api"]:
+            continue
+        rest, mrest = strip_redirects(argv[sub + 1:], marks[sub + 1:])
+        endpoint, method, fields, input_file, stray = parse_api_args(rest)
+        path = re.sub(r"^https?://[^/]+/(api/v3/)?", "", re.split(r"[?#]", endpoint or "", maxsplit=1)[0],
+                      flags=re.I).rstrip("/")
+        m = API_PULL_ENDPOINT.match(path)
+        if not m or stray:
+            continue
+        number = m.group(3)
+        method = method or ("POST" if fields or input_file else "GET")
+        if not ((method == "POST" and not number) or (method in ("PATCH", "PUT") and number)):
+            continue
+        has_body, body, has_body_file, body_file, labels, body_json = api_body_fields(fields, input_file)
+        if not (has_body or has_body_file):
+            if number:
+                continue  # an edit that sends no body leaves the existing one untouched
+            has_body, body = True, ""
+        found = {
+            "matched": True, "repo": f"{m.group(1)}/{m.group(2)}", "head": None, "has_body": has_body,
+            "body": body, "has_body_file": has_body_file, "body_file": body_file,
+            "body_json": body_json, "labels": labels, "auto": False, "method": method,
         }
     return found
 
@@ -1205,7 +1259,7 @@ def runs_unseen_gh(command, segments):
 
 def main():
     noun = sys.argv[1] if len(sys.argv) > 1 else ""
-    if noun not in ("pr", "issue", "api-issue"):
+    if noun not in ("pr", "issue", "api-issue", "api-pr"):
         print(json.dumps({"matched": False}))
         return 0
 
@@ -1218,6 +1272,9 @@ def main():
                     looks_like_gh_api(e) for e in NESTED_ERRORS):
                 match = {"matched": True, "unparseable": True}
             print(json.dumps(match or {"matched": False}))
+            return 0
+        if noun == "api-pr":
+            print(json.dumps(api_pr_match(segments) or {"matched": False}))
             return 0
         argv = matching_argv(segments, noun)
     except ValueError:
