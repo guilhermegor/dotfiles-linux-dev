@@ -943,6 +943,19 @@ STUB
     [[ "$output" == *"UNREADABLE"* ]]
 }
 
+@test "a plan marked has_unknown_merge_state is used but not cached (#1019)" {
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[],"has_unknown_merge_state":true}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+    [ -z "$(ls -A "$REVIEW_FANOUT_CACHE_DIR" 2>/dev/null)" ]
+    # The next run re-plans instead of reading a cached copy.
+    printf 'not json at all\n' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNREADABLE"* ]]
+}
+
 @test "a published cache entry is whole JSON and leaves no temp file behind" {
     loop_invoked
     plan_with_work

@@ -504,6 +504,12 @@ publish_cache() {
 		rm -f "$1"
 		return 0
 	fi
+	# A plan built while GitHub still reads a PR's mergeStateStatus as UNKNOWN is used this run
+	# but never cached: the head stays the same when it settles to DIRTY (#1019).
+	if jq -e '.has_unknown_merge_state == true' <"$1" >/dev/null 2>&1; then
+		rm -f "$1"
+		return 0
+	fi
 	mv "$1" "$2" && find "$CACHE_DIR" -maxdepth 1 -name "$cwdsum.*.json" ! -name "${2##*/}" -delete 2>/dev/null
 }
 

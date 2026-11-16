@@ -1308,6 +1308,8 @@ def build_plan() -> dict:
 		"merge_ready": ready,
 		"dispatchable": dispatchable,
 		"excluded": excluded,
+		# The guard must not cache a plan built while mergeability is still being computed (#1019).
+		"has_unknown_merge_state": any(pr.get("mergeStateStatus") == "UNKNOWN" for pr in prs),
 	}
 
 
