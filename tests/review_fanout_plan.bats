@@ -1196,6 +1196,25 @@ EOF
 
 # --- the ladder trigger: backlog and structural refusal, not slot state (#616) ------------
 
+@test "has_unknown_merge_state is set only while a PR reads UNKNOWN (#1019)" {
+    stub_gh_prs <<EOF
+[{"number":900,"headRefOid":"aaaa9000","mergeStateStatus":"UNKNOWN","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa9000","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    jq -e '.has_unknown_merge_state == true' <<<"$output"
+    stub_gh_prs <<EOF
+[{"number":900,"headRefOid":"aaaa9000","mergeStateStatus":"DIRTY","isDraft":false,
+  "reviews":[],"comments":[],
+  "commits":[{"oid":"aaaa9000","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    jq -e '.has_unknown_merge_state == false' <<<"$output"
+}
+
 @test "an unreviewed head older than the backlog window is flagged for the ladder" {
     stub_gh_prs <<EOF
 [{"number":700,"headRefOid":"aaaa7000","mergeStateStatus":"BLOCKED","isDraft":false,
