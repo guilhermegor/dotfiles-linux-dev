@@ -434,3 +434,79 @@ rest_origin() {
     run bash -c "payload 'gh api -X POST repos/o/r/issues -f body=short' | '$GUARD'"
     [ "$status" -eq 0 ]
 }
+
+# --- CodeRabbit round 1 on #1018 + fail-closed REST path (#1015) --------------------------------
+
+rest_good_body() { printf '## Description\nx\n## Testing\ny\n' > "$REPO/good.md"; }
+
+@test "REST: a body the shell expands from a variable is blocked, not read literally" {
+    rest_origin
+    run bash -c "payload 'BODY=short; gh api -X PATCH repos/o/r/pulls/5 -f body=\"\${BODY:-Description Testing}\"' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: a body file the chain rewrites first is blocked" {
+    rest_origin
+    rest_good_body
+    run bash -c "payload 'cp bad.md good.md && gh api -X PATCH repos/o/r/pulls/5 -F body=@$REPO/good.md' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: two PR writes in one command are not judged by the last one alone" {
+    rest_origin
+    rest_good_body
+    run bash -c "payload 'gh api -X PATCH repos/o/r/pulls/5 -f body=short; gh api -X PATCH repos/o/r/pulls/6 -F body=@$REPO/good.md' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: {owner}/{repo} placeholders resolve to the cwd repo, not a missing checkout" {
+    printf '## Description\nonly\n' > "$REPO/bad.md"
+    run bash -c "payload 'gh api -X PATCH repos/{owner}/{repo}/pulls/5 -F body=@$REPO/bad.md' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Missing required sections"* ]]
+}
+
+@test "REST: a --input payload without a body member passes on PATCH, is blocked on POST" {
+    rest_origin
+    printf '{"title":"new"}' > "$REPO/p.json"
+    run bash -c "payload 'gh api -X PATCH repos/o/r/pulls/5 --input $REPO/p.json' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api -X POST repos/o/r/pulls --input $REPO/p.json' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: the block message gives a gh api correction, not --body" {
+    rest_origin
+    run bash -c "payload 'gh api -X POST repos/o/r/pulls -f body=short' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"-f body=..."* ]]
+    [[ "$output" != *"with a --body that"* ]]
+}
+
+@test "REST: a \$VAR endpoint that could be a pulls write is blocked" {
+    run bash -c "payload 'gh api -X PATCH \$EP -f body=short' | '$GUARD'"
+    [ "$status" -eq 2 ]
+    run bash -c "payload 'gh api -X POST repos/o/r/\$K -f body=short' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: a variable only in owner/repo or a loop PR number is judged by its literal resource" {
+    run bash -c "payload 'gh api -X PUT repos/\$R/pulls/5/merge -f sha=abc' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api -X POST repos/\$R/issues -f body=short' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api -X PATCH repos/o/r/pulls/\$n -f title=t' | '$GUARD'"
+    [ "$status" -eq 0 ]
+    run bash -c "payload 'gh api -X PATCH repos/o/r/pulls/\$n -f body=short' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: an unparseable gh api command is blocked" {
+    run bash -c "payload 'gh api -X PATCH repos/o/r/pulls/5 -f body=\"unterminated' | '$GUARD'"
+    [ "$status" -eq 2 ]
+}
+
+@test "REST: a plain gh api read with a variable endpoint stays allowed" {
+    run bash -c "payload 'gh api \$EP --jq .id' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
