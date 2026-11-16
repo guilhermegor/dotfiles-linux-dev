@@ -956,6 +956,28 @@ STUB
     [[ "$output" == *"UNREADABLE"* ]]
 }
 
+@test "UNKNOWN then DIRTY on the same head: the second run excludes the PR (#1019)" {
+    loop_invoked
+    # Run 1: #530 reads UNKNOWN, so the planner still dispatches it and marks the plan.
+    cat >"$PLAN" <<'EOF'
+{"rung":{"status":"ok"},"has_unknown_merge_state":true,
+ "dispatchable":[{"pr":520,"head":"aaaa","checks":{}},{"pr":530,"head":"bbbb","checks":{}}],
+ "excluded":[]}
+EOF
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"530"* ]]
+    # Run 2: same head SHAs, #530 settled to DIRTY; an unmarked plan excludes it.
+    cat >"$PLAN" <<'EOF'
+{"rung":{"status":"ok"},"has_unknown_merge_state":false,
+ "dispatchable":[{"pr":520,"head":"aaaa","checks":{}}],
+ "excluded":[{"pr":530,"reason":"merge conflict (mergeStateStatus DIRTY)"}]}
+EOF
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#530  merge conflict"* ]]
+}
+
 @test "a published cache entry is whole JSON and leaves no temp file behind" {
     loop_invoked
     plan_with_work
