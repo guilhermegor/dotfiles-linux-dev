@@ -572,6 +572,15 @@ registry, so they run against the board repo's own checkout (cwd when its origin
 `$KANBAN_CHECKOUT_ROOT`/`~/github`/`<repo>`); no checkout is that board's UNKNOWN. A swept repo with no
 registry entry gets a `note:` line. Tests: `tests/kanban_reconcile.bats`, `tests/subagent_stop_sweep.bats`.
 
+## Owner-decision digest (`s:owner-decisions`, dotfiles-linux-dev#1033)
+
+`s:owner-decisions` answers "what is pending from a decision of mine?" from data:
+`hooks/lib/owner_decisions.sh` lists flagged open PRs, `[blocker-kind: decision]` cards
+(`roadmap_unblock.sh`, reused), OFF Projects workflows, `REPORT-REMOTE` branches and `hitl` /
+decision-blocked issues. Standing exclusions live in `~/.claude/tasks/owner-decisions-exclusions.txt`,
+never in code. Source is flat `skills/owner-decisions.md` (the installer globs `*.md`); an unreadable
+source prints `UNREADABLE`, never "none". Tests: `tests/owner_decisions.bats`.
+
 ## Stop-guard budget and plan cache (dotfiles-linux-dev#814)
 
 `Stop` runs after every main-session turn, so the three Stop guards
