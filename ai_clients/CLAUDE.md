@@ -1036,6 +1036,27 @@ Shaping stops exactly where design-language begins. When a shaped scope needs UI
 - The markdown frontmatter is the canonical source of truth for tokens.
   JSON / CSS exports are pure derivations emitted by `s:design-token-export`.
 
+## LSP plugins need their server binaries (dotfiles-linux-dev#1026)
+
+An enabled `*-lsp` plugin only starts a program (`pyright-langserver`, ...) it expects on
+`PATH`; nothing in the plugin installs it. Two scripts in `claude/lib/` close the gap, and both
+read the command from the plugin's own manifest (`marketplace.json` `lspServers`, or the cached
+`plugin.json`), never from the plugin's name:
+
+- `check_lsp_servers.sh [settings.json]` fails when an enabled `*-lsp` plugin's declared command
+  is not on `PATH`, or when the plugin declares no server at all (no manifest resolves).
+- `install_lsp_servers.sh` (step `lsp_servers` in `main.sh`) `npm install -g`s the missing ones
+  through the asdf node, then re-runs the check. Its command-to-package map covers
+  `pyright-langserver` (`pyright`) and `typescript-language-server`. A declared command with no
+  recipe is reported, never guessed.
+
+`html`, `css`, `json`, `yaml`, `toml`, `mssql`, `postgres`, `sqlite`, `mysql`, `mariadb` and
+`mongodb` `-lsp` are set to `false` in `settings.json`: no marketplace lists them (checked
+2026-11-18 against `marketplace.json` and the plugin directory cache), so they have no manifest
+to read a server from and could never start. Re-enable one only after it ships a manifest, then
+add its recipe to `lsp_npm_packages`. `pyright-lsp` is now in the `main.sh` promote list, which
+matches `settings.json`. Tests: `tests/claude_lsp_servers.bats` (stubbed `PATH` and manifests).
+
 ## Pruning orphaned artifacts
 
 The `install_*` steps only copy — they never delete. Anything removed or renamed
