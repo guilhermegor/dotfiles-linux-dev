@@ -123,7 +123,7 @@ _install_playwright_mcp() {
 }
 
 _install_chrome_devtools_mcp() {
-    if claude mcp list 2>/dev/null | grep -q '^chrome-devtools'; then
+    if claude mcp list 2>/dev/null | grep -Eq '^chrome-devtools([[:space:]:]|$)'; then
         print_status "info" "chrome-devtools MCP already registered — skipping"
         return 0
     fi

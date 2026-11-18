@@ -53,3 +53,20 @@ teardown() {
     run grep -q -- "mcp add" "$CLAUDE_LOG"
     [ "$status" -ne 0 ]
 }
+
+@test "_install_chrome_devtools_mcp still registers when only chrome-devtools-local is listed" {
+    CLAUDE_MCP_LIST="chrome-devtools-local  npx something  stdio"
+
+    run _install_chrome_devtools_mcp
+    [ "$status" -eq 0 ]
+    grep -q -- "mcp add" "$CLAUDE_LOG"
+}
+
+@test "_install_chrome_devtools_mcp skips on the colon-delimited listing format" {
+    CLAUDE_MCP_LIST="chrome-devtools: npx chrome-devtools-mcp@1.12.0 - Connected"
+
+    run _install_chrome_devtools_mcp
+    [ "$status" -eq 0 ]
+    run grep -q -- "mcp add" "$CLAUDE_LOG"
+    [ "$status" -ne 0 ]
+}
