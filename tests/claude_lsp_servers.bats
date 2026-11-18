@@ -13,12 +13,17 @@ setup() {
     export CLAUDE_DIR="$TEST_TMP/dot-claude"
     STUB_BIN="$TEST_TMP/bin"
     mkdir -p "$STUB_BIN" "$CLAUDE_DIR/plugins/marketplaces/mkt/.claude-plugin"
-    export PATH="$STUB_BIN:/usr/bin:/bin"
+    for str_tool in bash jq sort sed dirname basename cat chmod mkdir; do
+        ln -s "$(command -v "$str_tool")" "$STUB_BIN/$str_tool"
+    done
+    ORIG_PATH="$PATH"
+    export PATH="$STUB_BIN"
     printf '{"plugins":[{"name":"demo-lsp","lspServers":{"demo":{"command":"fake-lsp-server"}}}]}' \
         > "$CLAUDE_DIR/plugins/marketplaces/mkt/.claude-plugin/marketplace.json"
 }
 
 teardown() {
+    PATH="$ORIG_PATH"
     rm -rf "$TEST_TMP"
 }
 
@@ -70,4 +75,33 @@ enable() {
     chmod +x "$STUB_BIN/npm"
     run bash "$LIB/install_lsp_servers.sh"
     [ "$(cat "$TEST_TMP/npm.args")" = "install -g pyright" ]
+}
+
+@test "a Bash builtin does not count as an installed server" {
+    printf '{"plugins":[{"name":"demo-lsp","lspServers":{"d":{"command":"cd"}}}]}' \
+        > "$CLAUDE_DIR/plugins/marketplaces/mkt/.claude-plugin/marketplace.json"
+    enable "demo-lsp@mkt"
+    run bash "$LIB/check_lsp_servers.sh"
+    [ "$status" -ne 0 ]
+}
+
+@test "an unreadable settings.json fails the check and the installer" {
+    printf '{' > "$CLAUDE_DIR/settings.json"
+    run bash "$LIB/check_lsp_servers.sh"
+    [ "$status" -ne 0 ]
+    run bash "$LIB/install_lsp_servers.sh"
+    [ "$status" -ne 0 ]
+}
+
+@test "only the installPath version's manifest is checked" {
+    enable "demo-lsp@mkt"
+    printf '{"plugins":[]}' > "$CLAUDE_DIR/plugins/marketplaces/mkt/.claude-plugin/marketplace.json"
+    local cache="$CLAUDE_DIR/plugins/cache/mkt/demo-lsp"
+    mkdir -p "$cache/1/.claude-plugin" "$cache/2/.claude-plugin"
+    printf '{"lspServers":{"a":{"command":"old-ls"}}}' > "$cache/1/.claude-plugin/plugin.json"
+    printf '{"lspServers":{"a":{"command":"bash"}}}' > "$cache/2/.claude-plugin/plugin.json"
+    printf '{"plugins":{"demo-lsp@mkt":[{"installPath":"%s"}]}}' "$cache/2" \
+        > "$CLAUDE_DIR/plugins/installed_plugins.json"
+    run bash "$LIB/check_lsp_servers.sh"
+    [ "$status" -eq 0 ]
 }

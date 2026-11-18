@@ -19,21 +19,26 @@ lsp_npm_packages() {
 
 install_lsp_servers() {
     local settings="${1:-$(lsp_claude_dir)/settings.json}"
-    local plugin_key str_cmd str_pkgs
+    local plugin_key str_cmd str_pkgs str_plugins
     local -a list_missing=()
     if [ ! -f "$settings" ]; then
         print_status "error" "settings file not found: $settings"
         return 1
     fi
+    if ! str_plugins="$(lsp_enabled_plugins "$settings")"; then
+        print_status "error" "cannot read enabledPlugins from $settings"
+        return 1
+    fi
     while IFS= read -r plugin_key; do
+        [ -n "$plugin_key" ] || continue
         while IFS= read -r str_cmd; do
-            if [ -n "$str_cmd" ] && ! command -v "$str_cmd" >/dev/null 2>&1; then
+            if [ -n "$str_cmd" ] && ! lsp_have_cmd "$str_cmd"; then
                 list_missing+=("$str_cmd")
             fi
         done < <(lsp_declared_commands "$plugin_key" | sort -u)
-    done < <(lsp_enabled_plugins "$settings")
+    done <<< "$str_plugins"
 
-    for str_cmd in $(printf '%s\n' "${list_missing[@]}" | sort -u); do
+    while IFS= read -r str_cmd; do
         if ! str_pkgs="$(lsp_npm_packages "$str_cmd")"; then
             print_status "warning" "no install recipe for '$str_cmd'; disable its plugin"
             continue
@@ -45,7 +50,7 @@ install_lsp_servers() {
         print_status "info" "Installing $str_pkgs for '$str_cmd' ..."
         # shellcheck disable=SC2086
         npm install -g $str_pkgs || return 1
-    done
+    done < <(printf '%s\n' "${list_missing[@]}" | sort -u | sed '/^$/d')
     check_lsp_servers "$settings"
 }
 

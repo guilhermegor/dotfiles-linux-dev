@@ -6,7 +6,8 @@
 #
 # The command comes from the plugin's own manifest, never from its name:
 #   1. <marketplace>/.claude-plugin/marketplace.json  (plugins[].lspServers)
-#   2. cache/<marketplace>/<plugin>/<ver>/.claude-plugin/plugin.json
+#   2. the plugin's installPath from installed_plugins.json (else every
+#      cache/<marketplace>/<plugin>/<ver>) + /.claude-plugin/plugin.json
 # An enabled plugin with no resolvable manifest fails too: it declares no
 # server, so nothing can ever start it.
 
@@ -38,21 +39,43 @@ lsp_declared_commands() {
     if [ -f "$manifest" ]; then
         jq -r --arg n "$name" ".plugins[]? | select(.name == \$n) | $filter" "$manifest"
     fi
-    for manifest in "$dir/cache/$market/$name"/*/.claude-plugin/plugin.json; do
+    local installed="$dir/installed_plugins.json" path_install
+    local -a list_dirs=()
+    if [ -f "$installed" ]; then
+        while IFS= read -r path_install; do
+            list_dirs+=("$path_install")
+        done < <(jq -r --arg k "$plugin_key" '.plugins[$k][]?.installPath // empty' "$installed" 2>/dev/null)
+    fi
+    if [ "${#list_dirs[@]}" -eq 0 ]; then
+        list_dirs=("$dir/cache/$market/$name"/*)
+    fi
+    for path_install in "${list_dirs[@]}"; do
+        manifest="$path_install/.claude-plugin/plugin.json"
         if [ -f "$manifest" ]; then
             jq -r "$filter" "$manifest"
         fi
     done
 }
 
+# True only for an executable file: a bare name is searched on PATH, a path is
+# tested directly. Unlike `command -v`, a Bash builtin (cd, echo) never counts.
+lsp_have_cmd() {
+    type -P "$1" >/dev/null 2>&1
+}
+
 check_lsp_servers() {
     local settings="${1:-$(lsp_claude_dir)/settings.json}"
-    local plugin_key str_cmds str_cmd int_bad=0
+    local plugin_key str_cmds str_cmd str_plugins int_bad=0
     if [ ! -f "$settings" ]; then
         print_status "error" "settings file not found: $settings"
         return 1
     fi
+    if ! str_plugins="$(lsp_enabled_plugins "$settings")"; then
+        print_status "error" "cannot read enabledPlugins from $settings"
+        return 1
+    fi
     while IFS= read -r plugin_key; do
+        [ -n "$plugin_key" ] || continue
         str_cmds="$(lsp_declared_commands "$plugin_key" | sort -u)"
         if [ -z "$str_cmds" ]; then
             print_status "error" "$plugin_key is enabled but declares no server (no manifest)"
@@ -60,14 +83,14 @@ check_lsp_servers() {
             continue
         fi
         while IFS= read -r str_cmd; do
-            if command -v "$str_cmd" >/dev/null 2>&1; then
+            if lsp_have_cmd "$str_cmd"; then
                 print_status "success" "$plugin_key -> $str_cmd"
             else
                 print_status "error" "$plugin_key is enabled but '$str_cmd' is not on PATH"
                 int_bad=$((int_bad + 1))
             fi
         done <<< "$str_cmds"
-    done < <(lsp_enabled_plugins "$settings")
+    done <<< "$str_plugins"
     [ "$int_bad" -eq 0 ]
 }
 

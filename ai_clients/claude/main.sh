@@ -88,12 +88,12 @@ STEPS=(
     "rules|Install language rules (python.md, ...)"
     "marketplaces|Register plugin marketplaces"
     "plugins|Promote plugins to user scope"
-    "lsp_servers|Install language servers for enabled *-lsp plugins"
     "mcp_servers|Install MCP servers"
     "profiles|Install the claude-profile session launcher"
     "claude_mem|Configure claude-mem mode"
     "prune|Prune orphaned artifacts (asks before removing)"
     "state_sync|Link private AI-state repo (memories, tasks, specs) + ai-state-sync command"
+    "lsp_servers|Install language servers for enabled *-lsp plugins"
 )
 
 dispatch_step() {
