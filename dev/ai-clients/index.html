@@ -749,6 +749,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#lsp-plugins-need-their-server-binaries-dotfiles-linux-dev1026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LSP plugins need their server binaries (dotfiles-linux-dev#1026)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#pruning-orphaned-artifacts" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1588,6 +1599,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lsp-plugins-need-their-server-binaries-dotfiles-linux-dev1026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LSP plugins need their server binaries (dotfiles-linux-dev#1026)
+      
+    </span>
+  </a>
   
 </li>
       
@@ -2919,6 +2941,25 @@ only.</p>
 <li>The markdown frontmatter is the canonical source of truth for tokens.
   JSON / CSS exports are pure derivations emitted by <code>s:design-token-export</code>.</li>
 </ul>
+<h2 id="lsp-plugins-need-their-server-binaries-dotfiles-linux-dev1026">LSP plugins need their server binaries (dotfiles-linux-dev#1026)<a class="headerlink" href="#lsp-plugins-need-their-server-binaries-dotfiles-linux-dev1026" title="Permanent link">&para;</a></h2>
+<p>An enabled <code>*-lsp</code> plugin only starts a program (<code>pyright-langserver</code>, ...) it expects on
+<code>PATH</code>; nothing in the plugin installs it. Two scripts in <code>claude/lib/</code> close the gap, and both
+read the command from the plugin's own manifest (<code>marketplace.json</code> <code>lspServers</code>, or the cached
+<code>plugin.json</code>), never from the plugin's name:</p>
+<ul>
+<li><code>check_lsp_servers.sh [settings.json]</code> fails when an enabled <code>*-lsp</code> plugin's declared command
+  is not on <code>PATH</code>, or when the plugin declares no server at all (no manifest resolves).</li>
+<li><code>install_lsp_servers.sh</code> (step <code>lsp_servers</code> in <code>main.sh</code>) <code>npm install -g</code>s the missing ones
+  through the asdf node, then re-runs the check. Its command-to-package map covers
+  <code>pyright-langserver</code> (<code>pyright</code>) and <code>typescript-language-server</code>. A declared command with no
+  recipe is reported, never guessed.</li>
+</ul>
+<p><code>html</code>, <code>css</code>, <code>json</code>, <code>yaml</code>, <code>toml</code>, <code>mssql</code>, <code>postgres</code>, <code>sqlite</code>, <code>mysql</code>, <code>mariadb</code> and
+<code>mongodb</code> <code>-lsp</code> are set to <code>false</code> in <code>settings.json</code>: no marketplace lists them (checked
+2026-11-18 against <code>marketplace.json</code> and the plugin directory cache), so they have no manifest
+to read a server from and could never start. Re-enable one only after it ships a manifest, then
+add its recipe to <code>lsp_npm_packages</code>. <code>pyright-lsp</code> is now in the <code>main.sh</code> promote list, which
+matches <code>settings.json</code>. Tests: <code>tests/claude_lsp_servers.bats</code> (stubbed <code>PATH</code> and manifests).</p>
 <h2 id="pruning-orphaned-artifacts">Pruning orphaned artifacts<a class="headerlink" href="#pruning-orphaned-artifacts" title="Permanent link">&para;</a></h2>
 <p>The <code>install_*</code> steps only copy — they never delete. Anything removed or renamed
 in source therefore stays behind in <code>~/.claude/</code> forever, and a leftover in a
