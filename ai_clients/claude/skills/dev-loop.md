@@ -557,8 +557,10 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
      contexts (empty), not a failure**: a ruleset-only branch answers exactly that. Classic
      protection alone is the wrong read — it hides both the required set and the strict flag.
 
-     ⚠️ **`.parameters.strict_required_status_checks_policy == true` means a `BEHIND` PR is
-     blocked, not merge-ready** — the flag exists only in `rules/branches`. Measured
+     ⚠️ **`.parameters.strict_required_status_checks_policy == true` (ruleset) or
+     `.protection.required_status_checks.strict == true` (classic) means a `BEHIND` PR is
+     blocked, not merge-ready** — read the flag from both sources and OR them; a ruleset-only
+     repo answers classic with a 404, so there the ruleset flag is the only one. Measured
      2026-11-18 (pure-schema-regimes PR #2): the classic 404 was read as "unprotected", and a
      sha-pinned merge was refused with "3 of 3 required status checks are expected" on a strict
      ruleset.
