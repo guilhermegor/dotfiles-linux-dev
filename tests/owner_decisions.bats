@@ -21,18 +21,104 @@ setup() {
 }
 
 @test "should-fail: a decision-blocked card IS listed" {
-    BOARD_REPORT='board o/1 (r): ok — 1 item line(s)
-  decision blocker owner/repo#7: decision: pick a vendor — left untouched (only a person clears this) [blocker-kind: decision]'
+    BOARD_REPORT=$'owner/repo#7\tdecision: pick a vendor'
     run owner_decisions_collect
     [ "$status" -eq 0 ]
     [[ "$output" == *"owner/repo#7"* ]]
     [[ "$output" == *"pick a vendor"* ]]
 }
 
-@test "a still-blocked internal card is not a decision" {
-    BOARD_REPORT='  still blocked owner/repo#8: owner/repo#2 [blocker-kind: internal]'
+# The real od_board_report against a stubbed `gh`: decision cards only, and no write call ever.
+_board_fixture_gh() {
+    GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+    : >"$GH_LOG"
+    gh() {
+        printf '%s\n' "$*" >>"$GH_LOG"
+        [[ "$1 $2" == "project item-list" ]] || return 1
+        printf '%s' '{"items":[
+          {"status":"Blocked","blocked by":"decision: pick a vendor","content":{"type":"Issue","number":7,"repository":"owner/repo","body":""}},
+          {"status":"Blocked","blocked by":"","content":{"type":"Issue","number":8,"repository":"owner/repo","body":"**Blocked by:** decision: which db"}},
+          {"status":"Blocked","blocked by":"owner/repo#2","content":{"type":"Issue","number":9,"repository":"owner/repo","body":""}},
+          {"status":"Ready","blocked by":"decision: x","content":{"type":"Issue","number":10,"repository":"owner/repo","body":""}}]}'
+    }
+}
+
+@test "should-pass: the real board source lists only decision-blocked cards" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/owner_decisions.sh"
+    ROADMAP_BOARDS=("owner|1|repo")
+    _board_fixture_gh
+    run od_board_report
+    [ "$status" -eq 0 ]
+    [[ "$output" == *$'owner/repo#7\tdecision: pick a vendor'* ]]
+    [[ "$output" == *"owner/repo#8"* ]]
+    [[ "$output" != *"#9"* && "$output" != *"#10"* ]]
+}
+
+@test "should-fail: the board source never writes to a board" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/owner_decisions.sh"
+    ROADMAP_BOARDS=("owner|1|repo")
+    _board_fixture_gh
+    run od_board_report
+    run grep -E 'item-edit|issue edit|mutation' "$GH_LOG"
+    [ "$status" -ne 0 ]
+}
+
+@test "should-fail: a failing gh is UNREADABLE for every source, never none" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/owner_decisions.sh"
+    ROADMAP_BOARDS=("owner|1|repo")
+    gh() { echo "HTTP 401" >&2; return 1; }
+    prune_branches() { return 2; }
+    run owner_decisions_collect
+    [[ "$output" == *"UNREADABLE"*"open PRs of owner/repo"* ]]
+    [[ "$output" == *"UNREADABLE"*"owner-decision issues of owner/repo"* ]]
+    [[ "$output" == *"UNREADABLE"*"board decision blockers"* ]]
+    [[ "$output" == *"UNREADABLE"*"Projects workflows"* ]]
+    [[ "$output" == *"UNREADABLE"*"REPORT-REMOTE branches"* ]]
+}
+
+@test "a null project in the workflows answer is UNREADABLE, not none OFF" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/owner_decisions.sh"
+    ROADMAP_BOARDS=("org|1|repo")
+    gh() { printf '%s' '{"data":{"user":null}}'; }
+    run od_workflows_off
+    [ "$status" -ne 0 ]
+}
+
+@test "an issue that is also a decision card is listed once" {
+    ISSUE_JSON='[{"number":7,"title":"a","labels":[{"name":"state:blocked"}],"body":"**Blocked by:** decision: v","pull_request":null}]'
+    BOARD_REPORT=$'owner/repo#7\tdecision: v'
+    run owner_decisions_collect
+    [ "$(grep -c 'owner/repo#7' <<<"$output")" -eq 1 ]
+}
+
+@test "should-pass: a #N exclusion does not hide a branch whose name holds #N" {
+    REMOTE=$'fix#12\n'
+    printf '#12\n' >"$OWNER_DECISIONS_EXCLUDE_FILE"
+    run owner_decisions_collect
+    [[ "$output" == *"fix#12"* ]]
+}
+
+@test "branch: and workflow: exclusions hide their rows" {
+    WORKFLOWS=$'owner/13\tAuto-add to project\n'
+    REMOTE=$'feat/old\n'
+    printf 'branch:feat/old\nworkflow:owner/13/Auto-add to project # never ask\n' >"$OWNER_DECISIONS_EXCLUDE_FILE"
     run owner_decisions_collect
     [[ "$output" == *"No pending owner decisions."* ]]
+}
+
+@test "a Blocked by line that merely mentions decision is not a decision blocker" {
+    ISSUE_JSON='[{"number":13,"title":"c","labels":[{"name":"state:blocked"}],"body":"**Blocked by:** #12 (no decision needed)","pull_request":null}]'
+    run owner_decisions_collect
+    [[ "$output" != *"owner/repo#13"* ]]
+}
+
+@test "a long multibyte cell is cut on a character boundary" {
+    local long
+    export LC_ALL=C.UTF-8
+    long="$(printf 'é%.0s' {1..250})"
+    run _od_cell "$long"
+    [ "${#output}" -eq 200 ]
+    iconv -f UTF-8 -t UTF-8 <<<"$output" >/dev/null
 }
 
 @test "should-pass: a routine merged PR is NOT listed" {
@@ -88,4 +174,13 @@ setup() {
     od_pr_json() { return 1; }
     run owner_decisions_collect
     [[ "$output" == *"UNREADABLE"*"open PRs of owner/repo"* ]]
+}
+
+@test "default repos come from ROADMAP_BOARDS owner and repo, each once" {
+    unset OWNER_DECISIONS_REPOS
+    ROADMAP_BOARDS=("acme|1|tool" "acme|2|tool" "guilhermegor|3|other")
+    SEEN="$BATS_TEST_TMPDIR/repos.log"
+    od_pr_json() { printf '%s\n' "$1" >>"$SEEN"; printf '[]'; }
+    run owner_decisions_collect
+    [ "$(cat "$SEEN")" = $'acme/tool\nguilhermegor/other' ]
 }
