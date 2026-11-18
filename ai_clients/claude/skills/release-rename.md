@@ -3,7 +3,7 @@ name: s:release-rename
 description: Use when a published package is being renamed — the forge repo, the PyPI distribution, the import package, the docs site, boards, local checkout and downstream consumers — and the rename must end in a release without losing release history. Loaded by s:release when the shipped change is a rename; not invoked directly.
 effort: high
 argument-hint: [old name, new name, shim-or-clean-break decision — supplied by s:release or the tracking issue]
-allowed-tools: Bash(git grep*) Bash(git worktree*) Bash(git mv*) Bash(git tag*) Bash(gh workflow*) Bash(gh run*) Bash(gh api*) Bash(gh project*) Bash(curl*) Bash(jq*) Bash(pip install*) Bash(poetry install*) Read Grep Glob
+allowed-tools: Bash(rtk git grep*) Bash(rtk git worktree*) Bash(rtk git mv*) Bash(rtk git tag*) Bash(rtk gh workflow*) Bash(rtk gh run*) Bash(rtk gh api*) Bash(rtk gh project*) Bash(rtk curl*) Bash(jq*) Bash(pip install*) Bash(poetry install*) Read Grep Glob
 ---
 
 > **Priority:** this project's `CLAUDE.md` and `rules/*.md` take precedence over the guidance below whenever they conflict — treat this skill as a fallback, not a mandate.
@@ -74,10 +74,10 @@ and rebuilds each `vX.Y.Z` tag with only the distribution name rewritten, upload
 `skip-existing` (74 releases for cvm). Each backfilled version keeps its original code and its
 original import name.
 
-Dispatch Test PyPI first, then PyPI (use the repo's real workflow filenames from step 3, not the template's), and install-verify each (`s:release-py` §B):
+Before dispatching, confirm both workflows already define the `backfill` input (`rtk git grep -n backfill -- .github/workflows`); if not, land it first (cvm#419), since an undeclared input makes the dispatch fail. Dispatch Test PyPI first, then PyPI (use the repo's real workflow filenames from step 3, not the template's), and install-verify each (`s:release-py` §B):
 
 ```bash
-cd <absolute-repo-path> && gh workflow run <test-pypi-workflow-file> --ref <default-branch> -f version=<any-dummy> -f backfill=true
+cd <absolute-repo-path> && rtk gh workflow run <test-pypi-workflow-file> --ref <default-branch> -f version=<any-dummy> -f backfill=true
 ```
 
 Keep the old name literal in the backfill job (`old="filings-cvm"` stayed in `release-*.yaml` on
@@ -91,7 +91,7 @@ Run `/session-closeout` in every Claude session on the repo and close the editor
 
 ## 6. `git worktree repair` BEFORE any `git worktree prune`
 
-Save the path→branch map first: `cd <absolute-repo-path> && git worktree list --porcelain > <scratch-file>` — it is the only
+Save the path→branch map first: `cd <absolute-repo-path> && rtk git worktree list --porcelain > <scratch-file>` — it is the only
 record of which branch each worktree had.
 
 After `mv old new`, each worktree's `.git` file still points at the old path, which git reads as
@@ -105,8 +105,9 @@ after the move. `cd <absolute-repo-path> && rm -rf .venv && poetry install` as p
 
 ## 7. Rename the Claude project directory to match
 
-Rename `~/.claude/projects/-home-<user>-github-<old>` to the new path-keyed name (the harness keys
-project state by the path with dashes), or the project's memory is silently orphaned.
+Rename `~/.claude/projects/<old-key>` to `<new-key>`, where a key is the absolute checkout path with
+every `/` replaced by `-` (e.g. `/home/<user>/github/<old>` becomes `-home-<user>-github-<old>`);
+derive both from the real old and new paths, or the project's memory is silently orphaned.
 
 ## 8. The sweep — the forge identifier, not the spelling
 
@@ -115,8 +116,8 @@ Grep `owner/repo` **first**, never the bare name (lesson
 147 files mentioned the name, 6 carried the breaking form):
 
 ```bash
-cd <absolute-repo-path> && git grep -l 'owner/<old>'     # must change
-cd <absolute-repo-path> && git grep -l '<old>'           # classify every extra hit
+cd <absolute-repo-path> && rtk git grep -l 'owner/<old>'     # must change
+cd <absolute-repo-path> && rtk git grep -l '<old>'           # classify every extra hit
 ```
 
 For each remaining hit ask: **is this string read at runtime?** Examples that are not the repo's
@@ -124,7 +125,7 @@ name but share its spelling: `importlib.metadata.version("<dist>")` (breaks at i
 cache and state directories, env-var prefixes, rc-file begin/end markers. A marker renamed here
 leaves a previously-installed machine with an unrecognised block that the next run duplicates.
 Also check whether any code **branches** on the name:
-`git grep -nE '(=|==|\[\[|case|test).{0,20}<old>' -- '*.sh' 'bin/**' 'Makefile'`.
+`rtk git grep -nE '(=|==|\[\[|case|test).{0,20}<old>' -- '*.sh' 'bin/**' 'Makefile'`.
 
 ## 9. Leave the historical record untouched — and say so
 
