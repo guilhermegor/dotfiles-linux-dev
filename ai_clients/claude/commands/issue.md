@@ -542,10 +542,14 @@ Resolve the ids and set it:
 
 **A failed board write is reported, never swallowed** (dotfiles-linux-dev#1021). Projects v2 is
 GraphQL-only, so a rate or secondary limit refuses `item-add`/`item-edit` while the REST issue
-create already succeeded. Do not retry in a loop: keep the issue, skip the rest of this step, and
-say so in step 9's `Board:` line. The sweep's off-board pass (`reconcile_kanban_offboard`, item
-`[12]` of `subagent_stop_sweep.sh`) lists open issues over REST, finds the ones with no card and
-adds them with this step's derivation (open blocker -> `Blocked`, else the work-type column).
+create already succeeded. Do not retry in a loop: keep the issue, skip the remaining board writes
+(Status, `Points`), and say so in step 9's `Board:` line. The `Cut 1.0.0` link below is a REST
+write independent of the board, so it still runs. The sweep's off-board pass
+(`reconcile_kanban_offboard`, item `[12]` of `subagent_stop_sweep.sh`) lists open issues over REST,
+finds the ones with no card and adds them with this step's derivation (open blocker -> `Blocked`,
+else the work-type column). It scans only the `ROADMAP_BOARDS` boards, so an unregistered repo or
+a `--project` board needs a manual follow-up. It sets Status only, never `Points`: report `Points`
+as unset, and the resume path writes it (`Points` empty -> step 5a) on the next `/issue` run.
 
 **Also set `Points`, every time** — the score from step 5a (or the sum, for a parent), never
 skipped, using the field id from the same `field-list` read:
@@ -611,7 +615,8 @@ Surface: <n> path(s)                   (say "inferred" under --quick)
 Milestone: <title> | none (repo has no milestones) | none (no fit)   (omit for linear)
 Parent:  #<P>                          (omit when flat)
 Board:   <project> → <column>          (omit for linear)
-Board:   write failed (<error>) — the sweep's off-board pass places the card   (omit unless step 7 failed)
+Board:   item-add failed (<error>) — the sweep's off-board pass adds the card (ROADMAP_BOARDS only; Points unset)   (omit unless step 7 failed)
+Board:   Status edit failed (<error>) — card exists with no Status; the sweep's No-Status placement (reconcile_kanban_done) places it (Points unset)   (omit unless step 7 failed)
 Cut 1.0.0: #<cut> now blocked by #<N> | none in this repo | skipped (<reason>) | link failed (<error>)   (omit for linear)
 Branch:  <type>/<ref>-<slug> (checked out)   (omit for parents)
 ```

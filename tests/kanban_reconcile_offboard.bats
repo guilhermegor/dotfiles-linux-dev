@@ -141,11 +141,22 @@ run_offboard() {
     [ ! -s "$GH_LOG" ]
 }
 
-@test "latched: item-add refused by a rate limit stops the round as UNKNOWN (latched)" {
+@test "item-add refused by a rate limit writes the latch and reports UNKNOWN (throttled)" {
     write_issues "$(issue 7 research "x")"
     touch "$TEST_TMP/fail-item-add"
     write_fake_gh
     run_offboard
     [[ "$output" == *"rc=1"* ]]
-    [[ "$output" == *"UNKNOWN (latched)"* ]]
+    [[ "$output" == *"UNKNOWN (throttled)"* ]]
+    [ -e "$GH_BUDGET_LATCH_FILE" ]
+}
+
+@test "a non-array items value is UNKNOWN and adds nothing" {
+    write_issues "$(issue 7 task "x")"
+    echo '{"items":null}' > "$TEST_TMP/items.json"
+    write_fake_gh
+    run_offboard
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"could not parse project items"* ]]
+    refute_gh 'item-add'
 }

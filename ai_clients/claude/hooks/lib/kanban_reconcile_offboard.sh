@@ -82,13 +82,14 @@ reconcile_kanban_offboard() {
 	if ! items_json="$(gh project item-list "$project_number" --owner "$owner" --format json \
 		--limit "$limit" 2>/dev/null)"; then
 		if _board_throttled; then
-			RECONCILE_OFFBOARD_REPORT="UNKNOWN (latched): GraphQL rate-limited, board items not read"
+			gh_budget_latch_write "$(gh_budget_reset_ttl)" || true
+			RECONCILE_OFFBOARD_REPORT="UNKNOWN (throttled): GraphQL rate-limited, board items not read"
 		else
 			RECONCILE_OFFBOARD_REPORT="UNKNOWN: could not read project items for $owner/$repo"
 		fi
 		return 1
 	fi
-	count="$(jq -e '.items | length' <<<"$items_json" 2>/dev/null)" || {
+	count="$(jq -e '.items | if type == "array" then length else error("items is not an array") end' <<<"$items_json" 2>/dev/null)" || {
 		RECONCILE_OFFBOARD_REPORT="UNKNOWN: could not parse project items for $owner/$repo"
 		return 1
 	}
@@ -120,7 +121,9 @@ reconcile_kanban_offboard() {
 		if ! added="$(gh project item-add "$project_number" --owner "$owner" --url "$url" \
 			--format json 2>/dev/null)"; then
 			if _board_throttled; then
-				report+="UNKNOWN (latched): GraphQL rate-limited at issue #$number, remaining not added"$'\n'
+				gh_budget_latch_write "$(gh_budget_reset_ttl)" \
+					|| report+="latch write FAILED: later boards may still call GraphQL"$'\n'
+				report+="UNKNOWN (throttled): GraphQL rate-limited at issue #$number, remaining not added"$'\n'
 				RECONCILE_OFFBOARD_REPORT="$(printf '%s' "$report" | sed '/^$/d')"
 				return 1
 			fi
