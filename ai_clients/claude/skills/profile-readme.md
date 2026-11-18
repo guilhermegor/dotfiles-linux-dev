@@ -5,7 +5,7 @@ description: Use when the GitHub profile README (the `<user>/<user>` repo) must
   languages — after a round of package decisions, a publish, or a rename.
 effort: medium
 argument-hint: [profile-repo] [planning-repo]
-allowed-tools: Bash(rtk gh api*) Bash(rtk proxy gh api*) Bash(rtk gh issue list*) Bash(rtk gh pr create*) Bash(rtk git fetch*) Bash(rtk git switch*) Bash(rtk git add*) Bash(rtk git commit*) Bash(rtk git push*) Bash(rtk proxy curl*) Bash(python3*) Read Edit Write Grep
+allowed-tools: Bash(rtk gh api*) Bash(rtk proxy gh api*) Bash(rtk gh issue list*) Bash(rtk gh pr create*) Bash(rtk git symbolic-ref*) Bash(rtk git fetch*) Bash(rtk git switch*) Bash(rtk git add*) Bash(rtk git commit*) Bash(rtk git push*) Bash(rtk proxy curl*) Bash(python3*) Read Edit Write Grep
 ---
 
 > **Priority:** this project's `CLAUDE.md` and `rules/*.md` take precedence over the
@@ -51,7 +51,7 @@ rate-limited.
 ## Steps
 
 1. **Branch from `origin/<default>`**, never a local branch. Resolve the default
-   branch from `refs/remotes/origin/HEAD`, then:
+   branch with `rtk git symbolic-ref --short refs/remotes/origin/HEAD` (drop the `origin/` prefix), then:
    `cd <abs-path> && rtk git fetch origin <default> && rtk git switch -c <branch> origin/<default>`.
 2. **Rebuild** the Families, Shipped and Roadmap sections from the sources above.
    Keep the rest of the file exactly as the owner wrote it.
