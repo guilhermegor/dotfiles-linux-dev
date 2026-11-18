@@ -866,6 +866,9 @@ allowed-tools: Read Glob Grep  # space-separated for skills (no commas)
   description instead of reading the skill body
 - Skills are read-only reference guides by default; add `allowed-tools` only
   if the skill legitimately needs to run commands
+- A skill may be an **arm** of another: `s:release` decides and delegates to
+  `s:release-py` (PyPI mechanics) and `s:release-rename` (package-rename
+  order of operations). Arms are loaded by the parent, never invoked directly
 - Keep total token count low — skills load into every conversation that
   triggers them
 - Same target-qualification rule as commands, above (dotfiles-linux-dev#229) — a

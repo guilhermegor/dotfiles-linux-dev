@@ -1,6 +1,6 @@
 ---
 name: s:release
-description: Use when the user asks to cut a release, bump the version, or publish a package — decides whether a release is warranted and what to bump from the shipped-artifact diff and Conventional Commit types since the last tag, then delegates the publish mechanics to the matching ecosystem arm (s:release-py for PyPI, workflow-dispatch for everything else).
+description: Use when the user asks to cut a release, bump the version, or publish a package — decides whether a release is warranted and what to bump from the shipped-artifact diff and Conventional Commit types since the last tag, then delegates the publish mechanics to the matching ecosystem arm (s:release-py for PyPI, workflow-dispatch for everything else, s:release-rename when the shipped change is a package rename).
 effort: high
 argument-hint: [none — reads the repo state]
 allowed-tools: Bash(git log*), Bash(git tag*), Bash(git describe*), Bash(git diff*), Bash(git rev-parse*), Bash(rtk git log*), Bash(rtk git diff*), Bash(gh workflow*), Bash(gh run*), Bash(gh release*), Read, Glob, Grep
@@ -114,6 +114,11 @@ The table never yields `1.0.0`; it is a deliberate decision, and the first cut
 | a `workflow_dispatch` release Action, no PyPI publish | **dispatch arm** (§6b) | the **git tag** |
 | `package.json` / `Cargo.toml` / `*.gemspec` | future arm — **stop and ask** | — |
 
+A **package rename** (distribution, import package, repo) is not an ecosystem but an overlay on
+one: it still ends in the PyPI arm, and it adds the order-of-operations, local-state and sweep
+steps in **`s:release-rename`**. Load it alongside the ecosystem arm whenever the shipped change
+renames the package.
+
 If two signals match (a repo publishing to both PyPI and a package manager), ask which is being
 released rather than picking one.
 
@@ -166,6 +171,12 @@ artifact wrong" is memory, and no query reaches it.
 ### 6a. PyPI
 
 Hand off to **`s:release-py`**: Test PyPI → install-verify → PyPI → install-verify.
+
+### 6a'. Rename
+
+When the release is a package rename, **`s:release-rename`** runs first (decisions, publisher
+registration, backfill, local state, sweep) and then hands back to 6a for the regular renamed
+release.
 
 ### 6b. Workflow dispatch (tag-driven, ecosystem-agnostic)
 
