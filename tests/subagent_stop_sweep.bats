@@ -479,7 +479,7 @@ STUB
     ROADMAP_BOARDS=("o|1|a" "o|2|b" "o|3|c")
     gh_budget_gate "o/r" || status=$?
     [ "${status:-0}" -eq 1 ]
-    [[ "$BUDGET_GATE_REASON" == *"under the sweep floor of 54 calls"* ]]
+    [[ "$BUDGET_GATE_REASON" == *"under the sweep floor of 72 calls"* ]]
 }
 
 # dotfiles-linux-dev#559 (PR #559 review, comment 4117399074): gate_pr_thread_state() latching on ITS

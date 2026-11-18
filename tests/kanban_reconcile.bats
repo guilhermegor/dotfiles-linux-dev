@@ -970,9 +970,20 @@ write_stamp() {
     [ ! -e "$TEST_TMP/calls" ]
 }
 
-@test "boards: kanban_fanout_cost is boards x 3 kinds x the estimated calls per reconcile" {
+@test "boards: kanban_fanout_cost is boards x every reconcile kind x the estimated calls per reconcile" {
     run bash -c "source '$LIB'; ROADMAP_BOARDS=('a|1|x' 'b|2|y' 'c|3|z'); kanban_fanout_cost"
-    [ "$output" = "$((3 * 3 * 6))" ]
+    [ "$output" = "$((3 * 4 * 6))" ]
+    [ "$output" != "$((3 * 3 * 6))" ]
+}
+
+@test "boards: KANBAN_RECONCILE_KINDS lists exactly the kinds the sweep runs through sweep_kanban_boards" {
+    SWEEP="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/subagent_stop_sweep.sh"
+    run bash -c "source '$LIB'; echo \"\${KANBAN_RECONCILE_KINDS[*]}\""
+    [ "$output" = "in_review closed stale offboard" ]
+    for k in $output; do
+        grep -qE "^\s+sweep_kanban_boards $k " "$SWEEP"
+    done
+    [ "$(grep -cE '^\s+sweep_kanban_boards [a-z_]+ ' "$SWEEP")" = "4" ]
 }
 
 @test "boards: a warm-cache in_review reconcile with nothing to move costs 3 fixed gh calls, inside the estimate" {
