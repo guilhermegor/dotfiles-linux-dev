@@ -17,6 +17,7 @@ install_mcp_servers() {
     _install_context7 "$env_file"
     _install_tavily "$env_file"
     _install_playwright_mcp
+    _install_chrome_devtools_mcp
     _install_notesnook "$env_file"
     _install_linear
     _install_notion
@@ -119,6 +120,19 @@ _install_playwright_mcp() {
         npx @playwright/mcp@latest
 
     print_status "success" "playwright MCP registered (stdio transport, user scope)"
+}
+
+_install_chrome_devtools_mcp() {
+    if claude mcp list 2>/dev/null | grep -Eq '^chrome-devtools([[:space:]:]|$)'; then
+        print_status "info" "chrome-devtools MCP already registered — skipping"
+        return 0
+    fi
+
+    claude mcp add --scope user \
+        chrome-devtools \
+        npx chrome-devtools-mcp@1.12.0
+
+    print_status "success" "chrome-devtools MCP registered (stdio transport, user scope)"
 }
 
 _install_notesnook() {
