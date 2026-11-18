@@ -138,6 +138,13 @@ call site; returning `null` loses the error reasons.
   layout can grow into a fullstack one without renaming. Visual
   regression via `toHaveScreenshot` baselines committed to the repo.
 
+## Browser MCP routing
+
+Playwright MCP is the default for navigate, test and screenshot work. Use
+the `chrome-devtools` MCP only for what Playwright cannot do: performance
+traces (LCP/CLS/INP), CPU/network throttling and DevTools-grade network
+detail.
+
 ## CSS Modules pitfalls
 
 CSS Modules accept unitless non-zero lengths silently (e.g.
