@@ -3,7 +3,7 @@ name: s:release-rename
 description: Use when a published package is being renamed — the forge repo, the PyPI distribution, the import package, the docs site, boards, local checkout and downstream consumers — and the rename must end in a release without losing release history. Loaded by s:release when the shipped change is a rename; not invoked directly.
 effort: high
 argument-hint: [old name, new name, shim-or-clean-break decision — supplied by s:release or the tracking issue]
-allowed-tools: Bash(git grep*), Bash(git worktree*), Bash(git mv*), Bash(git tag*), Bash(gh workflow*), Bash(gh run*), Bash(gh api*), Bash(gh project*), Bash(curl*), Bash(jq*), Bash(pip install*), Read, Grep, Glob
+allowed-tools: Bash(git grep*) Bash(git worktree*) Bash(git mv*) Bash(git tag*) Bash(gh workflow*) Bash(gh run*) Bash(gh api*) Bash(gh project*) Bash(curl*) Bash(jq*) Bash(pip install*) Bash(poetry install*) Read Grep Glob
 ---
 
 > **Priority:** this project's `CLAUDE.md` and `rules/*.md` take precedence over the guidance below whenever they conflict — treat this skill as a fallback, not a mandate.
@@ -74,10 +74,10 @@ and rebuilds each `vX.Y.Z` tag with only the distribution name rewritten, upload
 `skip-existing` (74 releases for cvm). Each backfilled version keeps its original code and its
 original import name.
 
-Dispatch Test PyPI first, then PyPI, and install-verify each (`s:release-py` §B):
+Dispatch Test PyPI first, then PyPI (use the repo's real workflow filenames from step 3, not the template's), and install-verify each (`s:release-py` §B):
 
 ```bash
-cd <absolute-repo-path> && gh workflow run release-test-pypi.yaml --ref <default-branch> -f version=<any-dummy> -f backfill=true
+cd <absolute-repo-path> && gh workflow run <test-pypi-workflow-file> --ref <default-branch> -f version=<any-dummy> -f backfill=true
 ```
 
 Keep the old name literal in the backfill job (`old="filings-cvm"` stayed in `release-*.yaml` on
@@ -91,7 +91,7 @@ Run `/session-closeout` in every Claude session on the repo and close the editor
 
 ## 6. `git worktree repair` BEFORE any `git worktree prune`
 
-Save the path→branch map first: `git worktree list --porcelain > <scratch-file>` — it is the only
+Save the path→branch map first: `cd <absolute-repo-path> && git worktree list --porcelain > <scratch-file>` — it is the only
 record of which branch each worktree had.
 
 After `mv old new`, each worktree's `.git` file still points at the old path, which git reads as
@@ -101,7 +101,7 @@ and only for leftovers. Measured 2026-11-11 (lesson `moving-a-repo-repair-worktr
 but the staged-vs-unstaged split was lost.
 
 Also: in-project venvs have absolute shebangs and break the `pre-commit` hook on the first commit
-after the move. `rm -rf .venv && poetry install` as part of the move.
+after the move. `cd <absolute-repo-path> && rm -rf .venv && poetry install` as part of the move.
 
 ## 7. Rename the Claude project directory to match
 
@@ -135,12 +135,14 @@ this).
 
 ## 10. Big rename PRs
 
-- **CodeRabbit caps at 100 files.** cvm#420 had 720 files and got no review until the owner
-  approved by hand. Expect it; split mechanical moves from logic where possible, or get the owner
-  approval path ready.
+- **CodeRabbit caps at 100 files** (free plan). cvm#420 had 720 files; CodeRabbit posted "Review
+  skipped: Too many files" and even an explicit `@coderabbitai review` was refused. The owner
+  merged with the "Review threads answered" gate bypassed and said why in a PR comment. Expect it:
+  split mechanical moves from logic where possible, or have that bypass decision ready.
 - **Test-deletion gates read a renamed test as deleted** (blueprintx#1073, lesson
-  `test-deletion-gates-read-a-rename-as-a-deletion`): a `gate-change-ok:` trailer naming the rename
-  (as cvm#420 did) is the owner lever until that is fixed.
+  `test-deletion-gates-read-a-rename-as-a-deletion`): a `gate-change-ok: <reason>` line naming the
+  rename is the owner lever until that is fixed. `check_gate_integrity.py` accepts it in the **PR
+  body or** as a commit trailer; cvm#420 used the PR body (no commit carried it).
 
 ## 11. Branch names must not auto-close the tracking issue
 
