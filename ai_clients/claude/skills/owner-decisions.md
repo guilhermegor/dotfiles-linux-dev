@@ -34,10 +34,10 @@ again after being answered (dotfiles-linux-dev#1033). The list now comes from a 
 
 | Source | Counts as a decision when |
 |---|---|
-| open PRs | body says "decide whether", "surface expansion", "disabled feature" or "judgement call" |
-| board cards | `roadmap_unblock.sh` reports `[blocker-kind: decision]` (reused, never re-derived) |
+| open PRs | body says "decide whether", "surface expansion", "expands the (public) surface", "disabled feature", "feature (is) disabled" or "judg(e)ment call" |
+| board cards | a Blocked card whose "Blocked by" field or body line holds `decision:` (read-only: judged with `roadmap_unblock.sh`'s helpers, never its mutating reconcile) |
 | Projects workflows | reported OFF; the API cannot enable them |
-| origin branches | `branch_prune.sh` reports `REPORT-REMOTE` |
+| origin branches | `branch_prune.sh` dry-run reports `REPORT-REMOTE` (the repo you run it from only) |
 | issues | labelled `hitl`, or `state:blocked` with a `decision:` blocker |
 
 ## Standing exclusions
