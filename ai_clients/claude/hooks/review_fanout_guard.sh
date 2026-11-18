@@ -209,10 +209,13 @@ REVIEW_DISPATCH_NAME_RE='^review-pr-[0-9]+(-[0-9]+)?$'
 #     session sent a message:" lead-in) wrapping a JSON body of type idle_notification with
 #     `from`, `timestamp` and `idleReason` (`available` | `failed`) -> `I`. A batched record
 #     holds several envelopes, so each is parsed on its own with fromjson: `from` and the
-#     failed/completed verdict come from the SAME body. idleReason `failed` is the RESCUE case,
+#     failed/completed verdict come from the SAME body. The LATEST idle per agent wins (#1037): a
+#     `failed` followed by an `available` is completed. idleReason `failed` is the RESCUE case,
 #     anything else is completed. Only that record shape counts (never a tool_result, assistant
 #     text or a compaction summary that merely quotes one) — measured: a "continued from a
 #     previous conversation" summary record carries the idle text verbatim.
+#     A completed idle whose `result` reports a queued/running background job stays in flight; a
+#     FAILED review agent whose PR is no longer open is dropped (drop_closed_pr_failures, #1037).
 # TSV, in transcript order (the idle must be ordered against dispatches): `A`/`S<TAB>id<TAB>
 # name<TAB>label<TAB>ts` (Agent dispatch / SendMessage to a review teammate), `R<TAB>id<TAB>
 # ack|sent|done`, `E<TAB>id<TAB>effective-name`, `N<TAB>id<TAB>completed|failed`,
@@ -267,7 +270,12 @@ transcript_agent_facts() {
 			  | .b
 			  | (try fromjson catch empty)
 			  | select(type == "object" and .type == "idle_notification" and (.from | type) == "string")
-			  | "I\t\(.from)\t\(if .idleReason == "failed" then "failed" else "completed" end)\t\(.timestamp | dash)" )
+			  | "I\t\(.from)\t\(
+						if .idleReason == "failed" then "failed"
+						elif ((.result // .summary // "") | tostring
+							| test("(?i)(queued|pending|running|waiting).{0,40}(background|monitor|ladder)|(background|monitor|ladder).{0,40}(queued|pending|running|waiting)"))
+						then "completed-bg"
+						else "completed" end)\t\(.timestamp | dash)" )
 		  )
 	' "$transcript" 2>/dev/null
 }
@@ -321,6 +329,8 @@ review_dispatch_running() {
 	[ -r "$transcript" ] || return 1
 
 	local -A agent_name=() agent_label=() agent_result=() agent_note=() agent_ts=()
+	# idle_ts: ts of the idle that set a unit's verdict; agent_bg: that idle reported a background job.
+	local -A idle_ts=() agent_bg=()
 	# agent_task: dispatch id -> the agent's own id (task-id on every notification). task_state:
 	# agent id -> its LATEST event, a notification status or `pending` (resumed, not yet reported).
 	local -A agent_task=() task_state=()
@@ -399,9 +409,19 @@ review_dispatch_running() {
 			local unit
 			for unit in "${order[@]}"; do
 				[ "${agent_name[$unit]}" = "$id" ] || continue
-				[ -z "${agent_note[$unit]-}" ] || continue
 				[[ "${agent_ts[$unit]}" == "-" || "$label" == "-" || "${agent_ts[$unit]}" < "$label" ]] || continue
-				agent_note["$unit"]="$field"
+				# The LATEST idle per agent wins (#1037): a failed idle followed by an available
+				# one (a resume) is completed. A verdict that came from a task-notification (no
+				# idle_ts) is never overridden; an untimestamped idle cannot be ordered against
+				# an earlier one, so it only settles an unsettled unit.
+				if [ -n "${agent_note[$unit]-}" ]; then
+					[ -n "${idle_ts[$unit]-}" ] && [ "$label" != "-" ] \
+						&& [[ "${idle_ts[$unit]}" < "$label" ]] || continue
+				fi
+				agent_note["$unit"]="${field%-bg}"
+				idle_ts["$unit"]="$label"
+				# A completed idle reporting a queued background job is still working.
+				if [ "$field" = completed-bg ]; then agent_bg["$unit"]=1; else unset 'agent_bg[$unit]'; fi
 			done
 			;;
 		esac
@@ -432,7 +452,7 @@ review_dispatch_running() {
 			;;
 		ack | sent)
 			case "$note" in
-			completed) continue ;;
+			completed) [ -n "${agent_bg[$id]-}" ] || continue ;;
 			failed)
 				FAILED_BACKGROUND_AGENTS="$(printf '%s\n%s' \
 					"$FAILED_BACKGROUND_AGENTS" "${agent_label[$id]}")"
@@ -470,6 +490,26 @@ open_pr_heads() {
 	out="$(cd "$1" && timeout 20 gh api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' \
 		--jq '.[] | "\(.number):\(.head.sha)"' 2>/dev/null)" || return 1
 	printf '%s\n' "$out" | sort | cksum | cut -d' ' -f1
+}
+
+# drop_closed_pr_failures CWD
+# A FAILED review-pr-<N> agent whose PR is no longer open has nothing to rescue (#1037): drop it
+# from FAILED_BACKGROUND_AGENTS. Non-review labels are kept, and so is everything when the open
+# PRs cannot be read — a closure that cannot be proven is not assumed.
+drop_closed_pr_failures() {
+	[ -n "$FAILED_BACKGROUND_AGENTS" ] || return 0
+	local open label kept="" n
+	open="$(cd "$1" && timeout 20 gh api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' \
+		--jq '.[] | "\(.number):\(.head.sha)"' 2>/dev/null)" || return 0
+	while IFS= read -r label; do
+		if [[ "$label" =~ ^review-pr-([0-9]+)(-([0-9]+))?$ ]]; then
+			n="${BASH_REMATCH[1]}"
+			# `-<k>` is indistinguishable from more PR digits: open if either reading is.
+			printf '%s\n' "$open" | grep -qE "^(${n}|${n}${BASH_REMATCH[3]}):" || continue
+		fi
+		kept="$(printf '%s\n%s' "$kept" "$label")"
+	done <<<"$FAILED_BACKGROUND_AGENTS"
+	FAILED_BACKGROUND_AGENTS="$(printf '%s\n' "$kept" | sed '/^$/d')"
 }
 
 # refresh_running LOCK — a detached refresh holds LOCK (a dir; its pid file is written once the
@@ -639,6 +679,7 @@ main() {
 	# Budget low => pass, never block a turn on a board that cannot be read (#814). Above the
 	# cache on purpose: the cache key needs open_pr_heads, itself a gh call.
 	stop_budget_gate || exit 0
+	drop_closed_pr_failures "$cwd"
 
 	[ -r "$PLANNER" ] || block_unreadable "no review fan-out planner at $PLANNER (run 'make ai_clients')."
 

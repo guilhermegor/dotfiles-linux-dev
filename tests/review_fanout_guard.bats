@@ -340,6 +340,8 @@ agent_notification() {
     # (`a1`), which made the assertion pass for the wrong reason — it could not tell the label
     # from the id. Asserting on a distinct name pins that the LABEL is what reaches the
     # operator. Behaviour unchanged; the fixture was the weak part.
+    # PR 777 must be OPEN: a failed review agent for a closed PR is dropped (#1037).
+    printf '520:aaaa\n777:bbbb\n' >"$HEADS"
     loop_invoked
     agent_dispatched a1 "review-pr-777"
     agent_result a1 "Async agent launched successfully, id=a1"
@@ -496,6 +498,104 @@ agent_notification() {
     run_guard
     [ "$status" -eq 2 ]
     [[ "$output" == *"RESCUE case"* ]]
+}
+
+# teammate_idle_result NAME REASON TS RESULT — an idle_notification whose `result` is RESULT.
+teammate_idle_result() {
+    local name="$1" reason="$2" ts="$3" result="$4" body
+    body="$(jq -cn --arg n "$name" --arg ts "$ts" --arg r "$reason" --arg res "$result" \
+        '{type: "idle_notification", from: $n, timestamp: $ts, idleReason: $r, result: $res}')"
+    transcript_text_record "Another Claude session sent a message:
+<teammate-message teammate_id=\"$name\" color=\"blue\">
+$body
+</teammate-message>" "$ts"
+}
+
+@test "a later available idle supersedes an earlier failed one (#1037)" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    teammate_idle "review-pr-520" failed "2026-10-09T10:19:35.963Z"
+    teammate_idle "review-pr-520" available "2026-10-09T10:24:08.000Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#520"* ]]
+    [[ "$output" != *"RESCUE case"* ]]
+}
+
+@test "a late re-delivered copy of an old failed idle does not undo a newer available (#1037)" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    teammate_idle "review-pr-520" failed "2026-10-09T10:19:35.963Z"
+    teammate_idle "review-pr-520" available "2026-10-09T10:24:08.000Z"
+    teammate_idle "review-pr-520" failed "2026-10-09T10:19:35.963Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" != *"RESCUE case"* ]]
+}
+
+@test "a later failed idle supersedes an earlier available one (#1037)" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    teammate_idle "review-pr-520" available "2026-10-09T10:19:35.963Z"
+    teammate_idle "review-pr-520" failed "2026-10-09T10:24:08.000Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"RESCUE case"* ]]
+}
+
+@test "a failed review agent whose PR is no longer open is not listed (#1037)" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-1029"
+    teammate_spawned a1 "review-pr-1029"
+    teammate_idle "review-pr-1029" failed "2026-10-09T10:19:35.963Z"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" != *"RESCUE case"* ]]
+    [[ "$output" != *"review-pr-1029"* ]]
+}
+
+@test "the closed-PR filter makes no gh call while the budget latch is active (#1037)" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-1029"
+    teammate_spawned a1 "review-pr-1029"
+    teammate_idle "review-pr-1029" failed "2026-10-09T10:19:35.963Z"
+    plan_with_work
+    printf '%s\n' "$(($(date +%s) + 600))" >"$GH_BUDGET_LATCH_FILE"
+    printf '#!/bin/sh\necho called >>"%s/gh.calls"\ncat "$HEADS"\n' "$TEST_TMP" >"$TEST_TMP/bin/gh"
+    run_guard
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_TMP/gh.calls" ]
+}
+
+@test "a failed review agent is still listed when the open PRs cannot be read (#1037)" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-1029"
+    teammate_spawned a1 "review-pr-1029"
+    teammate_idle "review-pr-1029" failed "2026-10-09T10:19:35.963Z"
+    plan_with_work
+    GH_STUB_FAIL=1
+    export GH_STUB_FAIL
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"review-pr-1029"* ]]
+}
+
+@test "an idle that reports a queued background job keeps its PR in flight (#1037)" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-520"
+    teammate_spawned a1 "review-pr-520"
+    teammate_idle_result "review-pr-520" available "2026-10-09T10:24:08.000Z" \
+        "Ladder run queued in the background; waiting on its result"
+    plan_with_work
+    run_guard
+    [ "$status" -eq 0 ]
 }
 
 @test "an idle_notification from another teammate does not settle this one" {
