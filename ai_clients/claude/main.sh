@@ -18,6 +18,7 @@ source "$SCRIPT_DIR/lib/hooks.sh"
 source "$SCRIPT_DIR/lib/state_sync.sh"
 source "$SCRIPT_DIR/lib/marketplaces.sh"
 source "$SCRIPT_DIR/lib/plugins.sh"
+source "$SCRIPT_DIR/lib/install_lsp_servers.sh"
 source "$SCRIPT_DIR/lib/slash_commands.sh"
 source "$SCRIPT_DIR/lib/skills.sh"
 source "$SCRIPT_DIR/lib/agents.sh"
@@ -53,19 +54,11 @@ run_plugins() {
     # published plugins) or any other registered marketplace. Codex CLI is
     # installed as a real binary via ai_clients/codex/ instead (dotfiles-linux-dev#145);
     # no equivalent Copilot or Kimi runtime exists to wire up.
-    # LSPs — typescript-lsp covers JS, TS, JSX (.jsx), and TSX (.tsx)
+    # LSPs — typescript-lsp covers JS, TS, JSX (.jsx), and TSX (.tsx). Only plugins that
+    # the marketplace lists and that declare a server stay enabled (check_lsp_servers.sh);
+    # html/css/json/yaml/toml/SQL/mongodb-lsp exist nowhere upstream (#1026).
+    promote_plugin_to_user_scope "pyright-lsp@claude-plugins-official"        "pyright-lsp"        "claude-plugins-official"
     promote_plugin_to_user_scope "typescript-lsp@claude-plugins-official"     "typescript-lsp"     "claude-plugins-official"
-    promote_plugin_to_user_scope "html-lsp@claude-plugins-official"           "html-lsp"           "claude-plugins-official"
-    promote_plugin_to_user_scope "css-lsp@claude-plugins-official"            "css-lsp"            "claude-plugins-official"
-    promote_plugin_to_user_scope "mssql-lsp@claude-plugins-official"          "mssql-lsp"          "claude-plugins-official"
-    promote_plugin_to_user_scope "postgres-lsp@claude-plugins-official"       "postgres-lsp"       "claude-plugins-official"
-    promote_plugin_to_user_scope "sqlite-lsp@claude-plugins-official"         "sqlite-lsp"         "claude-plugins-official"
-    promote_plugin_to_user_scope "mysql-lsp@claude-plugins-official"          "mysql-lsp"          "claude-plugins-official"
-    promote_plugin_to_user_scope "mariadb-lsp@claude-plugins-official"        "mariadb-lsp"        "claude-plugins-official"
-    promote_plugin_to_user_scope "mongodb-lsp@claude-plugins-official"        "mongodb-lsp"        "claude-plugins-official"
-    promote_plugin_to_user_scope "json-lsp@claude-plugins-official"           "json-lsp"           "claude-plugins-official"
-    promote_plugin_to_user_scope "yaml-lsp@claude-plugins-official"           "yaml-lsp"           "claude-plugins-official"
-    promote_plugin_to_user_scope "toml-lsp@claude-plugins-official"           "toml-lsp"           "claude-plugins-official"
     # Skills
     promote_plugin_to_user_scope "security-guidance@claude-plugins-official"  "security-guidance"  "claude-plugins-official"
     promote_plugin_to_user_scope "code-review@claude-plugins-official"         "code-review"        "claude-plugins-official"
@@ -95,6 +88,7 @@ STEPS=(
     "rules|Install language rules (python.md, ...)"
     "marketplaces|Register plugin marketplaces"
     "plugins|Promote plugins to user scope"
+    "lsp_servers|Install language servers for enabled *-lsp plugins"
     "mcp_servers|Install MCP servers"
     "profiles|Install the claude-profile session launcher"
     "claude_mem|Configure claude-mem mode"
@@ -115,6 +109,7 @@ dispatch_step() {
         rules)          install_rules ;;
         marketplaces)   print_status "section" "REGISTERING MARKETPLACES"    && run_marketplaces ;;
         plugins)        print_status "section" "PROMOTING PLUGINS TO USER SCOPE" && run_plugins ;;
+        lsp_servers)    print_status "section" "INSTALLING LSP SERVERS" && install_lsp_servers ;;
         mcp_servers)    install_mcp_servers ;;
         profiles)       install_profiles ;;
         claude_mem)     configure_claude_mem ;;
