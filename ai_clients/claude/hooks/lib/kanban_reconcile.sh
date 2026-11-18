@@ -148,6 +148,11 @@ discover_roadmap_boards() {
 			ROADMAP_BOARDS_REPORT+="board $login/$override: skipped — .github/roadmap-board names a closed project"$'\n'
 		elif [[ ",${excl// /,}," == *",$override,"* ]]; then
 			ROADMAP_BOARDS_REPORT+="board $login/$override: skipped — .github/roadmap-board names a project excluded by ROADMAP_BOARDS_EXCLUDE"$'\n'
+		elif slug="$(git -C "$cwd" remote get-url origin 2>/dev/null)" && slug="${slug%.git}" \
+			&& slug="${slug##*github.com[:/]}" && [[ "${slug%%/*}" != "$login" ]]; then
+			# Entries carry one owner for project and repo, so a clone of another account's repo
+			# would be queried under the viewer's name (#1036 review).
+			ROADMAP_BOARDS_REPORT+="board $login/$override: UNKNOWN — .github/roadmap-board sits in a clone of $slug, a repo owned by another account"$'\n'
 		else
 			repo="$(basename "$(git -C "$cwd" remote get-url origin 2>/dev/null)" .git)"
 			for entry in ${ROADMAP_BOARDS[@]+"${ROADMAP_BOARDS[@]}"}; do

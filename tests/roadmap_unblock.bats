@@ -779,6 +779,18 @@ run_discover() {
     [[ "$output" != *"BOARD guilhermegor|24|"* ]]
 }
 
+@test "discovery: an override in a clone of another account's repo is UNKNOWN, never re-owned" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    git -C "$TEST_TMP" remote add origin git@github.com:team/widget.git
+    mkdir -p "$TEST_TMP/.github"
+    echo 31 > "$TEST_TMP/.github/roadmap-board"
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|31|"* ]]
+    [[ "$output" == *"board guilhermegor/31: UNKNOWN — .github/roadmap-board sits in a clone of team/widget"* ]]
+}
+
 @test "discovery: an override naming a closed project is skipped with a report line, discovery kept" {
     write_projects
     write_fake_gh
