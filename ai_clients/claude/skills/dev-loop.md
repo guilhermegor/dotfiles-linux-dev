@@ -547,12 +547,26 @@ notice-and-report external timer is worth building; one 3-hour sample is not tha
      to remove:
 
      ```bash
-     gh api repos/<owner>/<repo>/branches/<base>/protection \
-       --jq '.required_status_checks.contexts'
+     gh api --paginate repos/<owner>/<repo>/rules/branches/<base>
      ```
 
-     🔴 **Fail loudly if that read fails — report UNKNOWN, never "nothing is required" (every red
-     check would then look harmless) and never "everything is required" (that reinstates the
+     Take the contexts of the `required_status_checks` rules, **unioned with** classic protection
+     (`branches/<base>` → `.protection.required_status_checks.contexts`) when it is enabled. The
+     reference reader is `ai_clients/claude/hooks/merge_green_pr.sh` `required_contexts()` — use
+     its shape, do not restate it. A classic `404 Branch not protected` means **no classic
+     contexts (empty), not a failure**: a ruleset-only branch answers exactly that. Classic
+     protection alone is the wrong read — it hides both the required set and the strict flag.
+
+     ⚠️ **`.parameters.strict_required_status_checks_policy == true` (ruleset) or
+     `.protection.required_status_checks.strict == true` (classic) means a `BEHIND` PR is
+     blocked, not merge-ready** — read the flag from both sources and OR them; a ruleset-only
+     repo answers classic with a 404, so there the ruleset flag is the only one. Measured
+     2026-11-18 (pure-schema-regimes PR #2): the classic 404 was read as "unprotected", and a
+     sha-pinned merge was refused with "3 of 3 required status checks are expected" on a strict
+     ruleset.
+
+     🔴 **Fail loudly on any other read error — report UNKNOWN, never "nothing is required" (every
+     red check would then look harmless) and never "everything is required" (that reinstates the
      bug).** Same rule `gate_free_surface` already applies to its own read failures.
 
      | filter | eligible candidates, measured 2026-09-24 (dotfiles-dev, 5 open PRs) |
