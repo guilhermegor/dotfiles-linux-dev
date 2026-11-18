@@ -72,7 +72,7 @@ fi
 #   5. <cwd>/.github/roadmap-board (a project number) wins over discovery for that repo
 # #531 ("absent by declaration, never by omission") and #887 ("every board, never the cwd's") hold:
 # every viewer project is enumerated and a board leaves only through a visible report line.
-# One query (GraphQL cost 1), cached for the process; a failure is cached too, so the fan-out does
+# One GraphQL query per 50 projects (the cursor is followed, 20-page cap), cached for the process; a failure is cached too, so the fan-out does
 # not retry it per reconcile. A failed discovery is UNKNOWN, never "nothing to sweep".
 # shellcheck disable=SC2034 # read by the reconcile functions below and by their callers' tests
 [[ "$(declare -p ROADMAP_BOARDS 2>/dev/null)" == "declare -a"* ]] || ROADMAP_BOARDS=()
@@ -115,9 +115,9 @@ discover_roadmap_boards() {
 	excl="${excl//,/ }"
 	if ! json="$(_rb_fetch_projects)" \
 		|| ! login="$(jq -er '.data.viewer.login' <<<"$json" 2>/dev/null)" \
-		|| ! rows="$(jq -r '.data.viewer.projectsV2.nodes | sort_by(-.number)[]
+		|| ! rows="$(jq -r --arg l "$login" '.data.viewer.projectsV2.nodes | sort_by(-.number)[]
 			| (.title | sub(" kanban$"; "")) as $tr
-			| [.repositories.nodes[].nameWithOwner | split("/")[1]] as $rs
+			| [.repositories.nodes[].nameWithOwner | select(startswith($l + "/")) | split("/")[1]] as $rs
 			| [.number, .closed, .title, (($rs | map(select(. == $tr)) | first) // $rs[0] // "")] | @tsv' <<<"$json" 2>/dev/null)"; then
 		ROADMAP_BOARDS_ERROR="UNKNOWN: board discovery failed"
 		return 1
@@ -140,11 +140,19 @@ discover_roadmap_boards() {
 	done <<<"$rows"
 	if [[ -r "$cwd/.github/roadmap-board" ]] && override="$(tr -d '[:space:]' <"$cwd/.github/roadmap-board")" \
 		&& [[ "$override" =~ ^[0-9]+$ ]]; then
-		repo="$(basename "$(git -C "$cwd" remote get-url origin 2>/dev/null)" .git)"
-		for entry in ${ROADMAP_BOARDS[@]+"${ROADMAP_BOARDS[@]}"}; do
-			[[ "${entry##*|}" == "$repo" ]] || kept+=("$entry")
-		done
-		ROADMAP_BOARDS=(${kept[@]+"${kept[@]}"} "$login|$override|$repo")
+		override=$((10#$override))
+		closed="$(jq -r --argjson n "$override" '[.data.viewer.projectsV2.nodes[] | select(.number == $n) | .closed] | first // false' <<<"$json")"
+		if [[ "$closed" == "true" ]]; then
+			ROADMAP_BOARDS_REPORT+="board $login/$override: skipped — .github/roadmap-board names a closed project"$'\n'
+		elif [[ ",${excl// /,}," == *",$override,"* ]]; then
+			ROADMAP_BOARDS_REPORT+="board $login/$override: skipped — .github/roadmap-board names a project excluded by ROADMAP_BOARDS_EXCLUDE"$'\n'
+		else
+			repo="$(basename "$(git -C "$cwd" remote get-url origin 2>/dev/null)" .git)"
+			for entry in ${ROADMAP_BOARDS[@]+"${ROADMAP_BOARDS[@]}"}; do
+				[[ "${entry##*|}" == "$repo" ]] || kept+=("$entry")
+			done
+			ROADMAP_BOARDS=(${kept[@]+"${kept[@]}"} "$login|$override|$repo")
+		fi
 	fi
 	ROADMAP_BOARDS_REPORT="$(printf '%s' "$ROADMAP_BOARDS_REPORT" | sed '/^$/d')"
 	return 0
@@ -780,9 +788,10 @@ reconcile_kanban_boards() {
 	KANBAN_BOARDS_REPORT=""
 	discover_roadmap_boards "$cwd" || true
 	if ((${#ROADMAP_BOARDS[@]} == 0)); then
-		KANBAN_BOARDS_REPORT="${ROADMAP_BOARDS_ERROR:-UNKNOWN: no board discovered} — no board was swept"
+		KANBAN_BOARDS_REPORT="${ROADMAP_BOARDS_ERROR:-UNKNOWN: no board discovered}${ROADMAP_BOARDS_REPORT:+$'\n'$ROADMAP_BOARDS_REPORT} — no board was swept"
 		return 1
 	fi
+	[[ -n "$ROADMAP_BOARDS_REPORT" ]] && lines+="$ROADMAP_BOARDS_REPORT"$'\n'
 	skipped_file="$(_kb_skipped_file "$cwd")" || skipped_file=""
 	stamp_file="$(_kb_stamp_file "$cwd")" || stamp_file=""
 	# fd 3, not stdin: a `gh` call inside the loop must not swallow the remaining entries.
@@ -861,11 +870,16 @@ reconcile_kanban_boards() {
 kanban_stale_cards_rest() {
 	local entry owner project repo field rows out="" stamp stamp_file="" slug num closed_at status workflow_boards=""
 	stamp_file="$(_kb_stamp_file "${1:-.}")" || stamp_file=""
-	discover_roadmap_boards "${1:-.}" || true
-	if ((${#ROADMAP_BOARDS[@]} == 0)); then
-		echo "stale cards: ${ROADMAP_BOARDS_ERROR:-UNKNOWN: no board discovered}; no board was checked"
+	if command -v gh_budget_latch_active >/dev/null 2>&1 && gh_budget_latch_active && ((${#ROADMAP_BOARDS[@]} == 0)); then
+		echo "stale cards: UNKNOWN — GraphQL budget latch active, boards not discovered; no board was checked"
 		return 0
 	fi
+	discover_roadmap_boards "${1:-.}" || true
+	if ((${#ROADMAP_BOARDS[@]} == 0)); then
+		echo "stale cards: ${ROADMAP_BOARDS_ERROR:-UNKNOWN: no board discovered}${ROADMAP_BOARDS_REPORT:+; $ROADMAP_BOARDS_REPORT}; no board was checked"
+		return 0
+	fi
+	[[ -n "$ROADMAP_BOARDS_REPORT" ]] && printf '%s\n' "$ROADMAP_BOARDS_REPORT"
 	for entry in "${ROADMAP_BOARDS[@]}"; do
 		IFS='|' read -r owner project repo <<<"$entry"
 		field="$(gh api "users/$owner/projectsV2/$project/fields" \

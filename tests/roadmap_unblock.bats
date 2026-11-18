@@ -779,6 +779,43 @@ run_discover() {
     [[ "$output" != *"BOARD guilhermegor|24|"* ]]
 }
 
+@test "discovery: an override naming a closed project is skipped with a report line, discovery kept" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    git -C "$TEST_TMP" remote add origin https://github.com/guilhermegor/pure-schema-regimes.git
+    mkdir -p "$TEST_TMP/.github"
+    echo 3 > "$TEST_TMP/.github/roadmap-board"
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|3|"* ]]
+    [[ "$output" == *"BOARD guilhermegor|24|pure-schema-regimes"* ]]
+    [[ "$output" == *"board guilhermegor/3: skipped — .github/roadmap-board names a closed project"* ]]
+}
+
+@test "discovery: an override naming an excluded project is skipped with a report line" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    git -C "$TEST_TMP" remote add origin https://github.com/guilhermegor/pure-schema-regimes.git
+    mkdir -p "$TEST_TMP/.github"
+    echo 31 > "$TEST_TMP/.github/roadmap-board"
+    run_discover ROADMAP_BOARDS_EXCLUDE=31
+    [[ "$output" != *"BOARD guilhermegor|31|"* ]]
+    [[ "$output" == *"BOARD guilhermegor|24|pure-schema-regimes"* ]]
+    [[ "$output" == *"board guilhermegor/31: skipped — .github/roadmap-board names a project excluded by ROADMAP_BOARDS_EXCLUDE"* ]]
+}
+
+@test "discovery: a linked repo owned by someone else is never read as the viewer's repo" {
+    cat > "$TEST_TMP/projects.json" <<'JSON'
+{"data":{"viewer":{"login":"guilhermegor","projectsV2":{"pageInfo":{"hasNextPage":false},"nodes":[
+ {"number":9,"title":"scratch","closed":false,"repositories":{"nodes":[{"nameWithOwner":"some-org/widget"}]}}]}}}}
+JSON
+    write_fake_gh
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|9|"* ]]
+    [[ "$output" == *"board guilhermegor/9 (scratch): UNKNOWN"* ]]
+}
+
 @test "discovery: a failed query is UNKNOWN: board discovery failed, with no boards" {
     write_fake_gh
     run_discover
