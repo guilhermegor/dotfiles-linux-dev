@@ -465,7 +465,7 @@ reconcile_kanban() {
 # list: a roadmap board and a "<repo> kanban" board are the same project for every repo the operator
 # tracks, so two lists would only add a way to disagree. The registry is not derived from the cwd.
 #
-# reconcile_kanban_boards KIND CWD     KIND = in_review | closed | stale
+# reconcile_kanban_boards KIND CWD     KIND = in_review | closed | stale | offboard
 #   Sets KANBAN_BOARDS_REPORT: one "board OWNER/N (repo): ..." line per declared board, ALWAYS,
 #   with that board's own lines indented beneath it. "ok — nothing to change", "ok — N moved" and
 #   "UNKNOWN — <why>" are the only verdicts, so a board swept clean never looks like one nobody
@@ -512,6 +512,11 @@ _kb_run_kind() {
 	in_review)
 		reconcile_kanban "$owner" "$repo" || rc=$?
 		_KB_REPORT="$RECONCILE_KANBAN_REPORT"
+		return "$rc"
+		;;
+	offboard)
+		reconcile_kanban_offboard "$owner" "$repo" "$cwd" || rc=$?
+		_KB_REPORT="$RECONCILE_OFFBOARD_REPORT"
 		return "$rc"
 		;;
 	closed | stale)
@@ -570,16 +575,17 @@ _kb_board_number() {
 KANBAN_CACHE_REFRESH_MINUTES=60
 
 # kanban_fanout_cost — gh calls one full sweep spends on the boards: every declared board x the
-# three kinds (in_review, closed, stale) x KANBAN_CALLS_PER_RECONCILE. in_review is MEASURED by the
+# KANBAN_RECONCILE_KINDS (the kinds the sweep runs, one list) x KANBAN_CALLS_PER_RECONCILE. in_review is MEASURED by the
 # bats suite at 3 fixed calls on a warm cache, plus one GraphQL read per open PR and one edit per
 # move; closed/stale paginate, so 6 is an estimate, not a measurement. A cold cache adds a one-off
 # discovery. The sweep's budget gate sizes its floor
 # on this, not on the old single-repo cost (#907).
 KANBAN_CALLS_PER_RECONCILE=6
+KANBAN_RECONCILE_KINDS=(in_review closed stale offboard)
 kanban_fanout_cost() {
 	local n=0
 	declare -p ROADMAP_BOARDS >/dev/null 2>&1 && n=${#ROADMAP_BOARDS[@]}
-	echo $((n * 3 * KANBAN_CALLS_PER_RECONCILE))
+	echo $((n * ${#KANBAN_RECONCILE_KINDS[@]} * KANBAN_CALLS_PER_RECONCILE))
 }
 
 # #921: boards a round SKIPPED (throttle or latch) are retried FIRST on the next round, so a latch that

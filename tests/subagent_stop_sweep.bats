@@ -33,6 +33,7 @@ setup() {
     cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile_done.sh" "$REPO/lib/"
 cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile_stale.sh" "$REPO/lib/"
+    cp "$(dirname "$SWEEP_SRC")/lib/kanban_reconcile_offboard.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/dispatch_claims.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/gh_budget.sh" "$REPO/lib/"
     cp "$(dirname "$SWEEP_SRC")/lib/roadmap_unblock.sh" "$REPO/lib/"
@@ -478,7 +479,7 @@ STUB
     ROADMAP_BOARDS=("o|1|a" "o|2|b" "o|3|c")
     gh_budget_gate "o/r" || status=$?
     [ "${status:-0}" -eq 1 ]
-    [[ "$BUDGET_GATE_REASON" == *"under the sweep floor of 54 calls"* ]]
+    [[ "$BUDGET_GATE_REASON" == *"under the sweep floor of 72 calls"* ]]
 }
 
 # dotfiles-linux-dev#559 (PR #559 review, comment 4117399074): gate_pr_thread_state() latching on ITS
@@ -907,9 +908,9 @@ declared_board_numbers() {
     [ "$(grep -c '^board .*: UNKNOWN — latched' <<<"$ctx")" -eq "$boards" ]
 }
 
-@test "main() wires items [7], [9], [11] through sweep_kanban_boards, not a single-repo reconcile" {
-    run grep -cE '^\s+sweep_kanban_boards (in_review|closed|stale) "\$cwd" "\$repo"' "$SWEEP_SRC"
-    [ "$output" = "3" ]
+@test "main() wires items [7], [9], [11], [12] through sweep_kanban_boards, not a single-repo reconcile" {
+    run grep -cE '^\s+sweep_kanban_boards (in_review|closed|stale|offboard) "\$cwd" "\$repo"' "$SWEEP_SRC"
+    [ "$output" = "4" ]
     run grep -nE 'if reconcile_kanban(_done|_stale)? ' "$SWEEP_SRC"
     [ "$status" -ne 0 ]
 }

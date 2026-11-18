@@ -78,6 +78,8 @@ source "$HOOK_DIR/lib/dispatch_claims.sh"
 source "$HOOK_DIR/lib/kanban_reconcile_done.sh"
 # shellcheck source=lib/kanban_reconcile_stale.sh
 source "$HOOK_DIR/lib/kanban_reconcile_stale.sh"
+# shellcheck source=lib/kanban_reconcile_offboard.sh
+source "$HOOK_DIR/lib/kanban_reconcile_offboard.sh"
 # shellcheck source=lib/gh_budget.sh
 source "$HOOK_DIR/lib/gh_budget.sh"
 # shellcheck source=lib/roadmap_unblock.sh
@@ -538,7 +540,7 @@ sweep_roadmap_boards() {
 }
 
 # sweep_kanban_boards KIND CWD REPO
-# Prints reconcile_kanban_boards' per-board report for KIND (in_review|closed|stale): every declared
+# Prints reconcile_kanban_boards' per-board report for KIND (in_review|closed|stale|offboard): every declared
 # board, never only the repo the sweep runs in (dotfiles-linux-dev#887). A repo absent from the
 # registry is a `finding:` (dotfiles-linux-dev#921), not a `note:` the round report can skim past.
 sweep_kanban_boards() {
@@ -652,6 +654,8 @@ $(sweep_stale_cards_gated "$cwd")"
 		sweep_issue_hygiene "$repo"
 		echo "[11] kanban reconcile, every declared board (closed-unmerged PR -> Ready; idle In progress, report only)"
 		sweep_kanban_boards stale "$cwd" "$repo"
+		echo "[12] kanban reconcile, every declared board (open issues with no card -> added with derived column)"
+		sweep_kanban_boards offboard "$cwd" "$repo"
 	)"
 
 	emit "$report"
