@@ -1249,7 +1249,8 @@ footer closes the file. `bin/check_readme_structure.sh` (with `bin/lib/md_struct
 enforces it from `.githooks/pre-commit` and the `readme_structure` job in `tests.yml`.
 Both scripts are vendored byte-identical from BlueprintX `templates/common/bin/`; never edit
 them here, fix the gate upstream and re-sync. When generating a README for another project,
-use the `s:markdown-readme` skill, which reads the same template.
+use the `s:markdown-readme` skill, which reads the same template. To refresh the
+GitHub profile README (both languages) from the package ecosystem, use `s:profile-readme`.
 
 ## Commit message constraints (gitlint)
 
