@@ -540,6 +540,13 @@ Resolve the ids and set it:
 
 (`item-add` prints the item id; if not, get it from `rtk gh project item-list … --format json`.)
 
+**A failed board write is reported, never swallowed** (dotfiles-linux-dev#1021). Projects v2 is
+GraphQL-only, so a rate or secondary limit refuses `item-add`/`item-edit` while the REST issue
+create already succeeded. Do not retry in a loop: keep the issue, skip the rest of this step, and
+say so in step 9's `Board:` line. The sweep's off-board pass (`reconcile_kanban_offboard`, item
+`[12]` of `subagent_stop_sweep.sh`) lists open issues over REST, finds the ones with no card and
+adds them with this step's derivation (open blocker -> `Blocked`, else the work-type column).
+
 **Also set `Points`, every time** — the score from step 5a (or the sum, for a parent), never
 skipped, using the field id from the same `field-list` read:
 `rtk gh project item-edit --project-id <project-node-id> --id <item-id> --field-id <points-field-id> --number <score>`
@@ -604,6 +611,7 @@ Surface: <n> path(s)                   (say "inferred" under --quick)
 Milestone: <title> | none (repo has no milestones) | none (no fit)   (omit for linear)
 Parent:  #<P>                          (omit when flat)
 Board:   <project> → <column>          (omit for linear)
+Board:   write failed (<error>) — the sweep's off-board pass places the card   (omit unless step 7 failed)
 Cut 1.0.0: #<cut> now blocked by #<N> | none in this repo | skipped (<reason>) | link failed (<error>)   (omit for linear)
 Branch:  <type>/<ref>-<slug> (checked out)   (omit for parents)
 ```

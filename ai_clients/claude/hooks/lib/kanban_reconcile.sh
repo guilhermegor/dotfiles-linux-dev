@@ -465,7 +465,7 @@ reconcile_kanban() {
 # list: a roadmap board and a "<repo> kanban" board are the same project for every repo the operator
 # tracks, so two lists would only add a way to disagree. The registry is not derived from the cwd.
 #
-# reconcile_kanban_boards KIND CWD     KIND = in_review | closed | stale
+# reconcile_kanban_boards KIND CWD     KIND = in_review | closed | stale | offboard
 #   Sets KANBAN_BOARDS_REPORT: one "board OWNER/N (repo): ..." line per declared board, ALWAYS,
 #   with that board's own lines indented beneath it. "ok — nothing to change", "ok — N moved" and
 #   "UNKNOWN — <why>" are the only verdicts, so a board swept clean never looks like one nobody
@@ -512,6 +512,11 @@ _kb_run_kind() {
 	in_review)
 		reconcile_kanban "$owner" "$repo" || rc=$?
 		_KB_REPORT="$RECONCILE_KANBAN_REPORT"
+		return "$rc"
+		;;
+	offboard)
+		reconcile_kanban_offboard "$owner" "$repo" "$cwd" || rc=$?
+		_KB_REPORT="$RECONCILE_OFFBOARD_REPORT"
 		return "$rc"
 		;;
 	closed | stale)
