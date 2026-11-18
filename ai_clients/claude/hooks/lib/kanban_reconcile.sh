@@ -72,18 +72,18 @@ fi
 #   5. <cwd>/.github/roadmap-board (a project number) wins over discovery for that repo
 # #531 ("absent by declaration, never by omission") and #887 ("every board, never the cwd's") hold:
 # every viewer project is enumerated and a board leaves only through a visible report line.
-# One GraphQL query per 50 projects (the cursor is followed, 20-page cap), cached for the process; a failure is cached too, so the fan-out does
+# One GraphQL query per 50 projects (the cursor is followed until hasNextPage is false), cached for the process; a failure is cached too, so the fan-out does
 # not retry it per reconcile. A failed discovery is UNKNOWN, never "nothing to sweep".
 # shellcheck disable=SC2034 # read by the reconcile functions below and by their callers' tests
 [[ "$(declare -p ROADMAP_BOARDS 2>/dev/null)" == "declare -a"* ]] || ROADMAP_BOARDS=()
 : "${ROADMAP_BOARDS_LOADED:=0}" "${ROADMAP_BOARDS_ERROR:=}" "${ROADMAP_BOARDS_REPORT:=}"
 
 # _rb_fetch_projects
-#   Prints the viewer's projectsV2 as ONE response, following the cursor page by page (50 per page,
-#   capped at 20 pages). pageInfo.hasNextPage stays true only when the cap cut the walk short.
+#   Prints the viewer's projectsV2 as ONE response, following the cursor page by page (50 per page)
+#   until pageInfo.hasNextPage is false. A page that claims another page but gives no cursor fails.
 _rb_fetch_projects() {
-	local page merged="" cursor="" i
-	for ((i = 0; i < 20; i++)); do
+	local page merged="" cursor=""
+	while :; do
 		page="$(gh api graphql -F after="$cursor" -f query='query($after: String) { viewer { login projectsV2(first: 50, after: $after) { pageInfo { hasNextPage endCursor } nodes { number title closed repositories(first: 10) { nodes { nameWithOwner } } } } } }' 2>/dev/null)" || return 1
 		if [[ -z "$merged" ]]; then
 			merged="$page"
@@ -92,7 +92,8 @@ _rb_fetch_projects() {
 				| .data.viewer.projectsV2.pageInfo = $p.data.viewer.projectsV2.pageInfo' <<<"$merged")" || return 1
 		fi
 		[[ "$(jq -r '.data.viewer.projectsV2.pageInfo.hasNextPage' <<<"$page" 2>/dev/null)" == "true" ]] || break
-		cursor="$(jq -r '.data.viewer.projectsV2.pageInfo.endCursor' <<<"$page")"
+		cursor="$(jq -r '.data.viewer.projectsV2.pageInfo.endCursor // empty' <<<"$page")"
+		[[ -n "$cursor" ]] || return 1
 	done
 	printf '%s' "$merged"
 }
@@ -107,7 +108,7 @@ discover_roadmap_boards() {
 		return
 	fi
 	((${#ROADMAP_BOARDS[@]} > 0)) && return 0
-	local cwd="${1:-.}" json rows login num closed title repo override entry kept=()
+	local cwd="${1:-.}" json rows login num closed title repo foreign override entry kept=()
 	ROADMAP_BOARDS_LOADED=1
 	ROADMAP_BOARDS_REPORT=""
 	ROADMAP_BOARDS_ERROR=""
@@ -118,20 +119,21 @@ discover_roadmap_boards() {
 		|| ! rows="$(jq -r --arg l "$login" '.data.viewer.projectsV2.nodes | sort_by(-.number)[]
 			| (.title | sub(" kanban$"; "")) as $tr
 			| [.repositories.nodes[].nameWithOwner | select(startswith($l + "/")) | split("/")[1]] as $rs
-			| [.number, .closed, .title, (($rs | map(select(. == $tr)) | first) // $rs[0] // "")] | @tsv' <<<"$json" 2>/dev/null)"; then
+			| [.repositories.nodes[].nameWithOwner | select(startswith($l + "/") | not)] as $fs
+			| [.number, .closed, .title, (($rs | map(select(. == $tr)) | first) // $rs[0] // "-"), ($fs[0] // "-")] | @tsv' <<<"$json" 2>/dev/null)"; then
 		ROADMAP_BOARDS_ERROR="UNKNOWN: board discovery failed"
 		return 1
 	fi
-	[[ "$(jq -r '.data.viewer.projectsV2.pageInfo.hasNextPage' <<<"$json")" == "true" ]] \
-		&& ROADMAP_BOARDS_REPORT+="board discovery: UNKNOWN — more than 1000 projects, the tail was not enumerated"$'\n'
-	while IFS=$'\t' read -r num closed title repo; do
+	while IFS=$'\t' read -r num closed title repo foreign; do
 		[[ -n "$num" ]] || continue
 		if [[ "$closed" == "true" ]]; then
 			ROADMAP_BOARDS_REPORT+="board $login/$num ($title): skipped — project is closed"$'\n'
 		elif [[ ",${excl// /,}," == *",$num,"* ]]; then
 			ROADMAP_BOARDS_REPORT+="board $login/$num ($title): skipped — excluded by ROADMAP_BOARDS_EXCLUDE"$'\n'
-		elif [[ -n "$repo" ]]; then
+		elif [[ "$repo" != "-" ]]; then
 			ROADMAP_BOARDS+=("$login|$num|$repo")
+		elif [[ "$foreign" != "-" ]]; then
+			ROADMAP_BOARDS_REPORT+="board $login/$num ($title): UNKNOWN — linked only to $foreign, a repo owned by another account"$'\n'
 		elif [[ "$title" =~ ^(.+)\ kanban$ ]]; then
 			ROADMAP_BOARDS+=("$login|$num|${BASH_REMATCH[1]}")
 		else
@@ -871,7 +873,7 @@ kanban_stale_cards_rest() {
 	local entry owner project repo field rows out="" stamp stamp_file="" slug num closed_at status workflow_boards=""
 	stamp_file="$(_kb_stamp_file "${1:-.}")" || stamp_file=""
 	if command -v gh_budget_latch_active >/dev/null 2>&1 && gh_budget_latch_active && ((${#ROADMAP_BOARDS[@]} == 0)); then
-		echo "stale cards: UNKNOWN — GraphQL budget latch active, boards not discovered; no board was checked"
+		echo "stale cards: UNKNOWN — GraphQL budget latch active, boards not discovered${ROADMAP_BOARDS_REPORT:+; $ROADMAP_BOARDS_REPORT}; no board was checked"
 		return 0
 	fi
 	discover_roadmap_boards "${1:-.}" || true

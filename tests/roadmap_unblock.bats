@@ -816,6 +816,26 @@ JSON
     [[ "$output" == *"board guilhermegor/9 (scratch): UNKNOWN"* ]]
 }
 
+@test "discovery: a project linked only to a foreign repo is UNKNOWN even with a matching title" {
+    cat > "$TEST_TMP/projects.json" <<'JSON'
+{"data":{"viewer":{"login":"guilhermegor","projectsV2":{"pageInfo":{"hasNextPage":false},"nodes":[
+ {"number":7,"title":"widget kanban","closed":false,"repositories":{"nodes":[{"nameWithOwner":"team/widget"}]}}]}}}}
+JSON
+    write_fake_gh
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|7|"* ]]
+    [[ "$output" == *"board guilhermegor/7 (widget kanban): UNKNOWN — linked only to team/widget, a repo owned by another account"* ]]
+}
+
+@test "stale cards: a latched sweep with no boards prints the cached discovery report, no new query" {
+    run bash -c "source '$LIB'; gh() { echo GH_CALLED >&2; return 1; }; gh_budget_latch_active() { return 0; }; \
+        ROADMAP_BOARDS_LOADED=1; ROADMAP_BOARDS_REPORT='board guilhermegor/3 (old board): skipped — project is closed'; \
+        kanban_stale_cards_rest '$TEST_TMP' 2>&1"
+    [[ "$output" == *"GraphQL budget latch active"* ]]
+    [[ "$output" == *"board guilhermegor/3 (old board): skipped — project is closed"* ]]
+    [[ "$output" != *GH_CALLED* ]]
+}
+
 @test "discovery: a failed query is UNKNOWN: board discovery failed, with no boards" {
     write_fake_gh
     run_discover
