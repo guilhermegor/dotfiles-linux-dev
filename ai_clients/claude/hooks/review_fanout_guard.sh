@@ -675,11 +675,11 @@ main() {
 	# review-pr-N no longer silences the guard for every other dispatchable PR. An unrelated
 	# agent in flight counts for nothing — see review_dispatch_running's own header.
 	review_dispatch_running "$transcript" || true
-	drop_closed_pr_failures "$cwd"
 
 	# Budget low => pass, never block a turn on a board that cannot be read (#814). Above the
 	# cache on purpose: the cache key needs open_pr_heads, itself a gh call.
 	stop_budget_gate || exit 0
+	drop_closed_pr_failures "$cwd"
 
 	[ -r "$PLANNER" ] || block_unreadable "no review fan-out planner at $PLANNER (run 'make ai_clients')."
 

@@ -561,6 +561,19 @@ $body
     [[ "$output" != *"review-pr-1029"* ]]
 }
 
+@test "the closed-PR filter makes no gh call while the budget latch is active (#1037)" {
+    loop_invoked
+    agent_dispatched a1 "review-pr-1029"
+    teammate_spawned a1 "review-pr-1029"
+    teammate_idle "review-pr-1029" failed "2026-10-09T10:19:35.963Z"
+    plan_with_work
+    printf '%s\n' "$(($(date +%s) + 600))" >"$GH_BUDGET_LATCH_FILE"
+    printf '#!/bin/sh\necho called >>"%s/gh.calls"\ncat "$HEADS"\n' "$TEST_TMP" >"$TEST_TMP/bin/gh"
+    run_guard
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_TMP/gh.calls" ]
+}
+
 @test "a failed review agent is still listed when the open PRs cannot be read (#1037)" {
     loop_invoked
     agent_dispatched a1 "review-pr-1029"
