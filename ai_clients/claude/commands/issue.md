@@ -549,7 +549,7 @@ write independent of the board, so it still runs. The sweep's off-board pass
 finds the ones with no card and adds them with this step's derivation (open blocker -> `Blocked`,
 else the work-type column). It scans only the `ROADMAP_BOARDS` boards, so an unregistered repo or
 a `--project` board needs a manual follow-up. It sets Status only, never `Points`: report `Points`
-as unset, and the resume path writes it (`Points` empty -> step 5a) on the next `/issue` run.
+as unset (the off-board report says so too). The score is not retained: the resume path re-derives it (`Points` empty -> step 5a) on the next `/issue` run, which is intended.
 
 **Also set `Points`, every time** — the score from step 5a (or the sum, for a parent), never
 skipped, using the field id from the same `field-list` read:

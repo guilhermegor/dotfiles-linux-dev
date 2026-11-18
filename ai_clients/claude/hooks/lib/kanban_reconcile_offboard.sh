@@ -132,7 +132,7 @@ reconcile_kanban_offboard() {
 		fi
 		item_id="$(jq -r '.id // empty' <<<"$added" 2>/dev/null)"
 		if [[ -n "$item_id" ]] && move_card "$project_node" "$item_id" "$status_field" "$option"; then
-			report+="moved issue #$number onto the board in $target"$'\n'
+			report+="moved issue #$number onto the board in $target (Points unset: score it via /issue resume)"$'\n'
 		else
 			report+="FAILED to set Status $target on added issue #$number — verify by hand"$'\n'
 		fi
