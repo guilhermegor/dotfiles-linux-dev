@@ -2,7 +2,7 @@
 name: s:release-rename
 description: Use when a published package is being renamed — the forge repo, the PyPI distribution, the import package, the docs site, boards, local checkout and downstream consumers — and the rename must end in a release without losing release history. Loaded by s:release when the shipped change is a rename; not invoked directly.
 effort: high
-argument-hint: [old name, new name, shim-or-clean-break decision — supplied by s:release or the tracking issue]
+argument-hint: [old name, new name (shim + old-project delete are the defaults; overrides come from the tracking issue)]
 allowed-tools: Bash(rtk git grep*) Bash(rtk git worktree*) Bash(rtk git mv*) Bash(rtk git tag*) Bash(rtk gh workflow*) Bash(rtk gh run*) Bash(rtk gh api*) Bash(rtk gh project*) Bash(rtk curl*) Bash(jq*) Bash(pip install*) Bash(poetry install*) Read Grep Glob
 ---
 
@@ -24,15 +24,23 @@ phase by observable state, never by the absence of a failure.
 
 ## 1. Decide first, record on the tracking issue
 
-Before touching anything, the owner decides and the decision is written on the tracking issue:
+Before touching anything, write these three decisions on the tracking issue. The first two have
+standing defaults the owner set on 2026-11-18. Apply them unless the tracking issue says otherwise
+for this rename:
 
-- **Shim or clean break** for `import <old>`. (opendata-* shipped a clean break: pre-1.0, old
-  project deleted — cvm#420.)
-- **What happens to the old PyPI project.** Deleting it frees the name for anyone to register;
-  leaving it behind keeps the name held but live. This is the owner's call, per rename.
-- **Which runtime markers keep their old name** (state dirs, rc-file markers, cache keys — see step 8).
-
-If any of the three is unanswered, stop and ask. Do not infer a default.
+- **Shim for `import <old>`** (default). The new wheel also ships `src/<old>/__init__.py`, which
+  re-exports the new package (`from <new> import *`, plus `__all__` and `__version__`) and emits
+  one `DeprecationWarning` naming the new import. Add `<old>` to `pyproject.toml` `packages`, and
+  add one test that imports `<old>` and asserts the warning. Remove the shim at the next major
+  bump, and say so in that release's notes. opendata-* shipped a clean break (cvm#420), which
+  predates this default.
+- **Delete the old PyPI project** (default), and the old Test PyPI project too. Do this only
+  **after** step 4 has install-verified the new name on PyPI. Deleting the project frees the name
+  for anyone to register; the owner accepted that risk. PyPI deletion is web-only (project
+  Settings → Delete project), so hand the owner the two URLs and wait for confirmation. Never
+  report the deletion as done before then.
+- **Which runtime markers keep their old name** (state dirs, rc-file markers, cache keys; see
+  step 8). This one has no default. If it is unanswered, stop and ask.
 
 ## 2. Rename distribution AND import package in one release, major bump
 
@@ -179,5 +187,7 @@ rename, not the issue number; close the issue by hand after the install-verify (
 - Do not rename a runtime marker, state dir or `importlib.metadata` name as if it were the forge name.
 - Do not rewrite historical records to match the new name.
 - Do not name the rename branch `<type>/<tracking-issue-N>-…`.
-- Do not choose shim-vs-break or the old project's fate yourself — that is the owner's decision.
+- Do not depart from the step 1 defaults (shim, delete the old project) unless the tracking issue
+  records the owner's override for this rename.
+- Do not delete the old PyPI project yourself, or before the new name is install-verified.
 - Do not decide *whether* to release or *what* to bump — that is `s:release`'s call.
