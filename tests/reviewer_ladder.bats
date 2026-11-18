@@ -1110,9 +1110,9 @@ _make_bare_remote_with_pr() {
     fake_url() { printf 'file://%s\n' "$bare"; }
     export -f fake_url
     export REVIEWER_LADDER_REMOTE_URL_CMD=fake_url
-    # the forge claims the BASE commit is the PR's head — the exact #487
-    # mismatch shape, now hit through the real fetch/worktree-add code path.
-    fake_head_sha() { printf '%s\n' "$BASE_SHA"; }
+    # the forge claims an unreachable sha is the PR's head, so the fetch by
+    # sha fails and the stale pull ref is used — the #487 mismatch shape, now hit through the real fetch/worktree-add code path.
+    fake_head_sha() { printf '%s\n' deadbeefdeadbeefdeadbeefdeadbeefdeadbeef; }
     export -f fake_head_sha
     export REVIEWER_LADDER_HEAD_SHA_CMD=fake_head_sha
     unset REVIEWER_LADDER_CHECKOUT_CMD
@@ -1125,21 +1125,21 @@ _make_bare_remote_with_pr() {
     [ "$status" -ne 0 ]
 }
 
-@test "_checkout_pr_worktree: real path — a mismatch reports 'does not match', never 'cannot reach the forge'" {
+@test "_checkout_pr_worktree: real path — a mismatch reports 'is not the forge's head', never 'cannot reach the forge'" {
     export TMPDIR="$BATS_TEST_TMPDIR"
     local bare="$BATS_TEST_TMPDIR/remote-556b.git"
     _make_bare_remote_with_pr "$bare" 5561
     fake_url() { printf 'file://%s\n' "$bare"; }
     export -f fake_url
     export REVIEWER_LADDER_REMOTE_URL_CMD=fake_url
-    fake_head_sha() { printf '%s\n' "$BASE_SHA"; }
+    fake_head_sha() { printf '%s\n' deadbeefdeadbeefdeadbeefdeadbeefdeadbeef; }
     export -f fake_head_sha
     export REVIEWER_LADDER_HEAD_SHA_CMD=fake_head_sha
     unset REVIEWER_LADDER_CHECKOUT_CMD
 
     run _checkout_pr_worktree o r 5561
     [ "$status" -eq 1 ]
-    [[ "$output" == *"does not match the forge's head"* ]]
+    [[ "$output" == *"is not the forge's head"* ]]
     [[ "$output" != *"cannot reach the forge"* ]]
 }
 
@@ -1161,7 +1161,58 @@ _make_bare_remote_with_pr() {
     run _checkout_pr_worktree o r 557
     [ "$status" -eq 1 ]
     [[ "$output" == *"cannot reach the forge to verify the head"* ]]
-    [[ "$output" != *"does not match the forge's head"* ]]
+    [[ "$output" != *"is not the forge's head"* ]]
+}
+
+@test "_checkout_pr_worktree: reviews the REST sha when refs/pull/N/head is stale (#1025)" {
+    export TMPDIR="$BATS_TEST_TMPDIR"
+    local bare="$BATS_TEST_TMPDIR/remote-1025.git"
+    _make_bare_remote_with_pr "$bare" 1025
+    local work="$BATS_TEST_TMPDIR/seed-1025" stale_sha="$PR_HEAD_SHA"
+    echo newer >"$work/f.txt"
+    git -C "$work" add f.txt
+    git -C "$work" commit --quiet -m "pushed after the pull ref went stale"
+    git -C "$work" push --quiet origin HEAD:refs/heads/feat
+    export REST_SHA="$(git -C "$work" rev-parse HEAD)"
+    [ "$REST_SHA" != "$stale_sha" ]
+    [ "$(git -C "$bare" rev-parse refs/pull/1025/head)" = "$stale_sha" ]
+    fake_url() { printf 'file://%s\n' "$bare"; }
+    export -f fake_url
+    export REVIEWER_LADDER_REMOTE_URL_CMD=fake_url
+    fake_head_sha() { printf '%s\n' "$REST_SHA"; }
+    export -f fake_head_sha
+    export REVIEWER_LADDER_HEAD_SHA_CMD=fake_head_sha
+    unset REVIEWER_LADDER_CHECKOUT_CMD
+
+    _checkout_pr_worktree o r 1025
+    [ "$(git -C "$PR_WORKTREE_DIR" rev-parse HEAD)" = "$REST_SHA" ]
+    _teardown_pr_worktree "$PR_WORKTREE_DIR"
+}
+
+@test "run_ladder_review.sh: exits non-zero when every rung refused (#1025)" {
+    local bin="$BATS_TEST_TMPDIR/bin"
+    mkdir -p "$bin"
+    cat >"$bin/gh" <<'GH'
+#!/bin/bash
+case "$*" in
+*"/commits/"*) echo "1970-01-01T00:00:00Z" ;;
+*"/comments"*) echo '' ;;
+*) echo "$HEAD_SHA clean" ;;
+esac
+GH
+    chmod +x "$bin/gh"
+    git remote add origin https://github.com/o/r.git
+    # qwen is down; codex probes fine but its checkout is refused (the #1025 shape)
+    export -f _default_rung_down
+    export REVIEWER_LADDER_QWEN_PROBE=_default_rung_down
+    export REVIEWER_LADDER_CODEX_PROBE=true
+    _refuse_checkout() { :; }
+    export -f _refuse_checkout
+    export REVIEWER_LADDER_CHECKOUT_CMD=_refuse_checkout
+    export REVIEWER_LADDER_CODEX_CACHE="$FIXTURES/codex_full.json"
+    PATH="$bin:$PATH" run bash "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/run_ladder_review.sh" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot check out a verified head"* ]]
 }
 
 # --- dotfiles-linux-dev#857: concurrent checkouts must not race on FETCH_HEAD ---
@@ -1196,7 +1247,7 @@ _make_bare_remote_with_pr() {
     git() {
         command git "$@"
         local rc=$?
-        if [ "$1" = "fetch" ] && [[ "$*" == *"pull/857/head"* ]]; then
+        if [ "$1" = "fetch" ] && [[ "$*" == *"+$PR_A_SHA:"* ]]; then
             command git fetch --quiet "file://$BARE" "pull/858/head" 2>/dev/null
             : >"$RACE_SENTINEL"
         fi

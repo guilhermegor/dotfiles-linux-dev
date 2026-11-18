@@ -638,7 +638,8 @@ _pr_remote_url() {
 # forge answer from a CONTRADICTED one — those are different facts and only
 # one of them means the checkout is wrong:
 #   unanswerable — _pr_head_sha returned nothing (forge unreachable/refused)
-#   mismatched   — a real answer came back, but HEAD differs (or unreadable)
+#   mismatched   — a real answer came back, but HEAD differs (or unreadable);
+#                  with refs/pull/N/head as the source, that means a stale ref
 #   matched      — HEAD equals the forge's answer
 assert_worktree_matches_pr() {
 	local dir="$1" owner="$2" repo="$3" pr_number="$4"
@@ -678,7 +679,13 @@ _checkout_pr_worktree() {
 	# concurrent run's fetch could swap it between our fetch and worktree add.
 	# A per-run ref is ours alone; deleted once the detached worktree exists.
 	ref="refs/ladder/pr${pr_number}-$$-${dir##*-}"
-	if ! git fetch --quiet "$url" "+pull/$pr_number/head:$ref" 2>/dev/null ||
+	# issue #1025: refs/pull/N/head can lag a push; the sha REST reports is
+	# served directly, so the assert below then holds by construction. The
+	# pull ref is only the fallback (sha unreachable, or REST unanswered).
+	local want_sha
+	want_sha="$(_pr_head_sha "$owner" "$repo" "$pr_number")"
+	if ! { [ -n "$want_sha" ] && git fetch --quiet "$url" "+$want_sha:$ref" 2>/dev/null; } &&
+		! git fetch --quiet "$url" "+pull/$pr_number/head:$ref" 2>/dev/null ||
 		! git worktree add --detach --quiet "$dir" "$ref" 2>/dev/null; then
 		git update-ref -d "$ref" 2>/dev/null
 		rmdir "$dir" 2>/dev/null
@@ -692,7 +699,7 @@ _checkout_pr_worktree() {
 			# checkout itself was never inspected.
 			print_status "error" "PR #$pr_number: cannot reach the forge to verify the head — refusing"
 		else
-			print_status "error" "PR #$pr_number: checked-out HEAD does not match the forge's head — refusing"
+			print_status "error" "PR #$pr_number: checked-out HEAD is not the forge's head (refs/pull/$pr_number/head is stale, or its sha is unreachable) — refusing"
 		fi
 		git worktree remove --force "$dir" 2>/dev/null
 		return 1
