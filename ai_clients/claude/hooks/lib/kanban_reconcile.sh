@@ -78,6 +78,25 @@ fi
 [[ "$(declare -p ROADMAP_BOARDS 2>/dev/null)" == "declare -a"* ]] || ROADMAP_BOARDS=()
 : "${ROADMAP_BOARDS_LOADED:=0}" "${ROADMAP_BOARDS_ERROR:=}" "${ROADMAP_BOARDS_REPORT:=}"
 
+# _rb_fetch_projects
+#   Prints the viewer's projectsV2 as ONE response, following the cursor page by page (50 per page,
+#   capped at 20 pages). pageInfo.hasNextPage stays true only when the cap cut the walk short.
+_rb_fetch_projects() {
+	local page merged="" cursor="" i
+	for ((i = 0; i < 20; i++)); do
+		page="$(gh api graphql -F after="$cursor" -f query='query($after: String) { viewer { login projectsV2(first: 50, after: $after) { pageInfo { hasNextPage endCursor } nodes { number title closed repositories(first: 10) { nodes { nameWithOwner } } } } } }' 2>/dev/null)" || return 1
+		if [[ -z "$merged" ]]; then
+			merged="$page"
+		else
+			merged="$(jq -c --argjson p "$page" '.data.viewer.projectsV2.nodes += $p.data.viewer.projectsV2.nodes
+				| .data.viewer.projectsV2.pageInfo = $p.data.viewer.projectsV2.pageInfo' <<<"$merged")" || return 1
+		fi
+		[[ "$(jq -r '.data.viewer.projectsV2.pageInfo.hasNextPage' <<<"$page" 2>/dev/null)" == "true" ]] || break
+		cursor="$(jq -r '.data.viewer.projectsV2.pageInfo.endCursor' <<<"$page")"
+	done
+	printf '%s' "$merged"
+}
+
 # discover_roadmap_boards [CWD]
 #   Fills ROADMAP_BOARDS (+ ROADMAP_BOARDS_REPORT: one skip/UNKNOWN line per board left out).
 #   Returns 1 with ROADMAP_BOARDS_ERROR="UNKNOWN: board discovery failed" when the query fails.
@@ -94,7 +113,7 @@ discover_roadmap_boards() {
 	ROADMAP_BOARDS_ERROR=""
 	local excl="${ROADMAP_BOARDS_EXCLUDE:-}"
 	excl="${excl//,/ }"
-	if ! json="$(gh api graphql -f query='query { viewer { login projectsV2(first: 50) { pageInfo { hasNextPage } nodes { number title closed repositories(first: 10) { nodes { nameWithOwner } } } } } }' 2>/dev/null)" \
+	if ! json="$(_rb_fetch_projects)" \
 		|| ! login="$(jq -er '.data.viewer.login' <<<"$json" 2>/dev/null)" \
 		|| ! rows="$(jq -r '.data.viewer.projectsV2.nodes | sort_by(-.number)[]
 			| (.title | sub(" kanban$"; "")) as $tr
@@ -104,7 +123,7 @@ discover_roadmap_boards() {
 		return 1
 	fi
 	[[ "$(jq -r '.data.viewer.projectsV2.pageInfo.hasNextPage' <<<"$json")" == "true" ]] \
-		&& ROADMAP_BOARDS_REPORT+="board discovery: UNKNOWN — more than 50 projects, the tail was not enumerated"$'\n'
+		&& ROADMAP_BOARDS_REPORT+="board discovery: UNKNOWN — more than 1000 projects, the tail was not enumerated"$'\n'
 	while IFS=$'\t' read -r num closed title repo; do
 		[[ -n "$num" ]] || continue
 		if [[ "$closed" == "true" ]]; then

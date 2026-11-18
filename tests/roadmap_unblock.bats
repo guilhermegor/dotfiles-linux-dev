@@ -198,6 +198,7 @@ case "\$1 \$2" in
             echo '{"data":{"rateLimit":{"remaining":4999}}}'
         elif printf '%s' "\$full" | grep -q 'projectsV2'; then
             f="$TEST_TMP/projects.json"
+            if printf '%s' "\$full" | grep -q 'after=c1' && [ -f "$TEST_TMP/projects-2.json" ]; then f="$TEST_TMP/projects-2.json"; fi
             [ -f "\$f" ] || exit 1
             cat "\$f"
         elif printf '%s' "\$full" | grep -q 'items(first'; then
@@ -784,6 +785,29 @@ run_discover() {
     [[ "$output" == *"rc=1"* ]]
     [[ "$output" == *"ERR=UNKNOWN: board discovery failed"* ]]
     [[ "$output" != *"BOARD "*"|"* ]]
+}
+
+@test "discovery: follows the cursor so a second page of projects is enumerated (#1036)" {
+    cat > "$TEST_TMP/projects.json" <<'JSON'
+{"data":{"viewer":{"login":"guilhermegor","projectsV2":{"pageInfo":{"hasNextPage":true,"endCursor":"c1"},"nodes":[
+ {"number":24,"title":"a kanban","closed":false,"repositories":{"nodes":[{"nameWithOwner":"guilhermegor/a"}]}}]}}}}
+JSON
+    cat > "$TEST_TMP/projects-2.json" <<'JSON'
+{"data":{"viewer":{"login":"guilhermegor","projectsV2":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[
+ {"number":5,"title":"b kanban","closed":false,"repositories":{"nodes":[{"nameWithOwner":"guilhermegor/b"}]}}]}}}}
+JSON
+    write_fake_gh
+    run_discover
+    [[ "$output" == *"BOARD guilhermegor|24|a"* ]]
+    [[ "$output" == *"BOARD guilhermegor|5|b"* ]]
+    [[ "$output" != *"not enumerated"* ]]
+}
+
+@test "registry sweep: an UNKNOWN discovery line turns the status unknown (#1036)" {
+    write_projects
+    write_fake_gh
+    run bash -c "source '$LIB'; reconcile_roadmap_boards '$TEST_TMP' >/dev/null; echo \"STATUS=\$RECONCILE_BOARDS_STATUS\""
+    [[ "$output" == *"STATUS=unknown"* ]]
 }
 
 @test "discovery: one query per process, however many readers ask" {

@@ -624,7 +624,11 @@ reconcile_roadmap_boards() {
 		RECONCILE_BOARDS_REPORT="${ROADMAP_BOARDS_ERROR:-UNKNOWN: no board discovered}${ROADMAP_BOARDS_REPORT:+$'\n'$ROADMAP_BOARDS_REPORT} — no board was swept"
 		return 1
 	fi
-	[[ -n "$ROADMAP_BOARDS_REPORT" ]] && lines+="$ROADMAP_BOARDS_REPORT"$'\n'
+	if [[ -n "$ROADMAP_BOARDS_REPORT" ]]; then
+		lines+="$ROADMAP_BOARDS_REPORT"$'\n'
+		# shellcheck disable=SC2034 # read by callers
+		[[ "$ROADMAP_BOARDS_REPORT" == *UNKNOWN* ]] && RECONCILE_BOARDS_STATUS="unknown"
+	fi
 	for entry in "${ROADMAP_BOARDS[@]}"; do
 		if [[ ! "$entry" =~ $entry_shape ]]; then
 			RECONCILE_BOARDS_STATUS="unknown"
