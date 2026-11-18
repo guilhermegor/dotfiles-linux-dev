@@ -2681,6 +2681,9 @@ field — <code>commands/act.md</code> with <code>name: c:act</code> still surfa
   description instead of reading the skill body
 - Skills are read-only reference guides by default; add <code>allowed-tools</code> only
   if the skill legitimately needs to run commands
+- A skill may be an <strong>arm</strong> of another: <code>s:release</code> decides and delegates to
+  <code>s:release-py</code> (PyPI mechanics) and <code>s:release-rename</code> (package-rename
+  order of operations). Arms are loaded by the parent, never invoked directly
 - Keep total token count low — skills load into every conversation that
   triggers them
 - Same target-qualification rule as commands, above (dotfiles-linux-dev#229) — a
