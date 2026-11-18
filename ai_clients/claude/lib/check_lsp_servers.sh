@@ -6,8 +6,8 @@
 #
 # The command comes from the plugin's own manifest, never from its name:
 #   1. <marketplace>/.claude-plugin/marketplace.json  (plugins[].lspServers)
-#   2. the plugin's installPath from installed_plugins.json (else every
-#      cache/<marketplace>/<plugin>/<ver>) + /.claude-plugin/plugin.json
+#   2. the plugin's user-scope installPath from installed_plugins.json (else
+#      the most recent record, else the newest cache/<marketplace>/<plugin>/<ver>) + /.claude-plugin/plugin.json
 # An enabled plugin with no resolvable manifest fails too: it declares no
 # server, so nothing can ever start it.
 
@@ -39,15 +39,18 @@ lsp_declared_commands() {
     if [ -f "$manifest" ]; then
         jq -r --arg n "$name" ".plugins[]? | select(.name == \$n) | $filter" "$manifest"
     fi
-    local installed="$dir/installed_plugins.json" path_install
+    local installed="$dir/installed_plugins.json" path_install=""
     local -a list_dirs=()
     if [ -f "$installed" ]; then
-        while IFS= read -r path_install; do
-            list_dirs+=("$path_install")
-        done < <(jq -r --arg k "$plugin_key" '.plugins[$k][]?.installPath // empty' "$installed" 2>/dev/null)
+        path_install="$(jq -r --arg k "$plugin_key" '
+            (.plugins[$k] // []) | (map(select(.scope == "user")) | .[0])
+            // (sort_by(.lastUpdated // "") | last) | .installPath // empty' "$installed" 2>/dev/null)"
     fi
-    if [ "${#list_dirs[@]}" -eq 0 ]; then
-        list_dirs=("$dir/cache/$market/$name"/*)
+    if [ -n "$path_install" ]; then
+        list_dirs=("$path_install")
+    else
+        # shellcheck disable=SC2012
+        list_dirs=("$(ls -d "$dir/cache/$market/$name"/*/ 2>/dev/null | sort -V | tail -n 1)")
     fi
     for path_install in "${list_dirs[@]}"; do
         manifest="$path_install/.claude-plugin/plugin.json"

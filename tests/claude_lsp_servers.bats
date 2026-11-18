@@ -13,7 +13,7 @@ setup() {
     export CLAUDE_DIR="$TEST_TMP/dot-claude"
     STUB_BIN="$TEST_TMP/bin"
     mkdir -p "$STUB_BIN" "$CLAUDE_DIR/plugins/marketplaces/mkt/.claude-plugin"
-    for str_tool in bash jq sort sed dirname basename cat chmod mkdir; do
+    for str_tool in bash jq sort sed dirname basename cat chmod mkdir ls tail; do
         ln -s "$(command -v "$str_tool")" "$STUB_BIN/$str_tool"
     done
     ORIG_PATH="$PATH"
@@ -102,6 +102,43 @@ enable() {
     printf '{"lspServers":{"a":{"command":"bash"}}}' > "$cache/2/.claude-plugin/plugin.json"
     printf '{"plugins":{"demo-lsp@mkt":[{"installPath":"%s"}]}}' "$cache/2" \
         > "$CLAUDE_DIR/plugins/installed_plugins.json"
+    run bash "$LIB/check_lsp_servers.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "the user-scope record wins over a project-scope record" {
+    enable "demo-lsp@mkt"
+    printf '{"plugins":[]}' > "$CLAUDE_DIR/plugins/marketplaces/mkt/.claude-plugin/marketplace.json"
+    local cache="$CLAUDE_DIR/plugins/cache/mkt/demo-lsp"
+    mkdir -p "$cache/1/.claude-plugin" "$cache/2/.claude-plugin"
+    printf '{"lspServers":{"a":{"command":"old-ls"}}}' > "$cache/1/.claude-plugin/plugin.json"
+    printf '{"lspServers":{"a":{"command":"bash"}}}' > "$cache/2/.claude-plugin/plugin.json"
+    printf '{"plugins":{"demo-lsp@mkt":[{"scope":"project","projectPath":"/x","installPath":"%s"},{"scope":"user","installPath":"%s"}]}}' \
+        "$cache/1" "$cache/2" > "$CLAUDE_DIR/plugins/installed_plugins.json"
+    run bash "$LIB/check_lsp_servers.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "without a user-scope record the most recent record is used" {
+    enable "demo-lsp@mkt"
+    printf '{"plugins":[]}' > "$CLAUDE_DIR/plugins/marketplaces/mkt/.claude-plugin/marketplace.json"
+    local cache="$CLAUDE_DIR/plugins/cache/mkt/demo-lsp"
+    mkdir -p "$cache/1/.claude-plugin" "$cache/2/.claude-plugin"
+    printf '{"lspServers":{"a":{"command":"old-ls"}}}' > "$cache/1/.claude-plugin/plugin.json"
+    printf '{"lspServers":{"a":{"command":"bash"}}}' > "$cache/2/.claude-plugin/plugin.json"
+    printf '{"plugins":{"demo-lsp@mkt":[{"scope":"project","lastUpdated":"2026-01-01","installPath":"%s"},{"scope":"project","lastUpdated":"2026-02-01","installPath":"%s"}]}}' \
+        "$cache/1" "$cache/2" > "$CLAUDE_DIR/plugins/installed_plugins.json"
+    run bash "$LIB/check_lsp_servers.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "with no record only the newest cached version is checked" {
+    enable "demo-lsp@mkt"
+    printf '{"plugins":[]}' > "$CLAUDE_DIR/plugins/marketplaces/mkt/.claude-plugin/marketplace.json"
+    local cache="$CLAUDE_DIR/plugins/cache/mkt/demo-lsp"
+    mkdir -p "$cache/1.9/.claude-plugin" "$cache/1.10/.claude-plugin"
+    printf '{"lspServers":{"a":{"command":"old-ls"}}}' > "$cache/1.9/.claude-plugin/plugin.json"
+    printf '{"lspServers":{"a":{"command":"bash"}}}' > "$cache/1.10/.claude-plugin/plugin.json"
     run bash "$LIB/check_lsp_servers.sh"
     [ "$status" -eq 0 ]
 }
