@@ -3145,7 +3145,8 @@ footer closes the file. <code>bin/check_readme_structure.sh</code> (with <code>b
 enforces it from <code>.githooks/pre-commit</code> and the <code>readme_structure</code> job in <code>tests.yml</code>.
 Both scripts are vendored byte-identical from BlueprintX <code>templates/common/bin/</code>; never edit
 them here, fix the gate upstream and re-sync. When generating a README for another project,
-use the <code>s:markdown-readme</code> skill, which reads the same template.</p>
+use the <code>s:markdown-readme</code> skill, which reads the same template. To refresh the
+GitHub profile README (both languages) from the package ecosystem, use <code>s:profile-readme</code>.</p>
 <h2 id="commit-message-constraints-gitlint">Commit message constraints (gitlint)<a class="headerlink" href="#commit-message-constraints-gitlint" title="Permanent link">&para;</a></h2>
 <p>This repo enforces gitlint. Commits must satisfy:</p>
 <ul>
