@@ -38,6 +38,11 @@ issue() {
 
 write_issues() { printf '%s\n' "$@" | jq -sc '.' > "$TEST_TMP/issues.json"; }
 
+refute_gh() {
+    run grep -q -- "$1" "$GH_LOG"
+    [ "$status" -ne 0 ]
+}
+
 # blockers NUMBER STATE — native blocked_by of NUMBER holds one issue in STATE.
 blockers() {
     jq -nc --arg s "$2" '[{state: $s, number: 99, repository: {full_name: "owner/repo"}}]' \
@@ -115,7 +120,7 @@ run_offboard() {
     run_offboard
     [[ "$output" != *"#7"* ]]
     [[ "$output" == *"#9"* ]]
-    ! grep -q 'issues/7' "$GH_LOG"
+    refute_gh 'issues/7'
 }
 
 @test "a PR in the issue listing is never added" {
@@ -123,7 +128,7 @@ run_offboard() {
     write_fake_gh
     run_offboard
     [[ "$output" == *"STATUS=ok"* ]]
-    ! grep -q 'item-add' "$GH_LOG"
+    refute_gh 'item-add'
 }
 
 @test "latched: an active GraphQL budget latch reports UNKNOWN (latched) and calls nothing" {
