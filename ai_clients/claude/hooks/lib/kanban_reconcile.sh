@@ -60,6 +60,77 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 fi
 
 : "${CACHE_DIR:=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/kanban-boards}"
+# dotfiles-linux-dev#1022: the board set is DISCOVERED at runtime from the authenticated `gh` user
+# (viewer.projectsV2), never declared in source. ROADMAP_BOARDS is the in-process result — one
+# "owner|project|repo" entry per board, the same shape as LESSON_STORES — read by the roadmap
+# unblock, the kanban reconcile (#887) and the stale-card check. Rules, in order:
+#   1. closed project         -> skipped, with a report line naming it
+#   2. linked repo            -> owner|N|<repo>
+#   3. no linked repo         -> the "<repo> kanban" title convention (#907); neither -> UNKNOWN line
+#   4. ROADMAP_BOARDS_EXCLUDE -> space/comma-separated project numbers skipped at runtime (a report
+#                                line each); the only permitted exclusion of an OPEN board
+#   5. <cwd>/.github/roadmap-board (a project number) wins over discovery for that repo
+# #531 ("absent by declaration, never by omission") and #887 ("every board, never the cwd's") hold:
+# every viewer project is enumerated and a board leaves only through a visible report line.
+# One query (GraphQL cost 1), cached for the process; a failure is cached too, so the fan-out does
+# not retry it per reconcile. A failed discovery is UNKNOWN, never "nothing to sweep".
+# shellcheck disable=SC2034 # read by the reconcile functions below and by their callers' tests
+[[ "$(declare -p ROADMAP_BOARDS 2>/dev/null)" == "declare -a"* ]] || ROADMAP_BOARDS=()
+: "${ROADMAP_BOARDS_LOADED:=0}" "${ROADMAP_BOARDS_ERROR:=}" "${ROADMAP_BOARDS_REPORT:=}"
+
+# discover_roadmap_boards [CWD]
+#   Fills ROADMAP_BOARDS (+ ROADMAP_BOARDS_REPORT: one skip/UNKNOWN line per board left out).
+#   Returns 1 with ROADMAP_BOARDS_ERROR="UNKNOWN: board discovery failed" when the query fails.
+#   A no-op once loaded, or when ROADMAP_BOARDS is already populated (a caller-seeded set).
+discover_roadmap_boards() {
+	if ((ROADMAP_BOARDS_LOADED)); then
+		[[ -z "$ROADMAP_BOARDS_ERROR" ]]
+		return
+	fi
+	((${#ROADMAP_BOARDS[@]} > 0)) && return 0
+	local cwd="${1:-.}" json rows login num closed title repo override entry kept=()
+	ROADMAP_BOARDS_LOADED=1
+	ROADMAP_BOARDS_REPORT=""
+	ROADMAP_BOARDS_ERROR=""
+	local excl="${ROADMAP_BOARDS_EXCLUDE:-}"
+	excl="${excl//,/ }"
+	if ! json="$(gh api graphql -f query='query { viewer { login projectsV2(first: 50) { pageInfo { hasNextPage } nodes { number title closed repositories(first: 10) { nodes { nameWithOwner } } } } } }' 2>/dev/null)" \
+		|| ! login="$(jq -er '.data.viewer.login' <<<"$json" 2>/dev/null)" \
+		|| ! rows="$(jq -r '.data.viewer.projectsV2.nodes | sort_by(-.number)[]
+			| (.title | sub(" kanban$"; "")) as $tr
+			| [.repositories.nodes[].nameWithOwner | split("/")[1]] as $rs
+			| [.number, .closed, .title, (($rs | map(select(. == $tr)) | first) // $rs[0] // "")] | @tsv' <<<"$json" 2>/dev/null)"; then
+		ROADMAP_BOARDS_ERROR="UNKNOWN: board discovery failed"
+		return 1
+	fi
+	[[ "$(jq -r '.data.viewer.projectsV2.pageInfo.hasNextPage' <<<"$json")" == "true" ]] \
+		&& ROADMAP_BOARDS_REPORT+="board discovery: UNKNOWN — more than 50 projects, the tail was not enumerated"$'\n'
+	while IFS=$'\t' read -r num closed title repo; do
+		[[ -n "$num" ]] || continue
+		if [[ "$closed" == "true" ]]; then
+			ROADMAP_BOARDS_REPORT+="board $login/$num ($title): skipped — project is closed"$'\n'
+		elif [[ ",${excl// /,}," == *",$num,"* ]]; then
+			ROADMAP_BOARDS_REPORT+="board $login/$num ($title): skipped — excluded by ROADMAP_BOARDS_EXCLUDE"$'\n'
+		elif [[ -n "$repo" ]]; then
+			ROADMAP_BOARDS+=("$login|$num|$repo")
+		elif [[ "$title" =~ ^(.+)\ kanban$ ]]; then
+			ROADMAP_BOARDS+=("$login|$num|${BASH_REMATCH[1]}")
+		else
+			ROADMAP_BOARDS_REPORT+="board $login/$num ($title): UNKNOWN — no linked repo and no \"<repo> kanban\" title"$'\n'
+		fi
+	done <<<"$rows"
+	if [[ -r "$cwd/.github/roadmap-board" ]] && override="$(tr -d '[:space:]' <"$cwd/.github/roadmap-board")" \
+		&& [[ "$override" =~ ^[0-9]+$ ]]; then
+		repo="$(basename "$(git -C "$cwd" remote get-url origin 2>/dev/null)" .git)"
+		for entry in ${ROADMAP_BOARDS[@]+"${ROADMAP_BOARDS[@]}"}; do
+			[[ "${entry##*|}" == "$repo" ]] || kept+=("$entry")
+		done
+		ROADMAP_BOARDS=(${kept[@]+"${kept[@]}"} "$login|$override|$repo")
+	fi
+	ROADMAP_BOARDS_REPORT="$(printf '%s' "$ROADMAP_BOARDS_REPORT" | sed '/^$/d')"
+	return 0
+}
+
 
 owner_repo() {
 	gh repo view --json owner,name -q '.owner.login + " " + .name' 2>/dev/null
@@ -543,8 +614,9 @@ _kb_run_kind() {
 kanban_boards_unknown() {
 	local entry owner project repo lines=""
 	KANBAN_BOARDS_REPORT=""
-	if ! declare -p ROADMAP_BOARDS >/dev/null 2>&1 || ((${#ROADMAP_BOARDS[@]} == 0)); then
-		KANBAN_BOARDS_REPORT="UNKNOWN: ROADMAP_BOARDS is empty or not loaded — no board was swept"
+	# No discovery here: this runs when the budget gate stopped the sweep, so it must not call gh.
+	if ((${#ROADMAP_BOARDS[@]} == 0)); then
+		KANBAN_BOARDS_REPORT="${ROADMAP_BOARDS_ERROR:-UNKNOWN: board discovery failed — $1}"
 		return 0
 	fi
 	for entry in "${ROADMAP_BOARDS[@]}"; do
@@ -584,7 +656,7 @@ KANBAN_CALLS_PER_RECONCILE=6
 KANBAN_RECONCILE_KINDS=(in_review closed stale offboard)
 kanban_fanout_cost() {
 	local n=0
-	declare -p ROADMAP_BOARDS >/dev/null 2>&1 && n=${#ROADMAP_BOARDS[@]}
+	n=${#ROADMAP_BOARDS[@]}
 	echo $((n * ${#KANBAN_RECONCILE_KINDS[@]} * KANBAN_CALLS_PER_RECONCILE))
 }
 
@@ -687,8 +759,9 @@ reconcile_kanban_boards() {
 	local kind="$1" cwd="${2:-.}" lines="" status=0 entry owner project repo rc moved detail num
 	local entry_shape='^[^|]+\|[0-9]+\|[^|]+$' skipped_file="" skipped=() stamp_file="" started
 	KANBAN_BOARDS_REPORT=""
-	if ! declare -p ROADMAP_BOARDS >/dev/null 2>&1 || ((${#ROADMAP_BOARDS[@]} == 0)); then
-		KANBAN_BOARDS_REPORT="UNKNOWN: ROADMAP_BOARDS is empty or not loaded — no board was swept"
+	discover_roadmap_boards "$cwd" || true
+	if ((${#ROADMAP_BOARDS[@]} == 0)); then
+		KANBAN_BOARDS_REPORT="${ROADMAP_BOARDS_ERROR:-UNKNOWN: no board discovered} — no board was swept"
 		return 1
 	fi
 	skipped_file="$(_kb_skipped_file "$cwd")" || skipped_file=""
@@ -769,8 +842,9 @@ reconcile_kanban_boards() {
 kanban_stale_cards_rest() {
 	local entry owner project repo field rows out="" stamp stamp_file="" slug num closed_at status workflow_boards=""
 	stamp_file="$(_kb_stamp_file "${1:-.}")" || stamp_file=""
-	if ! declare -p ROADMAP_BOARDS >/dev/null 2>&1 || ((${#ROADMAP_BOARDS[@]} == 0)); then
-		echo "stale cards: UNKNOWN — ROADMAP_BOARDS is empty or not loaded; no board was checked"
+	discover_roadmap_boards "${1:-.}" || true
+	if ((${#ROADMAP_BOARDS[@]} == 0)); then
+		echo "stale cards: ${ROADMAP_BOARDS_ERROR:-UNKNOWN: no board discovered}; no board was checked"
 		return 0
 	fi
 	for entry in "${ROADMAP_BOARDS[@]}"; do
