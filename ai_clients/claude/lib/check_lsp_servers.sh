@@ -6,8 +6,8 @@
 #
 # The command comes from the plugin's own manifest, never from its name:
 #   1. <marketplace>/.claude-plugin/marketplace.json  (plugins[].lspServers)
-#   2. the plugin's user-scope installPath from installed_plugins.json (else
-#      the most recent record, else the newest cache/<marketplace>/<plugin>/<ver>) + /.claude-plugin/plugin.json
+#   2. the user-scope installPath in installed_plugins.json + /.claude-plugin/plugin.json
+#      (never a guessed version: no user-scope record means unresolved) + /.claude-plugin/plugin.json
 # An enabled plugin with no resolvable manifest fails too: it declares no
 # server, so nothing can ever start it.
 
@@ -43,15 +43,9 @@ lsp_declared_commands() {
     local -a list_dirs=()
     if [ -f "$installed" ]; then
         path_install="$(jq -r --arg k "$plugin_key" '
-            (.plugins[$k] // []) | (map(select(.scope == "user")) | .[0])
-            // (sort_by(.lastUpdated // "") | last) | .installPath // empty' "$installed" 2>/dev/null)"
+            [.plugins[$k][]? | select(.scope == "user")][0].installPath // empty' "$installed" 2>/dev/null)"
     fi
-    if [ -n "$path_install" ]; then
-        list_dirs=("$path_install")
-    else
-        # shellcheck disable=SC2012
-        list_dirs=("$(ls -d "$dir/cache/$market/$name"/*/ 2>/dev/null | sort -V | tail -n 1)")
-    fi
+    [ -z "$path_install" ] || list_dirs=("$path_install")
     for path_install in "${list_dirs[@]}"; do
         manifest="$path_install/.claude-plugin/plugin.json"
         if [ -f "$manifest" ]; then
@@ -81,7 +75,7 @@ check_lsp_servers() {
         [ -n "$plugin_key" ] || continue
         str_cmds="$(lsp_declared_commands "$plugin_key" | sort -u)"
         if [ -z "$str_cmds" ]; then
-            print_status "error" "$plugin_key is enabled but declares no server (no manifest)"
+            print_status "error" "$plugin_key is enabled but declares no server (no marketplace entry, and its active user-scope install cannot be determined)"
             int_bad=$((int_bad + 1))
             continue
         fi
