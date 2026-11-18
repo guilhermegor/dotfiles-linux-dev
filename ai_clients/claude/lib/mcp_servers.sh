@@ -109,8 +109,12 @@ _install_tavily() {
     print_status "success" "tavily MCP registered (HTTP transport, user scope)"
 }
 
+mcp_registered() {
+    claude mcp list 2>/dev/null | grep -Eq "^$1([[:space:]:]|\$)"
+}
+
 _install_playwright_mcp() {
-    if claude mcp list 2>/dev/null | grep -q '^playwright'; then
+    if mcp_registered playwright; then
         print_status "info" "playwright MCP already registered — skipping"
         return 0
     fi
@@ -123,7 +127,7 @@ _install_playwright_mcp() {
 }
 
 _install_chrome_devtools_mcp() {
-    if claude mcp list 2>/dev/null | grep -Eq '^chrome-devtools([[:space:]:]|$)'; then
+    if mcp_registered chrome-devtools; then
         print_status "info" "chrome-devtools MCP already registered — skipping"
         return 0
     fi
