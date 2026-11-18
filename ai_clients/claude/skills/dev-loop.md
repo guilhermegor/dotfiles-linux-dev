@@ -279,7 +279,11 @@ at `origin/HEAD` of `~/github/<name>` (`$ROADMAP_CHECKOUT_ROOT`), whose `origin`
 and whose `origin/HEAD` must resolve (`git remote set-head origin -a` sets it), at the freshness of
 its last fetch. A Backlog card moved by the `state:blocked` label records that label as its
 "Blocked by", so it waits for a person to clear it. A board that reconciled clean and a board nobody swept must never look the same. A board is
-found by linking its repo or naming it `<repo> kanban`; there is no list to edit.
+found by linking its repo or naming it `<repo> kanban`; there is no list to edit. Two runtime
+knobs remain, each leaving a report line: `ROADMAP_BOARDS_EXCLUDE` (project numbers, set in the
+`env` block of `ai_clients/claude/settings.json`; `2` keeps the unmaintained stpstone board out,
+#531) and a `.github/roadmap-board` file holding one project number, which replaces the discovered
+board for that checkout's repo.
 
 **The kanban reconcile covers the same boards (dotfiles-linux-dev#887).** The sweep's items `[7]`
 (open PR -> In review), `[9]` (closed -> Done, No Status -> placed) and `[11]` (closed-unmerged PR ->

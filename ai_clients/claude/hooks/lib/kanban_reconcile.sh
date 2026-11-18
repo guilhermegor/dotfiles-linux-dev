@@ -108,7 +108,7 @@ discover_roadmap_boards() {
 		return
 	fi
 	((${#ROADMAP_BOARDS[@]} > 0)) && return 0
-	local cwd="${1:-.}" json rows login num closed title repo foreign override entry kept=()
+	local cwd="${1:-.}" json rows login num closed title repo foreign override entry slug slug_owner kept=()
 	ROADMAP_BOARDS_LOADED=1
 	ROADMAP_BOARDS_REPORT=""
 	ROADMAP_BOARDS_ERROR=""
@@ -143,18 +143,27 @@ discover_roadmap_boards() {
 	if [[ -r "$cwd/.github/roadmap-board" ]] && override="$(tr -d '[:space:]' <"$cwd/.github/roadmap-board")" \
 		&& [[ "$override" =~ ^[0-9]+$ ]]; then
 		override=$((10#$override))
-		closed="$(jq -r --argjson n "$override" '[.data.viewer.projectsV2.nodes[] | select(.number == $n) | .closed] | first // false' <<<"$json")"
-		if [[ "$closed" == "true" ]]; then
+		closed="$(jq -r --argjson n "$override" '[.data.viewer.projectsV2.nodes[] | select(.number == $n) | .closed | tostring] | first // "missing"' <<<"$json")"
+		# Owner = the path segment before the repo, whatever the remote spelling (https, scp-style,
+		# an ssh host alias such as github-work:owner/repo); logins compare case-insensitively.
+		slug="$(git -C "$cwd" remote get-url origin 2>/dev/null)" || slug=""
+		slug="${slug%.git}"
+		repo="${slug##*/}"
+		slug_owner="${slug%/*}"
+		slug_owner="${slug_owner##*[:/]}"
+		if [[ "$closed" == "missing" ]]; then
+			ROADMAP_BOARDS_REPORT+="board $login/$override: UNKNOWN — .github/roadmap-board names a project the viewer does not have"$'\n'
+		elif [[ "$closed" == "true" ]]; then
 			ROADMAP_BOARDS_REPORT+="board $login/$override: skipped — .github/roadmap-board names a closed project"$'\n'
 		elif [[ ",${excl// /,}," == *",$override,"* ]]; then
 			ROADMAP_BOARDS_REPORT+="board $login/$override: skipped — .github/roadmap-board names a project excluded by ROADMAP_BOARDS_EXCLUDE"$'\n'
-		elif slug="$(git -C "$cwd" remote get-url origin 2>/dev/null)" && slug="${slug%.git}" \
-			&& slug="${slug##*github.com[:/]}" && [[ "${slug%%/*}" != "$login" ]]; then
+		elif [[ -z "$slug" || -z "$repo" || -z "$slug_owner" ]]; then
+			ROADMAP_BOARDS_REPORT+="board $login/$override: UNKNOWN — .github/roadmap-board sits in a checkout with no readable origin remote"$'\n'
+		elif [[ "${slug_owner,,}" != "${login,,}" ]]; then
 			# Entries carry one owner for project and repo, so a clone of another account's repo
 			# would be queried under the viewer's name (#1036 review).
-			ROADMAP_BOARDS_REPORT+="board $login/$override: UNKNOWN — .github/roadmap-board sits in a clone of $slug, a repo owned by another account"$'\n'
+			ROADMAP_BOARDS_REPORT+="board $login/$override: UNKNOWN — .github/roadmap-board sits in a clone of $slug_owner/$repo, a repo owned by another account"$'\n'
 		else
-			repo="$(basename "$(git -C "$cwd" remote get-url origin 2>/dev/null)" .git)"
 			for entry in ${ROADMAP_BOARDS[@]+"${ROADMAP_BOARDS[@]}"}; do
 				[[ "${entry##*|}" == "$repo" ]] || kept+=("$entry")
 			done

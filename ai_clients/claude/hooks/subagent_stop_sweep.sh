@@ -544,11 +544,18 @@ sweep_roadmap_boards() {
 # sweep_kanban_boards KIND CWD REPO
 # Prints reconcile_kanban_boards' per-board report for KIND (in_review|closed|stale|offboard): every declared
 # board, never only the repo the sweep runs in (dotfiles-linux-dev#887). Boards are discovered at
-# runtime (#1022), so a repo "missing from the registry" cannot happen; REPO stays for the callers.
+# runtime (#1022), but a repo can still have none: no linked project and no "<repo> kanban" title,
+# or an owner other than the gh viewer. That stays a `finding:` (dotfiles-linux-dev#921), not
+# silence. A failed discovery already printed its own UNKNOWN line, so it adds no finding.
 sweep_kanban_boards() {
-	local kind="$1" cwd="$2"
+	local kind="$1" cwd="$2" repo="$3" entry
 	reconcile_kanban_boards "$kind" "$cwd" || true
 	printf '%s\n' "$KANBAN_BOARDS_REPORT"
+	[[ -n "${ROADMAP_BOARDS_ERROR:-}" ]] && return 0
+	for entry in ${ROADMAP_BOARDS[@]+"${ROADMAP_BOARDS[@]}"}; do
+		[[ "${entry%%|*}/${entry##*|}" == "$repo" ]] && return 0
+	done
+	echo "finding: $repo has no discovered kanban board — not swept; link it to a project, title one \"<repo> kanban\", or name one in .github/roadmap-board"
 }
 
 # sweep_issue_hygiene REPO — report-only backstop for issue_template_guard.sh (#714): open issues
@@ -640,19 +647,19 @@ $(sweep_stale_cards_gated "$cwd")"
 		echo "[6] PR-unclaimed issues (narrower than dispatch_plan.py — see its own [d]/[x])"
 		free="$(free_dispatch_surface "$repo")"
 		format_free_surface_report "$free"
-		echo "[7] kanban reconcile, every declared board (open PRs -> In review)"
+		echo "[7] kanban reconcile, every discovered board (open PRs -> In review)"
 		sweep_kanban_boards in_review "$cwd" "$repo"
 		echo "[8] roadmap boards (discovered at runtime, lib/roadmap_unblock.sh)"
 		sweep_roadmap_boards
-		echo "[9] kanban reconcile, every declared board (closed issues -> Done, No Status -> placed)"
+		echo "[9] kanban reconcile, every discovered board (closed issues -> Done, No Status -> placed)"
 		sweep_kanban_boards closed "$cwd" "$repo"
 		echo "[9b] closed issues whose card is not in Done (REST only, runs while GraphQL is down)"
 		kanban_stale_cards_rest "$cwd"
 		echo "[10] issue hygiene (surface block + milestone, report only)"
 		sweep_issue_hygiene "$repo"
-		echo "[11] kanban reconcile, every declared board (closed-unmerged PR -> Ready; idle In progress, report only)"
+		echo "[11] kanban reconcile, every discovered board (closed-unmerged PR -> Ready; idle In progress, report only)"
 		sweep_kanban_boards stale "$cwd" "$repo"
-		echo "[12] kanban reconcile, every declared board (open issues with no card -> added with derived column)"
+		echo "[12] kanban reconcile, every discovered board (open issues with no card -> added with derived column)"
 		sweep_kanban_boards offboard "$cwd" "$repo"
 	)"
 

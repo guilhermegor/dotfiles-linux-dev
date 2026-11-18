@@ -874,13 +874,31 @@ declared_board_numbers() {
     [[ "$output" != *"note:"* ]]
 }
 
-@test "sweep_kanban_boards: no 'no ROADMAP_BOARDS entry' finding exists any more (#1022)" {
+@test "sweep_kanban_boards: a repo with no discovered board is a finding (#921, #1036 review)" {
     export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
     reconcile_kanban() { RECONCILE_KANBAN_REPORT=""; }
     ROADMAP_BOARDS=("o|13|declared")
     declared_board_numbers
     run sweep_kanban_boards in_review "$REPO" "o/undiscovered"
     [[ "$output" == *"board o/13 (declared): ok — nothing to change"* ]]
+    [[ "$output" == *"finding: o/undiscovered has no discovered kanban board"* ]]
+}
+
+@test "sweep_kanban_boards: a same-named repo under another owner has no board (#921)" {
+    export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
+    reconcile_kanban() { RECONCILE_KANBAN_REPORT=""; }
+    ROADMAP_BOARDS=("o|13|greenfield")
+    declared_board_numbers
+    run sweep_kanban_boards in_review "$REPO" "other/greenfield"
+    [[ "$output" == *"finding: other/greenfield has no discovered kanban board"* ]]
+}
+
+@test "sweep_kanban_boards: the sweep's own discovered repo adds no finding" {
+    export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
+    reconcile_kanban() { RECONCILE_KANBAN_REPORT=""; }
+    ROADMAP_BOARDS=("o|13|declared")
+    declared_board_numbers
+    run sweep_kanban_boards in_review "$REPO" "o/declared"
     [[ "$output" != *"finding:"* ]]
 }
 

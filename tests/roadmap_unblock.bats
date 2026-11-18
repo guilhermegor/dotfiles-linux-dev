@@ -715,7 +715,8 @@ write_projects() {
  {"number":17,"title":"greenfield kanban","closed":false,"repositories":{"nodes":[]}},
  {"number":3,"title":"old board","closed":true,"repositories":{"nodes":[{"nameWithOwner":"guilhermegor/x"}]}},
  {"number":2,"title":"stpstone kanban","closed":false,"repositories":{"nodes":[{"nameWithOwner":"guilhermegor/stpstone"}]}},
- {"number":30,"title":"scratch","closed":false,"repositories":{"nodes":[]}}
+ {"number":30,"title":"scratch","closed":false,"repositories":{"nodes":[]}},
+ {"number":31,"title":"shared board","closed":false,"repositories":{"nodes":[{"nameWithOwner":"team/other"}]}}
 ]}}}}
 JSON
 }
@@ -817,6 +818,42 @@ run_discover() {
     [[ "$output" == *"board guilhermegor/31: skipped — .github/roadmap-board names a project excluded by ROADMAP_BOARDS_EXCLUDE"* ]]
 }
 
+@test "discovery: an override naming a project the viewer does not have is UNKNOWN (#1036 review)" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    git -C "$TEST_TMP" remote add origin https://github.com/guilhermegor/pure-schema-regimes.git
+    mkdir -p "$TEST_TMP/.github"
+    echo 99 > "$TEST_TMP/.github/roadmap-board"
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|99|"* ]]
+    [[ "$output" == *"BOARD guilhermegor|24|pure-schema-regimes"* ]]
+    [[ "$output" == *"board guilhermegor/99: UNKNOWN — .github/roadmap-board names a project the viewer does not have"* ]]
+}
+
+@test "discovery: an override in a checkout with no origin is UNKNOWN, never an empty repo field (#1036 review)" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    mkdir -p "$TEST_TMP/.github"
+    echo 31 > "$TEST_TMP/.github/roadmap-board"
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|31|"* ]]
+    [[ "$output" == *"board guilhermegor/31: UNKNOWN — .github/roadmap-board sits in a checkout with no readable origin remote"* ]]
+}
+
+@test "discovery: an override behind an ssh host alias with different owner casing is the viewer's (#1036 review)" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    git -C "$TEST_TMP" remote add origin github-work:GuilhermeGor/pure-schema-regimes.git
+    mkdir -p "$TEST_TMP/.github"
+    echo 31 > "$TEST_TMP/.github/roadmap-board"
+    run_discover
+    [[ "$output" == *"BOARD guilhermegor|31|pure-schema-regimes"* ]]
+    [[ "$output" != *"BOARD guilhermegor|24|"* ]]
+}
+
 @test "discovery: a linked repo owned by someone else is never read as the viewer's repo" {
     cat > "$TEST_TMP/projects.json" <<'JSON'
 {"data":{"viewer":{"login":"guilhermegor","projectsV2":{"pageInfo":{"hasNextPage":false},"nodes":[
@@ -869,7 +906,7 @@ JSON
     run_discover
     [[ "$output" == *"BOARD guilhermegor|24|a"* ]]
     [[ "$output" == *"BOARD guilhermegor|5|b"* ]]
-    [[ "$output" != *"not enumerated"* ]]
+    [[ "$output" == *"rc=0"* ]]
 }
 
 @test "registry sweep: an UNKNOWN discovery line turns the status unknown (#1036)" {
