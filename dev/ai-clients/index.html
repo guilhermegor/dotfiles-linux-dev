@@ -2333,7 +2333,7 @@ on them; <code>dev-loop</code> step 4c-fast is the procedure.</p>
 <p><code>subagent_stop_sweep.sh</code> items <code>[7]</code>/<code>[9]</code>/<code>[11]</code> used to reconcile only the repo the sweep ran in,
 so board 13 sat stale for a day while the loop ran in layouts-cvm. They now call
 <code>reconcile_kanban_boards in_review|closed|stale CWD</code> (<code>hooks/lib/kanban_reconcile.sh</code>) over
-<code>ROADMAP_BOARDS</code> (<code>lib/roadmap_unblock.sh</code>), never a list derived from the cwd. <strong>The roadmap list
+the boards discovered at runtime (<code>discover_roadmap_boards</code>, #1022), never a list derived from the cwd. <strong>The roadmap list
 is reused, not mirrored:</strong> a roadmap board and a repo's <code>&lt;repo&gt; kanban</code> board are the same project,
 and two lists could only disagree. Contract: one line per board, <code>ok — nothing to change</code>,
 <code>ok — N moved</code> or <code>UNKNOWN — &lt;why&gt;</code>; fail closed per board; the #445 latch is checked before every
