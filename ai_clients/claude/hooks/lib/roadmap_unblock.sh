@@ -597,31 +597,8 @@ reconcile_roadmap_unblock() {
 	return 0
 }
 
-# dotfiles-linux-dev#531: the declared set of boards the reconciler sweeps — "owner|project|repo" per
-# entry, the same shape as LESSON_STORES (lib/lesson_mirrors.sh). Before this, "every project this
-# operator tracks" was session memory: a board nobody passed was indistinguishable from a board
-# with nothing to unblock, since both report nothing.
-#
-# A board is absent BY DECLARATION, never by omission: stpstone (project 2) is excluded because
-# its repo is no longer maintained. To add a board, add a row; to drop one, delete the row and say
-# why here. `repo` is the board's own repo: it labels the report line and, for
-# reconcile_kanban_boards (lib/kanban_reconcile.sh, #887), names the "<repo> kanban" board. The
-# kanban reconcile sweeps this same list; do not add a second one.
-# shellcheck disable=SC2034 # read by reconcile_roadmap_boards below and by its callers' tests
-ROADMAP_BOARDS=(
-	"guilhermegor|22|pure-docs-br"
-	"guilhermegor|21|layouts-cvm"
-	"guilhermegor|19|opendata-rfb"
-	"guilhermegor|17|greenfield"
-	"guilhermegor|16|wwdates"
-	"guilhermegor|15|opendata-b3"
-	"guilhermegor|13|dotfiles-linux-dev"
-	"guilhermegor|9|opendata-cvm"
-	"guilhermegor|8|blueprintx"
-)
-
 # reconcile_roadmap_boards
-#   Runs reconcile_roadmap_unblock over every ROADMAP_BOARDS entry. Sets:
+#   Runs reconcile_roadmap_unblock over every discovered board (discover_roadmap_boards). Sets:
 #     RECONCILE_BOARDS_STATUS = ok | unknown   (unknown when ANY board — or the registry — is unreadable)
 #     RECONCILE_BOARDS_REPORT = one "board OWNER/N (repo): ..." line per board, ALWAYS, plus that
 #                               board's own item lines indented beneath it. A board that reconciled
@@ -639,12 +616,18 @@ reconcile_roadmap_boards() {
 	# Whole-entry shape, never per-field: `read` drops a trailing `|`, so
 	# `owner|17|repo|` would split cleanly and pass a field-by-field check.
 	local entry_shape='^[^|]+\|[0-9]+\|[^|]+$'
+	discover_roadmap_boards "${1:-.}" || true
 	if ((${#ROADMAP_BOARDS[@]} == 0)); then
 		# shellcheck disable=SC2034 # read by callers
 		RECONCILE_BOARDS_STATUS="unknown"
 		# shellcheck disable=SC2034 # read by callers
-		RECONCILE_BOARDS_REPORT="UNKNOWN: ROADMAP_BOARDS is empty — no board was swept"
+		RECONCILE_BOARDS_REPORT="${ROADMAP_BOARDS_ERROR:-UNKNOWN: no board discovered}${ROADMAP_BOARDS_REPORT:+$'\n'$ROADMAP_BOARDS_REPORT} — no board was swept"
 		return 1
+	fi
+	if [[ -n "$ROADMAP_BOARDS_REPORT" ]]; then
+		lines+="$ROADMAP_BOARDS_REPORT"$'\n'
+		# shellcheck disable=SC2034 # read by callers
+		[[ "$ROADMAP_BOARDS_REPORT" == *UNKNOWN* ]] && RECONCILE_BOARDS_STATUS="unknown"
 	fi
 	for entry in "${ROADMAP_BOARDS[@]}"; do
 		if [[ ! "$entry" =~ $entry_shape ]]; then

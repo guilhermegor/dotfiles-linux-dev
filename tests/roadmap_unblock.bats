@@ -196,6 +196,11 @@ case "\$1 \$2" in
                 exit 1
             fi
             echo '{"data":{"rateLimit":{"remaining":4999}}}'
+        elif printf '%s' "\$full" | grep -q 'projectsV2'; then
+            f="$TEST_TMP/projects.json"
+            if printf '%s' "\$full" | grep -q 'after=c1' && [ -f "$TEST_TMP/projects-2.json" ]; then f="$TEST_TMP/projects-2.json"; fi
+            [ -f "\$f" ] || exit 1
+            cat "\$f"
         elif printf '%s' "\$full" | grep -q 'items(first'; then
             f="$TEST_TMP/item-fallback.json"
             [ -f "\$f" ] || exit 1
@@ -701,13 +706,222 @@ run_boards() {
         printf '%s\n' \"\$RECONCILE_BOARDS_REPORT\"; echo REPORT_END" _ "$@"
 }
 
-@test "registry: declares the eight maintained boards and excludes stpstone (2) by declaration" {
-    run bash -c "source '$LIB'; printf '%s\n' \"\${ROADMAP_BOARDS[@]}\""
-    [ "$status" -eq 0 ]
-    for n in 8 9 13 15 16 17 21 22; do
-        [[ "$output" == *"guilhermegor|$n|"* ]]
-    done
-    [[ "$output" != *"guilhermegor|2|"* ]]
+# write_projects: a viewer.projectsV2 response (dotfiles-linux-dev#1022). 24 is linked; 17 is an
+# unlinked "<repo> kanban"; 3 is closed; 2 is open but excluded by env; 30 matches neither rule.
+write_projects() {
+    cat > "$TEST_TMP/projects.json" <<'JSON'
+{"data":{"viewer":{"login":"guilhermegor","projectsV2":{"pageInfo":{"hasNextPage":false},"nodes":[
+ {"number":24,"title":"pure-schema-regimes kanban","closed":false,"repositories":{"nodes":[{"nameWithOwner":"guilhermegor/pure-schema-regimes"}]}},
+ {"number":17,"title":"greenfield kanban","closed":false,"repositories":{"nodes":[]}},
+ {"number":3,"title":"old board","closed":true,"repositories":{"nodes":[{"nameWithOwner":"guilhermegor/x"}]}},
+ {"number":2,"title":"stpstone kanban","closed":false,"repositories":{"nodes":[{"nameWithOwner":"guilhermegor/stpstone"}]}},
+ {"number":30,"title":"scratch","closed":false,"repositories":{"nodes":[]}},
+ {"number":31,"title":"shared board","closed":false,"repositories":{"nodes":[{"nameWithOwner":"team/other"}]}}
+]}}}}
+JSON
+}
+
+# run_discover [ENV=VAL...]: discovery against the stubbed gh; prints rc, the boards, the report.
+run_discover() {
+    run env "$@" bash -c "source '$LIB'; discover_roadmap_boards '$TEST_TMP'; echo \"rc=\$?\"; \
+        printf 'BOARD %s\n' \"\${ROADMAP_BOARDS[@]}\"; echo \"ERR=\$ROADMAP_BOARDS_ERROR\"; \
+        printf '%s\n' \"\$ROADMAP_BOARDS_REPORT\""
+}
+
+@test "discovery: a linked open project is found (pure-schema-regimes kanban, 24)" {
+    write_projects
+    write_fake_gh
+    run_discover
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"BOARD guilhermegor|24|pure-schema-regimes"* ]]
+}
+
+@test "discovery: an unlinked '<repo> kanban' board is found by title (greenfield, 17)" {
+    write_projects
+    write_fake_gh
+    run_discover
+    [[ "$output" == *"BOARD guilhermegor|17|greenfield"* ]]
+}
+
+@test "discovery: a closed project is skipped with a report line" {
+    write_projects
+    write_fake_gh
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|3|"* ]]
+    [[ "$output" == *"board guilhermegor/3 (old board): skipped — project is closed"* ]]
+}
+
+@test "discovery: a board matching neither rule is reported UNKNOWN, not dropped silently" {
+    write_projects
+    write_fake_gh
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|30|"* ]]
+    [[ "$output" == *"board guilhermegor/30 (scratch): UNKNOWN — no linked repo and no \"<repo> kanban\" title"* ]]
+}
+
+@test "discovery: ROADMAP_BOARDS_EXCLUDE skips an open board with a report line" {
+    write_projects
+    write_fake_gh
+    run_discover ROADMAP_BOARDS_EXCLUDE=2
+    [[ "$output" != *"BOARD guilhermegor|2|"* ]]
+    [[ "$output" == *"board guilhermegor/2 (stpstone kanban): skipped — excluded by ROADMAP_BOARDS_EXCLUDE"* ]]
+    [[ "$output" == *"BOARD guilhermegor|24|"* ]]
+}
+
+@test "discovery: a .github/roadmap-board file overrides the discovered board for its repo" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    git -C "$TEST_TMP" remote add origin https://github.com/guilhermegor/pure-schema-regimes.git
+    mkdir -p "$TEST_TMP/.github"
+    echo 31 > "$TEST_TMP/.github/roadmap-board"
+    run_discover
+    [[ "$output" == *"BOARD guilhermegor|31|pure-schema-regimes"* ]]
+    [[ "$output" != *"BOARD guilhermegor|24|"* ]]
+}
+
+@test "discovery: an override in a clone of another account's repo is UNKNOWN, never re-owned" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    git -C "$TEST_TMP" remote add origin git@github.com:team/widget.git
+    mkdir -p "$TEST_TMP/.github"
+    echo 31 > "$TEST_TMP/.github/roadmap-board"
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|31|"* ]]
+    [[ "$output" == *"board guilhermegor/31: UNKNOWN — .github/roadmap-board sits in a clone of team/widget"* ]]
+}
+
+@test "discovery: an override naming a closed project is skipped with a report line, discovery kept" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    git -C "$TEST_TMP" remote add origin https://github.com/guilhermegor/pure-schema-regimes.git
+    mkdir -p "$TEST_TMP/.github"
+    echo 3 > "$TEST_TMP/.github/roadmap-board"
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|3|"* ]]
+    [[ "$output" == *"BOARD guilhermegor|24|pure-schema-regimes"* ]]
+    [[ "$output" == *"board guilhermegor/3: skipped — .github/roadmap-board names a closed project"* ]]
+}
+
+@test "discovery: an override naming an excluded project is skipped with a report line" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    git -C "$TEST_TMP" remote add origin https://github.com/guilhermegor/pure-schema-regimes.git
+    mkdir -p "$TEST_TMP/.github"
+    echo 31 > "$TEST_TMP/.github/roadmap-board"
+    run_discover ROADMAP_BOARDS_EXCLUDE=31
+    [[ "$output" != *"BOARD guilhermegor|31|"* ]]
+    [[ "$output" == *"BOARD guilhermegor|24|pure-schema-regimes"* ]]
+    [[ "$output" == *"board guilhermegor/31: skipped — .github/roadmap-board names a project excluded by ROADMAP_BOARDS_EXCLUDE"* ]]
+}
+
+@test "discovery: an override naming a project the viewer does not have is UNKNOWN (#1036 review)" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    git -C "$TEST_TMP" remote add origin https://github.com/guilhermegor/pure-schema-regimes.git
+    mkdir -p "$TEST_TMP/.github"
+    echo 99 > "$TEST_TMP/.github/roadmap-board"
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|99|"* ]]
+    [[ "$output" == *"BOARD guilhermegor|24|pure-schema-regimes"* ]]
+    [[ "$output" == *"board guilhermegor/99: UNKNOWN — .github/roadmap-board names a project the viewer does not have"* ]]
+}
+
+@test "discovery: an override in a checkout with no origin is UNKNOWN, never an empty repo field (#1036 review)" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    mkdir -p "$TEST_TMP/.github"
+    echo 31 > "$TEST_TMP/.github/roadmap-board"
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|31|"* ]]
+    [[ "$output" == *"board guilhermegor/31: UNKNOWN — .github/roadmap-board sits in a checkout with no readable origin remote"* ]]
+}
+
+@test "discovery: an override behind an ssh host alias with different owner casing is the viewer's (#1036 review)" {
+    write_projects
+    write_fake_gh
+    git -C "$TEST_TMP" init -q
+    git -C "$TEST_TMP" remote add origin github-work:GuilhermeGor/pure-schema-regimes.git
+    mkdir -p "$TEST_TMP/.github"
+    echo 31 > "$TEST_TMP/.github/roadmap-board"
+    run_discover
+    [[ "$output" == *"BOARD guilhermegor|31|pure-schema-regimes"* ]]
+    [[ "$output" != *"BOARD guilhermegor|24|"* ]]
+}
+
+@test "discovery: a linked repo owned by someone else is never read as the viewer's repo" {
+    cat > "$TEST_TMP/projects.json" <<'JSON'
+{"data":{"viewer":{"login":"guilhermegor","projectsV2":{"pageInfo":{"hasNextPage":false},"nodes":[
+ {"number":9,"title":"scratch","closed":false,"repositories":{"nodes":[{"nameWithOwner":"some-org/widget"}]}}]}}}}
+JSON
+    write_fake_gh
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|9|"* ]]
+    [[ "$output" == *"board guilhermegor/9 (scratch): UNKNOWN"* ]]
+}
+
+@test "discovery: a project linked only to a foreign repo is UNKNOWN even with a matching title" {
+    cat > "$TEST_TMP/projects.json" <<'JSON'
+{"data":{"viewer":{"login":"guilhermegor","projectsV2":{"pageInfo":{"hasNextPage":false},"nodes":[
+ {"number":7,"title":"widget kanban","closed":false,"repositories":{"nodes":[{"nameWithOwner":"team/widget"}]}}]}}}}
+JSON
+    write_fake_gh
+    run_discover
+    [[ "$output" != *"BOARD guilhermegor|7|"* ]]
+    [[ "$output" == *"board guilhermegor/7 (widget kanban): UNKNOWN — linked only to team/widget, a repo owned by another account"* ]]
+}
+
+@test "stale cards: a latched sweep with no boards prints the cached discovery report, no new query" {
+    run bash -c "source '$LIB'; gh() { echo GH_CALLED >&2; return 1; }; gh_budget_latch_active() { return 0; }; \
+        ROADMAP_BOARDS_LOADED=1; ROADMAP_BOARDS_REPORT='board guilhermegor/3 (old board): skipped — project is closed'; \
+        kanban_stale_cards_rest '$TEST_TMP' 2>&1"
+    [[ "$output" == *"GraphQL budget latch active"* ]]
+    [[ "$output" == *"board guilhermegor/3 (old board): skipped — project is closed"* ]]
+    [[ "$output" != *GH_CALLED* ]]
+}
+
+@test "discovery: a failed query is UNKNOWN: board discovery failed, with no boards" {
+    write_fake_gh
+    run_discover
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"ERR=UNKNOWN: board discovery failed"* ]]
+    [[ "$output" != *"BOARD "*"|"* ]]
+}
+
+@test "discovery: follows the cursor so a second page of projects is enumerated (#1036)" {
+    cat > "$TEST_TMP/projects.json" <<'JSON'
+{"data":{"viewer":{"login":"guilhermegor","projectsV2":{"pageInfo":{"hasNextPage":true,"endCursor":"c1"},"nodes":[
+ {"number":24,"title":"a kanban","closed":false,"repositories":{"nodes":[{"nameWithOwner":"guilhermegor/a"}]}}]}}}}
+JSON
+    cat > "$TEST_TMP/projects-2.json" <<'JSON'
+{"data":{"viewer":{"login":"guilhermegor","projectsV2":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[
+ {"number":5,"title":"b kanban","closed":false,"repositories":{"nodes":[{"nameWithOwner":"guilhermegor/b"}]}}]}}}}
+JSON
+    write_fake_gh
+    run_discover
+    [[ "$output" == *"BOARD guilhermegor|24|a"* ]]
+    [[ "$output" == *"BOARD guilhermegor|5|b"* ]]
+    [[ "$output" == *"rc=0"* ]]
+}
+
+@test "registry sweep: an UNKNOWN discovery line turns the status unknown (#1036)" {
+    write_projects
+    write_fake_gh
+    run bash -c "source '$LIB'; reconcile_roadmap_boards '$TEST_TMP' >/dev/null; echo \"STATUS=\$RECONCILE_BOARDS_STATUS\""
+    [[ "$output" == *"STATUS=unknown"* ]]
+}
+
+@test "discovery: one query per process, however many readers ask" {
+    write_projects
+    write_fake_gh
+    run bash -c "source '$LIB'; discover_roadmap_boards; discover_roadmap_boards; discover_roadmap_boards; \
+        grep -c projectsV2 '$GH_LOG'"
+    [ "${lines[-1]}" = "1" ]
 }
 
 @test "registry sweep: one line per board, clean boards included, every board visited" {
@@ -736,12 +950,12 @@ run_boards() {
     [[ "$output" == *"unblocked owner/repo#3"* ]]
 }
 
-@test "registry sweep: an empty registry is UNKNOWN, never 'nothing to unblock'" {
+@test "registry sweep: a failed discovery is UNKNOWN, never 'nothing to unblock'" {
     write_fake_gh
     run_boards
     [[ "$output" == *"rc=1"* ]]
     [[ "$output" == *"STATUS=unknown"* ]]
-    [[ "$output" == *"UNKNOWN: ROADMAP_BOARDS is empty"* ]]
+    [[ "$output" == *"UNKNOWN: board discovery failed"* ]]
     refute_gh "project item-list"
 }
 

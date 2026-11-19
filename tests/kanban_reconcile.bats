@@ -857,14 +857,14 @@ write_stamp() {
 
 @test "stale cards: an empty registry is UNKNOWN, never 'none' (#921)" {
     run env bash -c "source '$LIB'; ROADMAP_BOARDS=(); gh() { return 1; }; kanban_stale_cards_rest"
-    [[ "$output" == *"UNKNOWN — ROADMAP_BOARDS is empty"* ]]
+    [[ "$output" == *"UNKNOWN: board discovery failed"* ]]
     [[ "$output" != *"none"* ]]
 }
 
 @test "boards: an empty or missing registry is UNKNOWN, never a clean sweep" {
-    run_boards in_review "$TEST_TMP"
+    run_boards in_review "$TEST_TMP" -- 'gh() { return 1; }'
     [[ "$output" == *"rc=1"* ]]
-    [[ "$output" == *"UNKNOWN: ROADMAP_BOARDS is empty"* ]]
+    [[ "$output" == *"UNKNOWN: board discovery failed"* ]]
 }
 
 @test "boards: a malformed registry entry is UNKNOWN and the next board is still swept" {

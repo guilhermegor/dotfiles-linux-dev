@@ -504,6 +504,8 @@ gh_budget_gate() {
 		BUDGET_GATE_REASON="403 latch active — GitHub API budget still exhausted"
 		return 1
 	fi
+	# One GraphQL point, only past the latch check; a failure is cached and reported UNKNOWN (#1022).
+	discover_roadmap_boards "${cwd:-.}" || true
 	local floor
 	floor="$(kanban_fanout_cost)"
 	((floor < 5)) && floor=5
@@ -541,16 +543,19 @@ sweep_roadmap_boards() {
 
 # sweep_kanban_boards KIND CWD REPO
 # Prints reconcile_kanban_boards' per-board report for KIND (in_review|closed|stale|offboard): every declared
-# board, never only the repo the sweep runs in (dotfiles-linux-dev#887). A repo absent from the
-# registry is a `finding:` (dotfiles-linux-dev#921), not a `note:` the round report can skim past.
+# board, never only the repo the sweep runs in (dotfiles-linux-dev#887). Boards are discovered at
+# runtime (#1022), but a repo can still have none: no linked project and no "<repo> kanban" title,
+# or an owner other than the gh viewer. That stays a `finding:` (dotfiles-linux-dev#921), not
+# silence. A failed discovery already printed its own UNKNOWN line, so it adds no finding.
 sweep_kanban_boards() {
 	local kind="$1" cwd="$2" repo="$3" entry
 	reconcile_kanban_boards "$kind" "$cwd" || true
 	printf '%s\n' "$KANBAN_BOARDS_REPORT"
-	for entry in "${ROADMAP_BOARDS[@]}"; do
+	[[ -n "${ROADMAP_BOARDS_ERROR:-}" ]] && return 0
+	for entry in ${ROADMAP_BOARDS[@]+"${ROADMAP_BOARDS[@]}"}; do
 		[[ "${entry%%|*}/${entry##*|}" == "$repo" ]] && return 0
 	done
-	echo "finding: $repo has no ROADMAP_BOARDS entry — its kanban board (if it has one) was not swept; add \"<owner>|<N>|<repo>\" to ai_clients/claude/hooks/lib/roadmap_unblock.sh"
+	echo "finding: $repo has no discovered kanban board — not swept; link it to a project, title one \"<repo> kanban\", or name one in .github/roadmap-board"
 }
 
 # sweep_issue_hygiene REPO — report-only backstop for issue_template_guard.sh (#714): open issues
@@ -620,7 +625,7 @@ dispatch: free surface empty"
 		kanban_boards_unknown "latched — $BUDGET_GATE_REASON, board not swept"
 		emit "── sweep $(date -u '+%H:%M UTC') — $repo ──
 $BUDGET_GATE_REASON (dotfiles-linux-dev#445) — skipping this sweep, no further gh calls.
-kanban boards (declared: ROADMAP_BOARDS), none swept:
+kanban boards (discovered at runtime), none swept:
 $KANBAN_BOARDS_REPORT
 dispatch: UNKNOWN — $BUDGET_GATE_REASON
 $(sweep_stale_cards_gated "$cwd")"
@@ -642,19 +647,19 @@ $(sweep_stale_cards_gated "$cwd")"
 		echo "[6] PR-unclaimed issues (narrower than dispatch_plan.py — see its own [d]/[x])"
 		free="$(free_dispatch_surface "$repo")"
 		format_free_surface_report "$free"
-		echo "[7] kanban reconcile, every declared board (open PRs -> In review)"
+		echo "[7] kanban reconcile, every discovered board (open PRs -> In review)"
 		sweep_kanban_boards in_review "$cwd" "$repo"
-		echo "[8] roadmap boards (declared registry: ROADMAP_BOARDS in lib/roadmap_unblock.sh)"
+		echo "[8] roadmap boards (discovered at runtime, lib/roadmap_unblock.sh)"
 		sweep_roadmap_boards
-		echo "[9] kanban reconcile, every declared board (closed issues -> Done, No Status -> placed)"
+		echo "[9] kanban reconcile, every discovered board (closed issues -> Done, No Status -> placed)"
 		sweep_kanban_boards closed "$cwd" "$repo"
 		echo "[9b] closed issues whose card is not in Done (REST only, runs while GraphQL is down)"
 		kanban_stale_cards_rest "$cwd"
 		echo "[10] issue hygiene (surface block + milestone, report only)"
 		sweep_issue_hygiene "$repo"
-		echo "[11] kanban reconcile, every declared board (closed-unmerged PR -> Ready; idle In progress, report only)"
+		echo "[11] kanban reconcile, every discovered board (closed-unmerged PR -> Ready; idle In progress, report only)"
 		sweep_kanban_boards stale "$cwd" "$repo"
-		echo "[12] kanban reconcile, every declared board (open issues with no card -> added with derived column)"
+		echo "[12] kanban reconcile, every discovered board (open issues with no card -> added with derived column)"
 		sweep_kanban_boards offboard "$cwd" "$repo"
 	)"
 
