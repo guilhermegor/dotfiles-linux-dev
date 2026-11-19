@@ -528,6 +528,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#owner-decision-digest-sowner-decisions-dotfiles-linux-dev1033" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Owner-decision digest (s:owner-decisions, dotfiles-linux-dev#1033)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#stop-guard-budget-and-plan-cache-dotfiles-linux-dev814" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1375,6 +1386,17 @@
     <span class="md-ellipsis">
       
         Kanban reconcile reaches every declared board (dotfiles-linux-dev#887)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#owner-decision-digest-sowner-decisions-dotfiles-linux-dev1033" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Owner-decision digest (s:owner-decisions, dotfiles-linux-dev#1033)
       
     </span>
   </a>
@@ -2342,6 +2364,13 @@ board and reports <code>UNKNOWN (latched)</code> (also on the sweep's early budg
 registry, so they run against the board repo's own checkout (cwd when its origin matches, else
 <code>$KANBAN_CHECKOUT_ROOT</code>/<code>~/github</code>/<code>&lt;repo&gt;</code>); no checkout is that board's UNKNOWN. A swept repo with no
 registry entry gets a <code>note:</code> line. Tests: <code>tests/kanban_reconcile.bats</code>, <code>tests/subagent_stop_sweep.bats</code>.</p>
+<h2 id="owner-decision-digest-sowner-decisions-dotfiles-linux-dev1033">Owner-decision digest (<code>s:owner-decisions</code>, dotfiles-linux-dev#1033)<a class="headerlink" href="#owner-decision-digest-sowner-decisions-dotfiles-linux-dev1033" title="Permanent link">&para;</a></h2>
+<p><code>s:owner-decisions</code> answers "what is pending from a decision of mine?" from data:
+<code>hooks/lib/owner_decisions.sh</code> lists flagged open PRs, <code>[blocker-kind: decision]</code> cards
+(<code>roadmap_unblock.sh</code>, reused), OFF Projects workflows, <code>REPORT-REMOTE</code> branches and <code>hitl</code> /
+decision-blocked issues. Standing exclusions live in <code>~/.claude/tasks/owner-decisions-exclusions.txt</code>,
+never in code. Source is flat <code>skills/owner-decisions.md</code> (the installer globs <code>*.md</code>); an unreadable
+source prints <code>UNREADABLE</code>, never "none". Tests: <code>tests/owner_decisions.bats</code>.</p>
 <h2 id="stop-guard-budget-and-plan-cache-dotfiles-linux-dev814">Stop-guard budget and plan cache (dotfiles-linux-dev#814)<a class="headerlink" href="#stop-guard-budget-and-plan-cache-dotfiles-linux-dev814" title="Permanent link">&para;</a></h2>
 <p><code>Stop</code> runs after every main-session turn, so the three Stop guards
 (<code>dispatch_free_surface_guard.sh</code>, <code>round_dispatch_guard.sh</code>, <code>review_fanout_guard.sh</code>) used to
