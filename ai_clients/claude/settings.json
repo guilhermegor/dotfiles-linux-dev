@@ -3,7 +3,8 @@
     "DISABLE_PROMPT_CACHING": "false",
     "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75"
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "75",
+    "ROADMAP_BOARDS_EXCLUDE": "2"
   },
   "model": "opus",
   "smallFastModel": "haiku",

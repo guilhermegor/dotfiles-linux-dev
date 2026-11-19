@@ -831,9 +831,10 @@ STUB
 
 @test "sweep_roadmap_boards: an empty registry reads UNKNOWN, never silence" {
     ROADMAP_BOARDS=()
+    gh() { return 1; }
     run sweep_roadmap_boards
     [ "$status" -eq 0 ]
-    [[ "$output" == *"UNKNOWN: ROADMAP_BOARDS is empty"* ]]
+    [[ "$output" == *"UNKNOWN: board discovery failed"* ]]
 }
 
 @test "main() wires item [8] into the report (main needs a live origin, so pin the wiring)" {
@@ -873,16 +874,32 @@ declared_board_numbers() {
     [[ "$output" != *"note:"* ]]
 }
 
-@test "sweep_kanban_boards: a repo missing from the registry is named, not swept out of existence" {
+@test "sweep_kanban_boards: a repo with no discovered board is a finding (#921, #1036 review)" {
     export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
     reconcile_kanban() { RECONCILE_KANBAN_REPORT=""; }
     ROADMAP_BOARDS=("o|13|declared")
     declared_board_numbers
-    run sweep_kanban_boards in_review "$REPO" "o/undeclared"
+    run sweep_kanban_boards in_review "$REPO" "o/undiscovered"
     [[ "$output" == *"board o/13 (declared): ok — nothing to change"* ]]
-    [[ "$output" == *"finding: o/undeclared has no ROADMAP_BOARDS entry"* ]]
-    [[ "$output" == *"ai_clients/claude/hooks/lib/roadmap_unblock.sh"* ]]
-    [[ "$output" != *"note: "*"ROADMAP_BOARDS"* ]]
+    [[ "$output" == *"finding: o/undiscovered has no discovered kanban board"* ]]
+}
+
+@test "sweep_kanban_boards: a same-named repo under another owner has no board (#921)" {
+    export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
+    reconcile_kanban() { RECONCILE_KANBAN_REPORT=""; }
+    ROADMAP_BOARDS=("o|13|greenfield")
+    declared_board_numbers
+    run sweep_kanban_boards in_review "$REPO" "other/greenfield"
+    [[ "$output" == *"finding: other/greenfield has no discovered kanban board"* ]]
+}
+
+@test "sweep_kanban_boards: the sweep's own discovered repo adds no finding" {
+    export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
+    reconcile_kanban() { RECONCILE_KANBAN_REPORT=""; }
+    ROADMAP_BOARDS=("o|13|declared")
+    declared_board_numbers
+    run sweep_kanban_boards in_review "$REPO" "o/declared"
+    [[ "$output" != *"finding:"* ]]
 }
 
 @test "sweep_kanban_boards: an active latch reports every board SKIPPED, no gh call" {
@@ -895,7 +912,7 @@ declared_board_numbers() {
     [[ "$output" == *"board o/9 (b): SKIPPED — GraphQL rate-limited"* ]]
 }
 
-@test "main(): a budget stop still names every declared board as UNKNOWN, not silence" {
+@test "main(): a budget stop reads board discovery UNKNOWN, never silence (#1022)" {
     export GH_BUDGET_LATCH_FILE="$REPO/latch"
     printf '%s\n' "$(($(date +%s) + 600))" > "$GH_BUDGET_LATCH_FILE"
     git remote set-url origin https://github.com/o/r.git
@@ -903,9 +920,7 @@ declared_board_numbers() {
     run bash "$SWEEP_SRC" <<<"{\"cwd\":\"$REPO\"}"
     [ "$status" -eq 1 ]
     ctx="$(jq -r '.hookSpecificOutput.additionalContext' <<<"$output")"
-    boards="$(bash -c "source '$REPO/lib/roadmap_unblock.sh'; printf '%s\n' \"\${ROADMAP_BOARDS[@]}\"" | wc -l)"
-    [ "$boards" -gt 0 ]
-    [ "$(grep -c '^board .*: UNKNOWN — latched' <<<"$ctx")" -eq "$boards" ]
+    [[ "$ctx" == *"UNKNOWN: board discovery failed"* ]]
 }
 
 @test "main() wires items [7], [9], [11], [12] through sweep_kanban_boards, not a single-repo reconcile" {
@@ -919,12 +934,4 @@ declared_board_numbers() {
 # undefined, so a claimed No-Status issue reads as Ready. Unsourced, nothing else would notice.
 @test "sweep sources the dispatch claims registry kanban_reconcile_done depends on" {
     declare -F dispatch_claimed_issues >/dev/null
-}
-
-@test "sweep_kanban_boards: a same-named repo under another owner is still undeclared" {
-    export GH_BUDGET_LATCH_FILE="$REPO/no-latch"
-    reconcile_kanban() { RECONCILE_KANBAN_REPORT=""; }
-    ROADMAP_BOARDS=("o|13|greenfield")
-    run sweep_kanban_boards in_review "$REPO" "other/greenfield"
-    [[ "$output" == *"finding: other/greenfield has no ROADMAP_BOARDS entry"* ]]
 }
