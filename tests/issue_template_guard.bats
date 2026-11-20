@@ -532,22 +532,24 @@ EOF"
 }
 
 # --- REST comments are not issue bodies (#1068) -----------------------------------------------
+# Only LITERAL endpoints are skipped: a shell-built one may expand past `?`/`#` into an issue
+# edit, so it stays judged (pinned in issue_template_guard_rest.bats).
 
-@test "allows a comment POST to issues/N/comments, literal or shell-built endpoint" {
+@test "allows a comment write to a literal issues/N/comments endpoint, with or without a leading slash" {
     for cmd in 'gh api repos/o/r/issues/5/comments -f body=hi' \
-               'gh api repos/o/r/issues/5/comments -X POST -F body=@/dev/null' \
-               'gh api repos/o/r/issues/comments/9 -X PATCH -f body=hi' \
-               'gh api repos/$R/issues/$N/comments -f body=hi' \
-               'gh api "repos/$R/issues/$N/comments" -f body=hi'; do
+               'gh api /repos/o/r/issues/5/comments -f body=hi' \
+               'gh api /repos/o/r/issues/5/comments -X POST -F body=@/dev/null' \
+               'gh api repos/o/r/issues/comments/9 -X PATCH -f body=hi'; do
         run bash -c "payload '$cmd' | '$GUARD'"
-        [ "$status" -eq 0 ]
+        [ "$status" -eq 0 ] || { echo "WRONGLY BLOCKED: $cmd"; return 1; }
     done
 }
 
 @test "still judges REST issue create and edit with a non-template body" {
     for cmd in 'gh api repos/o/r/issues -f title=x -f body=nope' \
-               'gh api repos/o/r/issues/5 -X PATCH -f body=nope'; do
+               'gh api repos/o/r/issues/5 -X PATCH -f body=nope' \
+               'gh api repos/o/r/issues/$N/comments -X PATCH -f body=nope'; do
         run bash -c "payload '$cmd' | '$GUARD'"
-        [ "$status" -eq 2 ]
+        [ "$status" -eq 2 ] || { echo "NOT BLOCKED: $cmd"; return 1; }
     done
 }
