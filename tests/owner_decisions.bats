@@ -309,7 +309,8 @@ _empty_boards_in_checkout() {
 @test "should-fail: an empty ROADMAP_BOARDS never scans the phantom repo /" {
     _empty_boards_in_checkout
     run owner_decisions_collect
-    ! grep -qx '/' "$SCANNED"
+    run grep -qx '/' "$SCANNED"
+    [ "$status" -ne 0 ]
 }
 
 @test "should-pass: an empty ROADMAP_BOARDS scans the cwd origin repo and reports the fallback" {
