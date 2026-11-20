@@ -79,6 +79,9 @@ teardown() {
     block="$(sed -n '/^install_blueprintx() *{/,/^}/p' "$REPO_ROOT/distro_config/install_coding_lib/languages.sh" \
         | sed -n '/already installed/,/return 0/p')"
     [[ "$block" == *'--only-upgrade -y blueprintx'* ]]
+    # DRY_RUN previews the apt refresh, and a failed apt-get is not masked by tee.
+    [[ "$block" == *'run_or_echo sudo apt update'* ]]
+    [[ "$block" == *'set -o pipefail; run_or_echo sudo apt-get install --only-upgrade'* ]]
 }
 
 @test "pgAdmin no longer skips the key import when a keyring exists" {
