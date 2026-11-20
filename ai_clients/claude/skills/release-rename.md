@@ -14,8 +14,9 @@ major bump — see step 2). You own the **order of operations**, the **local-sta
 **sweep**, which `s:release-py` does not cover. The publish mechanics themselves stay in
 `s:release-py`.
 
-Measured on three renames, `filings-cvm` / `filings-b3` / `filings-rfb` → `opendata-*`
-(2026-11-11/12), plus two queued (`pure-docs-br` → `purepii-br`, pure-docs-br#63; `wwdates` →
+Measured on four renames: `filings-cvm` / `filings-b3` / `filings-rfb` → `opendata-*`
+(2026-11-11/12) and `pure-docs-br` → `purepii-br` (purepii-br#63, shipped as purepii-br 2.0.0 on
+2026-11-19, shim-less break, 20-version backfill on both indexes), plus one queued (`wwdates` →
 `purecalendars`, wwdates#75). Every step below cost real time once.
 
 ⚠️ **The forge redirects, so nothing forces the issue.** GitHub redirects the old repo URL and old
@@ -162,9 +163,16 @@ rename, not the issue number; close the issue by hand after the install-verify (
 
 ## 12. Downstream
 
-- **Boards:** retitle each kanban board (`<new> kanban`) **and** update `ROADMAP_BOARDS` in
-  `ai_clients/claude/hooks/lib/roadmap_unblock.sh` — the reconcile broke while it still named
-  `filings-*` (dotfiles-linux-dev#981). Update the `commands/issue.md` example too.
+- **Boards:** retitle each kanban board to `<new> kanban`. That is the whole board step: no
+  source list names a repo any more. `discover_roadmap_boards`
+  (`ai_clients/claude/hooks/lib/kanban_reconcile.sh`, #1022) reads the authenticated user's
+  projects at runtime and takes the repo from the board's linked repository, falling back to the
+  `<repo> kanban` title only when none is linked. So a repo renamed on the forge is picked up by
+  itself (GitHub renames the linked repo with it), and a board left titled `<old> kanban` with no
+  linked repo is reported `UNKNOWN`, never swept under the old name (that was the
+  `filings-*` breakage, dotfiles-linux-dev#981). Verify by observable state: run the reconcile
+  and check the board's line names `<new>`. Only a board that must not be swept needs a manual
+  entry: `ROADMAP_BOARDS_EXCLUDE` (project numbers) or a `.github/roadmap-board` file in the repo.
 - **blueprintx** template pins, the profile README, greenfield specs
   (`.specs/_ecosystem/package-families.md`) and memory files.
 - **Consumers:** notify the sessions and projects that depend on the package, with **exact
@@ -177,7 +185,7 @@ rename, not the issue number; close the issue by hand after the install-verify (
 - Backfill: tags rebuilt, install-verified on Test PyPI and PyPI
 - Local state: worktrees repaired (count), project dir renamed
 - Sweep: forge-identifier hits changed, runtime markers deliberately kept, history left untouched
-- Downstream: boards, `ROADMAP_BOARDS`, consumers notified with versions
+- Downstream: boards retitled and seen by the reconcile, consumers notified with versions
 
 ## Do Not
 
