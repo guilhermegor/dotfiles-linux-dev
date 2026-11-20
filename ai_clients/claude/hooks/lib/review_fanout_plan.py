@@ -143,7 +143,7 @@ OPEN_PR_LIST_CAP = 200
 # (see `truncated_window`).
 PR_SELECTION = (
 	"number headRefOid baseRefName mergeStateStatus isDraft author{login} "
-	"reviews(last:100){totalCount nodes{state body commit{oid} author{login __typename}}} "
+	"reviews(last:100){totalCount nodes{state body submittedAt commit{oid} author{login __typename}}} "
 	"comments(last:100){totalCount nodes{body createdAt author{login}}} "
 	"commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{"
 	"__typename ... on CheckRun{name status conclusion} "
@@ -332,6 +332,7 @@ def _rest_review(review: dict) -> dict:
 	return {
 		"state": review.get("state"),
 		"body": review.get("body"),
+		"submittedAt": review.get("submitted_at"),
 		"commit": {"oid": review.get("commit_id")},
 		"author": {
 			"login": (review.get("user") or {}).get("login"),
@@ -785,7 +786,7 @@ def names_head(body: str, head: str) -> bool:
 
 
 def ladder_covered_at_head(pr: dict, head_time: datetime.datetime) -> bool:
-	"""True when a ladder attribution comment reviewed THIS head — channel 2.
+	"""True when a ladder attribution comment or Bot-authored review reviewed THIS head — channel 2.
 
 	Two independent AND clauses, neither subsuming the other: the marker's own
 	``Reviewed head:`` line names ``headRefOid`` (which commit), and it was posted strictly
@@ -799,6 +800,19 @@ def ladder_covered_at_head(pr: dict, head_time: datetime.datetime) -> bool:
 		if not LADDER_ATTRIBUTION_RE.search(body) or not names_head(body, head):
 			continue
 		posted = parse_ts(comment.get("createdAt"))
+		if posted is not None and posted > head_time:
+			return True
+	# The ladder can deliver the same marker as a submitted review authored by its App
+	# (dotfiles-linux-dev#1066). Bot-typed, never a login substring: a human can type the marker.
+	for review in pr.get("reviews") or []:
+		body = review.get("body") or ""
+		if (
+			(review.get("author") or {}).get("__typename") != "Bot"
+			or not LADDER_ATTRIBUTION_RE.search(body)
+			or not names_head(body, head)
+		):
+			continue
+		posted = parse_ts(review.get("submittedAt"))
 		if posted is not None and posted > head_time:
 			return True
 	return False
