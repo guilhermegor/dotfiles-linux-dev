@@ -75,7 +75,8 @@ fi
 # directly, whatever the board's title. The "<repo> kanban" title lookup is only the fallback for a
 # repo with no registry entry (e.g. the event hook, which never runs discovery). An explicit
 # .github/roadmap-board override is itself a registry number, so it is resolved the same way; a
-# number that names no board is UNKNOWN, never a silent fall back to the title.
+# number that names no board is UNKNOWN in the sweep and rc 3 (no-board no-op) from board_config, never a
+# silent fall back to the title.
 # #531 ("absent by declaration, never by omission") and #887 ("every board, never the cwd's") hold:
 # every viewer project is enumerated and a board leaves only through a visible report line.
 # One GraphQL query per 50 projects (the cursor is followed until hasNextPage is false), cached for the process; a failure is cached too, so the fan-out does
@@ -198,7 +199,8 @@ discover_board() {
 	# Optional 3rd arg: the discovered project NUMBER (#1043). When set it picks the board instead
 	# of the title, so a non-conventional title still resolves; absent = the title fallback.
 	local owner="$1" repo="$2" want="${3:-}" projects matches count num node fields field_id options config
-	projects="$(gh project list --owner "$owner" --format json 2>/dev/null)" || return 1
+	# --limit: gh lists 30 by default, but discovery enumerates every project, so a board past the 30th must still resolve.
+	projects="$(gh project list --owner "$owner" --limit 1000 --format json 2>/dev/null)" || return 1
 
 	matches="$(printf '%s' "$projects" \
 		| jq -r --arg t "$repo kanban" --arg n "$want" '.projects[]
