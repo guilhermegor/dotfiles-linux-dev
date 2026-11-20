@@ -1148,6 +1148,16 @@ install_blueprintx() {
         if [ -f /etc/apt/sources.list.d/blueprintx.list ]; then
             refresh_apt_keyring https://guilhermegor.github.io/blueprintx/apt/gpg.key \
                 /usr/share/keyrings/blueprintx.gpg --dearmor || return 1
+            # The early return used to skip upgrades, so a machine sat on 3.9.5 while new
+            # scaffolds missed fixes shipped upstream; keep the installed copy current.
+            run_or_echo sudo apt update 2>&1 | tee -a "$LOG_FILE"
+            # Subshell pipefail: the status must be apt-get's, not tee's.
+            if (set -o pipefail; run_or_echo sudo apt-get install --only-upgrade -y blueprintx 2>&1 | tee -a "$LOG_FILE"); then
+                print_status "success" "blueprintx is up to date"
+            else
+                print_status "error" "blueprintx upgrade failed — check $LOG_FILE"
+                return 1
+            fi
         fi
         return 0
     fi
