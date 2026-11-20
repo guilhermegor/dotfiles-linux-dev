@@ -2713,6 +2713,10 @@ field — <code>commands/act.md</code> with <code>name: c:act</code> still surfa
 - A skill may be an <strong>arm</strong> of another: <code>s:release</code> decides and delegates to
   <code>s:release-py</code> (PyPI mechanics) and <code>s:release-rename</code> (package-rename
   order of operations). Arms are loaded by the parent, never invoked directly
+- <code>s:pr-review-request</code> is standalone: it asks the operator for every input
+  (reviewers, issue/PR links, area, title language), makes no <code>gh</code> calls, keeps
+  no handle map or config, and only prints a Slack review-request draft.
+  <code>s:gh-create-pr</code> must not call it (dotfiles-linux-dev#1024)
 - Keep total token count low — skills load into every conversation that
   triggers them
 - Same target-qualification rule as commands, above (dotfiles-linux-dev#229) — a
