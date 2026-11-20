@@ -878,6 +878,10 @@ allowed-tools: Read Glob Grep  # space-separated for skills (no commas)
 - A skill may be an **arm** of another: `s:release` decides and delegates to
   `s:release-py` (PyPI mechanics) and `s:release-rename` (package-rename
   order of operations). Arms are loaded by the parent, never invoked directly
+- `s:pr-review-request` is standalone: it asks the operator for every input
+  (reviewers, issue/PR links, area, title language), makes no `gh` calls, keeps
+  no handle map or config, and only prints a Slack review-request draft.
+  `s:gh-create-pr` must not call it (dotfiles-linux-dev#1024)
 - Keep total token count low — skills load into every conversation that
   triggers them
 - Same target-qualification rule as commands, above (dotfiles-linux-dev#229) — a
