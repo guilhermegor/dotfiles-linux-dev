@@ -494,10 +494,10 @@ EOF
 
 # A ladder App delivers its marker as a submitted REVIEW, not a comment (#1066). The author is
 # not in the roster, so channel 1 cannot see it; channel 2 must, and only for a Bot.
-ladder_review_pr() { # PR HEAD MARKER_HEAD AUTHOR_TYPE
+ladder_review_pr() { # PR HEAD MARKER_HEAD AUTHOR_TYPE [SUBMITTED_SECONDS_AGO]
     stub_gh_prs <<EOF
 [{"number":$1,"headRefOid":"$2","mergeStateStatus":"BLOCKED","isDraft":false,
-  "reviews":[{"commit":{"oid":"$3"},"state":"COMMENTED","submittedAt":"$(ago 60)",
+  "reviews":[{"commit":{"oid":"$3"},"state":"COMMENTED","submittedAt":"$(ago ${5:-60})",
     "body":"Fallback review — runtime: claude, model: default (selected by: last-resort)\nReviewed head: $3",
     "author":{"login":"other-ladder[bot]","__typename":"$4"}}],
   "comments":[],
@@ -517,6 +517,13 @@ EOF
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "1067" ]
+}
+
+@test "a ladder-App review marker submitted before the head was pushed stays dispatchable (#1066)" {
+    ladder_review_pr 1069 cccc1111 cccc1111 Bot 7200
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "1069" ]
 }
 
 @test "a review marker from a non-Bot author is not coverage (#1066)" {
