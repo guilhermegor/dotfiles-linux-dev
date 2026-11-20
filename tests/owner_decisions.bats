@@ -293,3 +293,28 @@ _board_fixture_gh() {
     run owner_decisions_collect
     [[ "$output" == *"No pending owner decisions."* ]]
 }
+
+# Failed board discovery leaves ROADMAP_BOARDS empty; that must never scan the phantom repo "/" (#1059).
+_empty_boards_in_checkout() {
+    unset OWNER_DECISIONS_REPOS
+    ROADMAP_BOARDS=()
+    SCANNED="$BATS_TEST_TMPDIR/scanned.log"
+    : >"$SCANNED"
+    od_pr_json() { printf '%s\n' "$1" >>"$SCANNED"; printf '[]'; }
+    git init -q "$BATS_TEST_TMPDIR/co"
+    git -C "$BATS_TEST_TMPDIR/co" remote add origin git@github.com:acme/widgets.git
+    cd "$BATS_TEST_TMPDIR/co"
+}
+
+@test "should-fail: an empty ROADMAP_BOARDS never scans the phantom repo /" {
+    _empty_boards_in_checkout
+    run owner_decisions_collect
+    ! grep -qx '/' "$SCANNED"
+}
+
+@test "should-pass: an empty ROADMAP_BOARDS scans the cwd origin repo and reports the fallback" {
+    _empty_boards_in_checkout
+    run owner_decisions_collect
+    [ "$(cat "$SCANNED")" = "acme/widgets" ]
+    [[ "$output" == *"fallback"*"acme/widgets"* ]]
+}
