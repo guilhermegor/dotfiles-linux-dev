@@ -11,8 +11,8 @@
 #   od_pr_json REPO        open PRs whose body flags a judgement call
 #   od_board_report        Blocked cards whose blocker is `decision:` ("owner/repo#N<TAB>text")
 #   od_workflows_off       GitHub Projects workflows reported OFF ("owner/N<TAB>name")
-#   od_report_remote       branch_prune.sh REPORT-REMOTE branch names (dry-run, one repo:
-#                          OD_REPO_DIR, default $PWD)
+#   od_report_remote REPO  branch_prune.sh REPORT-REMOTE branch names (dry-run) of REPO's own
+#                          local checkout; rc 3 = no checkout, rc 1 = pass unreadable
 #   od_issue_json REPO     open issues labelled hitl, or state:blocked by a decision
 #
 # Every provider returns non-zero when its read fails; the row then becomes
@@ -25,11 +25,13 @@
 # cards. Asking "what is pending on me?" must not change a board.
 #
 # OWNER_DECISIONS_REPOS overrides the scanned repos (space-separated `owner/repo`); the default is
-# every ROADMAP_BOARDS entry as `<owner>/<repo>`.
+# every ROADMAP_BOARDS entry as `<owner>/<repo>` (discovered at runtime, #1022). Every scanned
+# repo gets its REPORT-REMOTE pass (#1046); one with no local checkout is UNREADABLE, never silent.
 #
 # Standing exclusions come from a DATA file, never hardcoded numbers: OWNER_DECISIONS_EXCLUDE_FILE
 # (default ~/.claude/tasks/owner-decisions-exclusions.txt), one ref per line — `owner/repo#N`,
-# `#N` (any repo), `branch:<name>` or `workflow:<owner/N>/<name>`; text after ` # ` is the reason.
+# `#N` (any repo), `branch:<name>` (any repo), `branch:<owner/repo>:<name>` or
+# `workflow:<owner/N>/<name>`; text after ` # ` is the reason.
 #
 # ⚠️ Routine loop actions (merge, release, dispatch) are never decisions: only the five sources
 # above produce rows, and none of them keys on a merge/release/dispatch event.
@@ -92,12 +94,19 @@ od_workflows_off() {
 	done
 }
 
-od_report_remote() {
-	local out
+od_report_remote() (
+	local repo="$1" dir out
+	# A GIT_DIR inherited from a hook or another repo's tooling would make every `git -C <dir>` in
+	# the lookup and the prune pass read THAT repo, so the unset is scoped to this subshell.
+	unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+		GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+	# The repo's own checkout (cwd when its origin matches, else $KANBAN_CHECKOUT_ROOT/<repo>,
+	# the lookup the kanban reconcile uses): rc 3 = none, never a guess at another repo's clone.
+	dir="$(_kb_checkout "${repo%%/*}" "${repo#*/}" "${OD_REPO_DIR:-$PWD}")" || return 3
 	# 0 = dry-run (prune_branches <repo> <apply 0|1>); rc 2 means the pass could not read the repo.
-	out="$(prune_branches "${OD_REPO_DIR:-$PWD}" 0 2>/dev/null)" || return 1
+	out="$(prune_branches "$dir" 0 2>/dev/null)" || return 1
 	sed -n 's/^REPORT-REMOTE \([^:]*\):.*/\1/p' <<<"$out"
-}
+)
 
 # Cells are single-line and pipe-free so a row can never break the table. The cap is a bash
 # substring, which counts characters (not bytes, as `cut -c` does) under a UTF-8 locale.
@@ -108,8 +117,16 @@ _od_cell() {
 
 # One TSV row per candidate: kind<TAB>ref<TAB>decision<TAB>context
 _od_rows() {
-	local repo json line
+	local repo json line rc why
 	local -a repos
+	# Boards are discovered, never listed (#1022); a failed or partial discovery is reported, not
+	# read as "no repos". Runs here (not in a subshell per source) so the result is shared.
+	if ! discover_roadmap_boards "$PWD"; then
+		printf 'unreadable\t-\tboard discovery (%s)\t\n' "${ROADMAP_BOARDS_ERROR:-failed}"
+	fi
+	while IFS= read -r line; do
+		[[ "$line" == *UNKNOWN* ]] && printf 'unreadable\t-\t%s\t\n' "$line"
+	done <<<"${ROADMAP_BOARDS_REPORT:-}"
 	read -ra repos <<<"${OWNER_DECISIONS_REPOS:-$(printf '%s\n' "${ROADMAP_BOARDS[@]}" | awk -F'|' '!seen[$1"/"$3]++ {print $1"/"$3}' | tr '\n' ' ')}"
 	for repo in "${repos[@]}"; do
 		if json="$(od_pr_json "$repo")" && jq -e 'type == "array"' <<<"$json" >/dev/null 2>&1; then
@@ -131,6 +148,15 @@ _od_rows() {
 		else
 			printf 'unreadable\t-\towner-decision issues of %s\t\n' "$repo"
 		fi
+		rc=0
+		line="$(od_report_remote "$repo")" || rc=$?
+		if ((rc == 0)); then
+			awk -v repo="$repo" 'NF {printf "branch\tbranch:%s:%s\tKeep or delete origin branch %s of %s?\tcontent missing from the default branch (REPORT-REMOTE)\n", repo, $0, $0, repo}' <<<"$line"
+		else
+			why=""
+			((rc == 3)) && why=" (no local checkout)"
+			printf 'unreadable\t-\tREPORT-REMOTE branches of %s%s\t\n' "$repo" "$why"
+		fi
 	done
 	if line="$(od_board_report)"; then
 		awk -F'\t' 'NF >= 2 {printf "card\t%s\tDecide on blocked card %s\t%s\n", $1, $1, $2}' <<<"$line"
@@ -141,11 +167,6 @@ _od_rows() {
 		awk -F'\t' 'NF >= 2 {printf "workflow\tworkflow:%s/%s\tEnable Projects workflow \"%s\" on board %s?\tReported OFF; the API cannot enable it\n", $1, $2, $2, $1}' <<<"$line"
 	else
 		printf 'unreadable\t-\tProjects workflows\t\n'
-	fi
-	if line="$(od_report_remote)"; then
-		awk 'NF {printf "branch\tbranch:%s\tKeep or delete origin branch %s?\tcontent missing from the default branch (REPORT-REMOTE)\n", $0, $0}' <<<"$line"
-	else
-		printf 'unreadable\t-\tREPORT-REMOTE branches\t\n'
 	fi
 }
 
@@ -163,6 +184,9 @@ _od_filter_excluded() {
 		# `#N` names an issue/PR number, so it never matches a branch or workflow ref.
 		case "$kind" in
 		pr | issue | card) grep -qxF -- "#${ref##*#}" <<<"$excl" && continue ;;
+		# A ref is `branch:<owner/repo>:<name>` (git forbids ':' in a branch name); a bare
+		# `branch:<name>` entry hides that name in every repo.
+		branch) grep -qxF -- "branch:${ref#branch:*:}" <<<"$excl" && continue ;;
 		esac
 		printf '%s\t%s\t%s\t%s\n' "$kind" "$ref" "$decision" "$context"
 	done

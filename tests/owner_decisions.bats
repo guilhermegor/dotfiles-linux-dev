@@ -18,6 +18,8 @@ setup() {
     od_board_report() { printf '%s\n' "$BOARD_REPORT"; }
     od_workflows_off() { printf '%s' "$WORKFLOWS"; }
     od_report_remote() { printf '%s' "$REMOTE"; }
+    # Board discovery is a live GraphQL read; a test that wants it overrides this stub.
+    discover_roadmap_boards() { return 0; }
 }
 
 @test "should-fail: a decision-blocked card IS listed" {
@@ -68,6 +70,7 @@ _board_fixture_gh() {
     ROADMAP_BOARDS=("owner|1|repo")
     gh() { echo "HTTP 401" >&2; return 1; }
     prune_branches() { return 2; }
+    _kb_checkout() { printf '%s\n' "$BATS_TEST_TMPDIR"; }
     run owner_decisions_collect
     [[ "$output" == *"UNREADABLE"*"open PRs of owner/repo"* ]]
     [[ "$output" == *"UNREADABLE"*"owner-decision issues of owner/repo"* ]]
@@ -183,4 +186,110 @@ _board_fixture_gh() {
     od_pr_json() { printf '%s\n' "$1" >>"$SEEN"; printf '[]'; }
     run owner_decisions_collect
     [ "$(cat "$SEEN")" = $'acme/tool\nguilhermegor/other' ]
+}
+
+# --- REPORT-REMOTE across every board repo (dotfiles-linux-dev#1046) ---
+
+@test "should-fail: REPORT-REMOTE branches of EVERY board repo are listed, tagged by repo" {
+    OWNER_DECISIONS_REPOS="acme/a acme/b"
+    od_report_remote() {
+        case "$1" in
+        acme/a) printf 'feat/shared\n' ;;
+        acme/b) printf 'feat/shared\nfix/only-b\n' ;;
+        esac
+    }
+    run owner_decisions_collect
+    [ "$(grep -c 'feat/shared' <<<"$output")" -eq 2 ]
+    [[ "$output" == *"branch:acme/a:feat/shared"* ]]
+    [[ "$output" == *"branch:acme/b:feat/shared"* ]]
+    [[ "$output" == *"branch:acme/b:fix/only-b"* ]]
+}
+
+@test "should-fail: a board repo with no checkout is UNREADABLE, the others still list" {
+    OWNER_DECISIONS_REPOS="acme/a acme/b"
+    od_report_remote() { [[ "$1" == acme/a ]] || return 3; printf 'feat/x\n'; }
+    run owner_decisions_collect
+    [[ "$output" == *"branch:acme/a:feat/x"* ]]
+    [[ "$output" == *'UNREADABLE (not "none"): REPORT-REMOTE branches of acme/b (no local checkout)'* ]]
+    [[ "$output" != *"No pending owner decisions."* ]]
+}
+
+@test "should-fail: a repo whose branch pass fails is UNREADABLE, not clean" {
+    OWNER_DECISIONS_REPOS="acme/a"
+    od_report_remote() { return 1; }
+    run owner_decisions_collect
+    [[ "$output" == *"UNREADABLE"*"REPORT-REMOTE branches of acme/a"* ]]
+    [[ "$output" != *"(no local checkout)"* ]]
+}
+
+@test "the real od_report_remote runs the dry-run pass in the repo's own checkout" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/owner_decisions.sh"
+    _kb_checkout() { printf '%s %s\n' "$1" "$2" >"$BATS_TEST_TMPDIR/co.log"; printf '/checkouts/%s\n' "$2"; }
+    prune_branches() {
+        printf '%s %s\n' "$1" "$2" >"$BATS_TEST_TMPDIR/prune.log"
+        printf 'KEEP-REMOTE feat/held: held by a worktree\nREPORT-REMOTE feat/old: content missing from origin/master (judgement call, not deleted):\n    +x\n'
+    }
+    run od_report_remote acme/tool
+    [ "$status" -eq 0 ]
+    [ "$output" = "feat/old" ]
+    [ "$(cat "$BATS_TEST_TMPDIR/co.log")" = "acme tool" ]
+    [ "$(cat "$BATS_TEST_TMPDIR/prune.log")" = "/checkouts/tool 0" ]
+}
+
+@test "the real od_report_remote: no checkout is rc 3, an unreadable pass is rc 1" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/owner_decisions.sh"
+    _kb_checkout() { return 1; }
+    run od_report_remote acme/tool
+    [ "$status" -eq 3 ]
+    _kb_checkout() { printf '/c\n'; }
+    prune_branches() { echo "[branch-prune] forge PR list unreadable - skipped"; return 2; }
+    run od_report_remote acme/tool
+    [ "$status" -eq 1 ]
+}
+
+@test "an inherited GIT_DIR does not hide another repo's checkout" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/owner_decisions.sh"
+    export KANBAN_CHECKOUT_ROOT="$BATS_TEST_TMPDIR/github"
+    local r
+    for r in a b; do
+        mkdir -p "$KANBAN_CHECKOUT_ROOT/$r"
+        git init -q "$KANBAN_CHECKOUT_ROOT/$r"
+        git -C "$KANBAN_CHECKOUT_ROOT/$r" remote add origin "https://github.com/acme/$r.git"
+    done
+    prune_branches() { printf 'REPORT-REMOTE feat/in-%s: content missing\n' "${1##*/}"; }
+    export GIT_DIR="$KANBAN_CHECKOUT_ROOT/a/.git"
+    run od_report_remote acme/b
+    [ "$status" -eq 0 ]
+    [ "$output" = "feat/in-b" ]
+    [ "$GIT_DIR" = "$KANBAN_CHECKOUT_ROOT/a/.git" ]
+}
+
+@test "a failed board discovery is UNREADABLE, never an empty repo list" {
+    discover_roadmap_boards() { ROADMAP_BOARDS_ERROR="UNKNOWN: board discovery failed"; return 1; }
+    run owner_decisions_collect
+    [[ "$output" == *'UNREADABLE (not "none"): board discovery'* ]]
+}
+
+@test "a board discovery skip reported UNKNOWN is UNREADABLE" {
+    discover_roadmap_boards() { ROADMAP_BOARDS_REPORT=$'board me/4 (x): UNKNOWN - no linked repo\nboard me/5 (y): skipped - project is closed\n'; return 0; }
+    run owner_decisions_collect
+    [[ "$output" == *'UNREADABLE (not "none"): board me/4 (x): UNKNOWN'* ]]
+    [[ "$output" != *"me/5"* ]]
+}
+
+@test "a repo-qualified branch exclusion hides only that repo's branch" {
+    OWNER_DECISIONS_REPOS="acme/a acme/b"
+    od_report_remote() { printf 'feat/dup\n'; }
+    printf 'branch:acme/a:feat/dup # superseded\n' >"$OWNER_DECISIONS_EXCLUDE_FILE"
+    run owner_decisions_collect
+    [[ "$output" != *"branch:acme/a:feat/dup"* ]]
+    [[ "$output" == *"branch:acme/b:feat/dup"* ]]
+}
+
+@test "a bare branch: exclusion hides that branch name in every repo" {
+    OWNER_DECISIONS_REPOS="acme/a acme/b"
+    od_report_remote() { printf 'feat/dup\n'; }
+    printf 'branch:feat/dup\n' >"$OWNER_DECISIONS_EXCLUDE_FILE"
+    run owner_decisions_collect
+    [[ "$output" == *"No pending owner decisions."* ]]
 }
