@@ -65,6 +65,7 @@ teardown() {
     for spec in \
         install_coding_lib/databases.sh:install_postgresql \
         install_coding_lib/containers.sh:install_docker \
+        install_coding_lib/containers.sh:install_kubectl \
         install_lib/browsers.sh:install_brave \
         install_coding_lib/languages.sh:install_blueprintx; do
         file="$REPO_ROOT/distro_config/${spec%%:*}"
