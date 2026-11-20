@@ -904,12 +904,13 @@ _write_ladder_probe() {
 # The parse is _gate_roster_logins' (review_thread_gate.sh), so the warning fires
 # exactly when the gate would not count the login — keep the two in step.
 _warn_if_not_on_roster() {
-	local owner="$1" repo="$2" token="$3" login roster logins
+	local owner="$1" repo="$2" token="$3" login content roster logins
 	login="$(ladder_poster_login)" || return 0
 	[ -n "$login" ] || return 0
-	roster="$(GH_TOKEN="$token" gh api "repos/$owner/$repo/contents/.review-bots.yaml" \
-		--jq '.content' </dev/null 2>/dev/null | base64 -d 2>/dev/null)" || return 0
-	[ -n "$roster" ] || return 0
+	# Two steps so a failed read (gh's status) stays silent while a readable empty roster warns.
+	content="$(GH_TOKEN="$token" gh api "repos/$owner/$repo/contents/.review-bots.yaml" \
+		--jq '.content' </dev/null 2>/dev/null)" || return 0
+	roster="$(printf '%s' "$content" | base64 -d 2>/dev/null)" || return 0
 	logins="$(printf '%s\n' "$roster" |
 		sed -n 's/^[[:space:]]*-[[:space:]]*login:[[:space:]]*//p' | sed 's/\[bot\]$//')"
 	grep -Fxq -- "${login%\[bot\]}" <<<"$logins" && return 0

@@ -983,6 +983,7 @@ _roster_stub() {
         case "$*" in
             *contents/.review-bots.yaml*)
                 [ -n "$ROSTER_YAML" ] || { echo "Not Found (HTTP 404)" >&2; return 1; }
+                [ "$ROSTER_YAML" = "EMPTY" ] && return 0
                 printf '%s' "$ROSTER_YAML" | base64 ;;
             *) printf '%s\n' "$*" >>"$GH_LOG"; cat >/dev/null ;;
         esac
@@ -990,6 +991,13 @@ _roster_stub() {
     _ladder_app_token() { echo "app-installation-token"; }
     export -f gh _ladder_app_token
     export ROSTER_YAML GH_LOG
+}
+
+@test "_post_pr_review: a readable empty roster warns (#1016)" {
+    _roster_stub EMPTY
+    run --separate-stderr _post_pr_review o r 487 "hi" "$HEAD_SHA"
+    [ "$status" -eq 0 ]
+    [[ "$stderr" == *"does not list some-ladder[bot]"* ]]
 }
 
 @test "_post_pr_review: roster entry without [bot] counts, as in the gate (#1016)" {
