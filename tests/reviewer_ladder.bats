@@ -5,6 +5,8 @@
 # and every runtime/post call is stubbed via the lib's own override hooks
 # (REVIEWER_LADDER_*_PROBE, REVIEWER_LADDER_RUN_CMD, REVIEWER_LADDER_POST_CMD).
 
+bats_require_minimum_version 1.5.0
+
 setup() {
     source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/reviewer_ladder.sh"
     # #818: the ladder writes ladder-last-probe into the cwd's git common dir; never the real repo's.
@@ -969,6 +971,71 @@ _make_two_commit_repo() {
     [ "$status" -eq 0 ]
     run grep -F -- 'issues/487/comments' "$GH_LOG"
     [ "$status" -ne 0 ]
+}
+
+# dotfiles-linux-dev#1016: warn (never block) when the poster is not on the roster.
+_roster_stub() {
+    unset REVIEWER_LADDER_POST_CMD
+    export REVIEWER_LADDER_POSTER="some-ladder[bot]"
+    ROSTER_YAML="$1"
+    GH_LOG="$BATS_TEST_TMPDIR/gh-roster.log"
+    gh() {
+        case "$*" in
+            *contents/.review-bots.yaml*)
+                [ -n "$ROSTER_YAML" ] || { echo "Not Found (HTTP 404)" >&2; return 1; }
+                [ "$ROSTER_YAML" = "EMPTY" ] && return 0
+                printf '%s' "$ROSTER_YAML" | base64 ;;
+            *) printf '%s\n' "$*" >>"$GH_LOG"; cat >/dev/null ;;
+        esac
+    }
+    _ladder_app_token() { echo "app-installation-token"; }
+    export -f gh _ladder_app_token
+    export ROSTER_YAML GH_LOG
+}
+
+@test "_post_pr_review: a readable empty roster warns (#1016)" {
+    _roster_stub EMPTY
+    run --separate-stderr _post_pr_review o r 487 "hi" "$HEAD_SHA"
+    [ "$status" -eq 0 ]
+    [[ "$stderr" == *"does not list some-ladder[bot]"* ]]
+}
+
+@test "_post_pr_review: roster entry without [bot] counts, as in the gate (#1016)" {
+    _roster_stub $'bots:\n  - login: some-ladder\n'
+    run --separate-stderr _post_pr_review o r 487 "hi" "$HEAD_SHA"
+    [ "$status" -eq 0 ]
+    [ -z "$stderr" ]
+}
+
+@test "_post_pr_review: quoted roster entry warns, since the gate never counts it (#1016)" {
+    _roster_stub $'bots:\n  - login: "some-ladder[bot]"\n'
+    run --separate-stderr _post_pr_review o r 487 "hi" "$HEAD_SHA"
+    [ "$status" -eq 0 ]
+    [[ "$stderr" == *"does not list some-ladder[bot]"* ]]
+}
+
+@test "_post_pr_review: roster lists the poster, no warning (#1016)" {
+    _roster_stub $'bots:\n  - login: other[bot]\n  - login: some-ladder[bot]\n'
+    run --separate-stderr _post_pr_review o r 487 "hi" "$HEAD_SHA"
+    [ "$status" -eq 0 ]
+    [ -z "$stderr" ]
+}
+
+@test "_post_pr_review: roster omits the poster, warning names it, still posts (#1016)" {
+    _roster_stub $'bots:\n  - login: other[bot]\n'
+    run --separate-stderr _post_pr_review o r 487 "hi" "$HEAD_SHA"
+    [ "$status" -eq 0 ]
+    [[ "$stderr" == *"o/r"* ]]
+    [[ "$stderr" == *"  - login: some-ladder[bot]"* ]]
+    run grep -F -- 'pulls/487/reviews' "$GH_LOG"
+    [ "$status" -eq 0 ]
+}
+
+@test "_post_pr_review: no roster file, no warning (#1016)" {
+    _roster_stub ""
+    run --separate-stderr _post_pr_review o r 487 "hi" "$HEAD_SHA"
+    [ "$status" -eq 0 ]
+    [ -z "$stderr" ]
 }
 
 @test "_post_pr_review: no App configured fails loudly and never posts as the owner (#624)" {
