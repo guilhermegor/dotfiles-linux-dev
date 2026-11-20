@@ -530,3 +530,24 @@ EOF"
     [[ "$output" == *"empty What / Why"* ]]
     [[ "$output" == *"no surface block"* ]]
 }
+
+# --- REST comments are not issue bodies (#1068) -----------------------------------------------
+
+@test "allows a comment POST to issues/N/comments, literal or shell-built endpoint" {
+    for cmd in 'gh api repos/o/r/issues/5/comments -f body=hi' \
+               'gh api repos/o/r/issues/5/comments -X POST -F body=@/dev/null' \
+               'gh api repos/o/r/issues/comments/9 -X PATCH -f body=hi' \
+               'gh api repos/$R/issues/$N/comments -f body=hi' \
+               'gh api "repos/$R/issues/$N/comments" -f body=hi'; do
+        run bash -c "payload '$cmd' | '$GUARD'"
+        [ "$status" -eq 0 ]
+    done
+}
+
+@test "still judges REST issue create and edit with a non-template body" {
+    for cmd in 'gh api repos/o/r/issues -f title=x -f body=nope' \
+               'gh api repos/o/r/issues/5 -X PATCH -f body=nope'; do
+        run bash -c "payload '$cmd' | '$GUARD'"
+        [ "$status" -eq 2 ]
+    done
+}

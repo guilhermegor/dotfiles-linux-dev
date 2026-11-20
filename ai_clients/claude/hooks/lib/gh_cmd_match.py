@@ -430,6 +430,8 @@ DYNAMIC_REPO_BODYLESS_SUBRESOURCE = re.compile(
     r"^repos/(?:[^/]+/)?[^/]+/issues/\d+/(?:labels|assignees|events|timeline|reactions|lock|"
     r"sub_issues|dependencies)(?:/[^/$`]+)*$"
 )
+# A comment endpoint with a shell-built repo/number: `repos/$R/issues/$N/comments`, `.../issues/comments/$id`.
+DYNAMIC_ISSUE_COMMENT = re.compile(r"^repos/[^/]+(?:/[^/]+)?/issues/(?:[^/]+/comments|comments/[^/]+)$")
 # `repos/O/R/issues/$n`: a literal repo and a shell-built issue number (a loop id), #987.
 DYNAMIC_ISSUE_NUMBER = re.compile(r"^repos/[^/$`]+/[^/$`]+/issues/[^/]*[$`][^/]*$")
 API_VALUE_FLAGS = {
@@ -1065,6 +1067,9 @@ def api_issue_match(segments):
             continue
         dynamic = ("$" in path or "`" in path or not endpoint  # endpoint the shell builds / unseen
                    or any("$" in t or "`" in t for t in stray))  # stray may be the real endpoint
+        if (DYNAMIC_ISSUE_COMMENT.match(path) and not stray
+                and not {".", ".."} & set(path.split("/"))):
+            continue  # a literal `/comments` tail is never issue create/edit (#1068)
         field_keys = [re.split(r"[\[=]", f, maxsplit=1)[0] for _, f in fields]
         may_write_body = bool(input_file) or any(
             k in ("body", "title") or "$" in k or "`" in k for k in field_keys)
