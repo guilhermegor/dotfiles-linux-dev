@@ -897,6 +897,25 @@ _write_ladder_probe() {
 	printf '%s %s\n' "$(date +%s)" "$1" >"$dir/ladder-last-probe" 2>/dev/null || true
 }
 
+# _warn_if_not_on_roster OWNER REPO TOKEN
+# dotfiles-linux-dev#1016: a review from a login the repo's `.review-bots.yaml`
+# does not list is posted but never counted by the roster gate. Warn once on
+# stderr; a missing roster (404) or any read failure stays silent, never blocks.
+_warn_if_not_on_roster() {
+	local owner="$1" repo="$2" token="$3" login roster
+	login="$(ladder_poster_login)" || return 0
+	[ -n "$login" ] || return 0
+	roster="$(GH_TOKEN="$token" gh api "repos/$owner/$repo/contents/.review-bots.yaml" \
+		--jq '.content' </dev/null 2>/dev/null | base64 -d 2>/dev/null)" || return 0
+	[ -n "$roster" ] || return 0
+	printf '%s\n' "$roster" |
+		sed -n 's/^[[:space:]]*-[[:space:]]*login:[[:space:]]*"\{0,1\}\([^"#[:space:]]*\).*/\1/p' |
+		grep -Fxq -- "$login" && return 0
+	printf 'warning: %s/%s .review-bots.yaml does not list %s; add the line `  - login: %s`\n' \
+		"$owner" "$repo" "$login" "$login" >&2
+	return 0
+}
+
 # _post_pr_review OWNER REPO PR_NUMBER BODY HEAD_SHA
 # Posts BODY as a submitted COMMENT review on HEAD_SHA, as the ladder App
 # (issue #624) — the shape a review-roster gate counts, which an issue comment
@@ -913,6 +932,7 @@ _post_pr_review() {
 		return $?
 	fi
 	token="$(_ladder_app_token "$owner" "$repo")" || return 1
+	_warn_if_not_on_roster "$owner" "$repo" "$token"
 	# stderr is read only on failure (the 404 check); on success it passes
 	# through to stderr untouched, as it did before #835.
 	local err rc=0
