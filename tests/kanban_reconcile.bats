@@ -925,7 +925,7 @@ write_stamp() {
 
 # --- dotfiles-linux-dev#907 ------------------------------------------------------------------------
 
-@test "boards: a declared project number the board lookup did not resolve is UNKNOWN, nothing moves" {
+@test "boards: a declared project number that names no board is UNKNOWN, nothing moves (#1043)" {
     write_board_cache
     write_prs 10
     write_closing 10 "42:OPEN"
@@ -933,7 +933,7 @@ write_stamp() {
     write_fake_gh
     run_boards in_review "$TEST_TMP" "owner|9|repo" -- "source '$LIB'"
     [[ "$output" == *"rc=1"* ]]
-    [[ "$output" == *"board owner/9 (repo): UNKNOWN — declared project 9 but the board named 'repo kanban' is project 1"* ]]
+    [[ "$output" == *"board owner/9 (repo): UNKNOWN — could not resolve project 9 (by number, not by title)"* ]]
     [[ "$output" != *"ok —"* ]]
     refute_gh 'item-edit'
 }
@@ -966,7 +966,7 @@ write_stamp() {
 @test "boards: an unresolvable board is UNKNOWN before any reconcile runs" {
     export TEST_TMP
     run_boards in_review "$TEST_TMP" "owner|1|clean" -- "_kb_board_number() { return 1; }; $STUB_IN_REVIEW"
-    [[ "$output" == *"board owner/1 (clean): UNKNOWN — could not resolve the project number of 'clean kanban'"* ]]
+    [[ "$output" == *"board owner/1 (clean): UNKNOWN — could not resolve project 1 (by number, not by title)"* ]]
     [ ! -e "$TEST_TMP/calls" ]
 }
 
@@ -1000,15 +1000,14 @@ write_stamp() {
 
 # PR #913 ladder review: a confirmed mismatch must not rediscover on every pass, a corrupt cache
 # must recover, and a zero-padded registry number is the same project.
-@test "boards: a mismatch confirmed by a fresh cache does not rediscover on the next sweep" {
+@test "boards: a declared number that names no board stays UNKNOWN on the next sweep (#1043)" {
     write_board_cache
     write_prs
     write_items
     write_fake_gh
     run_boards in_review "$TEST_TMP" "owner|9|repo" -- "source '$LIB'"
     run_boards in_review "$TEST_TMP" "owner|9|repo" -- "source '$LIB'"
-    [[ "$output" == *"UNKNOWN — declared project 9 but the board named 'repo kanban' is project 1"* ]]
-    refute_gh '^project list'
+    [[ "$output" == *"UNKNOWN — could not resolve project 9 (by number, not by title)"* ]]
 }
 
 @test "boards: a corrupt cache is rediscovered instead of staying UNKNOWN" {
@@ -1032,7 +1031,7 @@ write_stamp() {
     refute_gh '^project list'
 }
 
-@test "boards: a failed refresh of a stale mismatch keeps the cache and says the lookup failed" {
+@test "boards: a failed lookup by number keeps the stale cache and is UNKNOWN (#1043)" {
     write_board_cache
     jq '.project_number = 5' "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json" > "$TEST_TMP/c.json"
     mv "$TEST_TMP/c.json" "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json"
@@ -1040,7 +1039,7 @@ write_stamp() {
     write_fake_gh
     touch "$TEST_TMP/fail-field-list"
     run_boards in_review "$TEST_TMP" "owner|1|repo" -- "source '$LIB'"
-    [[ "$output" == *"is project unknown (the refresh lookup failed)"* ]]
+    [[ "$output" == *"could not resolve project 1 (by number, not by title)"* ]]
     [ "$(jq -r .project_number "$CLAUDE_CONFIG_DIR/kanban-boards/owner-repo.json")" = 5 ]
 }
 
