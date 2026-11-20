@@ -108,10 +108,13 @@ required_contexts() {
 # Workflow YAML on stdin -> JSON on stdout, aliases resolved. No parser is a failure, so the
 # caller fails closed (UNKNOWN). Considered and rejected: refusing any workflow change.
 workflow_json() {
-	if command -v yq >/dev/null 2>&1; then
-		yq -o=json '.'
+	local src out
+	src="$(cat)"
+	# yq may be a flavour without `-o=json` (kislyuk, mikefarah v3): fall through, never stop.
+	if command -v yq >/dev/null 2>&1 && out="$(yq -o=json 'explode(.)' <<<"$src" 2>/dev/null)" && [ -n "$out" ]; then
+		printf '%s\n' "$out"
 	elif python3 -c 'import yaml' >/dev/null 2>&1; then
-		python3 -c 'import sys, json, yaml; print(json.dumps(yaml.safe_load(sys.stdin)))'
+		python3 -c 'import sys, json, yaml; print(json.dumps(yaml.safe_load(sys.stdin)))' <<<"$src"
 	else
 		return 1
 	fi
@@ -123,7 +126,7 @@ workflow_json() {
 PERMISSIONS_SAFE='def lvl: . == "read" or . == "none";
 	def top: (type == "string" and . == "read-all") or (type == "object" and all(.[]; lvl));
 	def job: (type == "string" and . == "read-all")
-		or (type == "object" and all(("checks", "statuses") as $k | if has($k) then .[$k] | lvl else true end; .));
+		or (type == "object" and (has("<<") | not) and all(("checks", "statuses") as $k | if has($k) then .[$k] | lvl else true end; .));
 	type == "object" and has("permissions") and (.permissions | top)
 	and all((.jobs // {})[]; (type == "object") and ((has("permissions") | not) or (.permissions | job)))'
 
