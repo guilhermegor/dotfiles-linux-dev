@@ -141,7 +141,7 @@ elif [ "$1" = "api" ] && [[ "$2" == */pulls/*/reviews* ]]; then
     [ -n "${GH_PAGING_FAIL:-}" ] && { echo "gh: HTTP 502" >&2; exit 1; }
     p=1; [[ "$2" == *\&page=* ]] && p="${2##*\&page=}"
     jq --argjson n "$n" --argjson p "$p" '[.[] | select(.number == $n) | (.reviews // [])[]
-        | {commit_id: .commit.oid, state: .state, body: (.body // ""), user: {login: (.author.login // "coderabbitai"),
+        | {commit_id: .commit.oid, state: .state, body: (.body // ""), submitted_at: .submittedAt, user: {login: (.author.login // "coderabbitai"),
                     type: (.author.__typename // (if .author then "User" else "Bot" end))}}]
         | .[($p - 1) * 100:$p * 100]' "$FIXTURE"
 elif [ "$1" = "api" ] && [[ "$2" == */issues/*/comments* ]]; then
@@ -490,6 +490,47 @@ EOF
     run python3 "$PLANNER"
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+}
+
+# A ladder App delivers its marker as a submitted REVIEW, not a comment (#1066). The author is
+# not in the roster, so channel 1 cannot see it; channel 2 must, and only for a Bot.
+ladder_review_pr() { # PR HEAD MARKER_HEAD AUTHOR_TYPE [SUBMITTED_SECONDS_AGO]
+    stub_gh_prs <<EOF
+[{"number":$1,"headRefOid":"$2","mergeStateStatus":"BLOCKED","isDraft":false,
+  "reviews":[{"commit":{"oid":"$3"},"state":"COMMENTED","submittedAt":"$(ago ${5:-60})",
+    "body":"Fallback review — runtime: claude, model: default (selected by: last-resort)\nReviewed head: $3",
+    "author":{"login":"other-ladder[bot]","__typename":"$4"}}],
+  "comments":[],
+  "commits":[{"oid":"$2","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+}
+
+@test "a ladder-App review marker naming the current head is covered (#1066)" {
+    ladder_review_pr 1066 cccc1111 cccc1111 Bot
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+}
+
+@test "a ladder-App review marker naming an older head stays dispatchable (#1066)" {
+    ladder_review_pr 1067 cccc1111 bbbb0000 Bot
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "1067" ]
+}
+
+@test "a ladder-App review marker submitted before the head was pushed stays dispatchable (#1066)" {
+    ladder_review_pr 1069 cccc1111 cccc1111 Bot 7200
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "1069" ]
+}
+
+@test "a review marker from a non-Bot author is not coverage (#1066)" {
+    ladder_review_pr 1068 cccc1111 cccc1111 User
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable[0].pr' <<<"$output")" = "1068" ]
 }
 
 @test "a comment merely quoting the attribution line mid-body is not coverage" {
