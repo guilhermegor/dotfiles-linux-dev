@@ -345,6 +345,45 @@ refute_log() {
     refute_log "PUT"
 }
 
+@test "refuses checks: write hidden behind a YAML alias" {
+    FILES_7=$'.github/workflows/other.yml\t' \
+        WF_CONTENT=$'x: &p write\npermissions:\n  checks: *p\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"other.yml"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses a job-level checks: write under safe top-level permissions" {
+    FILES_7=$'.github/workflows/other.yml\t' \
+        WF_CONTENT=$'permissions: read-all\njobs:\n  j:\n    permissions: {checks: write}\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "refuses permissions: write-all" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions: write-all\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "accepts read-all and an empty-mapping permissions" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions: read-all\n' run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    FILES_8=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions: {}\njobs:\n  j:\n    runs-on: x\n' run bash "$SCRIPT" 8
+    [ "$status" -eq 0 ]
+}
+
+@test "no usable YAML parser is UNKNOWN and fails closed" {
+    mkdir -p "$BATS_TEST_TMPDIR/nopar"
+    printf '#!/bin/bash\nexit 1\n' > "$BATS_TEST_TMPDIR/nopar/python3"
+    cp "$BATS_TEST_TMPDIR/nopar/python3" "$BATS_TEST_TMPDIR/nopar/yq"
+    chmod +x "$BATS_TEST_TMPDIR/nopar/python3" "$BATS_TEST_TMPDIR/nopar/yq"
+    FILES_7=$'.github/workflows/other.yml\t' PATH="$BATS_TEST_TMPDIR/nopar:$PATH" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    refute_log "PUT"
+}
+
 @test "refuses a required check-run with no matching job in its run" {
     FILES_7=$'.github/workflows/other.yml\t' JOBS_1="lint" run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]

@@ -29,8 +29,9 @@
 # is UNKNOWN (fails closed). Checks from other apps keep the app_id matching only. Any
 # .github/actions/ change is still refused (merge by hand). Also refused: a run that
 # references (reusable workflow) a changed file; a required check-run with no job of that
-# name in its run (an API-posted check); and any added/changed workflow that may grant
-# `checks: write` or lacks a top-level `permissions:` (it could POST a required check).
+# name in its run (an API-posted check); and any added/changed workflow (parsed with yq or
+# PyYAML, aliases resolved; no parser is UNKNOWN) whose top-level `permissions` is missing,
+# write-all or grants checks: write, or has a job-level one that does (it could POST a check).
 # The gate cannot see CI code that is not under .github/.
 set -u
 
@@ -98,10 +99,28 @@ required_contexts() {
 	printf '%s\n%s\n' "$classic" "$rules" | sed '/^$/d'
 }
 
+# Workflow YAML on stdin -> JSON on stdout, aliases resolved. No parser is a failure, so the
+# caller fails closed (UNKNOWN). Considered and rejected: refusing any workflow change.
+workflow_json() {
+	if command -v yq >/dev/null 2>&1; then
+		yq -o=json '.'
+	elif python3 -c 'import yaml' >/dev/null 2>&1; then
+		python3 -c 'import sys, json, yaml; print(json.dumps(yaml.safe_load(sys.stdin)))'
+	else
+		return 1
+	fi
+}
+
+# Safe = a top-level `permissions` that is read-all or a mapping without checks: write, and
+# every job-level `permissions` absent or equally safe (write-all is a string, so never safe).
+PERMISSIONS_SAFE='def ok: (type == "string" and . == "read-all") or (type == "object" and ((.checks // "none") != "write"));
+	type == "object" and has("permissions") and (.permissions | ok)
+	and all((.jobs // {})[]; (type == "object") and ((has("permissions") | not) or (.permissions | ok)))'
+
 merge_one() {
 	local pr="$1" info head state draft base author changed try
 	local required checks statuses bad name files wf_changed wf_live wpath rname suite
-	local rid rpath refs jobs backed content wf
+	local rid rpath refs jobs backed content wf parsed
 
 	# mergeable_state is computed lazily: poll while GitHub still says unknown/null.
 	for try in 1 2 3; do
@@ -168,10 +187,10 @@ merge_one() {
 			[ -n "$wpath" ] || continue
 			content="$(gh_retry api "repos/$owner/$repo/contents/$wpath?ref=$head" --jq .content | base64 -d 2>/dev/null)" && [ -n "$content" ] ||
 				{ echo "#$pr UNKNOWN: cannot read $wpath at $head"; return 1; }
-			if grep -q -E "checks[\"']?:[[:space:]]*[\"']?write|write-all" <<<"$content" || ! grep -q -E '^permissions:' <<<"$content"; then
-				echo "#$pr REFUSED: changed workflow $wpath may grant checks: write (permissions not provably safe)"
-				return 1
-			fi
+			parsed="$(workflow_json <<<"$content")" && [ -n "$parsed" ] ||
+				{ echo "#$pr UNKNOWN: cannot parse $wpath (no YAML parser, or invalid YAML)"; return 1; }
+			jq -e "$PERMISSIONS_SAFE" <<<"$parsed" >/dev/null 2>&1 ||
+				{ echo "#$pr REFUSED: changed workflow $wpath may grant checks: write (permissions not provably safe)"; return 1; }
 		done <<<"$wf_live"
 		# (2) Each required Actions check-run: its run and every reusable workflow that run
 		# references must be unchanged, and the run must have a job of that name.
