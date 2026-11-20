@@ -4,6 +4,9 @@
 # STATE_<n>, DRAFT_<n>, CHECK_<n>, AUTHOR_<n>, FILES_<n>, CHANGED_<n>, MERGED_<n>;
 # global: ME, USER_FAIL, FILES_FAIL, PROT_FAIL, PROT_404, PUT_FAIL, STATUS_<n>, RULE_CTX,
 # FILES_FLAKY (first /files call prints a row, then fails with HTTP 502).
+# Provenance (#1064): check-runs carry a check_suite id (SUITE, default 1); EXTRA_CHECKS adds
+# raw check-run rows; RUN_PATH_<suite> is that suite's workflow path (default ci.yml,
+# "none" = unresolvable); RUN_FAIL makes the actions/runs read fail.
 
 setup() {
     SCRIPT="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/merge_green_pr.sh"
@@ -51,12 +54,20 @@ if [[ "$args" == *"/rules/branches/"* ]]; then
     [ -n "${RULE_CTX:-}" ] && echo "$RULE_CTX"
     exit 0
 fi
+if [[ "$args" == *"actions/runs?check_suite_id="* ]]; then
+    [ -n "${RUN_FAIL:-}" ] && exit 1
+    id="${args#*check_suite_id=}"; id="${id%% *}"
+    p="RUN_PATH_$id"; p="${!p:-.github/workflows/ci.yml}"
+    [ "$p" = none ] || echo "$p"
+    exit 0
+fi
 if [[ "$args" == *"/check-runs"* ]]; then
     n="${args#*commits/sha}"; n="${n%%/*}"
     c="CHECK_$n"; c="${!c:-success}"
     [ "$c" = missing ] && exit 0
-    printf 'build\t%s\t::check::\t%s\n' "$c" "${APP_ID:-15368}"
-    printf 'Review threads answered\t%s\t::check::\t%s\n' "$c" "${APP_ID:-15368}"
+    printf 'build\t%s\t::check::\t%s\t%s\n' "$c" "${APP_ID:-15368}" "${SUITE:-1}"
+    printf 'Review threads answered\t%s\t::check::\t%s\t%s\n' "$c" "${APP_ID:-15368}" "${SUITE:-1}"
+    [ -n "${EXTRA_CHECKS:-}" ] && printf '%s\n' "$EXTRA_CHECKS"
     exit 0
 fi
 if [[ "$args" == *"/status"* ]]; then
@@ -258,13 +269,54 @@ refute_log() {
     refute_log "pulls/8/merge"
 }
 
-@test "refuses a PR touching .github/workflows or .github/actions" {
-    FILES_7=$'src/a.sh\t\n.github/workflows/ci.yml\t' run bash "$SCRIPT" 7
+@test "refuses a PR touching .github/actions" {
+    FILES_7=".github/actions/x/action.yml"$'\t' run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]
-    [[ "$output" == *"touches CI definitions"* ]]
-    FILES_8=".github/actions/x/action.yml"$'\t' run bash "$SCRIPT" 8
-    [ "$status" -ne 0 ]
+    [[ "$output" == *".github/actions"* ]]
     refute_log "PUT"
+}
+
+@test "merges when an unrelated workflow is edited and required checks come from unchanged ones" {
+    FILES_7=$'src/a.sh\t\n.github/workflows/other.yml\t' run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
+}
+
+@test "refuses when the workflow producing a required check is edited" {
+    FILES_7=$'.github/workflows/ci.yml\t' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"[build]"* ]]
+    [[ "$output" == *".github/workflows/ci.yml"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses a new workflow posting a duplicate required check name" {
+    FILES_7=$'.github/workflows/new.yml\t' EXTRA_CHECKS=$'build\tsuccess\t::check::\t15368\t2' \
+        RUN_PATH_2=.github/workflows/new.yml run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"[build]"* ]]
+    [[ "$output" == *".github/workflows/new.yml"* ]]
+    refute_log "PUT"
+}
+
+@test "an unresolvable run path is UNKNOWN and fails closed" {
+    FILES_7=$'.github/workflows/other.yml\t' RUN_PATH_1=none run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    refute_log "PUT"
+}
+
+@test "an actions/runs read failure is UNKNOWN and fails closed" {
+    FILES_7=$'.github/workflows/other.yml\t' RUN_FAIL=1 run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    refute_log "PUT"
+}
+
+@test "a required check from a non-Actions app is not resolved to a workflow" {
+    FILES_7=$'.github/workflows/ci.yml\t' APP_ID=424242 run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    refute_log "actions/runs"
 }
 
 @test "refuses when the file list is shorter than changed_files" {
@@ -277,7 +329,7 @@ refute_log() {
 @test "refuses a rename out of .github/workflows" {
     FILES_7="docs/ci.yml"$'\t'".github/workflows/ci.yml" run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]
-    [[ "$output" == *"touches CI definitions"* ]]
+    [[ "$output" == *".github/workflows/ci.yml"* ]]
     refute_log "PUT"
 }
 
