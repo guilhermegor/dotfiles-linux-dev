@@ -37,7 +37,7 @@ again after being answered (dotfiles-linux-dev#1033). The list now comes from a 
 | open PRs | body says "decide whether", "surface expansion", "expands the (public) surface", "disabled feature", "feature (is) disabled" or "judg(e)ment call" |
 | board cards | a Blocked card whose "Blocked by" field or body line holds `decision:` (read-only: judged with `roadmap_unblock.sh`'s helpers, never its mutating reconcile) |
 | Projects workflows | reported OFF; the API cannot enable them |
-| origin branches | `branch_prune.sh` dry-run reports `REPORT-REMOTE` (the repo you run it from only) |
+| origin branches | `branch_prune.sh` dry-run reports `REPORT-REMOTE`, run in every board repo's own checkout (cwd when its origin matches, else `$KANBAN_CHECKOUT_ROOT`/`~/github`/`<repo>`); a repo with no checkout prints `UNREADABLE ... (no local checkout)` |
 | issues | labelled `hitl`, or `state:blocked` with a `decision:` blocker |
 
 ## Standing exclusions
@@ -48,7 +48,8 @@ Read from a data file, never hardcoded: `~/.claude/tasks/owner-decisions-exclusi
 ```
 #1046                    # blocked until owner says, never ask
 owner/repo#7             # one repo only
-branch:feat/old
+branch:feat/old          # that branch name in any repo
+branch:owner/repo:feat/old   # one repo only
 workflow:guilhermegor/13/Auto-add to project
 ```
 
