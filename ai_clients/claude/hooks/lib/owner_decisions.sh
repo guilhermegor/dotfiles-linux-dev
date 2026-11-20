@@ -134,7 +134,13 @@ _od_rows() {
 		read -ra repos <<<"$(printf '%s\n' "${ROADMAP_BOARDS[@]}" | awk -F'|' '!seen[$1"/"$3]++ {print $1"/"$3}' | tr '\n' ' ')"
 	else
 		# Empty discovery (a failed read, #1059): never scan "/"; fall back to this checkout's origin.
-		line="$(git remote get-url origin 2>/dev/null | sed -E 's#^.*[:/]([^/:]+/[^/]+)$#\1#; s#\.git$##')"
+		# _kb_origin_slug accepts only a github.com origin and strips a trailing "/" and ".git";
+		# the GIT_* unset (subshell-scoped, as in od_report_remote) keeps it on the cwd checkout.
+		line="$(
+			unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+				GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
+			_kb_origin_slug "$PWD"
+		)"
 		repos=()
 		[[ "$line" == */* ]] && repos=("$line")
 		printf 'unreadable\t-\tno boards discovered; fallback to cwd origin repo (%s)\t\n' "${line:-none}"
