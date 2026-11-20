@@ -123,12 +123,16 @@ unreadable protection is UNKNOWN and fails closed. The PUT is
 any was refused.
 
 Two trust checks keep the check gate honest. (1) **Check-run spoofing:** a PR can
-add a workflow that posts a green check named like a required one, so a PR whose
-files (REST, paginated) touch `.github/workflows/` or `.github/actions/` is refused
-("touches CI definitions — merge by hand"), including a rename out of them
-(`previous_filename`); an unreadable file list is UNKNOWN, and so is a list whose
-length differs from the PR's `changed_files` ("file list incomplete", since the
-endpoint caps at 3000).
+add a workflow that posts a green check named like a required one, so provenance is
+proved instead of refusing every CI change (#1064). Any `.github/actions/` change is
+still refused. When the PR adds, changes or renames (`previous_filename`) a workflow,
+each required Actions check-run (duplicates too) is traced check_suite -> run -> path
+and refused if that workflow, or a reusable one in `referenced_workflows`, is changed;
+it must also match a real job of its run. Changed workflows are parsed (yq or PyYAML):
+top-level `permissions` must exist, with no `checks: write` or `write-all`, job-level
+included. An unresolvable path, failed read or missing parser is UNKNOWN (fails
+closed), as is an unreadable file list or one differing from `changed_files` ("file
+list incomplete", since the endpoint caps at 3000).
 The gate is **partial by design**: it cannot see CI code outside `.github/` (a local
 composite action, `make test`, test files), which is the PR author's own code on a
 single-maintainer repo. A required check pinned to an app (protection `checks[].app_id`,
