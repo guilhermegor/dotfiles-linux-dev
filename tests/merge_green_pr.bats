@@ -6,7 +6,9 @@
 # FILES_FLAKY (first /files call prints a row, then fails with HTTP 502).
 # Provenance (#1064): check-runs carry a check_suite id (SUITE, default 1); EXTRA_CHECKS adds
 # raw check-run rows; RUN_PATH_<suite> is that suite's workflow path (default ci.yml,
-# "none" = unresolvable); RUN_FAIL makes the actions/runs read fail.
+# "none" = unresolvable); REFS_<suite> = its referenced (reusable) workflows; JOBS_<suite> =
+# the run's job names (default build + the review gate); WF_CONTENT = a changed workflow's
+# content at the head (default: safe permissions); RUN_FAIL makes the actions/runs read fail.
 
 setup() {
     SCRIPT="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/merge_green_pr.sh"
@@ -58,7 +60,17 @@ if [[ "$args" == *"actions/runs?check_suite_id="* ]]; then
     [ -n "${RUN_FAIL:-}" ] && exit 1
     id="${args#*check_suite_id=}"; id="${id%% *}"
     p="RUN_PATH_$id"; p="${!p:-.github/workflows/ci.yml}"
-    [ "$p" = none ] || echo "$p"
+    r="REFS_$id"
+    [ "$p" = none ] || printf '%s\t%s\t%s\n' "$id" "$p" "${!r:-}"
+    exit 0
+fi
+if [[ "$args" == *"actions/runs/"*"/jobs"* ]]; then
+    id="${args#*actions/runs/}"; id="${id%%/*}"
+    j="JOBS_$id"; printf '%b\n' "${!j:-build\nReview threads answered}"
+    exit 0
+fi
+if [[ "$args" == *"/contents/"* ]]; then
+    printf '%b' "${WF_CONTENT:-permissions:\n  contents: read\n}" | base64
     exit 0
 fi
 if [[ "$args" == *"/check-runs"* ]]; then
@@ -310,6 +322,33 @@ refute_log() {
     FILES_7=$'.github/workflows/other.yml\t' RUN_FAIL=1 run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]
     [[ "$output" == *"UNKNOWN"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses an unchanged caller of a changed reusable workflow" {
+    FILES_7=$'.github/workflows/reusable.yml\t' REFS_1=".github/workflows/reusable.yml" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *".github/workflows/reusable.yml"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses a changed workflow granting checks: write" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions:\n  checks: write\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"other.yml"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses a changed workflow with no permissions key" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'on: push\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "refuses a required check-run with no matching job in its run" {
+    FILES_7=$'.github/workflows/other.yml\t' JOBS_1="lint" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"[build]"* ]]
     refute_log "PUT"
 }
 
