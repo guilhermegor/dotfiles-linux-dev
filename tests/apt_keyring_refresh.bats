@@ -75,6 +75,12 @@ teardown() {
     done
 }
 
+@test "an already-installed blueprintx is upgraded, not skipped" {
+    block="$(sed -n '/^install_blueprintx() *{/,/^}/p' "$REPO_ROOT/distro_config/install_coding_lib/languages.sh" \
+        | sed -n '/already installed/,/return 0/p')"
+    [[ "$block" == *'--only-upgrade -y blueprintx'* ]]
+}
+
 @test "pgAdmin no longer skips the key import when a keyring exists" {
     fn="$(sed -n '/^install_pgadmin() *{/,/^}/p' "$REPO_ROOT/distro_config/install_coding_lib/databases.sh")"
     [[ "$fn" == *refresh_apt_keyring* ]]
