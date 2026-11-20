@@ -436,10 +436,25 @@ refute_log() {
     refute_log "PUT"
 }
 
-@test "a required check from a non-Actions app is not resolved to a workflow" {
-    FILES_7=$'.github/workflows/ci.yml\t' APP_ID=424242 run bash "$SCRIPT" 7
+@test "a required check-run from a non-Actions app refuses when the PR changes a workflow" {
+    FILES_7=$'.github/workflows/other.yml\t' APP_ID=424242 run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"non-Actions check-run"* ]]
+    refute_log "PUT"
+}
+
+@test "a non-Actions required check-run still merges when no workflow changes" {
+    APP_ID=424242 run bash "$SCRIPT" 7
     [ "$status" -eq 0 ]
     refute_log "actions/runs"
+}
+
+@test "a changed workflow filename outside [A-Za-z0-9._/-] is refused before any contents read" {
+    FILES_7=$'.github/workflows/x?ref=sha7&a=.yml\t' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"outside [A-Za-z0-9._/-]"* ]]
+    refute_log "/contents/"
+    refute_log "PUT"
 }
 
 @test "refuses when the file list is shorter than changed_files" {

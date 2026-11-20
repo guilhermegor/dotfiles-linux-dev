@@ -32,13 +32,11 @@
 # name in its run (an API-posted check); and any added/changed workflow (parsed with yq or
 # PyYAML, aliases resolved; no parser is UNKNOWN) whose top-level `permissions` is missing,
 # write-all or grants checks/statuses: write, or has a job-level one that does (it could
-# POST a check). A required context met by a commit status has no check_suite to trace, so
-# it refuses any PR that changes a workflow.
+# POST a check). A required context met by a commit status or by a non-Actions check-run has
+# no workflow to trace, so it refuses any PR that changes a workflow. A changed workflow
+# filename outside [A-Za-z0-9._/-] is refused too (it is interpolated into a URL).
 # An UNCHANGED workflow with checks/statuses: write that runs PR-controlled code is out of
 # scope: it is already trusted on the base branch, and the old blanket rule did not cover it.
-# An UNCHANGED workflow with checks/statuses: write that runs PR-controlled code is out of
-# scope — it is already trusted on the base branch, and the old blanket rule did not cover
-# it either.
 # The gate cannot see CI code that is not under .github/.
 set -u
 
@@ -196,6 +194,18 @@ merge_one() {
 		# workflow. Fail closed: a required context met by a status refuses any workflow change.
 		if awk -F'\t' 'NR==FNR {req[$1]=1; next} $3!="::check::" && ($1 in req) {f=1} END {exit !f}' <(cut -f1 <<<"$required") - <<<"$checks"; then
 			echo "#$pr REFUSED: a required context is satisfied by a commit status and this PR changes a workflow"
+			return 1
+		fi
+		# (0b) A check-run from any app other than GitHub Actions cannot be traced to a workflow,
+		# and a dropped job leaves its name free for an App token to post under. Fail closed.
+		if awk -F'\t' 'NR==FNR {req[$1]=1; next} $3=="::check::" && $4!="15368" && ($1 in req) {f=1} END {exit !f}' <(cut -f1 <<<"$required") - <<<"$checks"; then
+			echo "#$pr REFUSED: a required context is satisfied by a non-Actions check-run and this PR changes a workflow"
+			return 1
+		fi
+		# (0c) The path goes into a URL unescaped, so ?, & or # would redirect the contents read
+		# to another revision; tab/newline would break the TSV columns. Allowlist the charset.
+		if grep -q -v -E '^[A-Za-z0-9._/-]+$' <<<"$wf_changed"; then
+			echo "#$pr REFUSED: a changed workflow filename has characters outside [A-Za-z0-9._/-]"
 			return 1
 		fi
 		# (1) Forgery: a changed workflow whose GITHUB_TOKEN may write checks could POST a
