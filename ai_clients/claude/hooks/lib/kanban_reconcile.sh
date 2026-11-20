@@ -70,6 +70,13 @@ fi
 #   4. ROADMAP_BOARDS_EXCLUDE -> space/comma-separated project numbers skipped at runtime (a report
 #                                line each); the only permitted exclusion of an OPEN board
 #   5. <cwd>/.github/roadmap-board (a project number) wins over discovery for that repo
+# The project number found here is what every consumer resolves the board by (#1043): board_config,
+# _kb_board_number and the sweep look it up in ROADMAP_BOARDS (_kb_registry_number) and use it
+# directly, whatever the board's title. The "<repo> kanban" title lookup is only the fallback for a
+# repo with no registry entry (e.g. the event hook, which never runs discovery). An explicit
+# .github/roadmap-board override is itself a registry number, so it is resolved the same way; a
+# number that names no board is UNKNOWN in the sweep and rc 3 (no-board no-op) from board_config, never a
+# silent fall back to the title.
 # #531 ("absent by declaration, never by omission") and #887 ("every board, never the cwd's") hold:
 # every viewer project is enumerated and a board leaves only through a visible report line.
 # One GraphQL query per 50 projects (the cursor is followed until hasNextPage is false), cached for the process; a failure is cached too, so the fan-out does
@@ -189,11 +196,16 @@ discover_board() {
 	# MORE THAN ONE board carries that title (refuse to guess — the caller surfaces this), and
 	# 3 when NO `<repo> kanban` board exists or it has no usable Status field (#865: told apart from a
 	# gh error without a re-query).
-	local owner="$1" repo="$2" projects matches count num node fields field_id options config
-	projects="$(gh project list --owner "$owner" --format json 2>/dev/null)" || return 1
+	# Optional 3rd arg: the discovered project NUMBER (#1043). When set it picks the board instead
+	# of the title, so a non-conventional title still resolves; absent = the title fallback.
+	local owner="$1" repo="$2" want="${3:-}" projects matches count num node fields field_id options config
+	# --limit: gh lists 30 by default, but discovery enumerates every project, so a board past the 30th must still resolve.
+	projects="$(gh project list --owner "$owner" --limit 1000 --format json 2>/dev/null)" || return 1
 
 	matches="$(printf '%s' "$projects" \
-		| jq -r --arg t "$repo kanban" '.projects[] | select(.title==$t) | "\(.number) \(.id)"')" \
+		| jq -r --arg t "$repo kanban" --arg n "$want" '.projects[]
+			| select(if $n == "" then .title==$t else (.number|tostring)==$n end)
+			| "\(.number) \(.id)"')" \
 		|| return 1   # unparseable list is a gh-side failure, not "no board"
 	count="$(printf '%s\n' "$matches" | grep -c .)"
 	(( count == 0 )) && return 3
@@ -221,15 +233,30 @@ discover_board() {
 	printf '%s' "$config"
 }
 
+# _kb_registry_number OWNER REPO — the project number discovery put in ROADMAP_BOARDS for the repo
+# (#1043); prints nothing when the repo has no entry, so callers fall back to the title lookup.
+_kb_registry_number() {
+	local e
+	for e in ${ROADMAP_BOARDS[@]+"${ROADMAP_BOARDS[@]}"}; do
+		[[ "$e" == "$1|"*"|$2" ]] || continue
+		e="${e#*|}"
+		echo $((10#${e%%|*}))
+		return 0
+	done
+	return 1
+}
+
 board_config() {
 	# Emit "<project_number> <project_node> <status_field_id> <option_id_for_target>". Reads the
 	# per-repo cache, discovering + writing it on a miss. Returns 0 on success (or AMBIGUOUS), 3 when
 	# there is no `<repo> kanban` board or it lacks the target column (a legitimate no-op), and 1
 	# on a gh failure (#865). Callers that only test `||` treat both non-zero codes alike.
-	local owner="$1" repo="$2" target="$3" file line num node field opt
+	local owner="$1" repo="$2" target="$3" file line num node field opt want
 	file="$(cache_file "$owner" "$repo")"
+	want="$(_kb_registry_number "$owner" "$repo")" || want=""
 
-	if [[ -r "$file" ]]; then
+	# A cache for another project than the discovered one is stale, not a hit (#1043).
+	if [[ -r "$file" ]] && { [[ -z "$want" ]] || [[ "$(jq -r '.project_number' "$file" 2>/dev/null)" == "$want" ]]; }; then
 		opt="$(jq -r --arg t "$target" '.options[$t] // empty' "$file" 2>/dev/null)"
 		if [[ -n "$opt" ]]; then
 			num="$(jq -r '.project_number' "$file")"
@@ -243,7 +270,7 @@ board_config() {
 	fi
 
 	local rc
-	line="$(discover_board "$owner" "$repo")"; rc=$?   # writes the cache as a side effect
+	line="$(discover_board "$owner" "$repo" "$want")"; rc=$?   # writes the cache as a side effect
 	(( rc == 2 )) && { printf 'AMBIGUOUS\n'; return 0; }   # >1 same-named board — let the caller warn
 	(( rc == 0 )) || return "$rc"
 	opt="$(printf '%s' "$line" | jq -r --arg t "$target" '.options[$t] // empty' 2>/dev/null)"
@@ -670,24 +697,21 @@ kanban_boards_unknown() {
 	KANBAN_BOARDS_REPORT="$(printf '%s' "$lines" | sed '/^$/d')"
 }
 
-# _kb_board_number OWNER REPO — prints the project number of "<REPO> kanban", the board every
-# reconcile resolves by name. Reads the per-repo cache, discovering (and caching) on a miss, so the
-# reconcile that follows reuses it. An unreadable or corrupt cache is rediscovered, never left
-# UNKNOWN. Returns 1 when the board cannot be resolved (#907).
+# _kb_board_number OWNER REPO [PROJECT] — prints the project number the reconcile sweeps. With a
+# discovered PROJECT (#1043) that number is the board, whatever its title: the cache is kept when it
+# already names it, otherwise the board is looked up BY NUMBER and cached. Without PROJECT it is the
+# "<REPO> kanban" title lookup (#907). An unreadable or corrupt cache is rediscovered, never left
+# UNKNOWN. Returns 1 when the board cannot be resolved.
 _kb_board_number() {
 	local file n
 	file="$(cache_file "$1" "$2")"
-	if [[ -r "$file" ]] && n="$(jq -er '.project_number' "$file" 2>/dev/null)"; then
+	if [[ -r "$file" ]] && n="$(jq -er '.project_number' "$file" 2>/dev/null)" \
+		&& [[ -z "${3:-}" || "$n" == "$((10#$3))" ]]; then
 		echo "$n"
 		return 0
 	fi
-	discover_board "$1" "$2" | jq -er '.project_number' 2>/dev/null
+	discover_board "$1" "$2" "${3:+$((10#$3))}" | jq -er '.project_number' 2>/dev/null
 }
-
-# A cached number that disagrees with the registry is rediscovered only once the cache is older
-# than this, so a registry row that is simply wrong costs one discovery per board per window, not
-# one per sweep (PR #913 review). discover_board rewrites the cache, which restarts the window.
-KANBAN_CACHE_REFRESH_MINUTES=60
 
 # kanban_fanout_cost — gh calls one full sweep spends on the boards: every declared board x the
 # KANBAN_RECONCILE_KINDS (the kinds the sweep runs, one list) x KANBAN_CALLS_PER_RECONCILE. in_review is MEASURED by the
@@ -825,19 +849,9 @@ reconcile_kanban_boards() {
 			lines+="board $owner/$project ($repo): SKIPPED — GraphQL rate-limited (budget latch active), board not swept"$'\n'
 			continue
 		fi
-		if ! num="$(_kb_board_number "$owner" "$repo")"; then
+		if ! num="$(_kb_board_number "$owner" "$repo" "$project")" || [[ "$num" != "$project" ]]; then
 			status=1
-			lines+="board $owner/$project ($repo): UNKNOWN — could not resolve the project number of '$repo kanban'"$'\n'
-			continue
-		fi
-		if [[ "$num" != "$project" ]] \
-			&& [[ -n "$(find "$(cache_file "$owner" "$repo")" -mmin +"$KANBAN_CACHE_REFRESH_MINUTES" 2>/dev/null)" ]]; then
-			num="$(discover_board "$owner" "$repo" | jq -er '.project_number' 2>/dev/null)" \
-				|| num="unknown (the refresh lookup failed)"
-		fi
-		if [[ "$num" != "$project" ]]; then
-			status=1
-			lines+="board $owner/$project ($repo): UNKNOWN — declared project $project but the board named '$repo kanban' is project $num"$'\n'
+			lines+="board $owner/$project ($repo): UNKNOWN — could not resolve project $project (by number, not by title)"$'\n'
 			continue
 		fi
 		rc=0

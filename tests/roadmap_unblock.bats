@@ -1451,3 +1451,46 @@ JSON
     [[ "$output" == *"FAILED to unblock owner/repo#3: Blocked-by clear failed: GraphQL: stub item-edit refused — verify by hand"* ]]
     [[ "$output" != *"a gh write failed"* ]]
 }
+
+# --- dotfiles-linux-dev#1043: the board is resolved by its discovered project number ----------------
+
+# run_board_cfg REGISTRY_ENTRY|"" : board_config against a stubbed `gh project` whose list holds
+# project 24 titled "Roadmap" (not "<repo> kanban") and project 5 titled "widget kanban".
+run_board_cfg() {
+    run env CACHE_DIR="$TEST_TMP/cache" bash -c "source '$LIB'
+        gh() {
+            case \"\$1 \$2\" in
+            'project list') echo '{\"projects\":[{\"number\":24,\"id\":\"PVT_24\",\"title\":\"Roadmap\"},{\"number\":5,\"id\":\"PVT_5\",\"title\":\"widget kanban\"}]}' ;;
+            'project field-list') echo '{\"fields\":[{\"name\":\"Status\",\"id\":\"F_1\",\"options\":[{\"name\":\"Ready\",\"id\":\"O_READY\"}]}]}' ;;
+            *) return 1 ;;
+            esac
+        }
+        ROADMAP_BOARDS=(); [ -n '$1' ] && ROADMAP_BOARDS=('$1')
+        board_config guilhermegor widget Ready; echo \"rc=\$?\""
+}
+
+@test "board_config: a discovered board with a non-conventional title is resolved by number (#1043)" {
+    run_board_cfg 'guilhermegor|24|widget'
+    [[ "$output" == *"24 PVT_24 F_1 O_READY"* ]]
+    [[ "$output" == *"rc=0"* ]]
+}
+
+@test "board_config: a title-only board with no discovery result still resolves by title (#1043)" {
+    run_board_cfg ''
+    [[ "$output" == *"5 PVT_5 F_1 O_READY"* ]]
+    [[ "$output" == *"rc=0"* ]]
+}
+
+@test "board_config: a discovered number that names no board is no-board, never the title board (#1043)" {
+    run_board_cfg 'guilhermegor|99|widget'
+    [[ "$output" != *"PVT_5"* ]]
+    [[ "$output" == *"rc=3"* ]]
+}
+
+@test "board_config: a cache for another project than the discovered one is rediscovered (#1043)" {
+    mkdir -p "$TEST_TMP/cache"
+    echo '{"project_number":5,"project_node_id":"PVT_5","status_field_id":"F_1","options":{"Ready":"O_READY"}}' \
+        > "$TEST_TMP/cache/guilhermegor-widget.json"
+    run_board_cfg 'guilhermegor|24|widget'
+    [[ "$output" == *"24 PVT_24 F_1 O_READY"* ]]
+}
