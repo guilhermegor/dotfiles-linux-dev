@@ -94,15 +94,19 @@ od_workflows_off() {
 	done
 }
 
-od_report_remote() {
+od_report_remote() (
 	local repo="$1" dir out
+	# A GIT_DIR inherited from a hook or another repo's tooling would make every `git -C <dir>` in
+	# the lookup and the prune pass read THAT repo, so the unset is scoped to this subshell.
+	unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+		GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX
 	# The repo's own checkout (cwd when its origin matches, else $KANBAN_CHECKOUT_ROOT/<repo>,
 	# the lookup the kanban reconcile uses): rc 3 = none, never a guess at another repo's clone.
 	dir="$(_kb_checkout "${repo%%/*}" "${repo#*/}" "${OD_REPO_DIR:-$PWD}")" || return 3
 	# 0 = dry-run (prune_branches <repo> <apply 0|1>); rc 2 means the pass could not read the repo.
 	out="$(prune_branches "$dir" 0 2>/dev/null)" || return 1
 	sed -n 's/^REPORT-REMOTE \([^:]*\):.*/\1/p' <<<"$out"
-}
+)
 
 # Cells are single-line and pipe-free so a row can never break the table. The cap is a bash
 # substring, which counts characters (not bytes, as `cut -c` does) under a UTF-8 locale.

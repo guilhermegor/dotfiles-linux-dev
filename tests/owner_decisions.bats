@@ -247,6 +247,23 @@ _board_fixture_gh() {
     [ "$status" -eq 1 ]
 }
 
+@test "an inherited GIT_DIR does not hide another repo's checkout" {
+    source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/owner_decisions.sh"
+    export KANBAN_CHECKOUT_ROOT="$BATS_TEST_TMPDIR/github"
+    local r
+    for r in a b; do
+        mkdir -p "$KANBAN_CHECKOUT_ROOT/$r"
+        git init -q "$KANBAN_CHECKOUT_ROOT/$r"
+        git -C "$KANBAN_CHECKOUT_ROOT/$r" remote add origin "https://github.com/acme/$r.git"
+    done
+    prune_branches() { printf 'REPORT-REMOTE feat/in-%s: content missing\n' "${1##*/}"; }
+    export GIT_DIR="$KANBAN_CHECKOUT_ROOT/a/.git"
+    run od_report_remote acme/b
+    [ "$status" -eq 0 ]
+    [ "$output" = "feat/in-b" ]
+    [ "$GIT_DIR" = "$KANBAN_CHECKOUT_ROOT/a/.git" ]
+}
+
 @test "a failed board discovery is UNREADABLE, never an empty repo list" {
     discover_roadmap_boards() { ROADMAP_BOARDS_ERROR="UNKNOWN: board discovery failed"; return 1; }
     run owner_decisions_collect
