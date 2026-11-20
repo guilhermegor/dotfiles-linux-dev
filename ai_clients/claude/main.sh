@@ -44,8 +44,11 @@ run_marketplaces() {
 }
 
 run_plugins() {
-    # Explicit removals — demote before promoting to enforce desired state
-    demote_plugin_from_user_scope "frontend-design@claude-plugins-official"
+    # Explicit removals — demote before promoting to enforce desired state.
+    # Owner removed these three on 2026-11-20: enabled but never installed (no cache).
+    demote_plugin_from_user_scope "supabase-postgres-best-practices@claude-plugins-official"
+    demote_plugin_from_user_scope "senior-prompt-engineer@claude-plugins-official"
+    demote_plugin_from_user_scope "clean-code@claude-plugins-official"
 
     promote_plugin_to_user_scope "superpowers@claude-plugins-official"        "superpowers"        "claude-plugins-official"
     promote_plugin_to_user_scope "claude-hud@claude-hud"                      "claude-hud"         "claude-hud"
@@ -66,9 +69,7 @@ run_plugins() {
     promote_plugin_to_user_scope "feature-dev@claude-plugins-official"         "feature-dev"        "claude-plugins-official"
     promote_plugin_to_user_scope "learning-output-style@claude-plugins-official" "learning-output-style" "claude-plugins-official"
     promote_plugin_to_user_scope "pr-review-toolkit@claude-plugins-official"   "pr-review-toolkit"  "claude-plugins-official"
-    promote_plugin_to_user_scope "supabase-postgres-best-practices@claude-plugins-official" "supabase-postgres-best-practices" "claude-plugins-official"
-    promote_plugin_to_user_scope "senior-prompt-engineer@claude-plugins-official"           "senior-prompt-engineer"           "claude-plugins-official"
-    promote_plugin_to_user_scope "clean-code@claude-plugins-official"                       "clean-code"                       "claude-plugins-official"
+    promote_plugin_to_user_scope "frontend-design@claude-plugins-official"     "frontend-design"    "claude-plugins-official"
     # Context mode — standalone GitHub repo, bootstrapped automatically
     bootstrap_plugin "context-mode@context-mode" "context-mode" "context-mode" "mksglu/context-mode"
     # claude-mem — standalone GitHub repo, bootstrapped automatically

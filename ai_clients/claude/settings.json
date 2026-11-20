@@ -200,9 +200,6 @@
     "frontend-design@claude-plugins-official": true,
     "learning-output-style@claude-plugins-official": true,
     "pr-review-toolkit@claude-plugins-official": true,
-    "supabase-postgres-best-practices@claude-plugins-official": true,
-    "senior-prompt-engineer@claude-plugins-official": true,
-    "clean-code@claude-plugins-official": true,
     "context-mode@context-mode": true,
     "claude-mem@claude-mem": true,
     "ponytail@ponytail": true
