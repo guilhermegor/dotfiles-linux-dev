@@ -297,7 +297,7 @@ refute_log() {
 @test "refuses when the workflow producing a required check is edited" {
     FILES_7=$'.github/workflows/ci.yml\t' run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]
-    [[ "$output" == *"[build]"* ]]
+    [[ "$output" == *"required check ["* ]]  # which name is checked first depends on the sort locale
     [[ "$output" == *".github/workflows/ci.yml"* ]]
     refute_log "PUT"
 }
@@ -384,10 +384,34 @@ refute_log() {
     refute_log "PUT"
 }
 
+@test "refuses statuses: write, top-level and job-level, aliases included" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions:\n  statuses: write\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    FILES_8=$'.github/workflows/other.yml\t' \
+        WF_CONTENT=$'permissions: read-all\njobs:\n  j:\n    permissions: {statuses: write}\n' run bash "$SCRIPT" 8
+    [ "$status" -ne 0 ]
+    FILES_9=$'.github/workflows/other.yml\t' \
+        WF_CONTENT=$'x: &p write\npermissions:\n  statuses: *p\n' run bash "$SCRIPT" 9
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "a required context met by a commit status refuses when the PR changes a workflow" {
+    FILES_7=$'.github/workflows/other.yml\t' STATUS_7=$'ci/extra\tsuccess\tci-bot\t-' RULE_CTX="ci/extra" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"commit status"* ]]
+    refute_log "PUT"
+}
+
+@test "a required commit status still merges when no workflow changes" {
+    STATUS_7=$'ci/extra\tsuccess\tci-bot\t-' RULE_CTX="ci/extra" run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+}
+
 @test "refuses a required check-run with no matching job in its run" {
     FILES_7=$'.github/workflows/other.yml\t' JOBS_1="lint" run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]
-    [[ "$output" == *"[build]"* ]]
+    [[ "$output" == *"no backing job"* ]]
     refute_log "PUT"
 }
 

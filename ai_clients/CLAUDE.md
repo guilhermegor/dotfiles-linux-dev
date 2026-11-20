@@ -129,8 +129,9 @@ still refused. When the PR adds, changes or renames (`previous_filename`) a work
 each required Actions check-run (duplicates too) is traced check_suite -> run -> path
 and refused if that workflow, or a reusable one in `referenced_workflows`, is changed;
 it must also match a real job of its run. Changed workflows are parsed (yq or PyYAML):
-top-level `permissions` must exist, with no `checks: write` or `write-all`, job-level
-included. An unresolvable path, failed read or missing parser is UNKNOWN (fails
+top-level `permissions` must exist, with no `checks: write`, `statuses: write` or `write-all`, job-level
+included; a required context met by a commit status (no check_suite, so untraceable)
+refuses any workflow change. An unresolvable path, failed read or missing parser is UNKNOWN (fails
 closed), as is an unreadable file list or one differing from `changed_files` ("file
 list incomplete", since the endpoint caps at 3000).
 The gate is **partial by design**: it cannot see CI code outside `.github/` (a local

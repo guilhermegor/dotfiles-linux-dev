@@ -31,7 +31,9 @@
 # references (reusable workflow) a changed file; a required check-run with no job of that
 # name in its run (an API-posted check); and any added/changed workflow (parsed with yq or
 # PyYAML, aliases resolved; no parser is UNKNOWN) whose top-level `permissions` is missing,
-# write-all or grants checks: write, or has a job-level one that does (it could POST a check).
+# write-all or grants checks/statuses: write, or has a job-level one that does (it could
+# POST a check). A required context met by a commit status has no check_suite to trace, so
+# it refuses any PR that changes a workflow.
 # The gate cannot see CI code that is not under .github/.
 set -u
 
@@ -64,7 +66,8 @@ GATE_CHECK="Review threads answered"
 gh_retry() {
 	local out err
 	err="$(mktemp)" || return 1
-	if out="$(gh "$@" 2>"$err")"; then
+	# </dev/null: callers run inside `while read` loops and gh must not eat their stdin.
+	if out="$(gh "$@" 2>"$err" </dev/null)"; then
 		rm -f "$err"
 		printf '%s\n' "$out"
 		return 0
@@ -75,7 +78,7 @@ gh_retry() {
 	fi
 	sleep "${MERGE_GREEN_RETRY_SLEEP:-2}"
 	rm -f "$err"
-	out="$(gh "$@" 2>/dev/null)" || return 1
+	out="$(gh "$@" 2>/dev/null </dev/null)" || return 1
 	printf '%s\n' "$out"
 }
 
@@ -113,7 +116,7 @@ workflow_json() {
 
 # Safe = a top-level `permissions` that is read-all or a mapping without checks: write, and
 # every job-level `permissions` absent or equally safe (write-all is a string, so never safe).
-PERMISSIONS_SAFE='def ok: (type == "string" and . == "read-all") or (type == "object" and ((.checks // "none") != "write"));
+PERMISSIONS_SAFE='def ok: (type == "string" and . == "read-all") or (type == "object" and ((.checks // "none") != "write" and (.statuses // "none") != "write"));
 	type == "object" and has("permissions") and (.permissions | ok)
 	and all((.jobs // {})[]; (type == "object") and ((has("permissions") | not) or (.permissions | ok)))'
 
@@ -180,6 +183,12 @@ merge_one() {
 
 	# Provenance: only matters when the PR touched a workflow. Actions app id is 15368.
 	if [ -n "$wf_changed" ]; then
+		# (0) A commit status carries no check_suite, so its creator cannot be traced to a
+		# workflow. Fail closed: a required context met by a status refuses any workflow change.
+		if awk -F'\t' 'NR==FNR {req[$1]=1; next} $3!="::check::" && ($1 in req) {f=1} END {exit !f}' <(cut -f1 <<<"$required") - <<<"$checks"; then
+			echo "#$pr REFUSED: a required context is satisfied by a commit status and this PR changes a workflow"
+			return 1
+		fi
 		# (1) Forgery: a changed workflow whose GITHUB_TOKEN may write checks could POST a
 		# check-run under a required name. No top-level `permissions:` means the repo default
 		# applies, which cannot be proven safe from the file, so that refuses too.
