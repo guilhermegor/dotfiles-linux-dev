@@ -25,7 +25,8 @@
 # cards. Asking "what is pending on me?" must not change a board.
 #
 # OWNER_DECISIONS_REPOS overrides the scanned repos (space-separated `owner/repo`); the default is
-# every ROADMAP_BOARDS entry as `<owner>/<repo>` (discovered at runtime, #1022). Every scanned
+# every ROADMAP_BOARDS entry as `<owner>/<repo>` (discovered at runtime, #1022); when discovery
+# yields none, the cwd checkout's `origin` repo, with a report line saying so (#1059). Every scanned
 # repo gets its REPORT-REMOTE pass (#1046); one with no local checkout is UNREADABLE, never silent.
 #
 # Standing exclusions come from a DATA file, never hardcoded numbers: OWNER_DECISIONS_EXCLUDE_FILE
@@ -127,7 +128,17 @@ _od_rows() {
 	while IFS= read -r line; do
 		[[ "$line" == *UNKNOWN* ]] && printf 'unreadable\t-\t%s\t\n' "$line"
 	done <<<"${ROADMAP_BOARDS_REPORT:-}"
-	read -ra repos <<<"${OWNER_DECISIONS_REPOS:-$(printf '%s\n' "${ROADMAP_BOARDS[@]}" | awk -F'|' '!seen[$1"/"$3]++ {print $1"/"$3}' | tr '\n' ' ')}"
+	if [[ -n "${OWNER_DECISIONS_REPOS:-}" ]]; then
+		read -ra repos <<<"$OWNER_DECISIONS_REPOS"
+	elif ((${#ROADMAP_BOARDS[@]})); then
+		read -ra repos <<<"$(printf '%s\n' "${ROADMAP_BOARDS[@]}" | awk -F'|' '!seen[$1"/"$3]++ {print $1"/"$3}' | tr '\n' ' ')"
+	else
+		# Empty discovery (a failed read, #1059): never scan "/"; fall back to this checkout's origin.
+		line="$(git remote get-url origin 2>/dev/null | sed -E 's#^.*[:/]([^/:]+/[^/]+)$#\1#; s#\.git$##')"
+		repos=()
+		[[ "$line" == */* ]] && repos=("$line")
+		printf 'unreadable\t-\tno boards discovered; fallback to cwd origin repo (%s)\t\n' "${line:-none}"
+	fi
 	for repo in "${repos[@]}"; do
 		if json="$(od_pr_json "$repo")" && jq -e 'type == "array"' <<<"$json" >/dev/null 2>&1; then
 			jq -r --arg repo "$repo" --arg re "$OD_FLAG_RE" '.[]
