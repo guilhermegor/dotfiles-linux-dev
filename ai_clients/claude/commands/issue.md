@@ -547,8 +547,9 @@ create already succeeded. Do not retry in a loop: keep the issue, skip the remai
 write independent of the board, so it still runs. The sweep's off-board pass
 (`reconcile_kanban_offboard`, item `[12]` of `subagent_stop_sweep.sh`) lists open issues over REST,
 finds the ones with no card and adds them with this step's derivation (open blocker -> `Blocked`,
-else the work-type column). It scans only the `ROADMAP_BOARDS` boards, so an unregistered repo or
-a `--project` board needs a manual follow-up. It sets Status only, never `Points`: report `Points`
+else the work-type column). It scans only the boards discovered at runtime (a project linked to
+the repo or titled `<repo> kanban`, minus `ROADMAP_BOARDS_EXCLUDE`, or the `.github/roadmap-board`
+override, #1022), so a repo with no such board or a `--project` board needs a manual follow-up. It sets Status only, never `Points`: report `Points`
 as unset (the off-board report says so too). The score is not retained: the resume path re-derives it (`Points` empty -> step 5a) on the next `/issue` run, which is intended.
 
 **Also set `Points`, every time** — the score from step 5a (or the sum, for a parent), never
@@ -615,7 +616,7 @@ Surface: <n> path(s)                   (say "inferred" under --quick)
 Milestone: <title> | none (repo has no milestones) | none (no fit)   (omit for linear)
 Parent:  #<P>                          (omit when flat)
 Board:   <project> → <column>          (omit for linear)
-Board:   item-add failed (<error>) — the sweep's off-board pass adds the card (ROADMAP_BOARDS only; Points unset)   (omit unless step 7 failed)
+Board:   item-add failed (<error>) — the sweep's off-board pass adds the card (discovered boards only; Points unset)   (omit unless step 7 failed)
 Board:   Status edit failed (<error>) — card exists with no Status; the sweep's No-Status placement (reconcile_kanban_done) places it (Points unset)   (omit unless step 7 failed)
 Cut 1.0.0: #<cut> now blocked by #<N> | none in this repo | skipped (<reason>) | link failed (<error>)   (omit for linear)
 Branch:  <type>/<ref>-<slug> (checked out)   (omit for parents)

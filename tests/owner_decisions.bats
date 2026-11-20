@@ -293,3 +293,52 @@ _board_fixture_gh() {
     run owner_decisions_collect
     [[ "$output" == *"No pending owner decisions."* ]]
 }
+
+# Failed board discovery leaves ROADMAP_BOARDS empty; that must never scan the phantom repo "/" (#1059).
+_empty_boards_in_checkout() {
+    unset OWNER_DECISIONS_REPOS
+    ROADMAP_BOARDS=()
+    SCANNED="$BATS_TEST_TMPDIR/scanned.log"
+    : >"$SCANNED"
+    od_pr_json() { printf '%s\n' "$1" >>"$SCANNED"; printf '[]'; }
+    git init -q "$BATS_TEST_TMPDIR/co"
+    git -C "$BATS_TEST_TMPDIR/co" remote add origin git@github.com:acme/widgets.git
+    cd "$BATS_TEST_TMPDIR/co"
+}
+
+@test "should-fail: an empty ROADMAP_BOARDS never scans the phantom repo /" {
+    _empty_boards_in_checkout
+    run owner_decisions_collect
+    run grep -qx '/' "$SCANNED"
+    [ "$status" -eq 1 ]
+}
+
+@test "the cwd fallback strips a trailing slash from an https origin" {
+    _empty_boards_in_checkout
+    git remote set-url origin https://github.com/acme/widgets.git/
+    run owner_decisions_collect
+    [ "$(cat "$SCANNED")" = "acme/widgets" ]
+}
+
+@test "the cwd fallback scans nothing for a non-GitHub origin" {
+    _empty_boards_in_checkout
+    git remote set-url origin /srv/repos/widgets.git
+    run owner_decisions_collect
+    [ ! -s "$SCANNED" ]
+    [[ "$output" == *"fallback to cwd origin repo (none)"* ]]
+}
+
+@test "the cwd fallback ignores an inherited GIT_DIR" {
+    _empty_boards_in_checkout
+    git init -q "$BATS_TEST_TMPDIR/other"
+    git -C "$BATS_TEST_TMPDIR/other" remote add origin git@github.com:evil/elsewhere.git
+    GIT_DIR="$BATS_TEST_TMPDIR/other/.git" run owner_decisions_collect
+    [ "$(cat "$SCANNED")" = "acme/widgets" ]
+}
+
+@test "should-pass: an empty ROADMAP_BOARDS scans the cwd origin repo and reports the fallback" {
+    _empty_boards_in_checkout
+    run owner_decisions_collect
+    [ "$(cat "$SCANNED")" = "acme/widgets" ]
+    [[ "$output" == *"fallback"*"acme/widgets"* ]]
+}
