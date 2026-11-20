@@ -4,6 +4,11 @@
 # STATE_<n>, DRAFT_<n>, CHECK_<n>, AUTHOR_<n>, FILES_<n>, CHANGED_<n>, MERGED_<n>;
 # global: ME, USER_FAIL, FILES_FAIL, PROT_FAIL, PROT_404, PUT_FAIL, STATUS_<n>, RULE_CTX,
 # FILES_FLAKY (first /files call prints a row, then fails with HTTP 502).
+# Provenance (#1064): check-runs carry a check_suite id (SUITE, default 1); EXTRA_CHECKS adds
+# raw check-run rows; RUN_PATH_<suite> is that suite's workflow path (default ci.yml,
+# "none" = unresolvable); REFS_<suite> = its referenced (reusable) workflows; JOBS_<suite> =
+# the run's job names (default build + the review gate); WF_CONTENT = a changed workflow's
+# content at the head (default: safe permissions); RUN_FAIL makes the actions/runs read fail.
 
 setup() {
     SCRIPT="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/merge_green_pr.sh"
@@ -51,12 +56,30 @@ if [[ "$args" == *"/rules/branches/"* ]]; then
     [ -n "${RULE_CTX:-}" ] && echo "$RULE_CTX"
     exit 0
 fi
+if [[ "$args" == *"actions/runs?check_suite_id="* ]]; then
+    [ -n "${RUN_FAIL:-}" ] && exit 1
+    id="${args#*check_suite_id=}"; id="${id%% *}"
+    p="RUN_PATH_$id"; p="${!p:-.github/workflows/ci.yml}"
+    r="REFS_$id"
+    [ "$p" = none ] || printf '%s\t%s\t%s\n' "$id" "$p" "${!r:-}"
+    exit 0
+fi
+if [[ "$args" == *"actions/runs/"*"/jobs"* ]]; then
+    id="${args#*actions/runs/}"; id="${id%%/*}"
+    j="JOBS_$id"; printf '%b\n' "${!j:-build\nReview threads answered}"
+    exit 0
+fi
+if [[ "$args" == *"/contents/"* ]]; then
+    printf '%b' "${WF_CONTENT:-permissions:\n  contents: read\n}" | base64
+    exit 0
+fi
 if [[ "$args" == *"/check-runs"* ]]; then
     n="${args#*commits/sha}"; n="${n%%/*}"
     c="CHECK_$n"; c="${!c:-success}"
     [ "$c" = missing ] && exit 0
-    printf 'build\t%s\t::check::\t%s\n' "$c" "${APP_ID:-15368}"
-    printf 'Review threads answered\t%s\t::check::\t%s\n' "$c" "${APP_ID:-15368}"
+    printf 'build\t%s\t::check::\t%s\t%s\n' "$c" "${APP_ID:-15368}" "${SUITE:-1}"
+    printf 'Review threads answered\t%s\t::check::\t%s\t%s\n' "$c" "${APP_ID:-15368}" "${SUITE:-1}"
+    [ -n "${EXTRA_CHECKS:-}" ] && printf '%s\n' "$EXTRA_CHECKS"
     exit 0
 fi
 if [[ "$args" == *"/status"* ]]; then
@@ -258,12 +281,179 @@ refute_log() {
     refute_log "pulls/8/merge"
 }
 
-@test "refuses a PR touching .github/workflows or .github/actions" {
-    FILES_7=$'src/a.sh\t\n.github/workflows/ci.yml\t' run bash "$SCRIPT" 7
+@test "refuses a PR touching .github/actions" {
+    FILES_7=".github/actions/x/action.yml"$'\t' run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]
-    [[ "$output" == *"touches CI definitions"* ]]
-    FILES_8=".github/actions/x/action.yml"$'\t' run bash "$SCRIPT" 8
+    [[ "$output" == *".github/actions"* ]]
+    refute_log "PUT"
+}
+
+@test "merges when an unrelated workflow is edited and required checks come from unchanged ones" {
+    FILES_7=$'src/a.sh\t\n.github/workflows/other.yml\t' run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
+}
+
+@test "refuses when the workflow producing a required check is edited" {
+    FILES_7=$'.github/workflows/ci.yml\t' run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]
+    [[ "$output" == *"required check ["* ]]  # which name is checked first depends on the sort locale
+    [[ "$output" == *".github/workflows/ci.yml"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses a new workflow posting a duplicate required check name" {
+    FILES_7=$'.github/workflows/new.yml\t' EXTRA_CHECKS=$'build\tsuccess\t::check::\t15368\t2' \
+        RUN_PATH_2=.github/workflows/new.yml run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"[build]"* ]]
+    [[ "$output" == *".github/workflows/new.yml"* ]]
+    refute_log "PUT"
+}
+
+@test "an unresolvable run path is UNKNOWN and fails closed" {
+    FILES_7=$'.github/workflows/other.yml\t' RUN_PATH_1=none run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    refute_log "PUT"
+}
+
+@test "an actions/runs read failure is UNKNOWN and fails closed" {
+    FILES_7=$'.github/workflows/other.yml\t' RUN_FAIL=1 run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses an unchanged caller of a changed reusable workflow" {
+    FILES_7=$'.github/workflows/reusable.yml\t' REFS_1=".github/workflows/reusable.yml" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *".github/workflows/reusable.yml"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses a changed workflow granting checks: write" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions:\n  checks: write\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"other.yml"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses a changed workflow with no permissions key" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'on: push\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "refuses checks: write hidden behind a YAML alias" {
+    FILES_7=$'.github/workflows/other.yml\t' \
+        WF_CONTENT=$'x: &p write\npermissions:\n  checks: *p\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"other.yml"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses a job-level checks: write under safe top-level permissions" {
+    FILES_7=$'.github/workflows/other.yml\t' \
+        WF_CONTENT=$'permissions: read-all\njobs:\n  j:\n    permissions: {checks: write}\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "refuses permissions: write-all" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions: write-all\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "accepts read-all and an empty-mapping permissions" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions: read-all\n' run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    FILES_8=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions: {}\njobs:\n  j:\n    runs-on: x\n' run bash "$SCRIPT" 8
+    [ "$status" -eq 0 ]
+}
+
+@test "no usable YAML parser is UNKNOWN and fails closed" {
+    mkdir -p "$BATS_TEST_TMPDIR/nopar"
+    printf '#!/bin/bash\nexit 1\n' > "$BATS_TEST_TMPDIR/nopar/python3"
+    cp "$BATS_TEST_TMPDIR/nopar/python3" "$BATS_TEST_TMPDIR/nopar/yq"
+    chmod +x "$BATS_TEST_TMPDIR/nopar/python3" "$BATS_TEST_TMPDIR/nopar/yq"
+    FILES_7=$'.github/workflows/other.yml\t' PATH="$BATS_TEST_TMPDIR/nopar:$PATH" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    refute_log "PUT"
+}
+
+@test "refuses statuses: write, top-level and job-level, aliases included" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions:\n  statuses: write\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    FILES_8=$'.github/workflows/other.yml\t' \
+        WF_CONTENT=$'permissions: read-all\njobs:\n  j:\n    permissions: {statuses: write}\n' run bash "$SCRIPT" 8
+    [ "$status" -ne 0 ]
+    FILES_9=$'.github/workflows/other.yml\t' \
+        WF_CONTENT=$'x: &p write\npermissions:\n  statuses: *p\n' run bash "$SCRIPT" 9
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "a required context met by a commit status refuses when the PR changes a workflow" {
+    FILES_7=$'.github/workflows/other.yml\t' STATUS_7=$'ci/extra\tsuccess\tci-bot\t-' RULE_CTX="ci/extra" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"commit status"* ]]
+    refute_log "PUT"
+}
+
+@test "a required commit status still merges when no workflow changes" {
+    STATUS_7=$'ci/extra\tsuccess\tci-bot\t-' RULE_CTX="ci/extra" run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+}
+
+@test "permissions are an allowlist: Write, WRITE and bogus values are refused" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions:\n  checks: Write\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    FILES_8=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions:\n  statuses: WRITE\n' run bash "$SCRIPT" 8
+    [ "$status" -ne 0 ]
+    FILES_9=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions:\n  checks: bogus\n' run bash "$SCRIPT" 9
+    [ "$status" -ne 0 ]
+    FILES_7=$'.github/workflows/other.yml\t' \
+        WF_CONTENT=$'permissions: read-all\njobs:\n  j:\n    permissions: {checks: Write}\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "checks: none and read are accepted" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions:\n  checks: none\n  contents: read\n' run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    FILES_8=$'.github/workflows/other.yml\t' \
+        WF_CONTENT=$'permissions: read-all\njobs:\n  j:\n    permissions: {checks: read, statuses: none}\n' run bash "$SCRIPT" 8
+    [ "$status" -eq 0 ]
+}
+
+@test "refuses a required check-run with no matching job in its run" {
+    FILES_7=$'.github/workflows/other.yml\t' JOBS_1="lint" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no backing job"* ]]
+    refute_log "PUT"
+}
+
+@test "a required check-run from a non-Actions app refuses when the PR changes a workflow" {
+    FILES_7=$'.github/workflows/other.yml\t' APP_ID=424242 run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"non-Actions check-run"* ]]
+    refute_log "PUT"
+}
+
+@test "a non-Actions required check-run still merges when no workflow changes" {
+    APP_ID=424242 run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    refute_log "actions/runs"
+}
+
+@test "a changed workflow filename outside [A-Za-z0-9._/-] is refused before any contents read" {
+    FILES_7=$'.github/workflows/x?ref=sha7&a=.yml\t' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"outside [A-Za-z0-9._/-]"* ]]
+    refute_log "/contents/"
     refute_log "PUT"
 }
 
@@ -277,7 +467,7 @@ refute_log() {
 @test "refuses a rename out of .github/workflows" {
     FILES_7="docs/ci.yml"$'\t'".github/workflows/ci.yml" run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]
-    [[ "$output" == *"touches CI definitions"* ]]
+    [[ "$output" == *".github/workflows/ci.yml"* ]]
     refute_log "PUT"
 }
 

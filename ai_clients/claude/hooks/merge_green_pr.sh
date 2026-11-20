@@ -19,8 +19,25 @@
 # refused. OWNER/REPO come from the cwd's origin: from a shell already in the repo run it
 # bare (`~/.claude/hooks/merge_green_pr.sh 27 29`, no `cd`); `cd <absolute-repo-path> && …`
 # works too. A required check pinned to an app (protection app_id, ruleset integration_id)
-# must come from that app's check-run; unpinned (null/-1) is matched by name. The gate cannot
-# see CI code that is not under .github/.
+# must come from that app's check-run; unpinned (null/-1) is matched by name.
+#
+# CI provenance (#1064): a PR can add or edit a workflow that posts a green check under a
+# required name. So when the PR adds, changes or renames any .github/workflows/ file, EVERY
+# GitHub Actions check-run carrying a required name (duplicates included) is traced
+# check-run -> check_suite.id -> actions/runs?check_suite_id=... -> .path, and the PR is
+# REFUSED if that workflow file is one the PR touched. An unresolvable path or failed read
+# is UNKNOWN (fails closed). Checks from other apps keep the app_id matching only. Any
+# .github/actions/ change is still refused (merge by hand). Also refused: a run that
+# references (reusable workflow) a changed file; a required check-run with no job of that
+# name in its run (an API-posted check); and any added/changed workflow (parsed with yq or
+# PyYAML, aliases resolved; no parser is UNKNOWN) whose top-level `permissions` is missing,
+# write-all or grants checks/statuses: write, or has a job-level one that does (it could
+# POST a check). A required context met by a commit status or by a non-Actions check-run has
+# no workflow to trace, so it refuses any PR that changes a workflow. A changed workflow
+# filename outside [A-Za-z0-9._/-] is refused too (it is interpolated into a URL).
+# An UNCHANGED workflow with checks/statuses: write that runs PR-controlled code is out of
+# scope: it is already trusted on the base branch, and the old blanket rule did not cover it.
+# The gate cannot see CI code that is not under .github/.
 set -u
 
 if [ "$#" -lt 1 ]; then
@@ -52,7 +69,8 @@ GATE_CHECK="Review threads answered"
 gh_retry() {
 	local out err
 	err="$(mktemp)" || return 1
-	if out="$(gh "$@" 2>"$err")"; then
+	# </dev/null: callers run inside `while read` loops and gh must not eat their stdin.
+	if out="$(gh "$@" 2>"$err" </dev/null)"; then
 		rm -f "$err"
 		printf '%s\n' "$out"
 		return 0
@@ -63,7 +81,7 @@ gh_retry() {
 	fi
 	sleep "${MERGE_GREEN_RETRY_SLEEP:-2}"
 	rm -f "$err"
-	out="$(gh "$@" 2>/dev/null)" || return 1
+	out="$(gh "$@" 2>/dev/null </dev/null)" || return 1
 	printf '%s\n' "$out"
 }
 
@@ -87,9 +105,35 @@ required_contexts() {
 	printf '%s\n%s\n' "$classic" "$rules" | sed '/^$/d'
 }
 
+# Workflow YAML on stdin -> JSON on stdout, aliases resolved. No parser is a failure, so the
+# caller fails closed (UNKNOWN). Considered and rejected: refusing any workflow change.
+workflow_json() {
+	local src out
+	src="$(cat)"
+	# yq may be a flavour without `-o=json` (kislyuk, mikefarah v3): fall through, never stop.
+	if command -v yq >/dev/null 2>&1 && out="$(yq -o=json 'explode(.)' <<<"$src" 2>/dev/null)" && [ -n "$out" ]; then
+		printf '%s\n' "$out"
+	elif python3 -c 'import yaml' >/dev/null 2>&1; then
+		python3 -c 'import sys, json, yaml; print(json.dumps(yaml.safe_load(sys.stdin)))' <<<"$src"
+	else
+		return 1
+	fi
+}
+
+# Allowlist, never a denylist: a top-level `permissions` that is read-all or a mapping whose
+# every value is read/none, and every job-level `permissions` absent, read-all, or with
+# checks/statuses absent/read/none. Any other value (Write, bogus, write-all) is unsafe.
+PERMISSIONS_SAFE='def lvl: . == "read" or . == "none";
+	def top: (type == "string" and . == "read-all") or (type == "object" and all(.[]; lvl));
+	def job: (type == "string" and . == "read-all")
+		or (type == "object" and (has("<<") | not) and all(("checks", "statuses") as $k | if has($k) then .[$k] | lvl else true end; .));
+	type == "object" and has("permissions") and (.permissions | top)
+	and all((.jobs // {})[]; (type == "object") and ((has("permissions") | not) or (.permissions | job)))'
+
 merge_one() {
 	local pr="$1" info head state draft base author changed try
-	local required checks statuses bad name files
+	local required checks statuses bad name files wf_changed wf_live wpath rname suite
+	local rid rpath refs jobs backed content wf parsed
 
 	# mergeable_state is computed lazily: poll while GitHub still says unknown/null.
 	for try in 1 2 3; do
@@ -111,9 +155,7 @@ merge_one() {
 	[[ "$state" == "clean" || "$state" == "has_hooks" ]] ||
 		{ echo "#$pr REFUSED: mergeable_state is '$state', not clean"; return 1; }
 
-	# A PR can add a workflow that posts a green check with a required name, so the
-	# check gate below is only trustworthy for a PR that cannot change CI definitions.
-	files="$(gh_retry api --paginate "repos/$owner/$repo/pulls/$pr/files?per_page=100" --jq '.[] | [.filename, (.previous_filename // "")] | @tsv')" ||
+	files="$(gh_retry api --paginate "repos/$owner/$repo/pulls/$pr/files?per_page=100" --jq '.[] | [.filename, (.previous_filename // ""), (.status // "")] | @tsv')" ||
 		{ echo "#$pr UNKNOWN: cannot read the PR's files"; return 1; }
 	# The files endpoint stops at 3000, so a short list could hide a .github/ change.
 	if [ "$(grep -c . <<<"$files")" -ne "$changed" ]; then
@@ -121,10 +163,14 @@ merge_one() {
 		return 1
 	fi
 	# Either column: a rename out of .github/ keeps the old path in previous_filename.
-	if grep -q -E $'(^|\t)\\.github/(workflows|actions)/' <<<"$files"; then
-		echo "#$pr REFUSED: touches CI definitions — merge by hand"
+	if grep -q -E $'(^|\t)\\.github/actions/' <<<"$files"; then
+		echo "#$pr REFUSED: touches .github/actions — merge by hand"
 		return 1
 	fi
+	# Workflow files the PR added, changed or renamed (either column).
+	wf_changed="$(cut -f1,2 <<<"$files" | tr '\t' '\n' | grep -E '^\.github/workflows/' | sort -u)"
+	# Of those, the ones still present at the head (a removed file cannot post anything).
+	wf_live="$(awk -F'\t' '$1 ~ /^\.github\/workflows\// && $3!="removed" {print $1}' <<<"$files" | sort -u)"
 
 	required="$(required_contexts "$base")" ||
 		{ echo "#$pr UNKNOWN: cannot read the required checks of $base"; return 1; }
@@ -134,16 +180,73 @@ merge_one() {
 	# State is normalised to "success"; GitHub counts skipped/neutral as passing, so they
 	# are accepted too, except for the review gate itself (strict success).
 	checks="$(gh_retry api --paginate "repos/$owner/$repo/commits/$head/check-runs?per_page=100" \
-		--jq '.check_runs[] | [.name, (.conclusion // "pending"), "::check::", ((.app.id // -1)|tostring)] | @tsv')" ||
+		--jq '.check_runs[] | [.name, (.conclusion // "pending"), "::check::", ((.app.id // -1)|tostring), ((.check_suite.id // "-")|tostring)] | @tsv')" ||
 		{ echo "#$pr UNKNOWN: cannot read check-runs of $head"; return 1; }
 	# A commit status is forgeable by any token with repo access, this account's own gh
 	# included (a personal token cannot create a check-run). So a status never satisfies
 	# the review gate, and for any other context it counts only when its creator is not
 	# the authenticated user. Third column: "::check::" for a check-run, else the creator.
 	statuses="$(gh_retry api "repos/$owner/$repo/commits/$head/status" \
-		--jq '.statuses[] | [.context, .state, (.creator.login // "-"), "-"] | @tsv')" ||
+		--jq '.statuses[] | [.context, .state, (.creator.login // "-"), "-", "-"] | @tsv')" ||
 		{ echo "#$pr UNKNOWN: cannot read commit statuses of $head"; return 1; }
 	checks="$(printf '%s\n%s\n' "$checks" "$statuses")"
+
+	# Provenance: only matters when the PR touched a workflow. Actions app id is 15368.
+	if [ -n "$wf_changed" ]; then
+		# (0) A commit status carries no check_suite, so its creator cannot be traced to a
+		# workflow. Fail closed: a required context met by a status refuses any workflow change.
+		if awk -F'\t' 'NR==FNR {req[$1]=1; next} $3!="::check::" && ($1 in req) {f=1} END {exit !f}' <(cut -f1 <<<"$required") - <<<"$checks"; then
+			echo "#$pr REFUSED: a required context is satisfied by a commit status and this PR changes a workflow"
+			return 1
+		fi
+		# (0b) A check-run from any app other than GitHub Actions cannot be traced to a workflow,
+		# and a dropped job leaves its name free for an App token to post under. Fail closed.
+		if awk -F'\t' 'NR==FNR {req[$1]=1; next} $3=="::check::" && $4!="15368" && ($1 in req) {f=1} END {exit !f}' <(cut -f1 <<<"$required") - <<<"$checks"; then
+			echo "#$pr REFUSED: a required context is satisfied by a non-Actions check-run and this PR changes a workflow"
+			return 1
+		fi
+		# (0c) The path goes into a URL unescaped, so ?, & or # would redirect the contents read
+		# to another revision; tab/newline would break the TSV columns. Allowlist the charset.
+		if grep -q -v -E '^[A-Za-z0-9._/-]+$' <<<"$wf_changed"; then
+			echo "#$pr REFUSED: a changed workflow filename has characters outside [A-Za-z0-9._/-]"
+			return 1
+		fi
+		# (1) Forgery: a changed workflow whose GITHUB_TOKEN may write checks could POST a
+		# check-run under a required name. No top-level `permissions:` means the repo default
+		# applies, which cannot be proven safe from the file, so that refuses too.
+		while IFS= read -r wpath; do
+			[ -n "$wpath" ] || continue
+			content="$(gh_retry api "repos/$owner/$repo/contents/$wpath?ref=$head" --jq .content | base64 -d 2>/dev/null)" && [ -n "$content" ] ||
+				{ echo "#$pr UNKNOWN: cannot read $wpath at $head"; return 1; }
+			parsed="$(workflow_json <<<"$content")" && [ -n "$parsed" ] ||
+				{ echo "#$pr UNKNOWN: cannot parse $wpath (no YAML parser, or invalid YAML)"; return 1; }
+			jq -e "$PERMISSIONS_SAFE" <<<"$parsed" >/dev/null 2>&1 ||
+				{ echo "#$pr REFUSED: changed workflow $wpath may grant checks: write (permissions not provably safe)"; return 1; }
+		done <<<"$wf_live"
+		# (2) Each required Actions check-run: its run and every reusable workflow that run
+		# references must be unchanged, and the run must have a job of that name.
+		while IFS=$'\t' read -r rname suite; do
+			[ -n "$rname" ] || continue
+			# A suite with no runs is unresolvable, never assumed clean.
+			wpath="$(gh_retry api "repos/$owner/$repo/actions/runs?check_suite_id=$suite" \
+				--jq '.workflow_runs[] | [.id, .path, ((.referenced_workflows // []) | map(.path) | join(" "))] | @tsv')" && [ -n "$wpath" ] ||
+				{ echo "#$pr UNKNOWN: cannot resolve the workflow of required check [$rname]"; return 1; }
+			backed=""
+			while IFS=$'\t' read -r rid rpath refs; do
+				for wf in $rpath $refs; do
+					wf="$(sed -E 's/@.*//; s#^.*(\.github/workflows/)#\1#' <<<"$wf")"
+					if grep -q -x -F -- "$wf" <<<"$wf_changed"; then
+						echo "#$pr REFUSED: required check [$rname] came from $wf, which this PR changes"
+						return 1
+					fi
+				done
+				jobs="$(gh_retry api --paginate "repos/$owner/$repo/actions/runs/$rid/jobs?per_page=100" --jq '.jobs[].name')" ||
+					{ echo "#$pr UNKNOWN: cannot read the jobs of run $rid"; return 1; }
+				if grep -q -x -F -- "$rname" <<<"$jobs"; then backed=1; fi
+			done <<<"$wpath"
+			[ -n "$backed" ] || { echo "#$pr REFUSED: required check [$rname] has no backing job in its run"; return 1; }
+		done < <(awk -F'\t' 'NR==FNR {req[$1]=1; next} $3=="::check::" && $4=="15368" && ($1 in req) {print $1 "\t" $5}' <(cut -f1 <<<"$required") - <<<"$checks" | sort -u)
+	fi
 
 	bad=""
 	while IFS=$'\t' read -r name app; do
