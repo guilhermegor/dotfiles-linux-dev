@@ -18,7 +18,8 @@
 # (repo name, board id) is hardcoded. The `state:ready|blocked|deferred` label triad and the
 # "Status"/"Blocked by" field names are the one convention this file assumes, per the issue spec.
 #
-# Contract (two directions: Blocked unblocks; Ready with an open blocker re-blocks, #812):
+# Contract (two directions: Blocked unblocks to Ready, or to Backlog when the spec is incomplete,
+# #931; a Ready OR Backlog card with an open blocker re-blocks, #812/#931):
 #   reconcile_roadmap_unblock OWNER PROJECT
 #     Sets two globals (never partial):
 #       RECONCILE_STATUS = ok | unknown
@@ -604,7 +605,10 @@ reconcile_roadmap_unblock() {
 #                               board's own item lines indented beneath it. A board that reconciled
 #                               clean ("nothing to change") and one nobody swept (no line) must not
 #                               look alike.
-#   Returns 1 when RECONCILE_BOARDS_STATUS is unknown.
+#   Returns 1 when RECONCILE_BOARDS_STATUS is unknown. A throttled board gets a "board OWNER/N
+#   (repo): SKIPPED — GraphQL rate-limited, retry next round" line and the status is unknown (#1070).
+#   Read RECONCILE_BOARDS_STATUS, never RECONCILE_STATUS: the latter is the LAST board's own
+#   verdict and reads ok after a sweep that skipped an earlier board.
 #
 # ⚠️ Fail closed PER BOARD, never across the sweep: one unreadable board is reported UNKNOWN and the
 # loop continues. An early `return 1` here would let a single permissions error silently cancel
@@ -640,7 +644,12 @@ reconcile_roadmap_boards() {
 		reconcile_roadmap_unblock "$owner" "$project" || rc=$?
 		if ((rc != 0)); then
 			RECONCILE_BOARDS_STATUS="unknown"
-			lines+="board $owner/$project ($repo): UNKNOWN — $RECONCILE_REPORT"$'\n'
+			# #1070: a throttled board is SKIPPED (retry next round), worded like kanban_reconcile's.
+			if [[ "$RECONCILE_REPORT" == "UNKNOWN (throttled)"* ]]; then
+				lines+="board $owner/$project ($repo): SKIPPED — GraphQL rate-limited, retry next round"$'\n'
+			else
+				lines+="board $owner/$project ($repo): UNKNOWN — $RECONCILE_REPORT"$'\n'
+			fi
 		elif [[ -z "$RECONCILE_REPORT" ]]; then
 			lines+="board $owner/$project ($repo): ok — nothing to change"$'\n'
 		else

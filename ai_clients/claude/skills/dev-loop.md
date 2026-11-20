@@ -263,7 +263,9 @@ printf '%s\n' "$RECONCILE_BOARDS_REPORT"
 ```
 
 Report **one line per declared board**, clean or not — `$RECONCILE_BOARDS_REPORT` carries it
-(`board <owner>/<n> (<repo>): ok — nothing to change`, or `ok — N item line(s)` followed by that
+(`board <owner>/<n> (<repo>): SKIPPED — GraphQL rate-limited, retry next round` for a throttled
+board, which also makes `RECONCILE_BOARDS_STATUS` `unknown` — name it in the report, #1070;
+`board <owner>/<n> (<repo>): ok — nothing to change`, or `ok — N item line(s)` followed by that
 board's indented item lines: unblocked, still blocked, re-blocked, decision blocker, blocked by
 nothing, UNKNOWN). The reconcile runs both ways (dotfiles-linux-dev#812): beyond unblocking, a
 `Ready` card whose issue gained an open native or prose blocker is moved to `Blocked` and reported

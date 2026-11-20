@@ -937,6 +937,22 @@ JSON
     [[ "$output" == *"board owner/16 (beta): ok — nothing to change"* ]]
 }
 
+# dotfiles-linux-dev#1070: a throttled board must be named in the aggregate report, never vanish.
+@test "registry sweep: a throttled board among several is named in the report and status is not ok" {
+    write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
+    echo '{"items": []}' > "$TEST_TMP/items-16.json"
+    : > "$TEST_TMP/fail-board-26"
+    write_throttled
+    write_blockers 3 "$(blocker 2 closed "owner/repo")"
+    write_fake_gh
+    run_boards "owner|17|alpha" "owner|26|opendata-bcb" "owner|16|beta"
+    [[ "$output" == *"rc=1"* ]]
+    [[ "$output" == *"STATUS=unknown"* ]]
+    [[ "$output" == *"board owner/26 (opendata-bcb): SKIPPED — GraphQL rate-limited, retry next round"* ]]
+    [[ "$output" == *"board owner/17 (alpha): ok"* ]]
+    [[ "$output" == *"board owner/16 (beta): ok"* ]]
+}
+
 @test "registry sweep: an unreadable board is UNKNOWN and the other boards still reconcile" {
     write_items "$(item "owner/repo" 3 "Blocked" "" "**Blocked by:** owner/repo#2")"
     : > "$TEST_TMP/fail-board-9"
