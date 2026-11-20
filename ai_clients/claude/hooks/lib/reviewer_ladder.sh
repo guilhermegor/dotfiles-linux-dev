@@ -899,18 +899,20 @@ _write_ladder_probe() {
 
 # _warn_if_not_on_roster OWNER REPO TOKEN
 # dotfiles-linux-dev#1016: a review from a login the repo's `.review-bots.yaml`
-# does not list is posted but never counted by the roster gate. Warn once on
-# stderr; a missing roster (404) or any read failure stays silent, never blocks.
+# does not list is posted but never counted by the roster gate. Warn on stderr
+# per post; a missing roster (404) or any read failure stays silent, never blocks.
+# The parse is _gate_roster_logins' (review_thread_gate.sh), so the warning fires
+# exactly when the gate would not count the login — keep the two in step.
 _warn_if_not_on_roster() {
-	local owner="$1" repo="$2" token="$3" login roster
+	local owner="$1" repo="$2" token="$3" login roster logins
 	login="$(ladder_poster_login)" || return 0
 	[ -n "$login" ] || return 0
 	roster="$(GH_TOKEN="$token" gh api "repos/$owner/$repo/contents/.review-bots.yaml" \
 		--jq '.content' </dev/null 2>/dev/null | base64 -d 2>/dev/null)" || return 0
 	[ -n "$roster" ] || return 0
-	printf '%s\n' "$roster" |
-		sed -n 's/^[[:space:]]*-[[:space:]]*login:[[:space:]]*"\{0,1\}\([^"#[:space:]]*\).*/\1/p' |
-		grep -Fxq -- "$login" && return 0
+	logins="$(printf '%s\n' "$roster" |
+		sed -n 's/^[[:space:]]*-[[:space:]]*login:[[:space:]]*//p' | sed 's/\[bot\]$//')"
+	grep -Fxq -- "${login%\[bot\]}" <<<"$logins" && return 0
 	printf 'warning: %s/%s .review-bots.yaml does not list %s; add the line `  - login: %s`\n' \
 		"$owner" "$repo" "$login" "$login" >&2
 	return 0

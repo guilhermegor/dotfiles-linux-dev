@@ -978,17 +978,32 @@ _roster_stub() {
     unset REVIEWER_LADDER_POST_CMD
     export REVIEWER_LADDER_POSTER="some-ladder[bot]"
     ROSTER_YAML="$1"
+    GH_LOG="$BATS_TEST_TMPDIR/gh-roster.log"
     gh() {
         case "$*" in
             *contents/.review-bots.yaml*)
                 [ -n "$ROSTER_YAML" ] || { echo "Not Found (HTTP 404)" >&2; return 1; }
                 printf '%s' "$ROSTER_YAML" | base64 ;;
-            *) cat >/dev/null ;;
+            *) printf '%s\n' "$*" >>"$GH_LOG"; cat >/dev/null ;;
         esac
     }
     _ladder_app_token() { echo "app-installation-token"; }
     export -f gh _ladder_app_token
-    export ROSTER_YAML
+    export ROSTER_YAML GH_LOG
+}
+
+@test "_post_pr_review: roster entry without [bot] counts, as in the gate (#1016)" {
+    _roster_stub $'bots:\n  - login: some-ladder\n'
+    run --separate-stderr _post_pr_review o r 487 "hi" "$HEAD_SHA"
+    [ "$status" -eq 0 ]
+    [ -z "$stderr" ]
+}
+
+@test "_post_pr_review: quoted roster entry warns, since the gate never counts it (#1016)" {
+    _roster_stub $'bots:\n  - login: "some-ladder[bot]"\n'
+    run --separate-stderr _post_pr_review o r 487 "hi" "$HEAD_SHA"
+    [ "$status" -eq 0 ]
+    [[ "$stderr" == *"does not list some-ladder[bot]"* ]]
 }
 
 @test "_post_pr_review: roster lists the poster, no warning (#1016)" {
@@ -1004,6 +1019,8 @@ _roster_stub() {
     [ "$status" -eq 0 ]
     [[ "$stderr" == *"o/r"* ]]
     [[ "$stderr" == *"  - login: some-ladder[bot]"* ]]
+    run grep -F -- 'pulls/487/reviews' "$GH_LOG"
+    [ "$status" -eq 0 ]
 }
 
 @test "_post_pr_review: no roster file, no warning (#1016)" {
