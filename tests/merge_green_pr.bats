@@ -408,6 +408,27 @@ refute_log() {
     [ "$status" -eq 0 ]
 }
 
+@test "permissions are an allowlist: Write, WRITE and bogus values are refused" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions:\n  checks: Write\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    FILES_8=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions:\n  statuses: WRITE\n' run bash "$SCRIPT" 8
+    [ "$status" -ne 0 ]
+    FILES_9=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions:\n  checks: bogus\n' run bash "$SCRIPT" 9
+    [ "$status" -ne 0 ]
+    FILES_7=$'.github/workflows/other.yml\t' \
+        WF_CONTENT=$'permissions: read-all\njobs:\n  j:\n    permissions: {checks: Write}\n' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "checks: none and read are accepted" {
+    FILES_7=$'.github/workflows/other.yml\t' WF_CONTENT=$'permissions:\n  checks: none\n  contents: read\n' run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    FILES_8=$'.github/workflows/other.yml\t' \
+        WF_CONTENT=$'permissions: read-all\njobs:\n  j:\n    permissions: {checks: read, statuses: none}\n' run bash "$SCRIPT" 8
+    [ "$status" -eq 0 ]
+}
+
 @test "refuses a required check-run with no matching job in its run" {
     FILES_7=$'.github/workflows/other.yml\t' JOBS_1="lint" run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]

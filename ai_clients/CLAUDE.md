@@ -133,7 +133,9 @@ top-level `permissions` must exist, with no `checks: write`, `statuses: write` o
 included; a required context met by a commit status (no check_suite, so untraceable)
 refuses any workflow change. An unresolvable path, failed read or missing parser is UNKNOWN (fails
 closed), as is an unreadable file list or one differing from `changed_files` ("file
-list incomplete", since the endpoint caps at 3000).
+list incomplete", since the endpoint caps at 3000). An UNCHANGED workflow with
+checks/statuses: write that runs PR-controlled code is out of scope: it is already trusted
+on the base branch, and the old blanket rule did not cover it either.
 The gate is **partial by design**: it cannot see CI code outside `.github/` (a local
 composite action, `make test`, test files), which is the PR author's own code on a
 single-maintainer repo. A required check pinned to an app (protection `checks[].app_id`,

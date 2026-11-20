@@ -34,6 +34,11 @@
 # write-all or grants checks/statuses: write, or has a job-level one that does (it could
 # POST a check). A required context met by a commit status has no check_suite to trace, so
 # it refuses any PR that changes a workflow.
+# An UNCHANGED workflow with checks/statuses: write that runs PR-controlled code is out of
+# scope: it is already trusted on the base branch, and the old blanket rule did not cover it.
+# An UNCHANGED workflow with checks/statuses: write that runs PR-controlled code is out of
+# scope — it is already trusted on the base branch, and the old blanket rule did not cover
+# it either.
 # The gate cannot see CI code that is not under .github/.
 set -u
 
@@ -114,11 +119,15 @@ workflow_json() {
 	fi
 }
 
-# Safe = a top-level `permissions` that is read-all or a mapping without checks: write, and
-# every job-level `permissions` absent or equally safe (write-all is a string, so never safe).
-PERMISSIONS_SAFE='def ok: (type == "string" and . == "read-all") or (type == "object" and ((.checks // "none") != "write" and (.statuses // "none") != "write"));
-	type == "object" and has("permissions") and (.permissions | ok)
-	and all((.jobs // {})[]; (type == "object") and ((has("permissions") | not) or (.permissions | ok)))'
+# Allowlist, never a denylist: a top-level `permissions` that is read-all or a mapping whose
+# every value is read/none, and every job-level `permissions` absent, read-all, or with
+# checks/statuses absent/read/none. Any other value (Write, bogus, write-all) is unsafe.
+PERMISSIONS_SAFE='def lvl: . == "read" or . == "none";
+	def top: (type == "string" and . == "read-all") or (type == "object" and all(.[]; lvl));
+	def job: (type == "string" and . == "read-all")
+		or (type == "object" and all(("checks", "statuses") as $k | if has($k) then .[$k] | lvl else true end; .));
+	type == "object" and has("permissions") and (.permissions | top)
+	and all((.jobs // {})[]; (type == "object") and ((has("permissions") | not) or (.permissions | job)))'
 
 merge_one() {
 	local pr="$1" info head state draft base author changed try
