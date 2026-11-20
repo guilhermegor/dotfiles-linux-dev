@@ -421,7 +421,7 @@ def scan_flags(argv):
 
 API_ISSUE_ENDPOINT = re.compile(r"^/?repos/([^/]+)/([^/]+)/issues(?:/(\d+))?$")
 API_ISSUE_SUBRESOURCE = re.compile(
-    r"^repos/[^/]+/[^/]+/issues/(?:\d+/(?:comments|labels|assignees|events|timeline|reactions|"
+    r"^/?repos/[^/]+/[^/]+/issues/(?:\d+/(?:comments|labels|assignees|events|timeline|reactions|"
     r"lock|sub_issues|dependencies)(?:/.*)?|comments(?:/\d+(?:/reactions)?)?|events(?:/\d+)?)$"
 )
 # Issue sub-resources that never carry an issue title/body (so no `comments`), reached through a
