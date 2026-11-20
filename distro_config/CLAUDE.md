@@ -191,7 +191,7 @@ Folders are grouped by **artifact produced**, not by tool category. Existing fol
 | `Media` | Media | Video players, audio players, media tools |
 | `Sharing` | Sharing | File-sharing and remote-desktop apps |
 | `IRPF` | IRPF | Brazilian tax program |
-| `Code` | Code | IDEs, editors, terminals (Cursor, vim, nvim, Notepadqq, Warp, Devtoolbox) |
+| `Code` | Code | IDEs, editors, terminals (Cursor, vim, nvim, Notepadqq, Devtoolbox) |
 | `Data` | Data | DB clients (pgAdmin4, DBeaver) |
 | `Infra` | Infra | VMs, containers, USB imaging, disk tools (Docker Desktop, VM Manager, Ventoy, Balena Etcher, GNOME Disks, Baobab) |
 | `Design` | Design | Image/graphic design tools (Figma, GIMP, Pinta) |

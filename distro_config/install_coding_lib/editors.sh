@@ -500,28 +500,8 @@ _neovim_missing_plugins() {
     printf '%s' "$missing"
 }
 
-install_warp_terminal() {
-    print_status "section" "WARP TERMINAL"
-
-    if command_exists warp-terminal; then
-        print_status "info" "Warp Terminal already installed"
-        return 0
-    fi
-
-    cd "$DOWNLOADS_DIR" || return 1
-    print_status "info" "Downloading Warp Terminal..."
-    run_or_echo wget -O warp-terminal.deb "https://app.warp.dev/download?package=deb"
-
-    print_status "info" "Installing Warp Terminal..."
-    run_or_echo sudo apt install -y ./warp-terminal.deb
-
-    print_status "success" "Warp Terminal installed"
-    cd - > /dev/null || return 1
-}
-
 INSTALL_REGISTRY+=(
     "install_vscode:VS Code::com.microsoft.VSCode.desktop"
     "install_cursor:Cursor IDE:Code:cursor.desktop"
     "install_neovim:Neovim Text Editor::"
-    "install_warp_terminal:Warp Terminal:Code:dev.warp.Warp.desktop"
 )

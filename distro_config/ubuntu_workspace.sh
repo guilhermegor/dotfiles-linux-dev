@@ -1067,7 +1067,6 @@ organize_app_folders() {
     local code_app_names=(
         'vim.desktop' 'gvim.desktop' 'org.vim.Vim.desktop'
         'nvim.desktop' 'neovim.desktop' 'org.neovim.nvim.desktop'  # Added Neovim
-        'dev.warp.Warp.desktop' 'warp.desktop' 'warp-terminal.desktop'
         'me.iepure.devtoolbox.desktop' 'devtoolbox.desktop' 'dev-toolbox.desktop'
         'cursor.desktop' 'com.cursor.Cursor.desktop' 'cursor-app.desktop'
         'notepadqq.desktop' 'com.notepadqq.Notepadqq.desktop'
