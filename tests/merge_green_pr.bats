@@ -512,11 +512,31 @@ refute_log() {
 }
 
 @test "refuses a PR authored by someone else" {
-    AUTHOR_8=dependabot run bash "$SCRIPT" 7 8
+    AUTHOR_8="renovate[bot]" run bash "$SCRIPT" 7 8
     [ "$status" -ne 0 ]
     [[ "$output" == *"#7 MERGED"* ]]
     [[ "$output" == *"#8 REFUSED: author"* ]]
     refute_log "pulls/8/merge"
+}
+
+@test "merges a green Dependabot PR touching only pyproject.toml and poetry.lock (#1076)" {
+    AUTHOR_7="dependabot[bot]" FILES_7=$'pyproject.toml\t\npoetry.lock\t' run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
+}
+
+@test "a Dependabot PR editing a required check's workflow is still refused by rule (2) (#1076)" {
+    AUTHOR_7="dependabot[bot]" FILES_7=$'.github/workflows/ci.yml\t' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"required check ["* ]]
+    refute_log "PUT"
+}
+
+@test "a non-owner human author is refused (#1076)" {
+    AUTHOR_7="mallory" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"#7 REFUSED: author"* ]]
+    refute_log "PUT"
 }
 
 @test "fails closed when the authenticated user cannot be read" {

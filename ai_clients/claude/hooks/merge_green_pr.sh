@@ -149,7 +149,10 @@ merge_one() {
 	{ [ "$head" != "-" ] && [ "$base" != "-" ] && [ "$author" != "-" ] && [[ "$changed" =~ ^[0-9]+$ ]]; } ||
 		{ echo "#$pr UNKNOWN: malformed PR read"; return 1; }
 	# GitHub logins are case-insensitive.
-	[ "${author,,}" = "${me,,}" ] || { echo "#$pr REFUSED: author '$author' is not '$me' — merge by hand"; return 1; }
+	# Dependabot is the one bot allowed (#1076): the PR author is the account that opened it, so a
+	# fork cannot pose as it. Every check below still applies to it, workflow rules (0)-(2) included.
+	[ "${author,,}" = "${me,,}" ] || [ "${author,,}" = "dependabot[bot]" ] ||
+		{ echo "#$pr REFUSED: author '$author' is not '$me' — merge by hand"; return 1; }
 	[ "$draft" = "false" ] || { echo "#$pr REFUSED: draft"; return 1; }
 	# has_hooks is clean with pre-receive hooks; both are mergeable.
 	[[ "$state" == "clean" || "$state" == "has_hooks" ]] ||
@@ -283,7 +286,7 @@ merge_one() {
 main() {
 	local pr rc=0
 	# The remote is writable by an agent, so the target is trusted only if its owner is
-	# the authenticated user; each PR's author must be that user too (bots go to a prompt).
+	# the authenticated user; each PR's author must be that user or dependabot[bot] (other bots go to a prompt).
 	me="$(gh_retry api user --jq .login)" && [ -n "$me" ] ||
 		{ echo "UNKNOWN: cannot read the authenticated user"; return 1; }
 	# Case-insensitive; an org-owned repo never equals a user login, so it is refused on
