@@ -595,6 +595,41 @@ sweep_stale_cards_gated() {
 	fi
 }
 
+# sweep_cached KEY CMD [ARG...]
+# Memoizes CMD's stdout per round (#1072): N agents finishing in one round each fire a sweep, and the
+# GraphQL-bound sections (review threads, Projects v2 boards) answer the same question every time.
+# The first sweep computes it under a flock and every later one inside SWEEP_CACHE_TTL seconds (default
+# 120, 0 disables) reads the file, so the round pays one read per KEY, not one per completion. The
+# cache lives under $XDG_RUNTIME_DIR (/run/user/$UID, mode 0700) - never bare /tmp. A section that
+# reports UNKNOWN or unreadable is never cached: the next sweep retries it. An unusable cache dir
+# degrades to running CMD uncached.
+sweep_cached() {
+	local key="$1" dir f ttl="${SWEEP_CACHE_TTL:-120}" out mtime
+	shift
+	dir="${SWEEP_CACHE_DIR:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/dotfiles-dev-sweep-cache}"
+	f="$dir/${key//[^A-Za-z0-9._-]/_}"
+	if [[ ! "$ttl" =~ ^[0-9]+$ ]] || [ "$ttl" -eq 0 ] || ! { mkdir -p "$dir" && chmod 700 "$dir"; } 2>/dev/null; then
+		"$@"
+		return
+	fi
+	{
+		flock -w 90 9 || {
+			"$@"
+			return
+		}
+		if [ -f "$f" ] && mtime="$(stat -c %Y "$f" 2>/dev/null)" && [ "$(($(date +%s) - mtime))" -lt "$ttl" ]; then
+			cat "$f"
+			return
+		fi
+		out="$("$@")"
+		printf '%s\n' "$out"
+		case "$out" in
+		*UNKNOWN* | *unreadable*) ;;
+		*) printf '%s\n' "$out" >"$f.tmp.$$" && mv -f "$f.tmp.$$" "$f" ;;
+		esac
+	} 9>"$f.lock"
+}
+
 main() {
 	local payload cwd repo owner name db roster_file report agent_type
 	if [ ! -t 0 ]; then payload="$(cat)"; else payload=""; fi
@@ -637,7 +672,7 @@ $(sweep_stale_cards_gated "$cwd")"
 		echo "[1] worktree residue"
 		sweep_worktrees "$cwd"
 		echo "[2] review-thread gate (called, not re-derived)"
-		sweep_review_gate "$owner" "$name" "$repo" "$roster_file"
+		sweep_cached "$repo:review-gate" sweep_review_gate "$owner" "$name" "$repo" "$roster_file"
 		echo "[3] branch pushed without PR"
 		sweep_orphan_branches "$cwd" "$repo" "$owner" "$db"
 		echo "[4] PR without auto-merge armed"
@@ -648,19 +683,19 @@ $(sweep_stale_cards_gated "$cwd")"
 		free="$(free_dispatch_surface "$repo")"
 		format_free_surface_report "$free"
 		echo "[7] kanban reconcile, every discovered board (open PRs -> In review)"
-		sweep_kanban_boards in_review "$cwd" "$repo"
+		sweep_cached "$repo:kanban-in_review" sweep_kanban_boards in_review "$cwd" "$repo"
 		echo "[8] roadmap boards (discovered at runtime, lib/roadmap_unblock.sh)"
-		sweep_roadmap_boards
+		sweep_cached "$repo:roadmap-boards" sweep_roadmap_boards
 		echo "[9] kanban reconcile, every discovered board (closed issues -> Done, No Status -> placed)"
-		sweep_kanban_boards closed "$cwd" "$repo"
+		sweep_cached "$repo:kanban-closed" sweep_kanban_boards closed "$cwd" "$repo"
 		echo "[9b] closed issues whose card is not in Done (REST only, runs while GraphQL is down)"
 		kanban_stale_cards_rest "$cwd"
 		echo "[10] issue hygiene (surface block + milestone, report only)"
 		sweep_issue_hygiene "$repo"
 		echo "[11] kanban reconcile, every discovered board (closed-unmerged PR -> Ready; idle In progress, report only)"
-		sweep_kanban_boards stale "$cwd" "$repo"
+		sweep_cached "$repo:kanban-stale" sweep_kanban_boards stale "$cwd" "$repo"
 		echo "[12] kanban reconcile, every discovered board (open issues with no card -> added with derived column)"
-		sweep_kanban_boards offboard "$cwd" "$repo"
+		sweep_cached "$repo:kanban-offboard" sweep_kanban_boards offboard "$cwd" "$repo"
 	)"
 
 	emit "$report"

@@ -924,7 +924,8 @@ declared_board_numbers() {
 }
 
 @test "main() wires items [7], [9], [11], [12] through sweep_kanban_boards, not a single-repo reconcile" {
-    run grep -cE '^\s+sweep_kanban_boards (in_review|closed|stale|offboard) "\$cwd" "\$repo"' "$SWEEP_SRC"
+    # Each call is wrapped in sweep_cached (#1072): the wiring is unchanged, only memoized.
+    run grep -cE '^\s+sweep_cached "\$repo:kanban-[a-z_]+" sweep_kanban_boards (in_review|closed|stale|offboard) "\$cwd" "\$repo"' "$SWEEP_SRC"
     [ "$output" = "4" ]
     run grep -nE 'if reconcile_kanban(_done|_stale)? ' "$SWEEP_SRC"
     [ "$status" -ne 0 ]
@@ -934,4 +935,84 @@ declared_board_numbers() {
 # undefined, so a claimed No-Status issue reads as Ready. Unsourced, nothing else would notice.
 @test "sweep sources the dispatch claims registry kanban_reconcile_done depends on" {
     declare -F dispatch_claimed_issues >/dev/null
+}
+
+# --- sweep_cached: one read per round and repo (#1072) ---------------------------------------------
+
+cache_setup() {
+    export SWEEP_CACHE_DIR="$REPO/cache" SWEEP_CACHE_TTL=120
+    CALLS="$REPO/calls"
+    : > "$CALLS"
+}
+
+counting_section() { echo x >> "$CALLS"; echo "section output ${1:-ok}"; }
+
+@test "sweep_cached: the second call within the TTL is served from cache, the section runs once" {
+    cache_setup
+    run sweep_cached "o/r:review-gate" counting_section
+    [ "$output" = "section output ok" ]
+    run sweep_cached "o/r:review-gate" counting_section other
+    [ "$output" = "section output ok" ]
+    [ "$(wc -l < "$CALLS")" -eq 1 ]
+}
+
+@test "sweep_cached: different keys (repo or section) do not share an entry" {
+    cache_setup
+    sweep_cached "o/r:review-gate" counting_section > /dev/null
+    sweep_cached "o/r2:review-gate" counting_section > /dev/null
+    sweep_cached "o/r:kanban-closed" counting_section > /dev/null
+    [ "$(wc -l < "$CALLS")" -eq 3 ]
+}
+
+@test "sweep_cached: an entry older than the TTL is recomputed" {
+    cache_setup
+    sweep_cached "o/r:k" counting_section > /dev/null
+    touch -d '10 minutes ago' "$SWEEP_CACHE_DIR/o_r_k"
+    run sweep_cached "o/r:k" counting_section fresh
+    [ "$output" = "section output fresh" ]
+    [ "$(wc -l < "$CALLS")" -eq 2 ]
+}
+
+@test "sweep_cached: an UNKNOWN section is never cached, so the next sweep retries it" {
+    cache_setup
+    unknown_section() { echo x >> "$CALLS"; echo "    UNKNOWN - could not read"; }
+    sweep_cached "o/r:k" unknown_section > /dev/null
+    sweep_cached "o/r:k" unknown_section > /dev/null
+    [ "$(wc -l < "$CALLS")" -eq 2 ]
+}
+
+@test "sweep_cached: TTL 0 disables the cache" {
+    cache_setup
+    export SWEEP_CACHE_TTL=0
+    sweep_cached "o/r:k" counting_section > /dev/null
+    sweep_cached "o/r:k" counting_section > /dev/null
+    [ "$(wc -l < "$CALLS")" -eq 2 ]
+}
+
+@test "sweep_cached: concurrent sweeps in one round compute the section once" {
+    cache_setup
+    slow_section() { echo x >> "$CALLS"; sleep 1; echo done; }
+    for _ in 1 2 3 4; do sweep_cached "o/r:k" slow_section > /dev/null & done
+    wait
+    [ "$(wc -l < "$CALLS")" -eq 1 ]
+}
+
+@test "sweep_cached: the cache dir is private (0700)" {
+    cache_setup
+    sweep_cached "o/r:k" counting_section > /dev/null
+    [ "$(stat -c %a "$SWEEP_CACHE_DIR")" = "700" ]
+}
+
+@test "sweep_cached: an unusable cache dir degrades to running the section uncached" {
+    cache_setup
+    export SWEEP_CACHE_DIR="/proc/nope/cache"
+    run sweep_cached "o/r:k" counting_section
+    [ "$output" = "section output ok" ]
+}
+
+@test "main() wraps every GraphQL-bound section in sweep_cached" {
+    for k in review-gate roadmap-boards kanban-in_review kanban-closed kanban-stale kanban-offboard; do
+        run grep -c "sweep_cached \"\$repo:$k\"" "$SWEEP_SRC"
+        [ "$output" = "1" ]
+    done
 }

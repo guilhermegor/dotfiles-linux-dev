@@ -26,6 +26,7 @@ set -uo pipefail
 _gb_dir="${BASH_SOURCE[0]%/*}" # no slash (sourced by bare filename): the dir is cwd
 [[ "$_gb_dir" == "${BASH_SOURCE[0]}" ]] && _gb_dir=.
 source "$_gb_dir/lib/gh_budget.sh"
+source "$_gb_dir/lib/gh_graphql_mutation.sh"
 
 [ "$#" -ge 1 ] || { echo "usage: resolve_review_thread.sh <PRRT_id>..." >&2; exit 2; }
 
@@ -34,6 +35,7 @@ source "$_gb_dir/lib/gh_budget.sh"
 NOTICE_RE='\\A\\s*<!-- coderabbit-ai-generated:v1 -->\\s*### Rate Limit Exceeded\\s+`@[A-Za-z0-9-]+` have exceeded the limit for the number of chat messages per hour\\. Please wait \\*\\*[0-9]+ (minutes?|seconds?)( and [0-9]+ seconds?)?\\*\\* before sending another message\\.\\s*<!-- This is an auto-generated reply by CodeRabbit -->\\s*\\z'
 
 rc=0
+deferred=0
 for id in "$@"; do
   if ! [[ "$id" =~ ^PRRT_[A-Za-z0-9_-]+$ ]]; then
     echo "$id: REFUSED — not a review-thread node id" >&2; rc=1; continue
@@ -65,10 +67,15 @@ for id in "$@"; do
   if [ "$answered" -lt 1 ]; then
     echo "$id: REFUSED — last comment is not your submitted reply yet" >&2; rc=1; continue
   fi
-  gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
-  out=$(gh api graphql -f id="$id" -f query='mutation($id:ID!){
+  # The mutation goes through the shared door (#1072): under the latch it is DEFERRED (75) with
+  # the GitHub UI path on stderr, never a generic failure; the door logs the spend itself.
+  out=$(gh_graphql_mutation resolveReviewThread -f id="$id" -f query='mutation($id:ID!){
     resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' \
     --jq '.data.resolveReviewThread.thread.isResolved')
+  mrc=$?
+  if [ "$mrc" -eq "$GH_GQL_DEFERRED" ]; then echo "$id: DEFERRED" >&2; deferred=1; continue; fi
   if [ "$out" = "true" ]; then echo "$id: resolved"; else echo "$id: FAILED — $out" >&2; rc=1; fi
 done
+# 75 (deferred) only when nothing else failed: a real failure outranks a deferral.
+[ "$rc" -eq 0 ] && [ "$deferred" -eq 1 ] && exit "$GH_GQL_DEFERRED"
 exit "$rc"
