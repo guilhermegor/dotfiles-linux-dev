@@ -880,6 +880,7 @@ applies unchanged) — it never gates DISPATCH, and DISPATCH never waits for it.
 
 Serial drain governs **merge order only**, never reviewer allocation (#965): where the repo's gate is
 declared (`REVIEW_FANOUT_CARRY=1`) or evidenced to carry reviews forward, every dispatchable PR gets its review-pr-<N> agent now, not just the queue head.
+A `review-pr-<N>` brief creates its worktree on the PR head branch (`git worktree add <path> -b <head-ref> --track origin/<head-ref>`), so the push guard updates the PR instead of opening a side branch (#1074).
 
 1. **Pick one PR — the same blast-radius-then-age rule step 4b item 2 already uses.** Do not invent
    a second ranking.

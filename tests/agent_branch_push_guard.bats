@@ -204,3 +204,43 @@ refute_remote() {
         | all(any(.[]; .matcher == "Bash" and any(.hooks[]; .command | test("agent_branch_push_guard"))))' "$S"
     [ "$status" -eq 0 ]
 }
+
+# --- #1074: PR-head targeting ---
+
+add_tracking_worktree() {
+    git -C "$TEST_TMP/main" worktree add -q -b "$1" "$TEST_TMP/wt" --track "$2"
+    git -C "$TEST_TMP/wt" config user.email t@t
+    git -C "$TEST_TMP/wt" config user.name t
+    git -C "$TEST_TMP/wt" config commit.gpgsign false
+    git -C "$TEST_TMP/wt" commit -q --allow-empty -m work
+}
+
+@test "a branch tracking a differently-named remote branch updates that branch (#1074)" {
+    git -C "$TEST_TMP/main" push -q origin main:refs/heads/fix/pr-head-5
+    git -C "$TEST_TMP/main" fetch -q origin
+    add_tracking_worktree fix/9-review origin/fix/pr-head-5
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    refute_remote fix/9-review
+    [ "$(git -C "$TEST_TMP/origin.git" rev-parse fix/pr-head-5)" = "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
+}
+
+@test "a branch cut from origin/main never pushes to main (#1074)" {
+    git -C "$TEST_TMP/main" fetch -q origin
+    add_tracking_worktree fix/9-thing origin/main
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has fix/9-thing
+    [ "$(git -C "$TEST_TMP/origin.git" rev-parse main)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
+}
+
+@test "no upstream and HEAD is an open PR head elsewhere: refuse, no side branch (#1074)" {
+    add_worktree fix/9-review
+    mkdir "$TEST_TMP/bin"
+    printf '#!/bin/sh\nprintf '"'"'[{"head":{"ref":"fix/pr-head-5","sha":"%%s"}}]'"'"' "$(git rev-parse HEAD^)"\n' >"$TEST_TMP/bin/gh"
+    chmod +x "$TEST_TMP/bin/gh"
+    PATH="$TEST_TMP/bin:$PATH" run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"fix/pr-head-5"* ]]
+    refute_remote fix/9-review
+}

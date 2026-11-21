@@ -28,8 +28,20 @@ _resolve_dir() {
 	esac
 }
 
+# _open_pr_elsewhere CWD BRANCH: print the head ref of an open PR whose head is HEAD or HEAD^
+# under another name. Fails open (no gh, no network, no match -> prints nothing).
+_open_pr_elsewhere() {
+	local cwd="$1" branch="$2" shas
+	command -v gh >/dev/null 2>&1 || return 1
+	shas="$($GIT -C "$cwd" rev-parse HEAD HEAD^ 2>/dev/null)" || return 1
+	(cd "$cwd" && GH_PROMPT_DISABLED=1 timeout 20 gh api 'repos/{owner}/{repo}/pulls?state=open&per_page=100' 2>/dev/null) \
+		| jq -r --arg b "$branch" --arg s "$shas" \
+			'[.[] | select(.head.ref != $b and (.head.sha as $h | ($s | split("\n") | index($h))))][0].head.ref // empty' 2>/dev/null
+}
+
 main() {
-	local payload cwd cmd branch gitdir prefix dir pre
+	local payload cwd cmd branch gitdir prefix dir pre remote up base head_ref
+	local -a args
 
 	payload="$(cat)"
 	cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
@@ -65,8 +77,24 @@ main() {
 	branch="$($GIT -C "$cwd" symbolic-ref --short -q HEAD)" || exit 0
 	is_loop_branch "$branch" || exit 0
 
+	# A branch tracking a differently-named remote branch (a review worktree on a PR head)
+	# updates THAT branch; pushing by local name would open a side branch (#1074).
+	# The default branch is never a target: `worktree add -b x origin/main` tracks it.
+	remote="$($GIT -C "$cwd" config "branch.$branch.remote")" || remote=origin
+	up="$($GIT -C "$cwd" config "branch.$branch.merge")"
+	up="${up#refs/heads/}"
+	base="$($GIT -C "$cwd" symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null)"
+	base="${base#"$remote"/}"
+	args=(-u origin "$branch")
+	if [ -n "$up" ] && [ "$up" != "$branch" ] && [ "$up" != "${base:-main}" ] && [ "$up" != master ] && [ "$up" != main ]; then
+		args=("$remote" "HEAD:refs/heads/$up")
+	elif [ -z "$up" ] && head_ref="$(_open_pr_elsewhere "$cwd" "$branch")" && [ -n "$head_ref" ]; then
+		echo "agent_branch_push_guard: HEAD is the head of an open PR on '$head_ref'; not creating side branch $branch. Push explicitly: git push origin HEAD:$head_ref" >&2
+		exit 0
+	fi
+
 	# Bounded and prompt-free: a stalled remote must reach the pending-push branch, not hang the hook.
-	if GIT_TERMINAL_PROMPT=0 timeout 30 $GIT -C "$cwd" push -q -u origin "$branch" >/dev/null 2>&1; then
+	if GIT_TERMINAL_PROMPT=0 timeout 30 $GIT -C "$cwd" push -q "${args[@]}" >/dev/null 2>&1; then
 		rm -f "$gitdir/pending-push"
 	else
 		date +%s >"$gitdir/pending-push"
