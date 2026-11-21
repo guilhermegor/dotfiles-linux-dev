@@ -129,6 +129,8 @@ _ru_prose_refs() {
 	done | sort -u
 }
 
+# The three issue reads below (state, comments, labels) use REST, never `gh issue view`: that
+# subcommand is GraphQL, and REST draws on the separate core quota (dotfiles-linux-dev#1072).
 # _ru_ref_state REF (as "owner/repo#number")
 # Prints the referenced issue's state, lowercased ("open"/"closed"). Returns 1 on any read
 # failure — the caller's fail-closed signal, same contract as _ru_native_blockers.
@@ -136,7 +138,7 @@ _ru_ref_state() {
 	local ref="$1" repo number state
 	repo="${ref%#*}"
 	number="${ref##*#}"
-	state="$(gh issue view "$number" --repo "$repo" --json state --jq '.state' 2>/dev/null)" || return 1
+	state="$(gh api "repos/$repo/issues/$number" --jq '.state' 2>/dev/null)" || return 1
 	[[ -n "$state" ]] || return 1
 	printf '%s\n' "${state,,}"
 }
@@ -171,7 +173,7 @@ _ru_kind_tag() {
 # True when TEXT is already the body of a comment on the issue. A read failure counts as "absent":
 # a duplicate audit comment is visible and harmless, a suppressed one is silent.
 _ru_has_comment() {
-	gh issue view "$2" --repo "$1" --json comments --jq '.comments[].body' 2>/dev/null \
+	gh api "repos/$1/issues/$2/comments" --paginate --jq '.[].body' 2>/dev/null \
 		| grep -qxF "$3"
 }
 
@@ -475,7 +477,7 @@ _ru_item_labels() {
 		jq -r '(.labels // [])[] | if type == "object" then .name else . end' <<<"$1" 2>/dev/null
 		return
 	fi
-	gh issue view "$3" --repo "$2" --json labels --jq '.labels[].name' 2>/dev/null
+	gh api "repos/$2/issues/$3" --jq '.labels[].name' 2>/dev/null
 }
 
 # _ru_process_open_item OWNER PROJECT ITEM_JSON
