@@ -215,3 +215,82 @@ push_branch() {
 	elsewhere_out
 	[ -z "$output" ]
 }
+
+# --- GNOME keyring probe (dotfiles-linux-dev#1093) -------------------------------------------
+# A fake gdbus on PATH stands in for the Secret Service; never the live keyring.
+
+fake_gdbus() {
+	mkdir -p "$TEST_TMP/bin"
+	printf '#!/bin/bash\n%s\n' "$1" >"$TEST_TMP/bin/gdbus"
+	chmod +x "$TEST_TMP/bin/gdbus"
+}
+
+keyring_state_with() {
+	PATH="$TEST_TMP/bin:$PATH" KEYRING_PROBE_TIMEOUT=1 bash -c 'source "$1" && keyring_state' _ "$HOOK"
+}
+
+planner_keyring_locked() {
+	PATH="$TEST_TMP/bin:$PATH" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import dispatch_plan as d; d.KEYRING_PROBE_TIMEOUT = 1; print(d.keyring_locked())' \
+		"$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib"
+}
+
+@test "keyring_state: locked collection reads locked" {
+	fake_gdbus 'echo "(<true>,)"'
+	run keyring_state_with
+	[ "$output" = "locked" ]
+}
+
+@test "keyring_state: unlocked collection reads unlocked" {
+	fake_gdbus 'echo "(<false>,)"'
+	run keyring_state_with
+	[ "$output" = "unlocked" ]
+}
+
+@test "keyring_state: a hung probe is unknown, never unlocked, and returns within the bound" {
+	fake_gdbus 'sleep 30'
+	start=$SECONDS
+	run keyring_state_with
+	[ "$output" = "unknown" ]
+	[ $((SECONDS - start)) -lt 10 ]
+}
+
+@test "keyring_state: unparseable output is unknown, never unlocked" {
+	fake_gdbus 'echo garbage'
+	run keyring_state_with
+	[ "$output" = "unknown" ]
+}
+
+@test "emit_keyring_status: locked prints exactly one [auth] line" {
+	fake_gdbus 'echo "(<true>,)"'
+	run env PATH="$TEST_TMP/bin:$PATH" bash -c 'source "$1" && emit_keyring_status' _ "$HOOK"
+	[ "$status" -eq 0 ]
+	[ "$(printf '%s\n' "$output" | wc -l)" -eq 1 ]
+	[[ "$output" == "[auth] GNOME keyring locked"* ]]
+}
+
+@test "emit_keyring_status: unlocked is silent" {
+	fake_gdbus 'echo "(<false>,)"'
+	run env PATH="$TEST_TMP/bin:$PATH" bash -c 'source "$1" && emit_keyring_status' _ "$HOOK"
+	[ -z "$output" ]
+}
+
+@test "emit_keyring_status: a hung probe is reported UNKNOWN" {
+	fake_gdbus 'sleep 30'
+	run env PATH="$TEST_TMP/bin:$PATH" KEYRING_PROBE_TIMEOUT=1 bash -c 'source "$1" && emit_keyring_status' _ "$HOOK"
+	[[ "$output" == *"UNKNOWN"* ]]
+}
+
+@test "dispatch_plan.keyring_locked: exact (<true>,) is locked" {
+	fake_gdbus 'echo "(<true>,)"'
+	run planner_keyring_locked
+	[ "$output" = "True" ]
+}
+
+@test "dispatch_plan.keyring_locked: unlocked and hung probes are not locked" {
+	fake_gdbus 'echo "(<false>,)"'
+	run planner_keyring_locked
+	[ "$output" = "False" ]
+	fake_gdbus 'sleep 30'
+	run planner_keyring_locked
+	[ "$output" = "False" ]
+}

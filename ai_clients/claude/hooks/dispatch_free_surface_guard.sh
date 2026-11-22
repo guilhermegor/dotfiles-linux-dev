@@ -460,6 +460,22 @@ report_unreadable() {
 	exit 2
 }
 
+# report_blocked_auth TRANSCRIPT
+# BLOCKED-AUTH (dotfiles-linux-dev#1093): the GNOME keyring is locked, so gh cannot dispatch
+# anything. Only the owner can unlock it, so blocking every Stop would be a loop nobody can
+# break: announce once per session with exit 1 (surfaces stderr, does not block; exit 0 would
+# discard the message), then stay silent (exit 0) while it remains locked.
+report_blocked_auth() {
+	local marker
+	marker="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/quota-gap/blocked-auth-$(printf '%s' "$1" | cksum | cut -d' ' -f1)"
+	[ ! -e "$marker" ] || exit 0
+	mkdir -p "$(dirname "$marker")" 2>/dev/null && : >"$marker" 2>/dev/null
+	echo "BLOCKED-AUTH: GNOME keyring locked — gh and git push hang until it is unlocked" >&2
+	echo "(Seahorse or re-login). s:dev-loop gh-bound steps are skipped; not reported again" >&2
+	echo "this session while it stays locked." >&2
+	exit 1
+}
+
 # rescue_note REMAINING
 # Printed above every block message while a background dispatch of this session FAILED and
 # nothing has since RESOLVED it: a quota kill is not free capacity, and dispatching a duplicate
@@ -539,6 +555,9 @@ main() {
 	plan="$(stop_plan_cache_read dispatch_plan "$cwd" "$transcript")" || {
 		cached=0
 		stop_budget_gate || exit 0
+		# A locked keyring makes every gh call hang to its timeout; skip the planner entirely.
+		[ "$(bash -c 'source "$1" && keyring_state' _ "$HOOK_DIR/session_start_context.sh" 2>/dev/null)" != locked ] ||
+			report_blocked_auth "$transcript"
 		planner_rc=0
 		plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)" || planner_rc=$?
 		# Exit 3 = the latch was written after the gate passed: a blind board, so pass (#814).
@@ -553,6 +572,11 @@ main() {
 		and all(.excluded[]; (.issue | type == "number") and ((.reason // "") | length > 0))
 	' >/dev/null 2>&1 ||
 		report_unreadable "planner failed, timed out, or printed something else"
+
+	# Locked mid-run: the planner already classified it (dispatch_plan.py BLOCKED-AUTH reason).
+	if printf '%s' "$plan" | jq -e '.excluded[]? | select(.reason | startswith("BLOCKED-AUTH"))' >/dev/null 2>&1; then
+		report_blocked_auth "$transcript"
+	fi
 
 	# The planner's own fail-closed answer is an UNKNOWN reason on every issue, which arrives
 	# here as an EMPTY dispatchable list — indistinguishable from a genuinely clear board by any

@@ -71,6 +71,10 @@ main() {
 	gap=$((now - last))
 	[ "$gap" -gt "$QUOTA_GAP_THRESHOLD_SECONDS" ] || exit 0
 
+	# dotfiles-linux-dev#1093: a locked keyring is the usual cause of a stalled gh after a gap.
+	# Sourced in a bash -c so session_start_context.sh's shell options never leak into this hook.
+	bash -c 'source "$1" && emit_keyring_status' _ "$(dirname "${BASH_SOURCE[0]}")/session_start_context.sh" 2>/dev/null
+
 	# Real forge state, as session_start_context.sh passes it: with github_ok=0 the merged-PR
 	# exclusion never runs and every squash-merged leftover reads as interrupted work
 	# (dotfiles-linux-dev#616). Unreadable forge (no gh, offline, non-GitHub) -> github_ok=0.
