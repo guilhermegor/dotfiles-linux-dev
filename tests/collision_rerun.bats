@@ -81,3 +81,50 @@ gh() {
     gh() { return 1; }
     run ruleset_strict o r; [ "$output" = unknown ]
 }
+
+@test "ruleset_strict runs the real jq: false stays false, missing is unknown" {
+    gh() {
+        local jq=""
+        while [ $# -gt 0 ]; do [ "$1" = --jq ] && jq="$2"; shift; done
+        case "$jq" in
+            '.[].id') echo 5 ;;
+            *) echo "$RULESET_JSON" | jq -r "$jq" ;;
+        esac
+    }
+    RULESET_JSON='{"rules":[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false}}]}'
+    run ruleset_strict o r; [ "$output" = false ]
+    RULESET_JSON='{"rules":[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true}}]}'
+    run ruleset_strict o r; [ "$output" = true ]
+    RULESET_JSON='{"rules":[]}'
+    run ruleset_strict o r; [ "$output" = unknown ]
+}
+
+@test "wrapper paginates the merge's changed files" {
+    gh() {
+        echo "$*" >> "$GH_LOG"
+        case "$*" in
+            *"commits/abc"*) echo a.py ;;
+            *"pulls?state=open"*) echo 7 ;;
+            *"pulls/7/files"*) echo a.py ;;
+            *) return 0 ;;
+        esac
+    }
+    run collision_rerun o r abc
+    grep -q -- '--paginate repos/o/r/commits/abc' "$GH_LOG"
+}
+
+@test "wrapper returns nonzero after a failed update-branch but still prints hits" {
+    gh() {
+        case "$*" in
+            *"commits/abc"*) echo a.py ;;
+            *"pulls?state=open"*) printf '7\n9\n' ;;
+            *"pulls/7/update-branch"*) return 1 ;;
+            *"pulls/9/update-branch"*) echo "$*" >> "$GH_LOG" ;;
+            *"pulls/"*"/files"*) echo a.py ;;
+        esac
+    }
+    run collision_rerun o r abc
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"update-branch failed for #7"* ]]
+    grep -q 'pulls/9/update-branch' "$GH_LOG"
+}

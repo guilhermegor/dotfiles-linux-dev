@@ -16,7 +16,8 @@
 #
 #   collision_rerun OWNER REPO MERGE_SHA
 #       Thin REST wrapper: reads the merge's files and every open PR's files, runs
-#       collision_hits, calls update-branch on the hits only and prints their numbers. A PR whose
+#       collision_hits, calls update-branch on the hits only and prints their numbers; returns 1 after trying every hit if any
+#       update-branch failed. A PR whose
 #       file list cannot be read counts as a hit (an unknown overlap is not "no overlap").
 #       The caller re-reviews a hit only if its own patch fingerprint changed.
 set -u
@@ -34,7 +35,7 @@ ruleset_strict() {
     for id in $ids; do
         strict=$(gh api "repos/$owner/$repo/rulesets/$id" \
             --jq '[.rules[]? | select(.type == "required_status_checks")
-                   | .parameters.strict_required_status_checks_policy] | first // "none"' 2>/dev/null) \
+                   | .parameters.strict_required_status_checks_policy] | first | if . == null then "none" else tostring end' 2>/dev/null) \
             || { echo unknown; return 0; }
         case "$strict" in
             true) echo true; return 0 ;;
@@ -53,8 +54,8 @@ collision_hits() {
 }
 
 collision_rerun() {
-    local owner="$1" repo="$2" sha="$3" merged prs pr files rows="" hits
-    merged=$(gh api "repos/$owner/$repo/commits/$sha" --jq '.files[].filename') || return 1
+    local owner="$1" repo="$2" sha="$3" merged prs pr files rows="" hits rc=0
+    merged=$(gh api --paginate "repos/$owner/$repo/commits/$sha?per_page=100" --jq '.files[].filename') || return 1
     prs=$(gh api --paginate "repos/$owner/$repo/pulls?state=open&per_page=100" --jq '.[].number') || return 1
     for pr in $prs; do
         if files=$(gh api --paginate "repos/$owner/$repo/pulls/$pr/files?per_page=100" --jq '.[].filename'); then
@@ -68,7 +69,8 @@ collision_rerun() {
     hits=$(printf '%s' "$rows" | collision_hits "$merged")
     for pr in $hits; do
         gh api -X PUT "repos/$owner/$repo/pulls/$pr/update-branch" >/dev/null 2>&1 \
-            || echo "update-branch failed for #$pr" >&2
+            || { echo "update-branch failed for #$pr" >&2; rc=1; }
     done
     [ -z "$hits" ] || printf '%s\n' "$hits"
+    return "$rc"
 }

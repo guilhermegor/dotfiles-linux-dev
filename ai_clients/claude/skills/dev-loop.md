@@ -951,7 +951,8 @@ After each merge run `collision_rerun <owner> <repo> <merge-sha>`. It intersects
 merge changed with each open PR's files and calls `update-branch` on the hits only; it prints their
 numbers. A hit goes back to the reviewer fan-out only if its own patch fingerprint changed
 (step 4c-fast item 3); otherwise the carried-forward review stands. PRs it does not print are
-untouched. Tests: `tests/collision_rerun.bats`.
+untouched. A printed hit merges only after checks on its new head SHA pass, pinned to that SHA
+(step 4c-fast items 2 and 4). Tests: `tests/collision_rerun.bats`.
 
 ### 4c-fast. Merge-ready fast path (dotfiles-linux-dev#705)
 
