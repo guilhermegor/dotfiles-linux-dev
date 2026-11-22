@@ -53,12 +53,17 @@ hook `Passed`, `[branch abc123] N files changed` — while a sandboxed or
 containerized execution environment silently discards the ref update on
 teardown. Never trust printed output alone for a git write:
 
-- Never pipe `git commit` through `tail`/`head`/`grep`. A hook rejection
-  (lint, secret scan, formatter) can scroll off past a trimmed view while
-  trailing `Passed` lines make the run look clean.
-- After any git write, confirm it landed: run it with full output, then in
-  the same step `echo "===EXIT=$?==="` followed by `git log --oneline -1`,
-  and check that HEAD actually moved.
+- Never pipe a git write (`commit`, `push`, `tag`, `branch -d/-D`) through
+  `tail`/`head`/`grep`. A hook rejection (lint, secret scan, formatter) or a
+  rejected push can scroll off past a trimmed view while trailing lines make
+  the run look clean.
+- `$?` after a pipe is the last stage's status (`tail`), not git's: a
+  rejected `git push ... | tail -3; echo $?` prints `0`. Use no pipe, or
+  read `${PIPESTATUS[0]}` in the very next command.
+- After any git write, confirm it landed by comparing refs, not exit
+  codes: after a commit, `git log --oneline -1` and check HEAD moved; after
+  a push, `git rev-parse HEAD` must equal the sha from
+  `git ls-remote origin <branch>`.
 - If still unsure, read `.git/refs/heads/<branch>` (or `.git/logs/HEAD`)
   directly — a command run through the same sandboxed environment can
   report a state that was never durably committed.
