@@ -311,6 +311,34 @@ merged_json() {
     [[ "$output" == *"RELEASE DUE"* ]]
 }
 
+# --- dotfiles-linux-dev#1108: the last tag is the HIGHEST merged one, not the nearest -----------
+
+@test "RELEASE DUE: a lower tag nearer HEAD does not hide the highest tag" {
+    echo "a" >> src/lib.py
+    git commit -q -am "feat: a"
+    git tag v1.1.0
+    echo "b" >> src/lib.py
+    git commit -q -am "fix: b"
+    git tag v1.0.1
+
+    run run_hook "git pull"
+    # Non-vacuity: `git describe` picks the nearer v1.0.1 (empty diff) -> NO RELEASE NEEDED.
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RELEASE DUE"* ]]
+}
+
+@test "RELEASE DUE: a pre-release tag (1.2.0-rc1) does not beat 1.2.0" {
+    git tag -d v1.0.0 >/dev/null
+    git tag 1.2.0
+    echo "a" >> src/lib.py
+    git commit -q -am "fix: a"
+    git tag 1.2.0-rc1
+
+    run run_hook "git pull"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RELEASE DUE"* ]]
+}
+
 @test "silent: fresh repo with no tags at all" {
     FRESH="$(mktemp -d)"
     (cd "$FRESH" && git init -q -b main . && git config user.email t@t && git config user.name t \

@@ -294,3 +294,31 @@ with_origin() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"highest commit signal since the tag is feat"* ]]
 }
+
+# --- dotfiles-linux-dev#1108: the last tag is the HIGHEST merged one, not the nearest -----------
+
+@test "ALLOWED: a lower tag nearer the ref does not hide the highest tag" {
+    commit_py "feat: change greeting" $'GREETING = "hallo"\n'
+    git tag v1.1.0
+    commit_py "fix: change greeting again" $'GREETING = "hola"\n'
+    git tag v1.0.1
+    with_origin
+
+    run run_hook "gh workflow run release-pypi.yaml -f version=1.1.1"
+    # Non-vacuity: `git describe` picks the nearer v1.0.1, whose shipped diff is empty -> BLOCK.
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "ALLOWED: a pre-release tag (1.2.0-rc1) does not beat 1.2.0" {
+    git tag -d v1.0.0 >/dev/null
+    git tag 1.2.0
+    commit_py "fix: change greeting" $'GREETING = "hallo"\n'
+    git tag 1.2.0-rc1
+    with_origin
+
+    run run_hook "gh workflow run release-pypi.yaml -f version=1.2.1"
+    # Non-vacuity: describe picks the nearer 1.2.0-rc1 (empty diff -> BLOCK).
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
