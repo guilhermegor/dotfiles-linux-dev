@@ -91,11 +91,11 @@ gh() {
             *) echo "$RULESET_JSON" | jq -r "$jq" ;;
         esac
     }
-    RULESET_JSON='{"rules":[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false}}]}'
+    RULESET_JSON='{"enforcement":"active","rules":[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false}}]}'
     run ruleset_strict o r; [ "$output" = false ]
-    RULESET_JSON='{"rules":[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true}}]}'
+    RULESET_JSON='{"enforcement":"active","rules":[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true}}]}'
     run ruleset_strict o r; [ "$output" = true ]
-    RULESET_JSON='{"rules":[]}'
+    RULESET_JSON='{"enforcement":"active","rules":[]}'
     run ruleset_strict o r; [ "$output" = unknown ]
 }
 
@@ -127,4 +127,40 @@ gh() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"update-branch failed for #7"* ]]
     grep -q 'pulls/9/update-branch' "$GH_LOG"
+}
+
+@test "ruleset_strict ignores a disabled strict ruleset" {
+    gh() {
+        local jq=""
+        while [ $# -gt 0 ]; do [ "$1" = --jq ] && jq="$2"; shift; done
+        case "$jq" in
+            '.[].id') echo 5 ;;
+            *) echo "$RULESET_JSON" | jq -r "$jq" ;;
+        esac
+    }
+    RULESET_JSON='{"enforcement":"disabled","rules":[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true}}]}'
+    run ruleset_strict o r; [ "$output" = unknown ]
+}
+
+@test "ruleset_strict lists rulesets with pagination" {
+    gh() { echo "$*" >> "$GH_LOG"; return 1; }
+    run ruleset_strict o r
+    grep -q -- '--paginate.*rulesets' "$GH_LOG"
+}
+
+@test "wrapper counts the old path of a renamed PR file as a collision" {
+    gh() {
+        local all="$*" jq=""
+        while [ $# -gt 0 ]; do [ "$1" = --jq ] && jq="$2"; shift; done
+        case "$all" in
+            *"commits/abc"*) echo '{"files":[{"filename":"a.py"}]}' | jq -r ".files[] | (.filename, (.previous_filename // empty))" ;;
+            *"pulls?state=open"*) echo 7 ;;
+            *"pulls/7/files"*) echo '[{"filename":"b.py","previous_filename":"a.py"}]' | jq -r "$jq" ;;
+            *"-X PUT"*) return 0 ;;
+            *) return 1 ;;
+        esac
+    }
+    run collision_rerun o r abc
+    [ "$status" -eq 0 ]
+    [ "$output" = "7" ]
 }

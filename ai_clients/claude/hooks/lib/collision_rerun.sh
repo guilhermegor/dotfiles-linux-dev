@@ -29,12 +29,12 @@ fi
 
 ruleset_strict() {
     local owner="$1" repo="$2" ids id strict
-    ids=$(gh api "repos/$owner/$repo/rulesets" --jq '.[].id' 2>/dev/null) || { echo unknown; return 0; }
+    ids=$(gh api --paginate "repos/$owner/$repo/rulesets?per_page=100" --jq '.[].id' 2>/dev/null) || { echo unknown; return 0; }
     [ -n "$ids" ] || { echo unknown; return 0; }
     local seen=""
     for id in $ids; do
         strict=$(gh api "repos/$owner/$repo/rulesets/$id" \
-            --jq '[.rules[]? | select(.type == "required_status_checks")
+            --jq 'select(.enforcement == "active") | [.rules[]? | select(.type == "required_status_checks")
                    | .parameters.strict_required_status_checks_policy] | first | if . == null then "none" else tostring end' 2>/dev/null) \
             || { echo unknown; return 0; }
         case "$strict" in
@@ -55,10 +55,10 @@ collision_hits() {
 
 collision_rerun() {
     local owner="$1" repo="$2" sha="$3" merged prs pr files rows="" hits rc=0
-    merged=$(gh api --paginate "repos/$owner/$repo/commits/$sha?per_page=100" --jq '.files[].filename') || return 1
+    merged=$(gh api --paginate "repos/$owner/$repo/commits/$sha?per_page=100" --jq '.files[] | (.filename, (.previous_filename // empty))') || return 1
     prs=$(gh api --paginate "repos/$owner/$repo/pulls?state=open&per_page=100" --jq '.[].number') || return 1
     for pr in $prs; do
-        if files=$(gh api --paginate "repos/$owner/$repo/pulls/$pr/files?per_page=100" --jq '.[].filename'); then
+        if files=$(gh api --paginate "repos/$owner/$repo/pulls/$pr/files?per_page=100" --jq '.[] | (.filename, (.previous_filename // empty))'); then
             rows+=$(printf '%s\n' "$files" | sed "s/^/$pr\t/")$'\n'
         else
             # unreadable file list: force a hit via a sentinel the merge always "touches"
