@@ -6,7 +6,7 @@
 setup() {
     HOOK="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/agent_branch_push_guard.sh"
     TEST_TMP="$(mktemp -d)"
-    git init -q --bare "$TEST_TMP/origin.git"
+    git init -q --bare -b main "$TEST_TMP/origin.git"
     git init -q -b main "$TEST_TMP/main"
     cd "$TEST_TMP/main" || return 1
     git config user.email t@t && git config user.name t
@@ -203,4 +203,163 @@ refute_remote() {
     run jq -e '[.hooks.PostToolUse, .hooks.PostToolUseFailure]
         | all(any(.[]; .matcher == "Bash" and any(.hooks[]; .command | test("agent_branch_push_guard"))))' "$S"
     [ "$status" -eq 0 ]
+}
+
+# --- #1074: PR-head targeting ---
+
+add_tracking_worktree() {
+    git -C "$TEST_TMP/main" worktree add -q -b "$1" "$TEST_TMP/wt" --track "$2"
+    git -C "$TEST_TMP/wt" config user.email t@t
+    git -C "$TEST_TMP/wt" config user.name t
+    git -C "$TEST_TMP/wt" config commit.gpgsign false
+    git -C "$TEST_TMP/wt" commit -q --allow-empty -m work
+}
+
+@test "a branch tracking a differently-named remote branch updates that branch (#1074)" {
+    git -C "$TEST_TMP/main" push -q origin main:refs/heads/fix/pr-head-5
+    git -C "$TEST_TMP/main" fetch -q origin
+    add_tracking_worktree fix/9-review-pr-5 origin/fix/pr-head-5
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    refute_remote fix/9-review-pr-5
+    [ "$(git -C "$TEST_TMP/origin.git" rev-parse fix/pr-head-5)" = "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
+}
+
+@test "a branch cut from origin/main never pushes to main (#1074)" {
+    git -C "$TEST_TMP/main" fetch -q origin
+    add_tracking_worktree fix/9-thing origin/main
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has fix/9-thing
+    [ "$(git -C "$TEST_TMP/origin.git" rev-parse main)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
+}
+
+@test "no upstream and HEAD is an open PR head elsewhere: refuse, no side branch (#1074)" {
+    add_worktree fix/9-review
+    mkdir "$TEST_TMP/bin"
+    printf '#!/bin/sh\nprintf '"'"'[{"head":{"ref":"fix/pr-head-5","sha":"%%s"}}]'"'"' "$(git rev-parse HEAD^)"\n' >"$TEST_TMP/bin/gh"
+    chmod +x "$TEST_TMP/bin/gh"
+    PATH="$TEST_TMP/bin:$PATH" run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"fix/pr-head-5"* ]]
+    refute_remote fix/9-review
+}
+
+@test "the open-PR lookup reads every page, so a PR head on page 2 is found (#1074)" {
+    add_worktree fix/9-review
+    mkdir "$TEST_TMP/bin"
+    # Without --paginate --slurp the stub serves page 1 only (no match); with them, two pages.
+    cat >"$TEST_TMP/bin/gh" <<'STUB'
+#!/bin/bash
+case "$*" in
+    *--paginate*--slurp*)
+        printf '[[{"head":{"ref":"other","sha":"0"}}],[{"head":{"ref":"fix/pr-head-5","sha":"%s"}}]]' "$(git rev-parse HEAD^)" ;;
+    *) printf '[{"head":{"ref":"other","sha":"0"}}]' ;;
+esac
+STUB
+    chmod +x "$TEST_TMP/bin/gh"
+    PATH="$TEST_TMP/bin:$PATH" run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"fix/pr-head-5"* ]]
+    refute_remote fix/9-review
+}
+
+@test "an upstream equal to the remote default is never pushed when origin/HEAD is absent (#1074)" {
+    git -C "$TEST_TMP/origin.git" symbolic-ref HEAD refs/heads/develop
+    git -C "$TEST_TMP/main" push -q origin main:refs/heads/develop
+    # git >= 2.48 fetch creates origin/HEAD on its own; this test needs it absent.
+    git -C "$TEST_TMP/main" config remote.origin.followRemoteHEAD never
+    git -C "$TEST_TMP/main" fetch -q origin
+    run git -C "$TEST_TMP/main" symbolic-ref -q refs/remotes/origin/HEAD
+    [ "$status" -ne 0 ]
+    add_tracking_worktree fix/9-thing origin/develop
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has fix/9-thing
+    [ "$(git -C "$TEST_TMP/origin.git" rev-parse develop)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
+}
+
+@test "a stacked branch tracking its parent PR branch is pushed by its own name (#1074)" {
+    git -C "$TEST_TMP/main" push -q origin main:refs/heads/fix/parent-5
+    git -C "$TEST_TMP/main" fetch -q origin
+    add_tracking_worktree fix/12-child origin/fix/parent-5
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has fix/12-child
+    [ "$(git -C "$TEST_TMP/origin.git" rev-parse fix/parent-5)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
+}
+
+# A stale local origin/HEAD (-> release) while the remote default and the upstream are develop.
+stale_head_fixture() {
+    git -C "$TEST_TMP/origin.git" symbolic-ref HEAD refs/heads/develop
+    git -C "$TEST_TMP/main" push -q origin main:refs/heads/develop main:refs/heads/release
+    git -C "$TEST_TMP/main" fetch -q origin
+    git -C "$TEST_TMP/main" remote set-head origin release
+    add_tracking_worktree fix/9-thing origin/develop
+}
+
+@test "a stale local origin/HEAD does not hide the remote default (#1074)" {
+    stale_head_fixture
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has fix/9-thing
+    [ "$(git -C "$TEST_TMP/origin.git" rev-parse develop)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
+}
+
+@test "an unqueryable remote default means no upstream is trusted (#1074)" {
+    stale_head_fixture
+    # push still reaches the bare repo through pushurl; ls-remote reads the broken url.
+    git -C "$TEST_TMP/main" config remote.origin.pushurl "$TEST_TMP/origin.git"
+    git -C "$TEST_TMP/main" config remote.origin.url "$TEST_TMP/missing.git"
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has fix/9-thing
+    [ "$(git -C "$TEST_TMP/origin.git" rev-parse develop)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
+}
+
+# --- #1078 review findings ---
+
+@test "a PR head several commits below HEAD is still detected (#1074)" {
+    add_worktree fix/9-review
+    git -C "$TEST_TMP/wt" commit -q --allow-empty -m second
+    git -C "$TEST_TMP/wt" commit -q --allow-empty -m third
+    mkdir "$TEST_TMP/bin"
+    printf '#!/bin/sh\nprintf '"'"'[{"head":{"ref":"fix/pr-head-5","sha":"%%s"}}]'"'"' "$(git rev-parse HEAD~2)"\n' >"$TEST_TMP/bin/gh"
+    chmod +x "$TEST_TMP/bin/gh"
+    PATH="$TEST_TMP/bin:$PATH" run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"fix/pr-head-5"* ]]
+    refute_remote fix/9-review
+}
+
+@test "a fork PR head is not treated as a head on origin (#1074)" {
+    add_worktree fix/9-thing
+    mkdir "$TEST_TMP/bin"
+    printf '#!/bin/sh\nprintf '"'"'[{"head":{"ref":"fix/pr-head-5","sha":"%%s","repo":{"full_name":"fork/r"}},"base":{"repo":{"full_name":"o/r"}}}]'"'"' "$(git rev-parse HEAD^)"\n' >"$TEST_TMP/bin/gh"
+    chmod +x "$TEST_TMP/bin/gh"
+    PATH="$TEST_TMP/bin:$PATH" run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"fix/pr-head-5"* ]]
+    remote_has fix/9-thing
+}
+
+@test "a branch tracking a local branch never moves a local ref (#1074)" {
+    git -C "$TEST_TMP/main" branch other
+    add_tracking_worktree fix/9-thing other
+    before="$(git -C "$TEST_TMP/main" rev-parse other)"
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$TEST_TMP/main" rev-parse other)" = "$before" ]
+}
+
+@test "the remote default is not queried when there is no differing upstream (#1074)" {
+    add_worktree fix/9-thing
+    mkdir "$TEST_TMP/bin"
+    printf '#!/bin/sh\necho "$*" >>"%s/timeout.log"\nshift\nexec "$@"\n' "$TEST_TMP" >"$TEST_TMP/bin/timeout"
+    chmod +x "$TEST_TMP/bin/timeout"
+    PATH="$TEST_TMP/bin:$PATH" run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has fix/9-thing
+    run grep -c ls-remote "$TEST_TMP/timeout.log"
+    [ "$output" = 0 ]
 }

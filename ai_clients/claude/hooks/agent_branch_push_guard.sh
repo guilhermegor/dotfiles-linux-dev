@@ -28,8 +28,30 @@ _resolve_dir() {
 	esac
 }
 
+# _open_pr_elsewhere CWD BRANCH: print the head ref of an open PR whose head is one of the last 50 commits
+# of HEAD, under another name and in this repo (not a fork). Fails open (no gh, no network, no match -> prints nothing).
+_open_pr_elsewhere() {
+	local cwd="$1" branch="$2" shas
+	command -v gh >/dev/null 2>&1 || return 1
+	shas="$($GIT -C "$cwd" rev-list -n 50 HEAD 2>/dev/null)" || return 1
+	(cd "$cwd" && GH_PROMPT_DISABLED=1 timeout 20 gh api --paginate --slurp 'repos/{owner}/{repo}/pulls?state=open&per_page=100' 2>/dev/null) \
+		| jq -r --arg b "$branch" --arg s "$shas" \
+			'[flatten[] | select(.head.ref != $b and (.head.repo.full_name == .base.repo.full_name) and (.head.sha as $h | ($s | split("\n") | index($h))))][0].head.ref // empty' 2>/dev/null
+}
+
+# _remote_default CWD REMOTE: print REMOTE's default branch as the remote itself reports it; prints
+# nothing when it cannot be queried (the caller then trusts no upstream). The local
+# refs/remotes/REMOTE/HEAD is never consulted: it goes stale when the remote default changes.
+_remote_default() {
+	local cwd="$1" remote="$2"
+
+	GIT_TERMINAL_PROMPT=0 timeout 10 $GIT -C "$cwd" ls-remote --symref "$remote" HEAD 2>/dev/null \
+		| awk '$1 == "ref:" { sub("refs/heads/", "", $2); print $2; exit }'
+}
+
 main() {
-	local payload cwd cmd branch gitdir prefix dir pre
+	local payload cwd cmd branch gitdir prefix dir pre remote up base head_ref
+	local -a args
 
 	payload="$(cat)"
 	cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
@@ -65,8 +87,28 @@ main() {
 	branch="$($GIT -C "$cwd" symbolic-ref --short -q HEAD)" || exit 0
 	is_loop_branch "$branch" || exit 0
 
+	# A branch tracking a differently-named remote branch (a review worktree on a PR head)
+	# updates THAT branch; pushing by local name would open a side branch (#1074).
+	# The default branch is never a target: `worktree add -b x origin/main` tracks it. An unknown
+	# Only a review branch (<type>/<N>-review-pr-<M>[-rK]) is redirected: a stacked branch cut from
+	# another feature branch also tracks it, and must not push onto its parent PR.
+	# default (remote unreachable) means no upstream is trusted: the push goes by local name, never to another branch.
+	remote="$($GIT -C "$cwd" config "branch.$branch.remote")" || remote=origin
+	up="$($GIT -C "$cwd" config "branch.$branch.merge")"
+	up="${up#refs/heads/}"
+	# Only an upstream that differs from the branch needs the (network) default lookup.
+	base=""
+	if [[ "$branch" == *-review-pr-* ]] && [ -n "$up" ] && [ "$up" != "$branch" ] && [ "$remote" != . ]; then base="$(_remote_default "$cwd" "$remote")"; fi
+	args=(-u origin "$branch")
+	if [ -n "$up" ] && [ "$up" != "$branch" ] && [ -n "$base" ] && [ "$up" != "$base" ] && [ "$up" != master ] && [ "$up" != main ]; then
+		args=("$remote" "HEAD:refs/heads/$up")
+	elif [ -z "$up" ] && head_ref="$(_open_pr_elsewhere "$cwd" "$branch")" && [ -n "$head_ref" ]; then
+		echo "agent_branch_push_guard: HEAD is the head of an open PR on '$head_ref'; not creating side branch $branch. Push explicitly: git push origin HEAD:$head_ref" >&2
+		exit 0
+	fi
+
 	# Bounded and prompt-free: a stalled remote must reach the pending-push branch, not hang the hook.
-	if GIT_TERMINAL_PROMPT=0 timeout 30 $GIT -C "$cwd" push -q -u origin "$branch" >/dev/null 2>&1; then
+	if GIT_TERMINAL_PROMPT=0 timeout 30 $GIT -C "$cwd" push -q "${args[@]}" >/dev/null 2>&1; then
 		rm -f "$gitdir/pending-push"
 	else
 		date +%s >"$gitdir/pending-push"
