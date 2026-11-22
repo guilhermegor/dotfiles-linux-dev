@@ -45,6 +45,10 @@ claims.
   listing's silence as proof of absence.
 - If a result looks empty but anything (memory, an index, prior knowledge)
   says the path should exist, verify directly before concluding absence.
+- The same holds for test runners: the proxy can collapse `jest --coverage`
+  to one `PASS`/`FAIL` line and rewrite `npx <bin>` into `npm run <bin>`. Never
+  read a structured report (coverage, per-file lint) through a proxied runner;
+  run package binaries by path (`./node_modules/.bin/<bin>`) or `rtk proxy`.
 
 ## Verify git writes actually landed
 
