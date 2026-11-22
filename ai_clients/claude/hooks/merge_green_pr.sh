@@ -130,29 +130,56 @@ PERMISSIONS_SAFE='def lvl: . == "read" or . == "none";
 	type == "object" and has("permissions") and (.permissions | top)
 	and all((.jobs // {})[]; (type == "object") and ((has("permissions") | not) or (.permissions | job)))'
 
+# A Dependabot PR is trusted only when the branch is Dependabot's own: a dependabot/* head in
+# this repo, and every commit authored by the bot, committed by it or GitHub's web-flow, and
+# signature-verified. Shape taken from a real Dependabot PR (author dependabot[bot], committer
+# web-flow, verified). Any other commit (a human's, an agent's push, "Update branch") refuses.
+bot_provenance() {
+	local pr="$1" head_ref="$2" head_repo="$3" base_repo="$4" commits total
+	[[ "$head_ref" == dependabot/* ]] ||
+		{ echo "#$pr REFUSED: dependabot PR head ref '$head_ref' is not dependabot/* — merge by hand"; return 1; }
+	[ "$head_repo" != "-" ] && [ "${head_repo,,}" = "${base_repo,,}" ] ||
+		{ echo "#$pr REFUSED: dependabot PR head repo '$head_repo' is not '$base_repo' — merge by hand"; return 1; }
+	commits="$(gh_retry api --paginate "repos/$owner/$repo/pulls/$pr/commits?per_page=100" \
+		--jq '.[] | [(.author.login // "-"), (.committer.login // "-"), ((.commit.verification.verified // false)|tostring)] | @tsv')" && [ -n "$commits" ] ||
+		{ echo "#$pr UNKNOWN: cannot read the PR's commits"; return 1; }
+	total="$(grep -c . <<<"$commits")"
+	# The commits endpoint stops at 250, so a full page could hide a later foreign commit.
+	[ "$total" -lt 250 ] ||
+		{ echo "#$pr REFUSED: commit list may be truncated — merge by hand"; return 1; }
+	if awk -F'\t' '{a=tolower($1); c=tolower($2)} !(a=="dependabot[bot]" && (c=="dependabot[bot]" || c=="web-flow") && $3=="true") {f=1} END {exit !f}' <<<"$commits"; then
+		echo "#$pr REFUSED: dependabot PR carries a commit not authored by dependabot[bot] or not verified — merge by hand"
+		return 1
+	fi
+}
+
 merge_one() {
-	local pr="$1" info head state draft base author changed try
+	local pr="$1" info head state draft base author changed try head_ref head_repo base_repo
 	local required checks statuses bad name files wf_changed wf_live wpath rname suite
 	local rid rpath refs jobs backed content wf parsed
 
 	# mergeable_state is computed lazily: poll while GitHub still says unknown/null.
 	for try in 1 2 3; do
 		info="$(gh_retry api "repos/$owner/$repo/pulls/$pr" \
-			--jq '[(.head.sha // "-"), (.mergeable_state // "unknown"), ((.draft // false)|tostring), (.base.ref // "-"), (.user.login // "-"), ((.changed_files // "-")|tostring)] | @tsv')" && [ -n "$info" ] ||
+			--jq '[(.head.sha // "-"), (.mergeable_state // "unknown"), ((.draft // false)|tostring), (.base.ref // "-"), (.user.login // "-"), ((.changed_files // "-")|tostring), (.head.ref // "-"), (.head.repo.full_name // "-"), (.base.repo.full_name // "-")] | @tsv')" && [ -n "$info" ] ||
 			{ echo "#$pr UNKNOWN: cannot read the PR"; return 1; }
 		# "-" placeholders keep every field non-empty: tab is IFS whitespace and would
 		# otherwise collapse an empty field and shift the columns.
-		IFS=$'\t' read -r head state draft base author changed <<<"$info"
+		IFS=$'\t' read -r head state draft base author changed head_ref head_repo base_repo <<<"$info"
 		[ "$state" = "unknown" ] || break
 		[ "$try" -lt 3 ] && sleep "${MERGE_GREEN_RETRY_SLEEP:-2}"
 	done
 	{ [ "$head" != "-" ] && [ "$base" != "-" ] && [ "$author" != "-" ] && [[ "$changed" =~ ^[0-9]+$ ]]; } ||
 		{ echo "#$pr UNKNOWN: malformed PR read"; return 1; }
 	# GitHub logins are case-insensitive.
-	# Dependabot is the one bot allowed (#1076): the PR author is the account that opened it, so a
-	# fork cannot pose as it. Every check below still applies to it, workflow rules (0)-(2) included.
-	[ "${author,,}" = "${me,,}" ] || [ "${author,,}" = "dependabot[bot]" ] ||
-		{ echo "#$pr REFUSED: author '$author' is not '$me' — merge by hand"; return 1; }
+	# Dependabot is the one bot allowed (#1076), but the PR author is only whoever opened the PR:
+	# anyone able to push to a dependabot/* branch keeps that author. So its PRs also need the
+	# commit provenance below; every check after it applies to it unchanged, rules (0)-(2) too.
+	if [ "${author,,}" != "${me,,}" ]; then
+		[ "${author,,}" = "dependabot[bot]" ] ||
+			{ echo "#$pr REFUSED: author '$author' is not '$me' or dependabot[bot] — merge by hand"; return 1; }
+		bot_provenance "$pr" "$head_ref" "$head_repo" "$base_repo" || return 1
+	fi
 	[ "$draft" = "false" ] || { echo "#$pr REFUSED: draft"; return 1; }
 	# has_hooks is clean with pre-receive hooks; both are mergeable.
 	[[ "$state" == "clean" || "$state" == "has_hooks" ]] ||
@@ -286,7 +313,8 @@ merge_one() {
 main() {
 	local pr rc=0
 	# The remote is writable by an agent, so the target is trusted only if its owner is
-	# the authenticated user; each PR's author must be that user or dependabot[bot] (other bots go to a prompt).
+	# the authenticated user; each PR's author must be that user, or dependabot[bot] with
+	# bot_provenance (other bots go to a prompt).
 	me="$(gh_retry api user --jq .login)" && [ -n "$me" ] ||
 		{ echo "UNKNOWN: cannot read the authenticated user"; return 1; }
 	# Case-insensitive; an org-owned repo never equals a user login, so it is refused on
