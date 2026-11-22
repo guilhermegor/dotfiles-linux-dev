@@ -264,6 +264,39 @@ advance_branch_elsewhere() {
     [[ "$output" != *"INTERRUPTED WORK"* ]]
 }
 
+# --- dotfiles-linux-dev#1080 gap 3: content test, not counts ---
+
+@test "dirty edit that reverse-applies to origin/<default> is already shipped" {
+    wtH="$BATS_TEST_TMPDIR/wtH"
+    git -C "$work" worktree add --quiet --detach "$wtH" origin/master
+    echo plus >>"$wtH/file.txt"
+    echo plus >>"$work/file.txt"
+    git -C "$work" commit --quiet -am 'feat: ship the same edit'
+    git -C "$work" push --quiet origin master
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtH: 1 uncommitted file(s) — already on origin/master"* ]]
+    [[ "$output" != *"INTERRUPTED WORK"* ]]
+}
+
+@test "dirty edit absent from origin/<default> stays interrupted work" {
+    wtH="$BATS_TEST_TMPDIR/wtH"
+    git -C "$work" worktree add --quiet --detach "$wtH" origin/master
+    echo plus >>"$wtH/file.txt"
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtH: 1 uncommitted file(s) — INTERRUPTED WORK"* ]]
+}
+
+@test "a worktree whose path no longer exists is skipped without error" {
+    wtX="$BATS_TEST_TMPDIR/wtX"
+    git -C "$work" worktree add --quiet --detach "$wtX" origin/master
+    rm -rf "$wtX"
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"wtX"* ]]
+}
+
 @test "genuine staged work is not mistaken for a stale-index" {
     wtS="$BATS_TEST_TMPDIR/wtS"
     git -C "$work" worktree add --quiet -b stale2 "$wtS" master

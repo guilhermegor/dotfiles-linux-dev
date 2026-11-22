@@ -16,6 +16,23 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	exit 1
 fi
 
+# True when the worktree's diff against HEAD reverse-applies cleanly to the tree of
+# origin/<default> — i.e. that content is already there. Applied against a throwaway index
+# (`apply --cached`), so no checkout is touched and nothing is written to the worktree.
+# Any failed step returns 1: fail toward reporting, never toward hiding work.
+diff_already_on_default() {
+	local path="$1" db="$2" patch idx rc=1
+	patch="$(mktemp)" || return 1
+	idx="$(mktemp -u)"
+	if git -C "$path" diff HEAD --binary >"$patch" 2>/dev/null && [ -s "$patch" ] \
+		&& GIT_INDEX_FILE="$idx" git -C "$path" read-tree "origin/$db" 2>/dev/null \
+		&& GIT_INDEX_FILE="$idx" git -C "$path" apply --cached --check -R "$patch" 2>/dev/null; then
+		rc=0
+	fi
+	rm -f "$patch" "$idx"
+	return "$rc"
+}
+
 # Classifies a dirty worktree's diff against HEAD as "interrupted" (net new work worth
 # resuming) or "stale" (a revert of content already shipped on the default branch) — the
 # SIGN of the diff is the signal, not the file count (dotfiles-linux-dev#318; lessons-claude-toolchain:
@@ -36,6 +53,16 @@ classify_worktree_diff() {
 	fi
 	untracked="$(git -C "$path" ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d '[:space:]')"
 	[ -n "$untracked" ] || untracked=0
+
+	# Content beats counts (dotfiles-linux-dev#1080): a dirty diff that reverse-applies cleanly
+	# to origin/<default> is already there. Counts alone mislabel a shipped edit as new work
+	# (ins > del) and a small staged revert as real (+4/-40). Untracked files are new by
+	# definition, so they skip the test.
+	if [ "$untracked" -eq 0 ] && [ -n "$numstat" ] && [ -n "$default_branch" ] \
+		&& diff_already_on_default "$path" "$default_branch"; then
+		printf 'shipped\t%s\t%s\n' "$ins" "$del"
+		return
+	fi
 
 	if [ "$untracked" -gt 0 ] || [ "$ins" -gt "$del" ]; then
 		printf 'interrupted\t%s\t%s\n' "$ins" "$del"
@@ -262,6 +289,9 @@ fanout_worktrees() {
 					if [ "$verdict" = "stale-index" ]; then
 						printf '[fan-out] worktree %s: %s uncommitted file(s) — stale-index (== %s), stale revert, do NOT rescue%s\n' \
 							"$name" "$uncommitted" "$stale_sha" "$anon_note"
+					elif [ "$verdict" = "shipped" ]; then
+						printf '[fan-out] worktree %s: %s uncommitted file(s) — already on origin/%s (reverse-applies cleanly), stale revert, do NOT rescue (+%s/-%s)%s\n' \
+							"$name" "$uncommitted" "$default_branch" "$ins" "$del" "$anon_note"
 					elif [ "$verdict" = "stale" ]; then
 						printf '[fan-out] worktree %s: %s uncommitted file(s) — stale revert, do NOT rescue (+%s/-%s already on origin)%s\n' \
 							"$name" "$uncommitted" "$ins" "$del" "$anon_note"
