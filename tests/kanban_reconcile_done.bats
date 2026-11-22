@@ -91,9 +91,11 @@ case "\$1 \$2" in
     "project list")
         echo '{"projects":[{"title":"repo kanban","number":1,"id":"PVT_1"}]}'
         ;;
-    "project field-list")
+    "api graphql")
+        # the only board-fields read (#1089); the porcelain field-list is deliberately not stubbed
+        [[ "\$*" == *"fields(first:100)"* ]] || exit 1
         [ -f "$TEST_TMP/fail-field-list" ] && exit 1
-        cat "$TEST_TMP/fields.json"
+        jq -c '{data:{repositoryOwner:{projectV2:{fields:{nodes:.fields}}}}}' "$TEST_TMP/fields.json"
         ;;
     "project item-list")
         [ -f "$TEST_TMP/fail-item-list" ] && exit 1

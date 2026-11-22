@@ -9,12 +9,36 @@
 # session_start_context.sh sources this file and its output is unchanged by the extraction
 # (regression bar; see tests/session_start_context.bats, which still exercises these two
 # functions through that file unmodified).
+#
+# Verdicts beyond "interrupted" and "stale revert" (dotfiles-linux-dev#1080):
+#   - a second pass over local branches checked out in NO worktree: `[ahead N]` from
+#     for-each-ref, and cherry + content test for branches with no upstream;
+#   - `stale-index (== <sha>)`: the index tree equals a commit in `git log HEAD` and the
+#     files match the index, i.e. the reverse of newer commits, not interrupted work;
+#   - "already on origin/<default>": the dirty diff reverse-applies cleanly there.
 set -u
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	echo "worktree_fanout.sh is meant to be sourced, not executed." >&2
 	exit 1
 fi
+
+# True when the worktree's diff against HEAD reverse-applies cleanly to the tree of
+# origin/<default> — i.e. that content is already there. Applied against a throwaway index
+# (`apply --cached`), so no checkout is touched and nothing is written to the worktree.
+# Any failed step returns 1: fail toward reporting, never toward hiding work.
+diff_already_on_default() {
+	local path="$1" db="$2" patch idx rc=1
+	patch="$(mktemp)" || return 1
+	idx="$(mktemp -u)"
+	if git -C "$path" diff HEAD --binary >"$patch" 2>/dev/null && [ -s "$patch" ] \
+		&& GIT_INDEX_FILE="$idx" git -C "$path" read-tree "origin/$db" 2>/dev/null \
+		&& GIT_INDEX_FILE="$idx" git -C "$path" apply --cached --check -R "$patch" 2>/dev/null; then
+		rc=0
+	fi
+	rm -f "$patch" "$idx"
+	return "$rc"
+}
 
 # Classifies a dirty worktree's diff against HEAD as "interrupted" (net new work worth
 # resuming) or "stale" (a revert of content already shipped on the default branch) — the
@@ -36,6 +60,16 @@ classify_worktree_diff() {
 	fi
 	untracked="$(git -C "$path" ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d '[:space:]')"
 	[ -n "$untracked" ] || untracked=0
+
+	# Content beats counts (dotfiles-linux-dev#1080): a dirty diff that reverse-applies cleanly
+	# to origin/<default> is already there. Counts alone mislabel a shipped edit as new work
+	# (ins > del) and a small staged revert as real (+4/-40). Untracked files are new by
+	# definition, so they skip the test.
+	if [ "$untracked" -eq 0 ] && [ -n "$numstat" ] && [ -n "$default_branch" ] \
+		&& diff_already_on_default "$path" "$default_branch"; then
+		printf 'shipped\t%s\t%s\n' "$ins" "$del"
+		return
+	fi
 
 	if [ "$untracked" -gt 0 ] || [ "$ins" -gt "$del" ]; then
 		printf 'interrupted\t%s\t%s\n' "$ins" "$del"
@@ -60,6 +94,29 @@ classify_worktree_diff() {
 	fi
 
 	printf 'interrupted\t%s\t%s\n' "$ins" "$del"
+}
+
+# Phantom dirty index (dotfiles-linux-dev#1080): another worktree advanced this branch, so the
+# index stayed put and shows staged "M" files that are only the reverse of newer commits.
+# Deterministic test: the index tree equals the tree of a commit in `git log HEAD`, and the
+# working files match the index (nothing unstaged, nothing untracked). Prints that commit's
+# short sha, or nothing. The log is capped — this hook must stay fast; past the cap it fails
+# toward reporting.
+# `git write-tree` takes index.lock and rewrites the index (measured on git 2.43: held lock
+# fails it, mtime moves), and this hook runs while a live agent may be using the worktree —
+# so the tree is computed from a private COPY of the index, never the live one.
+stale_index_commit() {
+	local path="$1" tree idx
+	idx="$(mktemp -u)"
+	cp "$(git -C "$path" rev-parse --path-format=absolute --git-path index 2>/dev/null)" "$idx" 2>/dev/null \
+		|| return 1
+	tree="$(GIT_INDEX_FILE="$idx" git -C "$path" write-tree 2>/dev/null)"
+	rm -f "$idx"
+	[ -n "$tree" ] || return 1
+	git -C "$path" diff --quiet 2>/dev/null || return 1
+	[ -z "$(git -C "$path" ls-files --others --exclude-standard 2>/dev/null)" ] || return 1
+	git -C "$path" log HEAD -n 200 --format='%T %h' 2>/dev/null \
+		| awk -v t="$tree" '$1==t{print $2; found=1; exit} END{exit !found}'
 }
 
 # owner/repo parsed from the origin remote URL, no network call. Empty when there is no
@@ -101,8 +158,8 @@ fanout_pr_json() {
 # The ancestor test needs the merged head object locally; when it is absent the check fails
 # toward reporting, never toward hiding work.
 merged_pr_covers_head() {
-	local path="$1" branch="$2" merged_heads="$3" head oid
-	head="$(git -C "$path" rev-parse HEAD 2>/dev/null)" || return 1
+	local path="$1" branch="$2" merged_heads="$3" ref="${4:-HEAD}" head oid b
+	head="$(git -C "$path" rev-parse "$ref" 2>/dev/null)" || return 1
 	while IFS=$'\t' read -r b oid; do
 		[ "$b" = "$branch" ] && [ -n "$oid" ] || continue
 		[ "$oid" = "$head" ] && return 0
@@ -117,12 +174,53 @@ merged_pr_covers_head() {
 # ONE commit reads as N unshipped commits (dotfiles-linux-dev#837); this compares content.
 # Any undecidable step (no merge-base, a failed diff) returns 1: fail toward reporting.
 branch_content_shipped() {
-	local path="$1" db="$2" base
-	base="$(git -C "$path" merge-base "origin/$db" HEAD 2>/dev/null)" || return 1
+	local path="$1" db="$2" ref="${3:-HEAD}" base
+	base="$(git -C "$path" merge-base "origin/$db" "$ref" 2>/dev/null)" || return 1
 	# NUL-separated names stay in the pipe: a command substitution would drop the NULs.
 	# An empty list makes the diff compare whole trees — stricter, so it still fails toward reporting.
-	git -C "$path" diff --name-only -z --no-renames "$base" HEAD 2>/dev/null \
-		| xargs -0 git -C "$path" --literal-pathspecs diff --quiet "origin/$db" HEAD -- 2>/dev/null
+	git -C "$path" diff --name-only -z --no-renames "$base" "$ref" 2>/dev/null \
+		| xargs -0 git -C "$path" --literal-pathspecs diff --quiet "origin/$db" "$ref" -- 2>/dev/null
+}
+
+# Second pass (dotfiles-linux-dev#1080): local branches checked out in NO worktree. The
+# worktree walk never sees them, yet a killed agent's commits can sit on one (opendata-rfb:
+# local `main` held an unpushed scaffold commit while the walk printed dirty=0 unpushed=0).
+# The count comes from the first oracle that applies: the branch's OWN remote ref
+# (origin/<b>..<b>, whatever its upstream is configured to — #457), else a live upstream's
+# `[ahead N]` (for-each-ref's upstream:track), else — no upstream, or one whose remote branch
+# was deleted (`[gone]`, the post-merge shape) — `git cherry` against origin/<default>, the
+# same test as the worktree pass. Whichever counted, a merged PR or content already on
+# origin/<default> settles it as shipped. Every undecidable step falls toward reporting.
+# Reported only, never added to the RESUME list: there is no agent worktree to SendMessage to.
+# $3 is the newline-delimited set of branches the walk already covered.
+fanout_unattached_branches() {
+	local cwd="$1" default_branch="$2" attached="$3" merged_heads="$4"
+	local b upstream track ref n msg
+
+	# `~` separates the fields: git forbids it in ref names, unlike `|`. `lstrip=2`, not
+	# `short`: a tag named like the branch makes `short` print "heads/<b>".
+	while IFS='~' read -r b upstream track; do
+		[ -n "$b" ] || continue
+		case "$attached" in *$'\n'"$b"$'\n'*) continue ;; esac
+		ref="refs/heads/$b"
+		if git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$b" >/dev/null 2>&1; then
+			n="$(git -C "$cwd" rev-list --count "refs/remotes/origin/$b..$ref" 2>/dev/null)"
+			msg='not pushed'
+		elif [ -n "$upstream" ] && [ "$track" != "[gone]" ]; then
+			n=0
+			[[ "$track" =~ ahead\ ([0-9]+) ]] && n="${BASH_REMATCH[1]}"
+			msg='not pushed'
+		else
+			[ -n "$default_branch" ] && [ "$b" != "$default_branch" ] || continue
+			n="$(git -C "$cwd" cherry "origin/$default_branch" "$ref" 2>/dev/null | grep -c '^+')"
+			msg='never pushed — no upstream'
+		fi
+		[ "${n:-0}" -gt 0 ] || continue
+		merged_pr_covers_head "$cwd" "$b" "$merged_heads" "$ref" && continue
+		branch_content_shipped "$cwd" "$default_branch" "$ref" && continue
+		printf '[fan-out] branch %s (no worktree): %s commit(s) %s\n' "$b" "$n" "$msg"
+	done < <(git -C "$cwd" for-each-ref refs/heads \
+		--format='%(refname:lstrip=2)~%(upstream:short)~%(upstream:track)' 2>/dev/null)
 }
 
 # `git worktree list` entries for THIS repo (parallel-agent worktrees included) — unpushed
@@ -133,6 +231,7 @@ fanout_worktrees() {
 	local pr_branches="" merged_heads="" default_branch path="" branch="" name uncommitted ahead pushed
 	local has_upstream never_pushed
 	local -a interrupted_names=()
+	local attached=$'\n'
 
 	if [ "$github_ok" = "1" ]; then
 		pr_branches="$(printf '%s' "$json" | jq -r '.[].headRefName' 2>/dev/null)"
@@ -154,6 +253,9 @@ fanout_worktrees() {
 			;;
 		"")
 			if [ -n "$path" ] && [ -d "$path" ]; then
+				# Covered only when the directory exists: a prunable worktree (dir deleted)
+				# is skipped here, so its branch must fall through to the unattached pass.
+				[ -z "$branch" ] || attached+="$branch"$'\n'
 				name="$(basename "$path")"
 				uncommitted="$(git -C "$path" status --porcelain 2>/dev/null | wc -l | tr -d '[:space:]')"
 				[ -n "$uncommitted" ] || uncommitted=0
@@ -203,12 +305,22 @@ fanout_worktrees() {
 				fi
 
 				if [ "$uncommitted" -gt 0 ]; then
-					local verdict ins del anon_note=""
-					IFS=$'\t' read -r verdict ins del <<<"$(classify_worktree_diff "$path" "$default_branch")"
+					local verdict ins del anon_note="" stale_sha
 					case "$branch" in
 					worktree-agent-*) anon_note=" [anonymous branch, no issue reference]" ;;
 					esac
-					if [ "$verdict" = "stale" ]; then
+					if stale_sha="$(stale_index_commit "$path")"; then
+						verdict="stale-index"
+					else
+						IFS=$'\t' read -r verdict ins del <<<"$(classify_worktree_diff "$path" "$default_branch")"
+					fi
+					if [ "$verdict" = "stale-index" ]; then
+						printf '[fan-out] worktree %s: %s uncommitted file(s) — stale-index (== %s), stale revert, do NOT rescue%s\n' \
+							"$name" "$uncommitted" "$stale_sha" "$anon_note"
+					elif [ "$verdict" = "shipped" ]; then
+						printf '[fan-out] worktree %s: %s uncommitted file(s) — already on origin/%s (reverse-applies cleanly), stale revert, do NOT rescue (+%s/-%s)%s\n' \
+							"$name" "$uncommitted" "$default_branch" "$ins" "$del" "$anon_note"
+					elif [ "$verdict" = "stale" ]; then
 						printf '[fan-out] worktree %s: %s uncommitted file(s) — stale revert, do NOT rescue (+%s/-%s already on origin)%s\n' \
 							"$name" "$uncommitted" "$ins" "$del" "$anon_note"
 					else
@@ -229,6 +341,8 @@ fanout_worktrees() {
 			;;
 		esac
 	done < <(git -C "$cwd" worktree list --porcelain 2>/dev/null; printf '\n')
+
+	fanout_unattached_branches "$cwd" "$default_branch" "$attached" "$merged_heads"
 
 	if [ "${#interrupted_names[@]}" -gt 0 ]; then
 		local joined
