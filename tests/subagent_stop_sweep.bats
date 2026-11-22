@@ -924,8 +924,7 @@ declared_board_numbers() {
 }
 
 @test "main() wires items [7], [9], [11], [12] through sweep_kanban_boards, not a single-repo reconcile" {
-    # Each call is wrapped in sweep_cached (#1072): the wiring is unchanged, only memoized.
-    run grep -cE '^\s+sweep_cached "\$repo:kanban-[a-z_]+" sweep_kanban_boards (in_review|closed|stale|offboard) "\$cwd" "\$repo"' "$SWEEP_SRC"
+    run grep -cE '^\s+sweep_kanban_boards (in_review|closed|stale|offboard) "\$cwd" "\$repo"' "$SWEEP_SRC"
     [ "$output" = "4" ]
     run grep -nE 'if reconcile_kanban(_done|_stale)? ' "$SWEEP_SRC"
     [ "$status" -ne 0 ]
@@ -1010,9 +1009,36 @@ counting_section() { echo x >> "$CALLS"; echo "section output ${1:-ok}"; }
     [ "$output" = "section output ok" ]
 }
 
-@test "main() wraps every GraphQL-bound section in sweep_cached" {
-    for k in review-gate roadmap-boards kanban-in_review kanban-closed kanban-stale kanban-offboard; do
-        run grep -c "sweep_cached \"\$repo:$k\"" "$SWEEP_SRC"
-        [ "$output" = "1" ]
+@test "sweep_cached: a non-zero exit is never cached, so the next sweep retries it" {
+    cache_setup
+    failing_section() { echo x >> "$CALLS"; echo "partial output"; return 3; }
+    run sweep_cached "o/r:k" failing_section
+    [ "$status" -eq 3 ]
+    run sweep_cached "o/r:k" failing_section
+    [ "$(wc -l < "$CALLS")" -eq 2 ]
+}
+
+@test "sweep_cached: SKIPPED, FAILED, DEFERRED and throttled output is never cached" {
+    cache_setup
+    for word in SKIPPED FAILED DEFERRED throttled; do
+        deferred_section() { echo x >> "$CALLS"; echo "board $word"; }
+        sweep_cached "o/r:$word" deferred_section > /dev/null
+        sweep_cached "o/r:$word" deferred_section > /dev/null
     done
+    [ "$(wc -l < "$CALLS")" -eq 8 ]
+}
+
+@test "sweep_cached: an uncreatable lock file degrades to running the section uncached" {
+    cache_setup
+    mkdir -p "$SWEEP_CACHE_DIR/o_r_k.lock"
+    run sweep_cached "o/r:k" counting_section
+    [ "$output" = "section output ok" ]
+}
+
+@test "main(): only the pure-read review gate is memoized, keyed by its roster file" {
+    run grep -cE '^\s+sweep_cached "\$repo:review-gate:\$roster_file" sweep_review_gate' "$SWEEP_SRC"
+    [ "$output" = "1" ]
+    # The mutating reconcilers must never replay a cached report (they move cards, add items).
+    run grep -E 'sweep_cached .*(sweep_kanban_boards|sweep_roadmap_boards)' "$SWEEP_SRC"
+    [ "$status" -ne 0 ]
 }
