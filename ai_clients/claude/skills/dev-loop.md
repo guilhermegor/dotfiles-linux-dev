@@ -951,8 +951,8 @@ code; on a repo whose gate does not, skip this path and use the serial drain abo
 ```bash
 rtk git fetch --tags origin <default>
 LAST=$(rtk git -c versionsort.suffix=- tag --sort=-v:refname --merged origin/<default> | head -1)
-[ -n "$LAST" ] || echo "no tags yet: first release, skip the diff"   # empty LAST makes ..origin/<default> diff HEAD
-rtk git diff --name-only "$LAST"..origin/<default> -- <shipped-paths>
+if [ -z "$LAST" ]; then echo "no tags yet: first release"   # empty LAST would diff HEAD..origin/<default>
+else rtk git diff --name-only "$LAST"..origin/<default> -- <shipped-paths>; fi
 ```
 
 `versionsort.suffix=-` ranks `v1.2.0` above `v1.2.0-rc1`; without it the pre-release comes first.
