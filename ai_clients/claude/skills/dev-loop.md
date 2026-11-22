@@ -941,14 +941,17 @@ every check green, blocked only on being `BEHIND`. Take them in this order:
    again, so updating them all in parallel fires the whole CI matrix once per PR for updates the
    next merge discards (dotfiles-linux-dev#1082). Advance to the next `merge_ready` PR whenever
    the head leaves the queue for any reason: it merged, its CI went red, step 3 sent it back to
-   review, or it was closed. A head that stalls must not stall the queue. Count queued runs
+   review, or it was closed. A head that stalls (a required check that never reports, CI still
+   `queued` after two rounds, or `update-branch` erroring) is skipped for this round and named in
+   the round report. A lower-numbered PR re-entering `merge_ready` later does not preempt the
+   head already in flight. This is the repo's own drain order, not GitHub's merge queue. Count queued runs
    (`rtk gh api "repos/<o>/<r>/actions/runs?status=queued&per_page=1" --jq .total_count`) and put
    it in the round report next to the in-progress count, so CI saturation shows as the
    bottleneck. It is a lower bound: runs held by a concurrency group are not `queued`.
 2. **Wait for CI, then read the repo's own review gate on the new head.** Never re-derive coverage.
 3. **Re-review only the PRs whose gate now reports the review superseded** (a conflict resolution
    or new code changed the PR's own patch) — they re-enter the planner as ordinary `dispatchable`.
-4. **Merge one at a time, pinned to the head SHA, as each turns green.** Then repeat step 1 for
+4. **Merge the head, pinned to its head SHA, once green.** Then repeat step 1 for
    the new queue head; if it is already up to date, go straight to step 2.
 
 ⚠️ **Depends on the gate carrying reviews forward** (blueprintx#698/#699: a review survives while the
