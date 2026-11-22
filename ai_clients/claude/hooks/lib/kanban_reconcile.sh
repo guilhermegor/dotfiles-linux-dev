@@ -405,17 +405,19 @@ _board_item_list() {
 # The project's field definitions, printed in the `{"fields":[...]}` shape `gh project field-list
 # --format json` printed (id, name, options[].{id,name}), so every downstream jq is unchanged.
 # That porcelain command also requests `items(first:100)`, and GraphQL bills connection size, so
-# each call cost 101 points (dotfiles-linux-dev#1089). This asks for `fields(first:30)` alone,
+# each call cost 101 points (dotfiles-linux-dev#1089). This asks for `fields(first:100)` alone,
 # via the owner-agnostic `repositoryOwner` interface (user and organization boards alike).
+# 100 is the connection maximum and still one request (the fields connection is billed by
+# its page size; `options` is a plain list), so it costs the same as 30 (not measured, #1089).
 # Non-single-select fields come back as `{}`, which no downstream select(.name==...) matches.
 # Returns 0 with the JSON on stdout, 2 when a rate limit is confirmed, 1 otherwise.
 _kr_project_fields() {
 	local owner="$1" project="$2" out rc=0 query
-	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){fields(first:30){pageInfo{hasNextPage} nodes{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}}'
+	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){fields(first:100){pageInfo{hasNextPage} nodes{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}}'
 	gh_budget_log_spend 1 # one GraphQL request, expected ~1 point, not measured (#1089)
 	out="$(_board_gql -f query="$query" -f login="$owner" -F num="$project")" || rc=$?
 	((rc == 0)) || return "$rc"
-	# More than 30 fields: Status may sit on page 2, so fail loudly (1) rather than let the
+	# More than 100 fields: Status may sit on page 2, so fail loudly (1) rather than let the
 	# caller read a truncated list as "no Status field" (3).
 	printf '%s' "$out" | jq -ce '.data.repositoryOwner.projectV2.fields
 		| select(. != null and .pageInfo.hasNextPage != true) | {fields: .nodes}' 2>/dev/null \

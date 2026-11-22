@@ -62,7 +62,7 @@ case "\$1 \$2" in
     "project item-edit") echo ok ;;
     "api graphql")
         # the only board-fields read (#1089); the porcelain field-list is deliberately not stubbed
-        [[ "\$*" == *"fields(first:30)"* ]] && { jq -c '{data:{repositoryOwner:{projectV2:{fields:{nodes:.fields}}}}}' "$TEST_TMP/fields.json"; exit 0; }
+        [[ "\$*" == *"fields(first:100)"* ]] && { jq -c '{data:{repositoryOwner:{projectV2:{fields:{nodes:.fields}}}}}' "$TEST_TMP/fields.json"; exit 0; }
         [ -f "$TEST_TMP/fail-item-add" ] && { echo "API rate limit exceeded" >&2; exit 1; }
         echo '{}' ;;
     *)

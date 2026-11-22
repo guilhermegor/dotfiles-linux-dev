@@ -93,7 +93,7 @@ case "\$1 \$2" in
         ;;
     "api graphql")
         # the only board-fields read (#1089); the porcelain field-list is deliberately not stubbed
-        [[ "\$*" == *"fields(first:30)"* ]] || exit 1
+        [[ "\$*" == *"fields(first:100)"* ]] || exit 1
         [ -f "$TEST_TMP/fail-field-list" ] && exit 1
         jq -c '{data:{repositoryOwner:{projectV2:{fields:{nodes:.fields}}}}}' "$TEST_TMP/fields.json"
         ;;

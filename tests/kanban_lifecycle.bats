@@ -48,7 +48,7 @@ run_hook() {
 }
 
 # Fake `gh` covering every subcommand the hook calls: repo view, issue view (state), project
-# list/item-list/item-edit, plus the fields(first:30) graphql read. `$1/$issue_state` controls
+# list/item-list/item-edit, plus the fields(first:100) graphql read. `$1/$issue_state` controls
 # what `gh issue view` reports.
 write_fake_gh() {
     local issue_state="$1"
@@ -67,9 +67,9 @@ case "\$1 \$2" in
         echo '{"projects":[{"title":"dotfiles-dev kanban","number":1,"id":"PVT_1"}]}'
         ;;
     "api graphql")
-        # the minimal fields(first:30) read (#1089); `project field-list` is no longer stubbed,
+        # the minimal fields(first:100) read (#1089); `project field-list` is no longer stubbed,
         # so a caller that reverts to it fails (exit 1 from the catch-all arm)
-        [[ "\$*" == *"fields(first:30)"* && "\$*" != *"items(first"* ]] || exit 1
+        [[ "\$*" == *"fields(first:100)"* && "\$*" != *"items(first"* ]] || exit 1
         echo '{"data":{"repositoryOwner":{"projectV2":{"fields":{"nodes":[{},{"name":"Status","id":"FIELD_1","options":[
             {"name":"In progress","id":"OPT_PROGRESS"},
             {"name":"In review","id":"OPT_REVIEW"},
@@ -145,9 +145,9 @@ case "$1 $2" in
         echo '{"projects":[{"title":"dotfiles-dev kanban","number":1,"id":"PVT_1"}]}'
         ;;
     "api graphql")
-        # the minimal fields(first:30) read (#1089); `project field-list` is no longer stubbed,
+        # the minimal fields(first:100) read (#1089); `project field-list` is no longer stubbed,
         # so a caller that reverts to it fails (exit 1 from the catch-all arm)
-        [[ "$*" == *"fields(first:30)"* && "$*" != *"items(first"* ]] || exit 1
+        [[ "$*" == *"fields(first:100)"* && "$*" != *"items(first"* ]] || exit 1
         echo '{"data":{"repositoryOwner":{"projectV2":{"fields":{"nodes":[{},{"name":"Status","id":"FIELD_1","options":[
             {"name":"In progress","id":"OPT_PROGRESS"},
             {"name":"In review","id":"OPT_REVIEW"},
@@ -621,8 +621,8 @@ run_hook_resp() {
 }
 
 # #1089: `gh project field-list` bills 101 GraphQL points. The fake answers only the minimal
-# `fields(first:30)` query and rejects `project field-list`, so reverting fails this test.
-@test "board fields are read with the minimal fields(first:30) query, not field-list (#1089)" {
+# `fields(first:100)` query and rejects `project field-list`, so reverting fails this test.
+@test "board fields are read with the minimal fields(first:100) query, not field-list (#1089)" {
     write_fake_gh "OPEN"
     run run_hook "gh pr create --title x"
     [ "$status" -eq 0 ]
