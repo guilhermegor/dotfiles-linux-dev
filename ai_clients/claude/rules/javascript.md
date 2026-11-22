@@ -138,6 +138,19 @@ call site; returning `null` loses the error reasons.
   layout can grow into a fullstack one without renaming. Visual
   regression via `toHaveScreenshot` baselines committed to the repo.
 
+## The rtk proxy and the JS toolchain
+
+The rtk proxy rewrites `npx <bin>` into `npm run <bin>` (`npm error Missing
+script: "stylelint"` while `./node_modules/.bin/stylelint` exits 0), and
+collapses `jest --coverage` to one `PASS (99) FAIL (0)` line — the coverage
+table never arrives, and a true-but-incomplete summary reads as complete.
+
+- Run package binaries by path (`./node_modules/.bin/<bin>`) or
+  `rtk proxy npx <bin>`, never bare `npx <bin>`.
+- Never read a structured report (coverage, per-file lint) through a proxied
+  test runner; use `rtk proxy` or the raw binary.
+- Run exit-code gates as their own call, not inside `&&`/`;` compounds.
+
 ## Browser MCP routing
 
 Playwright MCP is the default for navigate, test and screenshot work. Use
