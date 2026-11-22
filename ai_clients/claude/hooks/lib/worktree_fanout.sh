@@ -9,6 +9,13 @@
 # session_start_context.sh sources this file and its output is unchanged by the extraction
 # (regression bar; see tests/session_start_context.bats, which still exercises these two
 # functions through that file unmodified).
+#
+# Verdicts beyond "interrupted" and "stale revert" (dotfiles-linux-dev#1080):
+#   - a second pass over local branches checked out in NO worktree: `[ahead N]` from
+#     for-each-ref, and cherry + content test for branches with no upstream;
+#   - `stale-index (== <sha>)`: the index tree equals a commit in `git log HEAD` and the
+#     files match the index, i.e. the reverse of newer commits, not interrupted work;
+#   - "already on origin/<default>": the dirty diff reverse-applies cleanly there.
 set -u
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
