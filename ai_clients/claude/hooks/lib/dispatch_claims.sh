@@ -40,9 +40,16 @@
 # 2026-09-17: 8 agents dispatched in one batch each ran `gate_free_surface` inside their own
 # claim step; it compares every branch against the default branch (33 branches, one API call
 # each) and the shared 5000/h GitHub quota hit 0 within seconds, twice. Every claim then failed
-# closed — correctly — and the whole wave stalled. So `claim_files` makes ZERO API calls: it
-# reads `pr-held-paths.tsv`, which the orchestrator refreshes once per round with
+# closed — correctly — and the whole wave stalled. So `claim_files` makes no API call on the
+# normal path: it reads `pr-held-paths.tsv`, which the orchestrator refreshes once per round with
 # `refresh_pr_held_paths`, plus the registry itself.
+#
+# The one exception (#1091): a path that cache NOMINATES as open-PR-held is confirmed against the
+# open PRs over REST before it is refused — the cache is stale between refreshes, and a holder
+# that merged since is not a holder. Free paths still cost nothing; a refusal costs 1 + N reads
+# (open-PR list, then each PR's files), and an unreadable read is UNKNOWN, never the cache's word.
+# ponytail: the live read sees OPEN PRs only, while the cache also unions pushed branches with no
+# PR; such a branch-only holder is covered by the local claims and `elsewhere` files instead.
 #
 # Both files live in `$(git rev-parse --git-common-dir)` — shared by every worktree of the
 # repo (which is the point: the racing agents each have their own worktree) and never tracked.
@@ -154,8 +161,10 @@ _dispatch_forge_call() {
 	elif [ "$kind" = list ]; then
 		gh api "$arg" --paginate 2>/dev/null && return 0
 		[ -n "$token" ] || return 1
+		local sep='?'
+		[[ "$arg" == *\?* ]] && sep='&' # ARG may already carry a query (`pulls?state=open`)
 		while ((page <= 100)); do
-			out="$(curl -fsS -H @- "https://api.github.com/$arg?per_page=100&page=$page" \
+			out="$(curl -fsS -H @- "https://api.github.com/$arg${sep}per_page=100&page=$page" \
 				<<<"Authorization: Bearer $token" 2>/dev/null)" || return 1
 			printf '%s\n' "$out"
 			jq -e 'length >= 100' <<<"$out" >/dev/null || return 0
@@ -288,12 +297,49 @@ _dispatch_live_claims() {
 		'NF == 3 && ($1 + ttl) > now' "$file"
 }
 
-# _dispatch_holder PR_HELD_FILE LIVE_CLAIMS ISSUE PATH
+# _dispatch_cache_holds PR_HELD_FILE PATH — is PATH in the cached open-PR union?
+_dispatch_cache_holds() {
+	[ -s "$1" ] && cut -f2 "$1" | grep -qxF -- "$2"
+}
+
+# _dispatch_pr_slug — OWNER/REPO whose open PRs are read live: DISPATCH_PR_REPO, else the cwd's
+# `origin` (github.com, https or ssh). Non-zero when neither names one.
+_dispatch_pr_slug() {
+	local url slug
+	if [ -n "${DISPATCH_PR_REPO:-}" ]; then
+		printf '%s\n' "$DISPATCH_PR_REPO"
+		return 0
+	fi
+	url="$($DISPATCH_CLAIMS_GIT remote get-url origin 2>/dev/null)" || return 1
+	slug="$(sed -E 's#\.git$##; s#^(git@github\.com:|(https?|ssh)://([^@/]+@)?github\.com[:/])##' <<<"$url")"
+	[[ "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
+	printf '%s\n' "$slug"
+}
+
+# _dispatch_open_pr_files SLUG
+# Paths changed by every open PR of SLUG, read LIVE over REST (dotfiles-linux-dev#1091). Prints
+# nothing and succeeds when no PR is open. Non-zero when any read fails or comes back malformed:
+# an empty or non-array body is never "no open PRs", or a failed read would unfreeze every path.
+_dispatch_open_pr_files() {
+	local slug="$1" prs n page files=""
+	prs="$(_dispatch_forge_call list "repos/$slug/pulls?state=open")" || return 1
+	jq -es 'length > 0 and all(.[]; type == "array")' <<<"$prs" >/dev/null || return 1
+	for n in $(jq -r '.[].number' <<<"$prs"); do
+		page="$(_dispatch_forge_call list "repos/$slug/pulls/$n/files")" || return 1
+		jq -es 'length > 0 and all(.[]; type == "array")' <<<"$page" >/dev/null || return 1
+		files+="$(jq -r '.[].filename' <<<"$page")"$'\n'
+	done
+	printf '%s' "$files"
+}
+
+# _dispatch_holder PR_HELD_FILE LIVE_CLAIMS ISSUE PATH OPEN_PR_FILES
 # Who holds PATH against ISSUE, or empty when nobody does. An open PR wins the report because
 # it is the older, non-negotiable claim; a path this same ISSUE already holds is not a holder.
+# The cache only NOMINATES an open-PR holder; OPEN_PR_FILES (the live read) confirms it, so a PR
+# that merged since the last refresh cannot refuse a claim (#1091).
 _dispatch_holder() {
-	local pr_held="$1" live="$2" issue="$3" path="$4"
-	if [ -s "$pr_held" ] && cut -f2 "$pr_held" | grep -qxF -- "$path"; then
+	local pr_held="$1" live="$2" issue="$3" path="$4" open_files="$5"
+	if _dispatch_cache_holds "$pr_held" "$path" && printf '%s\n' "$open_files" | grep -qxF -- "$path"; then
 		printf 'open-pr\n'
 		return 0
 	fi
@@ -323,7 +369,7 @@ claim_files() {
 		return 1
 	}
 
-	local claims pr_held lock live holder path now
+	local claims pr_held lock live holder path now slug
 	claims="$(dispatch_claims_file)" || {
 		echo "UNKNOWN"
 		return 1
@@ -337,6 +383,21 @@ claim_files() {
 		return 1
 	}
 
+	# The cache is stale until the next refresh, so a path it nominates is confirmed against the
+	# open PRs live (#1091) — BEFORE the lock, so network latency never eats other racers'
+	# DISPATCH_CLAIM_LOCK_WAIT. A path no cache line nominates costs no call at all, and an
+	# unreadable live read is UNKNOWN, never the cache's word.
+	local open_files="" nominated=0
+	for path in "$@"; do
+		_dispatch_cache_holds "$pr_held" "$path" && nominated=1
+	done
+	if [ "$nominated" = 1 ]; then
+		slug="$(_dispatch_pr_slug)" && open_files="$(_dispatch_open_pr_files "$slug")" || {
+			echo "UNKNOWN"
+			return 1
+		}
+	fi
+
 	# The lock is held across the read AND the append — that single critical section is the
 	# whole mechanism. A check outside the lock followed by an append inside it grants the same
 	# path to every racer, which is the bug this file exists to prevent.
@@ -348,7 +409,7 @@ claim_files() {
 
 		live="$(_dispatch_live_claims "$claims")"
 		for path in "$@"; do
-			holder="$(_dispatch_holder "$pr_held" "$live" "$issue" "$path")"
+			holder="$(_dispatch_holder "$pr_held" "$live" "$issue" "$path" "$open_files")"
 			if [ -n "$holder" ]; then
 				printf 'HELD:%s:%s\n' "$holder" "$path"
 				exit 1

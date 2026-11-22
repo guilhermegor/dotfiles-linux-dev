@@ -5,9 +5,10 @@
 #
 # Strategy: the lib is SOURCED (it is a library, not a hook), against a throwaway real git repo
 # so `git rev-parse --git-common-dir` has a real answer and the registry lands in a real, shared
-# directory. No `gh` stub is needed anywhere in this suite — `claim_files` makes zero API calls
-# by design (scope 5), and the one function that does read the gate (`refresh_pr_held_paths`)
-# takes it via `declare -F gate_free_surface`, so a plain shell function stands in for it.
+# directory. `claim_files` makes no API call on the normal path (scope 5); the only read it ever
+# makes is the live confirmation of a cache-nominated open-PR holder (#1091), served by the
+# `pr_stub` gh stub below. `refresh_pr_held_paths` takes the gate via `declare -F
+# gate_free_surface`, so a plain shell function stands in for it.
 #
 # The race test is the load-bearing one and it is a REAL race: N background subshells, each a
 # separate process calling claim_files on the same path, joined with `wait`. A sequential
@@ -138,16 +139,113 @@ refute() {
 
 # --- a path an open PR already holds -------------------------------------------------------
 
+# `gh` is a stub on PATH driven by files in $PRSTUB (#1091): open-prs.json (the open-PR list),
+# files-<N>.json (that PR's files) and a fail-gh switch. GH_TOKEN is unset so a failing `gh` can
+# never fall through to a real `curl` against GitHub, and DISPATCH_PR_REPO names the repo because
+# the throwaway git repo has no `origin`.
+pr_stub() {
+    PRSTUB="$TEST_TMP/prstub"
+    mkdir -p "$PRSTUB/bin"
+    cat >"$PRSTUB/bin/gh" <<'SH'
+#!/bin/bash
+echo "$*" >>"$PRSTUB/gh-calls"
+[ -e "$PRSTUB/fail-gh" ] && exit 1
+case "$*" in
+*pulls/*/files*) cat "$PRSTUB/files-$(sed -E 's#.*pulls/([0-9]+)/files.*#\1#' <<<"$*").json" ;;
+*pulls*) cat "$PRSTUB/open-prs.json" ;;
+esac
+SH
+    chmod +x "$PRSTUB/bin/gh"
+    export PRSTUB PATH="$PRSTUB/bin:$PATH" DISPATCH_PR_REPO=o/r
+    unset GH_TOKEN GITHUB_TOKEN
+    echo '[]' >"$PRSTUB/open-prs.json"
+}
+
+open_pr_holds() {
+    printf '[{"number":%s}]' "$1" >"$PRSTUB/open-prs.json"
+    printf '[{"filename":"%s"}]' "$2" >"$PRSTUB/files-$1.json"
+}
+
 @test "a path held by an open PR is refused, naming the holder" {
+    pr_stub
+    open_pr_holds 9 "a/b.sh"
     printf 'open-pr\t%s\n' "a/b.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
     run claim_files 405 "a/b.sh"
     [ "$status" -ne 0 ]
     [ "$output" = "HELD:open-pr:a/b.sh" ]
 }
 
+@test "a stale cache whose holder PR already merged is CLAIMED (#1091)" {
+    # The cache still names the path, but the live read shows no open PR at all.
+    pr_stub
+    printf 'open-pr\t%s\n' "a/b.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
+    run claim_files 405 "a/b.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "CLAIMED" ]
+    grep -q 'pulls?state=open' "$PRSTUB/gh-calls"
+}
+
+@test "a stale cache is CLAIMED when open PRs exist but none touches the path (#1091)" {
+    pr_stub
+    open_pr_holds 9 "other/file.sh"
+    printf 'open-pr\t%s\n' "a/b.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
+    run claim_files 405 "a/b.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "CLAIMED" ]
+}
+
+@test "a stale cache with a failing live read is UNKNOWN, never CLAIMED or HELD (#1091)" {
+    pr_stub
+    touch "$PRSTUB/fail-gh"
+    printf 'open-pr\t%s\n' "a/b.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
+    run claim_files 405 "a/b.sh"
+    [ "$status" -ne 0 ]
+    [ "$output" = "UNKNOWN" ]
+    # Nothing was recorded: an undecided claim must not leave a half-granted one behind.
+    [ ! -s "$TEST_TMP/.git/dispatch-claims.tsv" ]
+}
+
+@test "an empty live read is UNKNOWN, not read as no open PRs (#1091)" {
+    pr_stub
+    : >"$PRSTUB/open-prs.json"
+    printf 'open-pr\t%s\n' "a/b.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
+    run claim_files 405 "a/b.sh"
+    [ "$status" -ne 0 ]
+    [ "$output" = "UNKNOWN" ]
+}
+
+@test "a cache nomination with no repo to read live is UNKNOWN (#1091)" {
+    pr_stub
+    unset DISPATCH_PR_REPO
+    printf 'open-pr\t%s\n' "a/b.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
+    run claim_files 405 "a/b.sh"
+    [ "$status" -ne 0 ]
+    [ "$output" = "UNKNOWN" ]
+}
+
+@test "the repo to read live comes from origin when DISPATCH_PR_REPO is unset (#1091)" {
+    pr_stub
+    unset DISPATCH_PR_REPO
+    git remote add origin git@github.com:acme/widgets.git
+    run _dispatch_pr_slug
+    [ "$output" = "acme/widgets" ]
+    git remote set-url origin https://github.com/acme/widgets.git
+    run _dispatch_pr_slug
+    [ "$output" = "acme/widgets" ]
+}
+
+@test "a path the cache does not nominate costs no API call at all (#1091)" {
+    pr_stub
+    printf 'open-pr\t%s\n' "x/y.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
+    run claim_files 405 "a/b.sh"
+    [ "$output" = "CLAIMED" ]
+    [ ! -e "$PRSTUB/gh-calls" ]
+}
+
 @test "the PR held-paths read is exact-path, never a prefix match" {
     # Same rule free_classify_files enforces (dotfiles-linux-dev#340): a directory-level match
     # reported 9 of 11 candidates as colliding when the exact recount said 97% free.
+    pr_stub
     printf 'open-pr\t%s\n' "a/b.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
     run claim_files 405 "a/b.sh.orig"
     [ "$status" -eq 0 ]
@@ -165,7 +263,10 @@ refute() {
     [ "$GATE_CALLS" -eq 1 ]
     run cut -f2 "$TEST_TMP/.git/pr-held-paths.tsv"
     [ "${#lines[@]}" -eq 2 ]
-    # Every subsequent claim reads that file and never the gate again.
+    # Every subsequent claim reads that file and never the gate again (the open PR is confirmed
+    # live, #1091, which is a REST read of its own, not the gate).
+    pr_stub
+    open_pr_holds 9 "x/y.sh"
     run claim_files 405 "x/y.sh"
     [ "$output" = "HELD:open-pr:x/y.sh" ]
 }
