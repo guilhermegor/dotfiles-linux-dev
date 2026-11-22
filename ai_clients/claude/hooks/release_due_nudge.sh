@@ -135,7 +135,7 @@ check_release_due() {
     # 1.2.0-rc1 below 1.2.0; no `v[0-9]*` filter, so unprefixed tags work. `--merged` keeps last_tag
     # an ancestor of ref by construction. No fetch here: the branch fetch in the caller already
     # auto-follows every tag reachable from origin/<base>, and this hook is offline-advisory.
-    last_tag="$(git -c versionsort.suffix=- tag --sort=-v:refname --merged "$ref" 2>/dev/null | head -1)"
+    last_tag="$(git -c versionsort.suffix=- tag --no-column --sort=-v:refname --merged "$ref" 2>/dev/null | head -1)"
     [[ -n "$last_tag" ]] || exit 0
 
     mapfile -t paths < <(shipped_paths "$ref")

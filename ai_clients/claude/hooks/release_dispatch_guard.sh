@@ -80,7 +80,7 @@ highest_merged_tag() {
     # ponytail: hyphen suffixes only (v1.2.0-rc1); hyphenless PEP 440 tags (1.2.0rc1) would sort above
     # their release, add versionsort.suffix entries if such tags are ever cut.
     local ref="$1" tag
-    tag="$(git -c versionsort.suffix=- tag --sort=-v:refname --merged "$ref" 2>/dev/null | head -1)"
+    tag="$(git -c versionsort.suffix=- tag --no-column --sort=-v:refname --merged "$ref" 2>/dev/null | head -1)"
     [[ -n "$tag" ]] && printf '%s' "$tag"
 }
 
