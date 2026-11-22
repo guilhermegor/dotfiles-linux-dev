@@ -321,7 +321,7 @@ _dispatch_pr_slug() {
 # nothing and succeeds when no PR is open. Non-zero when any read fails or comes back malformed:
 # an empty or non-array body is never "no open PRs", or a failed read would unfreeze every path.
 _dispatch_open_pr_files() {
-	local slug="$1" prs n page files=""
+	local slug="$1" prs n page names files=""
 	prs="$(_dispatch_forge_call list "repos/$slug/pulls?state=open")" || return 1
 	jq -es 'length > 0 and all(.[]; type == "array" and all(.[]; (.number | type) == "number"))' <<<"$prs" >/dev/null || return 1
 	for n in $(jq -r '.[].number' <<<"$prs"); do
@@ -330,7 +330,8 @@ _dispatch_open_pr_files() {
 		# GitHub's hard cap on this endpoint: a list that long may be truncated, so completeness
 		# cannot be established (#1102).
 		jq -es 'length > 0 and all(.[]; type == "array" and all(.[]; (.filename | type) == "string")) and ([.[][]] | length) < 3000' <<<"$page" >/dev/null || return 1
-		files+="$(jq -r '.[].filename' <<<"$page")"$'\n'
+		names="$(jq -r '.[].filename' <<<"$page")" || return 1
+		files+="$names"$'\n'
 	done
 	printf '%s' "$files"
 }

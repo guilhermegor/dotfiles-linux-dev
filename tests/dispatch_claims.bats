@@ -738,3 +738,19 @@ SH
     run _dispatch_holder $'a/b.sh\n' "" 405 "a/b.sh" $'a/b.sh\n'
     [ "$output" = "open-pr" ]
 }
+
+@test "a filename extraction failure after validation is UNKNOWN, not CLAIMED (#1102)" {
+    pr_stub
+    open_pr_holds 9 "a/b.sh"
+    printf 'open-pr\t%s\n' "a/b.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
+    real_jq="$(command -v jq)"
+    cat >"$PRSTUB/bin/jq" <<SH
+#!/bin/bash
+[ "\$*" = "-r .[].filename" ] && exit 1
+exec "$real_jq" "\$@"
+SH
+    chmod +x "$PRSTUB/bin/jq"
+    run claim_files 405 "a/b.sh"
+    [ "$status" -ne 0 ]
+    [ "$output" = "UNKNOWN" ]
+}
