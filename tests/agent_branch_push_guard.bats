@@ -218,10 +218,10 @@ add_tracking_worktree() {
 @test "a branch tracking a differently-named remote branch updates that branch (#1074)" {
     git -C "$TEST_TMP/main" push -q origin main:refs/heads/fix/pr-head-5
     git -C "$TEST_TMP/main" fetch -q origin
-    add_tracking_worktree fix/9-review origin/fix/pr-head-5
+    add_tracking_worktree fix/9-review-pr-5 origin/fix/pr-head-5
     run run_hook "$TEST_TMP/wt"
     [ "$status" -eq 0 ]
-    refute_remote fix/9-review
+    refute_remote fix/9-review-pr-5
     [ "$(git -C "$TEST_TMP/origin.git" rev-parse fix/pr-head-5)" = "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
 }
 
@@ -277,6 +277,16 @@ STUB
     [ "$status" -eq 0 ]
     remote_has fix/9-thing
     [ "$(git -C "$TEST_TMP/origin.git" rev-parse develop)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
+}
+
+@test "a stacked branch tracking its parent PR branch is pushed by its own name (#1074)" {
+    git -C "$TEST_TMP/main" push -q origin main:refs/heads/fix/parent-5
+    git -C "$TEST_TMP/main" fetch -q origin
+    add_tracking_worktree fix/12-child origin/fix/parent-5
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has fix/12-child
+    [ "$(git -C "$TEST_TMP/origin.git" rev-parse fix/parent-5)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
 }
 
 # A stale local origin/HEAD (-> release) while the remote default and the upstream are develop.

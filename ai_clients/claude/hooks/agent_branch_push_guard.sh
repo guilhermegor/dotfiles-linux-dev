@@ -90,13 +90,15 @@ main() {
 	# A branch tracking a differently-named remote branch (a review worktree on a PR head)
 	# updates THAT branch; pushing by local name would open a side branch (#1074).
 	# The default branch is never a target: `worktree add -b x origin/main` tracks it. An unknown
+	# Only a review branch (<type>/<N>-review-pr-<M>[-rK]) is redirected: a stacked branch cut from
+	# another feature branch also tracks it, and must not push onto its parent PR.
 	# default (remote unreachable) means no upstream is trusted: the push goes by local name, never to another branch.
 	remote="$($GIT -C "$cwd" config "branch.$branch.remote")" || remote=origin
 	up="$($GIT -C "$cwd" config "branch.$branch.merge")"
 	up="${up#refs/heads/}"
 	# Only an upstream that differs from the branch needs the (network) default lookup.
 	base=""
-	if [ -n "$up" ] && [ "$up" != "$branch" ] && [ "$remote" != . ]; then base="$(_remote_default "$cwd" "$remote")"; fi
+	if [[ "$branch" == *-review-pr-* ]] && [ -n "$up" ] && [ "$up" != "$branch" ] && [ "$remote" != . ]; then base="$(_remote_default "$cwd" "$remote")"; fi
 	args=(-u origin "$branch")
 	if [ -n "$up" ] && [ "$up" != "$branch" ] && [ -n "$base" ] && [ "$up" != "$base" ] && [ "$up" != master ] && [ "$up" != main ]; then
 		args=("$remote" "HEAD:refs/heads/$up")
