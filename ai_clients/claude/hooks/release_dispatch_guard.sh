@@ -58,7 +58,7 @@ main() {
     resolve_base_ref || exit 0                           # origin/<base> unresolvable → cannot reason
     ref="$BASE_REF"
     dispatch_targets_other_ref "$command" "${ref#origin/}" && exit 0
-    last_tag="$(highest_merged_tag "${ref#origin/}" "$ref")" || exit 0   # no tags → first release
+    last_tag="$(highest_merged_tag "$ref")" || exit 0   # no tags → first release
 
     mapfile -t paths < <(shipped_paths "$ref")
     shipped_diff_empty "$last_tag" "$ref" "${paths[@]}" && block_no_shipped_change "$last_tag" "$ref" "${paths[@]}"
@@ -75,9 +75,11 @@ highest_merged_tag() {
     # returns the nearest tag, so a lower tag cut from a nearer commit (a hotfix, a backport) hid the
     # real latest release. Version-sort descending; `versionsort.suffix=-` ranks 1.2.0-rc1 BELOW
     # 1.2.0. No `v[0-9]*` filter: repos that tag without a `v` prefix must keep working. Fails
-    # (no output) when no tag is merged, so the caller treats it as a first release.
-    local base="$1" ref="$2" tag
-    GIT_TERMINAL_PROMPT=0 timeout 10 git fetch --quiet --tags origin "$base" 2>/dev/null || true
+    # (no output) when no tag is merged, so the caller treats it as a first release. No fetch here:
+    # resolve_base_ref's branch fetch already auto-follows every tag reachable from origin/<base>.
+    # ponytail: hyphen suffixes only (v1.2.0-rc1); hyphenless PEP 440 tags (1.2.0rc1) would sort above
+    # their release, add versionsort.suffix entries if such tags are ever cut.
+    local ref="$1" tag
     tag="$(git -c versionsort.suffix=- tag --sort=-v:refname --merged "$ref" 2>/dev/null | head -1)"
     [[ -n "$tag" ]] && printf '%s' "$tag"
 }

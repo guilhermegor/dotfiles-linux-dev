@@ -133,8 +133,8 @@ check_release_due() {
     # dotfiles-linux-dev#1108: the HIGHEST tag merged into ref, not `git describe`'s nearest — a lower
     # tag cut nearer the ref (hotfix/backport) would otherwise win. `versionsort.suffix=-` ranks
     # 1.2.0-rc1 below 1.2.0; no `v[0-9]*` filter, so unprefixed tags work. `--merged` keeps last_tag
-    # an ancestor of ref by construction.
-    git fetch --quiet --tags origin "${ref#origin/}" 2>/dev/null || true
+    # an ancestor of ref by construction. No fetch here: the branch fetch in the caller already
+    # auto-follows every tag reachable from origin/<base>, and this hook is offline-advisory.
     last_tag="$(git -c versionsort.suffix=- tag --sort=-v:refname --merged "$ref" 2>/dev/null | head -1)"
     [[ -n "$last_tag" ]] || exit 0
 
