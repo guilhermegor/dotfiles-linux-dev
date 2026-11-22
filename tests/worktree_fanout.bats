@@ -195,3 +195,46 @@ pr_row() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"worktree wtG: 2 commit(s) never pushed"* ]]
 }
+
+# --- dotfiles-linux-dev#1080 gap 1: local branches checked out in no worktree ---
+
+make_unattached_commit() {
+    # one real commit (a new file) on <branch>, then drop the worktree: the branch stays,
+    # checked out nowhere
+    local branch="$1" tmp="$BATS_TEST_TMPDIR/tmp-$1"
+    git -C "$work" worktree add --quiet "$tmp" "$branch"
+    echo "$branch" >"$tmp/$branch.txt"
+    git -C "$tmp" add "$branch.txt"
+    git -C "$tmp" commit --quiet -m "feat: unattached work on $branch"
+    git -C "$work" worktree remove --force "$tmp"
+}
+
+@test "unattached branch ahead of its upstream is reported with [ahead N]" {
+    git -C "$work" branch --quiet --track ahead1 origin/master
+    make_unattached_commit ahead1
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"branch ahead1 (no worktree): 1 commit(s) not pushed"* ]]
+}
+
+@test "unattached branch in sync with its upstream is not reported" {
+    git -C "$work" branch --quiet --track synced1 origin/master
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"branch synced1"* ]]
+}
+
+@test "unattached branch with no upstream and unshipped commits is reported" {
+    git -C "$work" branch --quiet noup1 master
+    make_unattached_commit noup1
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"branch noup1 (no worktree): 1 commit(s) never pushed — no upstream"* ]]
+}
+
+@test "unattached no-upstream branch with zero commits ahead is not reported" {
+    git -C "$work" branch --quiet noup2 master
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"branch noup2"* ]]
+}

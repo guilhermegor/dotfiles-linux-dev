@@ -101,8 +101,8 @@ fanout_pr_json() {
 # The ancestor test needs the merged head object locally; when it is absent the check fails
 # toward reporting, never toward hiding work.
 merged_pr_covers_head() {
-	local path="$1" branch="$2" merged_heads="$3" head oid
-	head="$(git -C "$path" rev-parse HEAD 2>/dev/null)" || return 1
+	local path="$1" branch="$2" merged_heads="$3" ref="${4:-HEAD}" head oid b
+	head="$(git -C "$path" rev-parse "$ref" 2>/dev/null)" || return 1
 	while IFS=$'\t' read -r b oid; do
 		[ "$b" = "$branch" ] && [ -n "$oid" ] || continue
 		[ "$oid" = "$head" ] && return 0
@@ -117,12 +117,42 @@ merged_pr_covers_head() {
 # ONE commit reads as N unshipped commits (dotfiles-linux-dev#837); this compares content.
 # Any undecidable step (no merge-base, a failed diff) returns 1: fail toward reporting.
 branch_content_shipped() {
-	local path="$1" db="$2" base
-	base="$(git -C "$path" merge-base "origin/$db" HEAD 2>/dev/null)" || return 1
+	local path="$1" db="$2" ref="${3:-HEAD}" base
+	base="$(git -C "$path" merge-base "origin/$db" "$ref" 2>/dev/null)" || return 1
 	# NUL-separated names stay in the pipe: a command substitution would drop the NULs.
 	# An empty list makes the diff compare whole trees — stricter, so it still fails toward reporting.
-	git -C "$path" diff --name-only -z --no-renames "$base" HEAD 2>/dev/null \
-		| xargs -0 git -C "$path" --literal-pathspecs diff --quiet "origin/$db" HEAD -- 2>/dev/null
+	git -C "$path" diff --name-only -z --no-renames "$base" "$ref" 2>/dev/null \
+		| xargs -0 git -C "$path" --literal-pathspecs diff --quiet "origin/$db" "$ref" -- 2>/dev/null
+}
+
+# Second pass (dotfiles-linux-dev#1080): local branches checked out in NO worktree. The
+# worktree walk never sees them, yet a killed agent's commits can sit on one (opendata-rfb:
+# local `main` held an unpushed scaffold commit while the walk printed dirty=0 unpushed=0).
+# `[ahead N]` comes from for-each-ref's upstream:track; a branch with no upstream and no
+# remote ref of its own gets the same cherry + content test as the worktree pass. Reported
+# only, never added to the RESUME list: there is no agent worktree to SendMessage to.
+# $3 is the newline-delimited set of branches the walk already covered.
+fanout_unattached_branches() {
+	local cwd="$1" default_branch="$2" attached="$3" merged_heads="$4"
+	local b upstream track n
+
+	while IFS='|' read -r b upstream track; do
+		[ -n "$b" ] || continue
+		case "$attached" in *$'\n'"$b"$'\n'*) continue ;; esac
+		if [ -n "$upstream" ]; then
+			[[ "$track" =~ ahead\ ([0-9]+) ]] || continue
+			printf '[fan-out] branch %s (no worktree): %s commit(s) not pushed\n' "$b" "${BASH_REMATCH[1]}"
+			continue
+		fi
+		[ -n "$default_branch" ] && [ "$b" != "$default_branch" ] || continue
+		git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$b" >/dev/null 2>&1 && continue
+		merged_pr_covers_head "$cwd" "$b" "$merged_heads" "refs/heads/$b" && continue
+		n="$(git -C "$cwd" cherry "origin/$default_branch" "refs/heads/$b" 2>/dev/null | grep -c '^+')"
+		[ "${n:-0}" -gt 0 ] || continue
+		branch_content_shipped "$cwd" "$default_branch" "refs/heads/$b" && continue
+		printf '[fan-out] branch %s (no worktree): %s commit(s) never pushed — no upstream\n' "$b" "$n"
+	done < <(git -C "$cwd" for-each-ref refs/heads \
+		--format='%(refname:short)|%(upstream:short)|%(upstream:track)' 2>/dev/null)
 }
 
 # `git worktree list` entries for THIS repo (parallel-agent worktrees included) — unpushed
@@ -133,6 +163,7 @@ fanout_worktrees() {
 	local pr_branches="" merged_heads="" default_branch path="" branch="" name uncommitted ahead pushed
 	local has_upstream never_pushed
 	local -a interrupted_names=()
+	local attached=$'\n'
 
 	if [ "$github_ok" = "1" ]; then
 		pr_branches="$(printf '%s' "$json" | jq -r '.[].headRefName' 2>/dev/null)"
@@ -151,6 +182,7 @@ fanout_worktrees() {
 			;;
 		"branch "*)
 			branch="${line#branch refs/heads/}"
+			attached+="$branch"$'\n'
 			;;
 		"")
 			if [ -n "$path" ] && [ -d "$path" ]; then
@@ -229,6 +261,8 @@ fanout_worktrees() {
 			;;
 		esac
 	done < <(git -C "$cwd" worktree list --porcelain 2>/dev/null; printf '\n')
+
+	fanout_unattached_branches "$cwd" "$default_branch" "$attached" "$merged_heads"
 
 	if [ "${#interrupted_names[@]}" -gt 0 ]; then
 		local joined
