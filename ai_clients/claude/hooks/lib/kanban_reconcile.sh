@@ -408,13 +408,13 @@ _board_item_list() {
 # each call cost 101 points (dotfiles-linux-dev#1089). This asks for `fields(first:100)` alone,
 # via the owner-agnostic `repositoryOwner` interface (user and organization boards alike).
 # 100 is the connection maximum and still one request (the fields connection is billed by
-# its page size; `options` is a plain list), so it costs the same as 30 (not measured, #1089).
+# its page size; `options` is a plain list), so it costs 1 point (measured 2026-11-22: rateLimit{cost}=1 on a 19-field board, #1089).
 # Non-single-select fields come back as `{}`, which no downstream select(.name==...) matches.
 # Returns 0 with the JSON on stdout, 2 when a rate limit is confirmed, 1 otherwise.
 _kr_project_fields() {
 	local owner="$1" project="$2" out rc=0 query
 	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){fields(first:100){pageInfo{hasNextPage} nodes{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}}'
-	gh_budget_log_spend 1 # one GraphQL request, expected ~1 point, not measured (#1089)
+	gh_budget_log_spend 1 # one GraphQL request, measured 1 point (#1089)
 	out="$(_board_gql -f query="$query" -f login="$owner" -F num="$project")" || rc=$?
 	((rc == 0)) || return "$rc"
 	# More than 100 fields: Status may sit on page 2, so fail loudly (1) rather than let the
