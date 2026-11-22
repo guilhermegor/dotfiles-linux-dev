@@ -949,9 +949,13 @@ code; on a repo whose gate does not, skip this path and use the serial drain abo
 ## 5. RELEASE — evaluate and cut
 
 ```bash
-LAST=$(rtk git tag --sort=-v:refname --merged origin/<default> | head -1)
+rtk git fetch --tags origin <default>
+LAST=$(rtk git -c versionsort.suffix=- tag --sort=-v:refname --merged origin/<default> | head -1)
+[ -n "$LAST" ] || echo "no tags yet: first release, skip the diff"   # empty LAST makes ..origin/<default> diff HEAD
 rtk git diff --name-only "$LAST"..origin/<default> -- <shipped-paths>
 ```
+
+`versionsort.suffix=-` ranks `v1.2.0` above `v1.2.0-rc1`; without it the pre-release comes first.
 
 Never `git describe` for the last tag: with two tags on one commit it can return the older one
 (dotfiles-linux-dev#1088). For a PyPI package the version floor is the max of PyPI and Test PyPI

@@ -3,7 +3,7 @@ name: s:release
 description: Use when the user asks to cut a release, bump the version, or publish a package — decides whether a release is warranted and what to bump from the shipped-artifact diff and Conventional Commit types since the last tag, then delegates the publish mechanics to the matching ecosystem arm (s:release-py for PyPI, workflow-dispatch for everything else, s:release-rename when the shipped change is a package rename).
 effort: high
 argument-hint: [none — reads the repo state]
-allowed-tools: Bash(git log*), Bash(git tag*), Bash(git diff*), Bash(git rev-parse*), Bash(rtk git log*), Bash(rtk git diff*), Bash(gh workflow*), Bash(gh run*), Bash(gh release*), Read, Glob, Grep
+allowed-tools: Bash(git log*), Bash(git tag*), Bash(git diff*), Bash(git rev-parse*), Bash(rtk git log*), Bash(rtk git diff*), Bash(rtk git tag*), Bash(git -c versionsort*), Bash(rtk git -c versionsort*), Bash(rtk git fetch*), Bash(git fetch*), Bash(head*), Bash(gh workflow*), Bash(gh run*), Bash(gh release*), Read, Glob, Grep
 ---
 
 > **Priority:** this project's `CLAUDE.md` and `rules/*.md` take precedence over the guidance below whenever they conflict — treat this skill as a fallback, not a mandate.
@@ -47,9 +47,12 @@ which is the point of the check above.
 ## 2. Decide whether to release at all
 
 ```bash
-git tag --sort=-v:refname --merged origin/<default> | head -1   # → <last-tag>; empty if no tags yet
+git fetch --tags origin <default>
+git -c versionsort.suffix=- tag --sort=-v:refname --merged origin/<default> | head -1   # → <last-tag>; empty = no tags yet: skip the diff below (an empty tag diffs HEAD)
 git diff --name-only <last-tag>..origin/<default> -- <shipped-paths...>
 ```
+
+`versionsort.suffix=-` ranks `v1.2.0` above `v1.2.0-rc1`; without it the pre-release comes first.
 
 Never `git describe` for this: with two tags on one commit it can return the older one
 (dotfiles-linux-dev#1088). On a PyPI package the version floor is the max of PyPI and Test PyPI
@@ -235,7 +238,7 @@ asymmetric — do not reach for the obvious "just run it again":
 - **Fallback — create the tag/release by hand:** `gh release create <tag> --target <sha>`, then
   confirm `gh release view <tag> --json isDraft` shows `isDraft=false` (a draft creates no tag).
 - **A missing tag is not cosmetic:** dynamic versioning and the *next* release's gate
-  (`git diff <tag>..HEAD`) both depend on it — a published-but-untagged release mis-scopes the
+  (`git diff <tag>..origin/<default>`) both depend on it — a published-but-untagged release mis-scopes the
   following release's diff.
 
 ## Do Not
