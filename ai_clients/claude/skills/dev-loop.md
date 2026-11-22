@@ -927,6 +927,19 @@ Neither dependency is this step's file to fix — `slot_classify.py` and the API
 outside `dev-loop.md`/`reviewer_ladder.sh`/`tests/reviewer_ladder.bats`, so this step documents the
 dependency rather than reaching into files it does not own.
 
+### 4c-collision. Strict OFF: drain every green PR, rerun only collisions (dotfiles-linux-dev#1096)
+
+Read the flag once per pass with `ruleset_strict <owner> <repo>` (`hooks/lib/collision_rerun.sh`:
+REST `rulesets`, then GET each id). `false` means a merge no longer puts the others behind, so
+merge **every** green PR in the pass instead of one per round. `true` or `unknown` keeps the
+one-per-round drain above; unreadable is strict, never assumed off.
+
+After each merge run `collision_rerun <owner> <repo> <merge-sha>`. It intersects the files the
+merge changed with each open PR's files and calls `update-branch` on the hits only; it prints their
+numbers. A hit goes back to the reviewer fan-out only if its own patch fingerprint changed
+(step 4c-fast item 3); otherwise the carried-forward review stands. PRs it does not print are
+untouched. Tests: `tests/collision_rerun.bats`.
+
 ### 4c-fast. Merge-ready fast path (dotfiles-linux-dev#705)
 
 Runs **before** any reviewer rung is spent. The planner's `merge_ready` list (serial-drain mode,
