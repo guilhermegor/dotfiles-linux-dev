@@ -941,10 +941,13 @@ every check green, blocked only on being `BEHIND`. Take them in this order:
    again, so updating them all in parallel fires the whole CI matrix once per PR for updates the
    next merge discards (dotfiles-linux-dev#1082). Advance to the next `merge_ready` PR whenever
    the head leaves the queue for any reason: it merged, its CI went red, step 3 sent it back to
-   review, or it was closed. A head that stalls (a required check that never reports, CI still
-   `queued` after two rounds, or `update-branch` erroring) is skipped for this round and named in
-   the round report. A lower-numbered PR re-entering `merge_ready` later does not preempt the
-   head already in flight. This is the repo's own drain order, not GitHub's merge queue. Count queued runs
+   review, or it was closed, or `update-branch` hit a merge conflict (route it to conflict
+   resolution; step 3 then applies). Keep the head until it leaves the queue: step 1 runs again
+   only then, so a lower-numbered PR re-entering `merge_ready` does not preempt it. A head whose
+   required check never starts reporting is parked: name it in the round report, skip it until its
+   state changes, and update the next PR. Queued CI is waiting, not stalled: do not skip it, since
+   updating another PR only adds to the saturated queue. This is the repo's own drain order, not
+   GitHub's merge queue. Count queued runs
    (`rtk gh api "repos/<o>/<r>/actions/runs?status=queued&per_page=1" --jq .total_count`) and put
    it in the round report next to the in-progress count, so CI saturation shows as the
    bottleneck. It is a lower bound: runs held by a concurrency group are not `queued`.
