@@ -269,18 +269,6 @@ sudo apt install linux-headers-"$(uname -r)" build-essential
   fi
   ```
 
-## pre-commit stashes unstaged changes — whole-tree gates see the commit
-
-pre-commit stashes unstaged edits while hooks run. A `pass_filenames: false`
-whole-tree hook therefore sees the tree as it will be committed, so unstaged
-working-tree edits cannot pre-satisfy it for a deliberately partial commit.
-
-- Either include the fix in that commit, or `SKIP=<hook-id> git commit …`
-  (never `--no-verify`), after a standalone run proves the only red is the
-  deferred content. Put the reason in the commit message.
-- A hand-rolled grep gate can match its own prose or error strings. Run a
-  new gate against a clean tree, including its own file, before wiring it in.
-
 ## When in doubt
 
 If a shell change behaves unexpectedly or trips CI:

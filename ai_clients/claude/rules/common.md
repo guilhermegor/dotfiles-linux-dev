@@ -262,6 +262,20 @@ The failure mode each rule guards against, not the full reasoning:
 - **Flipping a wrong default means removing its compensations** (the allowlist
   excusing it, the test pinning the old value, the docs example, the cache key)
   — leave one in place and it silently suppresses the new default.
+- **pre-commit hides unstaged edits, not untracked files.** During a commit it
+  stashes only unstaged changes to *tracked* files, so a `pass_filenames: false`
+  whole-tree hook sees tracked files as staged, but every untracked file is
+  still on disk and visible (one that will not be committed can still satisfy
+  or fail the gate). Measured on pre-commit 4.7.0: `pre-commit run <id>` (and
+  the commit hook) saw the staged content only; `pre-commit run <id>
+  --all-files` stashes nothing and saw staged plus unstaged content.
+  - To defer a fix to a later commit, either include it, or
+    `SKIP=<hook-id> git commit …` (never `--no-verify`) after a standalone
+    `pre-commit run <hook-id>` (no `--all-files`) shows the only red is the
+    deferred content, with untracked files moved aside first. Put the reason
+    in the commit message.
+  - A hand-rolled grep gate can match its own prose or error strings. Run a
+    new gate against a clean tree, including its own file, before wiring it in.
 
 ## Documentation
 
