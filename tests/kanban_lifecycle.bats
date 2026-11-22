@@ -48,7 +48,8 @@ run_hook() {
 }
 
 # Fake `gh` covering every subcommand the hook calls: repo view, issue view (state), project
-# list/field-list/item-list/item-edit. `$1/$issue_state` controls what `gh issue view` reports.
+# list/item-list/item-edit, plus the fields(first:30) graphql read. `$1/$issue_state` controls
+# what `gh issue view` reports.
 write_fake_gh() {
     local issue_state="$1"
     cat > "$FAKE_BIN/gh" <<EOF
@@ -65,12 +66,15 @@ case "\$1 \$2" in
     "project list")
         echo '{"projects":[{"title":"dotfiles-dev kanban","number":1,"id":"PVT_1"}]}'
         ;;
-    "project field-list")
-        echo '{"fields":[{"name":"Status","id":"FIELD_1","options":[
+    "api graphql")
+        # the minimal fields(first:30) read (#1089); `project field-list` is no longer stubbed,
+        # so a caller that reverts to it fails (exit 1 from the catch-all arm)
+        [[ "\$*" == *"fields(first:30)"* && "\$*" != *"items(first"* ]] || exit 1
+        echo '{"data":{"repositoryOwner":{"projectV2":{"fields":{"nodes":[{},{"name":"Status","id":"FIELD_1","options":[
             {"name":"In progress","id":"OPT_PROGRESS"},
             {"name":"In review","id":"OPT_REVIEW"},
             {"name":"Done","id":"OPT_DONE"}
-        ]}]}'
+        ]}]}}}}}'
         ;;
     "project item-list")
         echo '{"items":[{"id":"ITEM_1","content":{"type":"Issue","number":131}}]}'
@@ -140,12 +144,15 @@ case "$1 $2" in
     "project list")
         echo '{"projects":[{"title":"dotfiles-dev kanban","number":1,"id":"PVT_1"}]}'
         ;;
-    "project field-list")
-        echo '{"fields":[{"name":"Status","id":"FIELD_1","options":[
+    "api graphql")
+        # the minimal fields(first:30) read (#1089); `project field-list` is no longer stubbed,
+        # so a caller that reverts to it fails (exit 1 from the catch-all arm)
+        [[ "$*" == *"fields(first:30)"* && "$*" != *"items(first"* ]] || exit 1
+        echo '{"data":{"repositoryOwner":{"projectV2":{"fields":{"nodes":[{},{"name":"Status","id":"FIELD_1","options":[
             {"name":"In progress","id":"OPT_PROGRESS"},
             {"name":"In review","id":"OPT_REVIEW"},
             {"name":"Done","id":"OPT_DONE"}
-        ]}]}'
+        ]}]}}}}}'
         ;;
     "project item-list")
         echo '{"items":[{"id":"ITEM_1","content":{"type":"Issue","number":131}}]}'
@@ -605,12 +612,23 @@ run_hook_resp() {
     write_fake_gh "OPEN"
     mv "$FAKE_BIN/gh" "$FAKE_BIN/gh.real"
     printf '%s\n' '#!/bin/bash' \
-        '[[ "$1 $2" == "project field-list" ]] && { echo "{\"fields\":[]}"; exit 0; }' \
+        '[[ "$1 $2" == "api graphql" ]] && { echo "{\"data\":{\"repositoryOwner\":{\"projectV2\":{\"fields\":{\"nodes\":[]}}}}}"; exit 0; }' \
         'exec "$(dirname "$0")/gh.real" "$@"' > "$FAKE_BIN/gh"
     chmod +x "$FAKE_BIN/gh"
     run run_hook "gh pr create --title x"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
+}
+
+# #1089: `gh project field-list` bills 101 GraphQL points. The fake answers only the minimal
+# `fields(first:30)` query and rejects `project field-list`, so reverting fails this test.
+@test "board fields are read with the minimal fields(first:30) query, not field-list (#1089)" {
+    write_fake_gh "OPEN"
+    run run_hook "gh pr create --title x"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"moved issue"* ]]
+    run "$FAKE_BIN/gh" project field-list 1 --owner o --format json
+    [ "$status" -ne 0 ]
 }
 
 @test "gh project list returning unparseable JSON warns instead of reading as no board" {

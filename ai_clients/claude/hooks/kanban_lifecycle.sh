@@ -22,7 +22,7 @@
 # never scrape a flag out of the raw command string (hook-command-string-scraping-fragile).
 #
 # Per-repo board ids (project number/node, Status field id, option ids) are discovered live via
-# `gh project field-list` and cached in a LOCAL, git-ignored file — same seam as the tracker map:
+# a `fields(first:30)` GraphQL read (#1089) and cached in a LOCAL, git-ignored file — same seam as the tracker map:
 # selecting a repo's board needs zero in-repo config, so a restricted repo is unaffected. A repo
 # with no `<repo> kanban` project simply finds nothing and no-ops (which also skips Linear/none
 # repos for free). A cached id gone stale (board recreated / columns renamed) self-heals: a failed

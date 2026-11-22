@@ -23,7 +23,7 @@
 #     card to "In review" when its current Status is BEHIND "In review" in the board's own
 #     column order. Never moves a card backwards: an issue already In review, Done, or any
 #     column at/after In review is left untouched. Column order is read fresh from
-#     `gh project field-list` every call, never hardcoded, so a renamed/reordered board is
+#     the `_kr_project_fields` GraphQL read every call, never hardcoded, so a renamed/reordered board is
 #     still handled correctly.
 #
 #     Sets two globals (never partial):
@@ -218,7 +218,7 @@ discover_board() {
 	read -r num node <<< "$matches"
 	[[ -n "$num" && -n "$node" ]] || return 1
 
-	fields="$(gh project field-list "$num" --owner "$owner" --format json 2>/dev/null)" || return 1
+	fields="$(_kr_project_fields "$owner" "$num")" || return 1
 	field_id="$(printf '%s' "$fields" | jq -r '.fields[] | select(.name=="Status") | .id' | head -n1)"
 	[[ -n "$field_id" ]] || return 3   # board exists but has no Status field: config, not a gh error
 	options="$(printf '%s' "$fields" \
@@ -401,33 +401,37 @@ _board_item_list() {
 	printf '%s' "$json"
 }
 
+# _kr_project_fields OWNER PROJECT
+# The project's field definitions, printed in the `{"fields":[...]}` shape `gh project field-list
+# --format json` printed (id, name, options[].{id,name}), so every downstream jq is unchanged.
+# That porcelain command also requests `items(first:100)`, and GraphQL bills connection size, so
+# each call cost 101 points (dotfiles-linux-dev#1089). This asks for `fields(first:30)` alone,
+# via the owner-agnostic `repositoryOwner` interface (user and organization boards alike).
+# Non-single-select fields come back as `{}`, which no downstream select(.name==...) matches.
+# Returns 0 with the JSON on stdout, 2 when a rate limit is confirmed, 1 otherwise.
+_kr_project_fields() {
+	local owner="$1" project="$2" out rc=0 query
+	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){fields(first:30){nodes{... on ProjectV2SingleSelectField{id name options{id name}}}}}}}}'
+	gh_budget_log_spend 0 # one GraphQL request, ~1 point (#1089)
+	out="$(_board_gql -f query="$query" -f login="$owner" -F num="$project")" || rc=$?
+	((rc == 0)) || return "$rc"
+	printf '%s' "$out" | jq -ce '.data.repositoryOwner.projectV2.fields.nodes
+		| select(. != null) | {fields: .}' 2>/dev/null | grep . || return 1
+}
+
 # _kr_status_names OWNER PROJECT
-# Ordered list of Status column names, one per line, straight from the ARRAY `gh project
-# field-list` returns. Arrays preserve order; this deliberately does not reconstruct order from
-# an object (board_config's cached `.options` map), whose key order this file does not want to
-# depend on.
-#
-# dotfiles-linux-dev#567: on a porcelain failure that is NOT a confirmed throttle, falls back to one
-# `gh api graphql` read of the same field/options (via the owner-agnostic `repositoryOwner`
-# interface — see `_board_item_list_graphql`'s own comment).
-# Returns 0 with the list on stdout, 2 (nothing on stdout) when a throttle is CONFIRMED, or 1
-# (nothing on stdout) when neither channel can read the Status field.
+# Ordered list of Status column names, one per line, straight from the ARRAY
+# `_kr_project_fields` returns. Arrays preserve order; this deliberately does not reconstruct
+# order from an object (board_config's cached `.options` map), whose key order this file does
+# not want to depend on.
+# Returns 0 with the list on stdout, 2 (nothing on stdout) when a throttle is CONFIRMED by the
+# read itself (#901), or 1 (nothing on stdout) when the Status field cannot be read.
 _kr_status_names() {
-	local owner="$1" project="$2" out query result
-	out="$(gh project field-list "$project" --owner "$owner" --format json 2>/dev/null \
+	local owner="$1" project="$2" fields out rc=0
+	fields="$(_kr_project_fields "$owner" "$project")" || rc=$?
+	((rc == 0)) || return "$rc"
+	out="$(printf '%s' "$fields" \
 		| jq -r '.fields[] | select(.name=="Status") | .options[].name' 2>/dev/null)"
-	if [[ -n "$out" ]]; then
-		printf '%s\n' "$out"
-		return 0
-	fi
-
-	_board_throttled && return 2
-
-	query='query($login:String!,$num:Int!){repositoryOwner(login:$login){... on ProjectV2Owner{projectV2(number:$num){fields(first:50){nodes{... on ProjectV2SingleSelectField{name options{name}}}}}}}}'
-	gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
-	result="$(_board_gql -f query="$query" -f login="$owner" -F num="$project")" || return $?
-	out="$(printf '%s' "$result" \
-		| jq -r '.data.repositoryOwner.projectV2.fields.nodes[] | select(.name=="Status") | .options[].name' 2>/dev/null)"
 	[[ -n "$out" ]] || return 1
 	printf '%s\n' "$out"
 }
