@@ -39,13 +39,12 @@ _open_pr_elsewhere() {
 			'[flatten[] | select(.head.ref != $b and (.head.sha as $h | ($s | split("\n") | index($h))))][0].head.ref // empty' 2>/dev/null
 }
 
-# _remote_default CWD REMOTE: print REMOTE's default branch, from the local origin/HEAD or else
-# the remote itself; prints nothing when neither can say (the caller then trusts no upstream).
+# _remote_default CWD REMOTE: print REMOTE's default branch as the remote itself reports it; prints
+# nothing when it cannot be queried (the caller then trusts no upstream). The local
+# refs/remotes/REMOTE/HEAD is never consulted: it goes stale when the remote default changes.
 _remote_default() {
-	local cwd="$1" remote="$2" d
+	local cwd="$1" remote="$2"
 
-	d="$($GIT -C "$cwd" symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null)"
-	[ -z "$d" ] || { printf '%s' "${d#"$remote"/}"; return 0; }
 	GIT_TERMINAL_PROMPT=0 timeout 10 $GIT -C "$cwd" ls-remote --symref "$remote" HEAD 2>/dev/null \
 		| awk '$1 == "ref:" { sub("refs/heads/", "", $2); print $2; exit }'
 }
@@ -91,7 +90,7 @@ main() {
 	# A branch tracking a differently-named remote branch (a review worktree on a PR head)
 	# updates THAT branch; pushing by local name would open a side branch (#1074).
 	# The default branch is never a target: `worktree add -b x origin/main` tracks it. An unknown
-# default means no upstream is trusted: pushing by local name cannot overwrite a branch.
+# default (remote unreachable) means no upstream is trusted: the push goes by local name, never to another branch.
 	remote="$($GIT -C "$cwd" config "branch.$branch.remote")" || remote=origin
 	up="$($GIT -C "$cwd" config "branch.$branch.merge")"
 	up="${up#refs/heads/}"

@@ -276,3 +276,31 @@ STUB
     remote_has fix/9-thing
     [ "$(git -C "$TEST_TMP/origin.git" rev-parse develop)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
 }
+
+# A stale local origin/HEAD (-> release) while the remote default and the upstream are develop.
+stale_head_fixture() {
+    git -C "$TEST_TMP/origin.git" symbolic-ref HEAD refs/heads/develop
+    git -C "$TEST_TMP/main" push -q origin main:refs/heads/develop main:refs/heads/release
+    git -C "$TEST_TMP/main" fetch -q origin
+    git -C "$TEST_TMP/main" remote set-head origin release
+    add_tracking_worktree fix/9-thing origin/develop
+}
+
+@test "a stale local origin/HEAD does not hide the remote default (#1074)" {
+    stale_head_fixture
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has fix/9-thing
+    [ "$(git -C "$TEST_TMP/origin.git" rev-parse develop)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
+}
+
+@test "an unqueryable remote default means no upstream is trusted (#1074)" {
+    stale_head_fixture
+    # push still reaches the bare repo through pushurl; ls-remote reads the broken url.
+    git -C "$TEST_TMP/main" config remote.origin.pushurl "$TEST_TMP/origin.git"
+    git -C "$TEST_TMP/main" config remote.origin.url "$TEST_TMP/missing.git"
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has fix/9-thing
+    [ "$(git -C "$TEST_TMP/origin.git" rev-parse develop)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
+}
