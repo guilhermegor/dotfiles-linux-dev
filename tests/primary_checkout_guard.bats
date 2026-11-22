@@ -74,3 +74,35 @@ payload() { # <cwd> <command> [agent_id]
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
+
+@test "absolute git executable is recognised" {
+    run bash "$GUARD" <<<"$(payload "$work" '/usr/bin/git reset --hard HEAD~1' agent1)"
+    [ "$status" -eq 2 ]
+}
+
+@test "file-restoring checkout does not exempt a chained reset" {
+    run bash "$GUARD" <<<"$(payload "$work" 'git checkout -- f && git reset --hard HEAD~1' agent1)"
+    [ "$status" -eq 2 ]
+}
+
+@test "git -C naming the primary from a worktree cwd is blocked" {
+    run bash "$GUARD" <<<"$(payload "$wt" "git -C $work reset --hard HEAD~1" agent1)"
+    [ "$status" -eq 2 ]
+}
+
+@test "cd into the primary then a move is blocked" {
+    run bash "$GUARD" <<<"$(payload "$wt" "cd $work && git checkout feat" agent1)"
+    [ "$status" -eq 2 ]
+}
+
+@test "git -C naming the agent's own worktree from the primary cwd is allowed" {
+    run bash "$GUARD" <<<"$(payload "$work" "git -C $wt reset --hard HEAD" agent1)"
+    [ "$status" -eq 0 ]
+}
+
+@test "fanout is silent for a deliberately bare repo with worktrees" {
+    git -C "$bare" worktree add --quiet -b g "$BATS_TEST_TMPDIR/bwt" master
+    run fanout_primary_bare_check "$BATS_TEST_TMPDIR/bwt"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}

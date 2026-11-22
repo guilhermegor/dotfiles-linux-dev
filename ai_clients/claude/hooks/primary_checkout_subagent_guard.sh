@@ -21,8 +21,45 @@ set -u
 command -v jq >/dev/null 2>&1 || exit 0
 
 ESCAPE_HATCH='ALLOW_PRIMARY_CHECKOUT_MOVE=1'
-MOVES_HEAD_RE='(^|[;&|[:space:]])git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(reset|switch|checkout)([[:space:]]|$)'
+# `/` in the boundary class admits an absolute executable (`/usr/bin/git`); group 3 is the -C path.
+MOVES_HEAD_RE='(^|[;&|/[:space:]])git[[:space:]]+(-C[[:space:]]+([^[:space:]]+)[[:space:]]+)?(reset|switch|checkout)([[:space:]]|$)'
 BRANCH_PRESERVING_RE='git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?checkout[[:space:]]+(--|\.)([[:space:]]|$)'
+CD_RE='^[[:space:]]*cd[[:space:]]+([^[:space:]]+)'
+
+# Prints <base>/<path> (or <path> when absolute) and succeeds only when it is a directory.
+resolve_dir() {
+	local p="${2//[\"\']/}"
+	[[ "$p" == /* ]] || p="$1/$p"
+	[[ -d "$p" ]] || return 1
+	printf '%s' "$p"
+}
+
+# Prints the first directory in which a segment of $1 moves HEAD while that directory is a
+# primary checkout on its default branch; fails when there is none. Each `;`/`&`/`|`/newline
+# segment is judged alone, so a branch-preserving `git checkout -- f` cannot exempt a `git reset`
+# chained after it, and the target is the segment's `git -C <path>` (or an earlier `cd <path>`)
+# rather than only the payload cwd. Unresolvable paths are skipped (fail open).
+primary_move_target() {
+	local command="$1" dir="$2" seg cpath target
+	while IFS= read -r seg; do
+		if [[ "$seg" =~ $CD_RE ]]; then
+			dir="$(resolve_dir "$dir" "${BASH_REMATCH[1]}")" || return 1
+			continue
+		fi
+		[[ "$seg" =~ $MOVES_HEAD_RE ]] || continue
+		cpath="${BASH_REMATCH[3]}"
+		[[ "$seg" =~ $BRANCH_PRESERVING_RE ]] && continue
+		target="$dir"
+		if [[ -n "$cpath" ]]; then
+			target="$(resolve_dir "$dir" "$cpath")" || continue
+		fi
+		if is_primary_on_default_branch "$target"; then
+			printf '%s' "$target"
+			return 0
+		fi
+	done < <(printf '%s\n' "$command" | tr ';&|' '\n')
+	return 1
+}
 
 is_primary_on_default_branch() {
 	local cwd="$1" gdir common branch default
@@ -36,7 +73,7 @@ is_primary_on_default_branch() {
 }
 
 main() {
-	local payload command cwd agent
+	local payload command cwd agent target
 	payload="$(cat)"
 	[[ "$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)" == "Bash" ]] || exit 0
 
@@ -45,18 +82,16 @@ main() {
 
 	command="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
 	[[ "$command" == *"$ESCAPE_HATCH"* ]] && exit 0
-	[[ "$command" =~ $MOVES_HEAD_RE ]] || exit 0
-	[[ "$command" =~ $BRANCH_PRESERVING_RE ]] && exit 0
 
 	cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
 	[[ -n "$cwd" && -d "$cwd" ]] || exit 0
-	is_primary_on_default_branch "$cwd" || exit 0
+	target="$(primary_move_target "$command" "$cwd")" || exit 0
 
 	cat >&2 <<EOF
-BLOCKED: a subagent ($agent) tried to move HEAD in the PRIMARY checkout ($cwd).
+BLOCKED: a subagent ($agent) tried to move HEAD in the PRIMARY checkout ($target).
 If your worktree was torn down (you were resumed after a limit), do not fall back to
 the primary checkout: create your own worktree by explicit path first, e.g.
-  git -C $cwd worktree add <absolute-path> origin/<branch>
+  git -C $target worktree add <absolute-path> origin/<branch>
 then run every git command with that path. (dotfiles-linux-dev#1081)
 Deliberate move: prefix the command with $ESCAPE_HATCH.
 EOF

@@ -133,10 +133,13 @@ fanout_primary_bare_check() {
 	local main out
 	main="$(git -C "$1" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
 	[ -n "$main" ] || return 0
-	out="$(git -C "$main" rev-parse --is-bare-repository 2>&1)"
-	[ "$out" = "false" ] && return 0
-	printf '[fan-out] PRIMARY CHECKOUT BROKEN: %s reports bare=%s (core.bare flipped); git fails there while worktrees still work — run `git -C %s config core.bare false`\n' \
-		"$main" "$(printf '%s' "$out" | head -n1)" "$main"
+	# A deliberately bare repo (worktrees hung off `repo.git`) is also "bare"; only a primary
+	# that still has a `.git` directory inside it is a working tree whose core.bare flipped.
+	[ -d "$main/.git" ] || return 0
+	out="$(git -C "$main" rev-parse --is-bare-repository 2>/dev/null)"
+	[ "$out" = "true" ] || return 0
+	printf '[fan-out] PRIMARY CHECKOUT BROKEN: %s reports bare=true (core.bare flipped); git fails there while worktrees still work — run `git -C %s config core.bare false`\n' \
+		"$main" "$main"
 }
 
 # `git worktree list` entries for THIS repo (parallel-agent worktrees included) — unpushed
