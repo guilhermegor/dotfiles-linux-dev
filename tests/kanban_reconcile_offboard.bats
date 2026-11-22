@@ -55,13 +55,14 @@ write_fake_gh() {
 echo "\$*" >> "$GH_LOG"
 case "\$1 \$2" in
     "project list") echo '{"projects":[{"title":"repo kanban","number":1,"id":"PVT_1"}]}' ;;
-    "project field-list") cat "$TEST_TMP/fields.json" ;;
     "project item-list") cat "$TEST_TMP/items.json" ;;
     "project item-add")
         [ -f "$TEST_TMP/fail-item-add" ] && { echo "GraphQL: API rate limit exceeded" >&2; exit 1; }
         echo '{"id":"ITEM_NEW"}' ;;
     "project item-edit") echo ok ;;
     "api graphql")
+        # the only board-fields read (#1089); the porcelain field-list is deliberately not stubbed
+        [[ "\$*" == *"fields(first:100)"* ]] && { jq -c '{data:{repositoryOwner:{projectV2:{fields:{nodes:.fields}}}}}' "$TEST_TMP/fields.json"; exit 0; }
         [ -f "$TEST_TMP/fail-item-add" ] && { echo "API rate limit exceeded" >&2; exit 1; }
         echo '{}' ;;
     *)

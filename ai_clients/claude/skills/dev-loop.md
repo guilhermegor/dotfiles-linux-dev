@@ -20,6 +20,8 @@ the step that gets skipped — and skipping it is the only one that destroys wor
 to the human at exactly the point it was meant to remove them from. If a step finds nothing, **say
 so in one line** — silence is indistinguishable from a step that never ran.
 
+⚠️ **Every GitHub call picks its channel first: REST, then GraphQL behind the latch, then Chrome** — load `s:gh-api-tiering` for the routing table and the last-resort procedure.
+
 ---
 
 ## 0. ARM — the skill arms its own schedules on invocation
@@ -91,7 +93,18 @@ An agent killed mid-flight leaves work in its worktree. A worktree is torn down;
   fi
   [ "$d" != "0" ] || { [ "$u" != "0" ] && [ "$u" != "NO-REMOTE" ]; } && echo "$b dirty=$d unpushed=$u"
 done
+# Second pass (#1080): local branches checked out in NO worktree are invisible above. Anchored
+# on the track field (a branch NAME containing "ahead" must not match); `|| true` because grep
+# exits 1 on no match. Branches with no upstream or a `[gone]` one show no `[ahead N]` at all.
+/usr/bin/git for-each-ref refs/heads --format='%(refname:lstrip=2) %(upstream:track)' \
+  | grep -E ' \[ahead [0-9]+' || true
+/usr/bin/git for-each-ref refs/heads --format='%(refname:lstrip=2) %(upstream) %(upstream:track)' \
+  | awk 'NF==1 || /\[gone\]/ {print $1" NO-UPSTREAM-OR-GONE"}'
 ```
+
+The loop above also misses a phantom dirty index (`dirty=N` that is only the reverse of newer
+commits) and dirty work already on `origin/<default>`; `hooks/lib/worktree_fanout.sh` classifies
+both (`stale-index (== <sha>)`, reverse-apply), so prefer its verdict over the raw `dirty=` count.
 
 🔴 **`@{upstream}`, never `origin/$b`.** On a **detached HEAD** — every `--detach` worktree, which
 is the normal shape for inspecting a PR — `rev-parse --abbrev-ref HEAD` prints the literal string
@@ -946,12 +959,27 @@ Runs **before** any reviewer rung is spent. The planner's `merge_ready` list (se
 #646) names PRs whose review gate is green on the current head (reviewed or carried forward), with
 every check green, blocked only on being `BEHIND`. Take them in this order:
 
-1. **Update every `merge_ready` PR in parallel** (`update-branch`). No reviewer, no rung.
+1. **Update only the head of the merge queue** (`update-branch`): the lowest-numbered
+   `merge_ready` PR (the planner sorts the list by PR number). No reviewer, no rung. `merge_ready`
+   exists only in serial-drain (strict up-to-date) mode, where every merge puts the others behind
+   again, so updating them all in parallel fires the whole CI matrix once per PR for updates the
+   next merge discards (dotfiles-linux-dev#1082). Advance to the next `merge_ready` PR whenever
+   the head leaves the queue for any reason: it merged, its CI went red, step 3 sent it back to
+   review, or it was closed, or `update-branch` hit a merge conflict (route it to conflict
+   resolution; step 3 then applies). Keep the head until it leaves the queue: step 1 runs again
+   only then, so a lower-numbered PR re-entering `merge_ready` does not preempt it. A head whose
+   required check never starts reporting is parked: name it in the round report, skip it until its
+   state changes, and update the next PR. Queued CI is waiting, not stalled: do not skip it, since
+   updating another PR only adds to the saturated queue. This is the repo's own drain order, not
+   GitHub's merge queue. Count queued runs
+   (`rtk gh api "repos/<o>/<r>/actions/runs?status=queued&per_page=1" --jq .total_count`) and put
+   it in the round report next to the in-progress count, so CI saturation shows as the
+   bottleneck. It is a lower bound: runs held by a concurrency group are not `queued`.
 2. **Wait for CI, then read the repo's own review gate on the new head.** Never re-derive coverage.
 3. **Re-review only the PRs whose gate now reports the review superseded** (a conflict resolution
    or new code changed the PR's own patch) — they re-enter the planner as ordinary `dispatchable`.
-4. **Merge one at a time, pinned to the head SHA, as each turns green.** Every merge puts the rest
-   behind again, so repeat step 1 for the remainder.
+4. **Merge the head, pinned to its head SHA, once green.** Then repeat step 1 for
+   the new queue head; if it is already up to date, go straight to step 2.
 
 ⚠️ **Depends on the gate carrying reviews forward** (blueprintx#698/#699: a review survives while the
 PR's own patch fingerprint is unchanged). Without it every update costs a full review of unchanged
@@ -960,8 +988,17 @@ code; on a repo whose gate does not, skip this path and use the serial drain abo
 ## 5. RELEASE — evaluate and cut
 
 ```bash
-rtk git diff --name-only $(rtk git describe --tags --abbrev=0 origin/main)..origin/main -- <shipped-paths>
+rtk git fetch --tags origin <default>
+LAST=$(rtk git -c versionsort.suffix=- tag --sort=-v:refname --merged origin/<default> | head -1)
+if [ -z "$LAST" ]; then echo "no tags yet: first release"   # empty LAST would diff HEAD..origin/<default>
+else rtk git diff --name-only "$LAST"..origin/<default> -- <shipped-paths>; fi
 ```
+
+`versionsort.suffix=-` ranks `v1.2.0` above `v1.2.0-rc1`; without it the pre-release comes first.
+
+Never `git describe` for the last tag: with two tags on one commit it can return the older one
+(dotfiles-linux-dev#1088). For a PyPI package the version floor is the max of PyPI and Test PyPI
+(`s:release-py`), not the last tag.
 
 Empty → **no release**, and say so. Non-empty with no breaking change → PATCH under 0.x.
 

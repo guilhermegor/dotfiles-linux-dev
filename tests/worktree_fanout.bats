@@ -195,3 +195,189 @@ pr_row() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"worktree wtG: 2 commit(s) never pushed"* ]]
 }
+
+# --- dotfiles-linux-dev#1080 gap 1: local branches checked out in no worktree ---
+
+make_unattached_commit() {
+    # one real commit (a new file) on <branch>, then drop the worktree: the branch stays,
+    # checked out nowhere
+    local branch="$1" tmp="$BATS_TEST_TMPDIR/tmp-$1"
+    git -C "$work" worktree add --quiet "$tmp" "$branch"
+    echo "$branch" >"$tmp/$branch.txt"
+    git -C "$tmp" add "$branch.txt"
+    git -C "$tmp" commit --quiet -m "feat: unattached work on $branch"
+    git -C "$work" worktree remove --force "$tmp"
+}
+
+@test "unattached branch ahead of its upstream is reported with [ahead N]" {
+    git -C "$work" branch --quiet --track ahead1 origin/master
+    make_unattached_commit ahead1
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"branch ahead1 (no worktree): 1 commit(s) not pushed"* ]]
+}
+
+@test "unattached branch in sync with its upstream is not reported" {
+    git -C "$work" branch --quiet --track synced1 origin/master
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"branch synced1"* ]]
+}
+
+@test "unattached branch with no upstream and unshipped commits is reported" {
+    git -C "$work" branch --quiet noup1 master
+    make_unattached_commit noup1
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"branch noup1 (no worktree): 1 commit(s) never pushed — no upstream"* ]]
+}
+
+@test "unattached no-upstream branch with zero commits ahead is not reported" {
+    git -C "$work" branch --quiet noup2 master
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"branch noup2"* ]]
+}
+
+@test "unattached branch whose upstream is [gone] is still reported" {
+    git -C "$work" branch --quiet gone1 master
+    git -C "$work" push --quiet -u origin gone1
+    make_unattached_commit gone1
+    git -C "$bare" branch --quiet -D gone1
+    git -C "$work" fetch --quiet --prune
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"branch gone1 (no worktree): 1 commit(s) never pushed"* ]]
+}
+
+@test "unattached branch ahead of its own origin ref with no upstream is reported" {
+    git -C "$work" branch --quiet noup3 master
+    git -C "$work" push --quiet origin noup3
+    make_unattached_commit noup3
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"branch noup3 (no worktree): 1 commit(s) not pushed"* ]]
+}
+
+@test "unattached branch in sync with its own origin ref is not reported" {
+    git -C "$work" branch --quiet noup5 master
+    git -C "$work" push --quiet origin noup5
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"branch noup5"* ]]
+}
+
+@test "branch of a worktree whose directory was deleted is reported as unattached" {
+    wtP="$BATS_TEST_TMPDIR/wtP"
+    git -C "$work" worktree add --quiet -b prune1 "$wtP" master
+    echo prune >"$wtP/prune.txt"
+    git -C "$wtP" add prune.txt
+    git -C "$wtP" commit --quiet -m 'feat: work in a worktree that then vanished'
+    rm -rf "$wtP"
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"branch prune1 (no worktree): 1 commit(s) never pushed"* ]]
+}
+
+@test "a merged PR for the head suppresses an unattached branch" {
+    git -C "$work" branch --quiet noup4 master
+    make_unattached_commit noup4
+    head4="$(git -C "$work" rev-parse refs/heads/noup4)"
+    run fanout_worktrees "$work" 1 "$(pr_row MERGED noup4 "$head4")"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"branch noup4"* ]]
+}
+
+@test "unattached branch tracking origin/master whose content shipped is not reported" {
+    git -C "$work" branch --quiet --track sq1 origin/master
+    make_unattached_commit sq1
+    echo sq1 >"$work/sq1.txt"
+    git -C "$work" add sq1.txt
+    git -C "$work" commit --quiet -m 'feat: squash of sq1'
+    git -C "$work" push --quiet origin master
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"branch sq1"* ]]
+}
+
+# --- dotfiles-linux-dev#1080 gap 2: phantom dirty index ---
+
+# Worktree wtS sits on branch stale1 at commit S1; a second (throwaway) worktree then
+# advances the same branch to S2, so wtS keeps an index that is the reverse of S2.
+advance_branch_elsewhere() {
+    local branch="$1" other="$BATS_TEST_TMPDIR/other-$1"
+    git -C "$work" worktree add --quiet --detach "$other" "$branch"
+    echo newer >"$other/newer.txt"
+    git -C "$other" add newer.txt
+    git -C "$other" commit --quiet -m 'feat: newer commit'
+    git -C "$work" update-ref "refs/heads/$branch" "$(git -C "$other" rev-parse HEAD)"
+    git -C "$work" worktree remove --force "$other"
+}
+
+@test "index equal to an ancestor commit's tree is a stale-index, not interrupted work" {
+    wtS="$BATS_TEST_TMPDIR/wtS"
+    git -C "$work" worktree add --quiet -b stale1 "$wtS" master
+    s1="$(git -C "$wtS" rev-parse --short HEAD)"
+    advance_branch_elsewhere stale1
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtS: 1 uncommitted file(s) — stale-index (== $s1)"* ]]
+    [[ "$output" != *"INTERRUPTED WORK"* ]]
+}
+
+# --- dotfiles-linux-dev#1080 gap 3: content test, not counts ---
+
+@test "dirty edit that reverse-applies to origin/<default> is already shipped" {
+    wtH="$BATS_TEST_TMPDIR/wtH"
+    git -C "$work" worktree add --quiet --detach "$wtH" origin/master
+    echo plus >>"$wtH/file.txt"
+    echo plus >>"$work/file.txt"
+    git -C "$work" commit --quiet -am 'feat: ship the same edit'
+    git -C "$work" push --quiet origin master
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtH: 1 uncommitted file(s) — already on origin/master"* ]]
+    [[ "$output" != *"INTERRUPTED WORK"* ]]
+}
+
+@test "dirty edit absent from origin/<default> stays interrupted work" {
+    wtH="$BATS_TEST_TMPDIR/wtH"
+    git -C "$work" worktree add --quiet --detach "$wtH" origin/master
+    echo plus >>"$wtH/file.txt"
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtH: 1 uncommitted file(s) — INTERRUPTED WORK"* ]]
+}
+
+@test "a worktree whose path no longer exists is skipped without error" {
+    wtX="$BATS_TEST_TMPDIR/wtX"
+    git -C "$work" worktree add --quiet --detach "$wtX" origin/master
+    rm -rf "$wtX"
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"wtX"* ]]
+}
+
+@test "stale-index detection works while the worktree's index.lock is held and leaves the index alone" {
+    wtS="$BATS_TEST_TMPDIR/wtS"
+    git -C "$work" worktree add --quiet -b stale3 "$wtS" master
+    advance_branch_elsewhere stale3
+    idx="$(git -C "$wtS" rev-parse --path-format=absolute --git-path index)"
+    before="$(stat -c %Y-%s "$idx")"
+    : >"$idx.lock"
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtS: 1 uncommitted file(s) — stale-index"* ]]
+    [ "$(stat -c %Y-%s "$idx")" = "$before" ]
+}
+
+@test "genuine staged work is not mistaken for a stale-index" {
+    wtS="$BATS_TEST_TMPDIR/wtS"
+    git -C "$work" worktree add --quiet -b stale2 "$wtS" master
+    echo real >"$wtS/real.txt"
+    git -C "$wtS" add real.txt
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtS: 1 uncommitted file(s) — INTERRUPTED WORK"* ]]
+    [[ "$output" != *"stale-index"* ]]
+}

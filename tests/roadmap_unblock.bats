@@ -213,6 +213,30 @@ case "\$1 \$2" in
     "api "*)
         path="\$2"
         n="\${path##*/issues/}"
+        # Issue reads are REST (#1072); keyed on the path and the --jq projection, never the
+        # whole command string (#409).
+        case "\$path" in
+        repos/*/issues/*/comments)
+            n="\${n%%/comments*}"
+            f="$TEST_TMP/comments-\$n.json"
+            [ -f "\$f" ] || exit 0
+            jq -r '.comments[].body' "\$f"
+            exit
+            ;;
+        repos/*/issues/*/dependencies*) ;;
+        repos/*/issues/*)
+            if printf '%s' "\$*" | grep -q -- '\.labels'; then
+                f="$TEST_TMP/labels-\$n.txt"
+            else
+                repo="\${path#repos/}"
+                repo="\${repo%/issues/*}"
+                f="$TEST_TMP/refstate-\${repo//\//_}-\$n.json"
+            fi
+            [ -f "\$f" ] || exit 1
+            cat "\$f"
+            exit
+            ;;
+        esac
         n="\${n%%/dependencies*}"
         f="$TEST_TMP/blockers-\$n.json"
         [ -f "\$f" ] || { echo '[]'; exit 0; }
@@ -224,26 +248,6 @@ case "\$1 \$2" in
     "issue edit")
         [ -f "$TEST_TMP/fail-issue-edit" ] && exit 1
         echo ok
-        ;;
-    "issue view")
-        # Keyed on the --json PROJECTION (state vs comments), never the full query string —
-        # a stub keyed on the whole command silently breaks the moment a flag is added
-        # elsewhere (dotfiles-linux-dev#409).
-        if printf '%s' "\$*" | grep -q -- '--json labels'; then
-            f="$TEST_TMP/labels-\$3.txt"
-            [ -f "\$f" ] || exit 1
-            cat "\$f"
-        elif printf '%s' "\$*" | grep -q -- '--json state'; then
-            repo="\$5"
-            key="\${repo//\//_}-\$3"
-            f="$TEST_TMP/refstate-\$key.json"
-            [ -f "\$f" ] || exit 1
-            cat "\$f"
-        else
-            f="$TEST_TMP/comments-\$3.json"
-            [ -f "\$f" ] || exit 0
-            jq -r '.comments[].body' "\$f"
-        fi
         ;;
     "project item-edit")
         if [ -f "$TEST_TMP/fail-item-edit" ]; then echo "GraphQL: stub item-edit refused" >&2; exit 1; fi
@@ -1477,7 +1481,7 @@ run_board_cfg() {
         gh() {
             case \"\$1 \$2\" in
             'project list') echo '{\"projects\":[{\"number\":24,\"id\":\"PVT_24\",\"title\":\"Roadmap\"},{\"number\":5,\"id\":\"PVT_5\",\"title\":\"widget kanban\"}]}' ;;
-            'project field-list') echo '{\"fields\":[{\"name\":\"Status\",\"id\":\"F_1\",\"options\":[{\"name\":\"Ready\",\"id\":\"O_READY\"}]}]}' ;;
+            'api graphql') [[ \"\$*\" == *'fields(first:100)'* ]] || return 1; echo '{\"data\":{\"repositoryOwner\":{\"projectV2\":{\"fields\":{\"nodes\":[{\"name\":\"Status\",\"id\":\"F_1\",\"options\":[{\"name\":\"Ready\",\"id\":\"O_READY\"}]}]}}}}}' ;;   # fields(first:100) read, #1089
             *) return 1 ;;
             esac
         }
