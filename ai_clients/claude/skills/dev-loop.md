@@ -20,6 +20,8 @@ the step that gets skipped — and skipping it is the only one that destroys wor
 to the human at exactly the point it was meant to remove them from. If a step finds nothing, **say
 so in one line** — silence is indistinguishable from a step that never ran.
 
+⚠️ **Every GitHub call picks its channel first: REST, then GraphQL behind the latch, then Chrome** — load `s:gh-api-tiering` for the routing table and the last-resort procedure.
+
 ---
 
 ## 0. ARM — the skill arms its own schedules on invocation

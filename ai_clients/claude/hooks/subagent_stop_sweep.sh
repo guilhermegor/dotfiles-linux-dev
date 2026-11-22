@@ -595,6 +595,56 @@ sweep_stale_cards_gated() {
 	fi
 }
 
+# sweep_cached KEY CMD [ARG...]
+# Memoizes CMD's stdout per round (#1072): N agents finishing in one round each fire a sweep, and
+# the review-thread gate answers the same question every time. The first sweep computes it under a
+# flock and every later one inside SWEEP_CACHE_TTL seconds (default 120, 0 disables) reads the file,
+# so the round pays one read per KEY, not one per completion. The cache lives under
+# $XDG_RUNTIME_DIR (/run/user/$UID, mode 0700) - never bare /tmp.
+#
+# ⚠️ Wrap ONLY a pure read, and put every per-call input (repo, roster file, cwd) in KEY. A cached
+# section that mutates replays "nothing to move" (or a stale "moved #N") to the next agent inside the
+# TTL and skips its real work, which is why the kanban and roadmap reconcilers are NOT wrapped.
+# A failed or deferred section is never cached, so the next sweep retries it: a non-zero exit, or
+# output carrying UNKNOWN, unreadable, SKIPPED, FAILED, DEFERRED or throttled. An unusable cache dir
+# or lock file degrades to running CMD uncached.
+sweep_cached() {
+	local key="$1" dir f ttl="${SWEEP_CACHE_TTL:-120}" out mtime rc
+	shift
+	dir="${SWEEP_CACHE_DIR:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/dotfiles-dev-sweep-cache}"
+	f="$dir/${key//[^A-Za-z0-9._-]/_}"
+	if [[ ! "$ttl" =~ ^[0-9]+$ ]] || [ "$ttl" -eq 0 ] || ! { mkdir -p "$dir" && chmod 700 "$dir"; } 2>/dev/null; then
+		"$@"
+		return
+	fi
+	# `{ ...; } 9>file` skips the whole group when the open fails, so open the lock explicitly.
+	if ! { exec 9>"$f.lock"; } 2>/dev/null; then
+		"$@"
+		return
+	fi
+	if ! flock -w 30 9; then
+		exec 9>&-
+		"$@"
+		return
+	fi
+	if [ -f "$f" ] && mtime="$(stat -c %Y "$f" 2>/dev/null)" && [ "$(($(date +%s) - mtime))" -lt "$ttl" ]; then
+		cat "$f"
+		exec 9>&-
+		return
+	fi
+	rc=0
+	out="$("$@")" || rc=$?
+	printf '%s\n' "$out"
+	if [ "$rc" -eq 0 ]; then
+		case "$out" in
+		*UNKNOWN* | *unreadable* | *SKIPPED* | *FAILED* | *DEFERRED* | *throttled*) ;;
+		*) printf '%s\n' "$out" >"$f.tmp.$$" && mv -f "$f.tmp.$$" "$f" ;;
+		esac
+	fi
+	exec 9>&-
+	return "$rc"
+}
+
 main() {
 	local payload cwd repo owner name db roster_file report agent_type
 	if [ ! -t 0 ]; then payload="$(cat)"; else payload=""; fi
@@ -637,7 +687,7 @@ $(sweep_stale_cards_gated "$cwd")"
 		echo "[1] worktree residue"
 		sweep_worktrees "$cwd"
 		echo "[2] review-thread gate (called, not re-derived)"
-		sweep_review_gate "$owner" "$name" "$repo" "$roster_file"
+		sweep_cached "$repo:review-gate:$roster_file" sweep_review_gate "$owner" "$name" "$repo" "$roster_file"
 		echo "[3] branch pushed without PR"
 		sweep_orphan_branches "$cwd" "$repo" "$owner" "$db"
 		echo "[4] PR without auto-merge armed"

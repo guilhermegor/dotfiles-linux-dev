@@ -5,6 +5,8 @@
 # READ_RAW prints verbatim instead, READ_FAIL fails the read, and the mutation prints
 # "$MUT" (default "true").
 
+bats_require_minimum_version 1.5.0
+
 setup() {
     SCRIPT="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/resolve_review_thread.sh"
     BIN="$BATS_TEST_TMPDIR/bin"
@@ -27,6 +29,8 @@ done
 exit 1
 STUB
     chmod +x "$BIN/gh"
+    # the door reads the 403 latch: isolate it from the real one on this machine (#1072)
+    export GH_BUDGET_LATCH_FILE="$BATS_TEST_TMPDIR/latch" GH_BUDGET_SPEND_LOG="$BATS_TEST_TMPDIR/spend.tsv"
     export PATH="$BIN:$PATH" GH_LOG
 }
 
@@ -332,4 +336,15 @@ refute_mutation() {
     run bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 1 ]
     refute_mutation
+}
+
+@test "under the latch the mutation is deferred (75), not a failure, and is never sent (#1072)" {
+    thread false Bot User
+    (source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/gh_budget.sh" && gh_budget_latch_write 600)
+    run --separate-stderr bash "$SCRIPT" PRRT_abc123
+    [ "$status" -eq 75 ]
+    [[ "$stderr" == *"DEFERRED resolveReviewThread"* ]]
+    [[ "$stderr" == *"Resolve conversation"* ]]
+    # no GraphQL request at all under the latch: neither the thread read nor the mutation
+    [ ! -s "$GH_LOG" ]
 }
