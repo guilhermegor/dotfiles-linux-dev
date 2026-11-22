@@ -2142,13 +2142,17 @@ check-and-append under <code>flock</code> to <code>$(git rev-parse --git-common-
 (shared by every worktree, never tracked) and prints <code>CLAIMED</code> / <code>HELD:&lt;holder&gt;:&lt;path&gt;</code> /
 <code>UNKNOWN</code>. Three points that are <strong>not</strong> obvious from the file:</p>
 <ol>
-<li><strong>Zero API calls, by contract.</strong> Measured 2026-09-17: 8 agents in one batch
+<li><strong>No API call on the normal path, by contract.</strong> Measured 2026-09-17: 8 agents in one batch
    each ran <code>gate_free_surface</code> inside their own claim step (33 branches, one
    compare call each) and the shared 5000/h quota hit 0 within seconds, twice —
    every claim then failed closed, correctly, and the wave stalled. So the
    orchestrator calls <code>refresh_pr_held_paths &lt;owner&gt; &lt;repo&gt;</code> <strong>once per round</strong>,
    writing <code>pr-held-paths.tsv</code> beside the registry, and <code>claim_files</code> reads only
-   that file plus the registry.</li>
+   that file plus the registry. The one exception (#1091): a path the cache
+   nominates as open-PR-held is confirmed against the open PRs over REST (1 + N
+   reads) before it is refused, since the cache is stale between refreshes; an
+   unreadable read is <code>UNKNOWN</code>. Only OPEN PRs block — a pushed branch with no PR
+   is covered by local claims and <code>elsewhere</code> files, not by this read.</li>
 <li><strong>The lock is a separate <code>.lock</code> file, never the registry.</strong> A writer replaces
    the registry by <code>mv</code> (the only atomic rewrite), so locking the registry itself
    lets the next claimer lock the <em>new</em> inode while the holder still holds the old
