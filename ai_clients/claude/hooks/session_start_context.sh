@@ -173,7 +173,36 @@ emit_elsewhere_status() {
 	done < <(cut -f1 "$common/elsewhere-held-paths.tsv" | sort -un)
 }
 
+# keyring_state: print locked | unlocked | unknown | absent for the GNOME "Login" collection
+# (dotfiles-linux-dev#1093). A locked keyring makes `gh auth token` block on the Secret Service,
+# so every gh call and `git push` stalls with no auth error. Bounded by `timeout`: a hang is
+# `unknown` (never `unlocked`), as is any output that is not exactly a boolean. `absent` is
+# only "no gdbus, or the bus answered with an error" -- nothing for gh to block on.
+keyring_state() {
+	command -v gdbus >/dev/null 2>&1 || { echo absent; return 0; }
+	local out rc=0
+	out="$(timeout "${KEYRING_PROBE_TIMEOUT:-8}" gdbus call --session --dest org.freedesktop.secrets \
+		--object-path /org/freedesktop/secrets/collection/login --method org.freedesktop.DBus.Properties.Get \
+		org.freedesktop.Secret.Collection Locked 2>/dev/null)" || rc=$?
+	if [ "$rc" -eq 124 ]; then echo unknown; return 0; fi
+	if [ "$rc" -ne 0 ]; then echo absent; return 0; fi
+	case "$out" in
+		"(<true>,)") echo locked ;;
+		"(<false>,)") echo unlocked ;;
+		*) echo unknown ;;
+	esac
+}
+
+# One line when the keyring is locked or unreadable; silent when unlocked or not applicable.
+emit_keyring_status() {
+	case "$(keyring_state)" in
+		locked) printf '%s\n' "[auth] GNOME keyring locked — gh and git push will hang until it is unlocked (Seahorse or re-login); dev-loop gh steps are BLOCKED-AUTH" ;;
+		unknown) printf '%s\n' "[auth] GNOME keyring state UNKNOWN (probe timed out or unreadable) — do not assume gh is usable" ;;
+	esac
+}
+
 main() {
+	emit_keyring_status
 	emit_cross_project_context
 	emit_deploy_drift_status
 	emit_fanout_status

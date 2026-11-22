@@ -56,6 +56,12 @@ STUB
     PATH="$BIN:$PATH"
     export PATH
 
+    # Pin the keyring probe (#1093): a developer's real, possibly locked, login keyring must
+    # never decide these tests. rc!=0 reads "absent"; fake_gdbus below overrides per test.
+    printf '#!/bin/bash\nexit 1\n' >"$BIN/gdbus"
+    chmod +x "$BIN/gdbus"
+    export CLAUDE_CONFIG_DIR="$TEST_TMP/cfg"
+
     PLAN_STUB="$TEST_TMP/plan.py"
     DISPATCH_GUARD_PLANNER="$PLAN_STUB"
     export DISPATCH_GUARD_PLANNER
@@ -954,4 +960,53 @@ transcript_dev_loop_background_agent_undeclared() {
         echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"name":"explore-something","prompt":"look around the repo"}}]}}'
     } >"$f"
     printf '%s\n' "$f"
+}
+
+# --- BLOCKED-AUTH: locked GNOME keyring (dotfiles-linux-dev#1093) -----------------------------
+
+fake_gdbus() {
+    printf '#!/bin/bash\n%s\n' "$1" >"$BIN/gdbus"
+}
+
+@test "a locked keyring skips the planner, announces once (exit 1), then stays silent" {
+    fake_gdbus 'echo "(<true>,)"'
+    printf '#!/usr/bin/env python3\nopen(%s, "w").close()\n' "'$TEST_TMP/planner-ran'" >"$PLAN_STUB"
+    chmod +x "$PLAN_STUB"
+    local t
+    t="$(transcript_dev_loop)"
+    run run_guard "$t"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"BLOCKED-AUTH"* ]]
+    [ ! -e "$TEST_TMP/planner-ran" ]
+    run run_guard "$t"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "a locked keyring makes no gh call at all, the budget gate's rate-limit reads included" {
+    fake_gdbus 'echo "(<true>,)"'
+    printf '#!/bin/bash\necho "gh $*" >>"$GH_LOG"\nexit 1\n' >"$BIN/gh"
+    run run_guard "$(transcript_dev_loop)"
+    [ "$status" -eq 1 ]
+    refute_gh_called
+}
+
+@test "an unlocked keyring leaves the planner path untouched" {
+    fake_gdbus 'echo "(<false>,)"'
+    stub_plan_broken
+    run run_guard "$(transcript_dev_loop)"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNREADABLE"* ]]
+}
+
+@test "a planner BLOCKED-AUTH exclusion (locked mid-run) announces once, not UNREADABLE" {
+    fake_gdbus 'echo "(<false>,)"'
+    stub_plan '{"dispatchable":[],"excluded":[{"issue":4,"reason":"BLOCKED-AUTH: GNOME keyring locked"}]}'
+    local t
+    t="$(transcript_dev_loop)"
+    run run_guard "$t"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"BLOCKED-AUTH"* ]]
+    run run_guard "$t"
+    [ "$status" -eq 0 ]
 }

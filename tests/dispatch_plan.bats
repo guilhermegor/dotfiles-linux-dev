@@ -895,6 +895,36 @@ PY
     [[ "$output" == *"free surface gate UNKNOWN"* ]]
 }
 
+# A failed gate behind a locked keyring is BLOCKED-AUTH, not UNKNOWN (dotfiles-linux-dev#1093).
+planner_gate_failed() {
+    run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" "$1" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import dispatch_plan as d
+d.live_agent_held_paths = lambda root: (True, [])
+d.repo_slug = lambda: "acme/widgets"
+d.open_issues = lambda slug: [{"number": 1, "body": "```surface\nfree/a.sh\n```"}]
+d.open_prs = lambda slug: []
+d.read_unclaimed = lambda owner, name: (False, set())
+d.keyring_locked = lambda: sys.argv[2] == "locked"
+d.main()
+PY
+}
+
+@test "a failed gate with a locked keyring is excluded as BLOCKED-AUTH (#1093)" {
+    planner_gate_failed locked
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"BLOCKED-AUTH"* ]]
+    [[ "$output" != *"free surface gate UNKNOWN"* ]]
+}
+
+@test "a failed gate with an unlocked keyring stays UNKNOWN (#1093)" {
+    planner_gate_failed unlocked
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"free surface gate UNKNOWN"* ]]
+    [[ "$output" != *"BLOCKED-AUTH"* ]]
+}
+
 @test "a glob surface is not expanded (no git read) on the UNKNOWN path (#973 review)" {
     run python3 - "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib" <<'PY'
 import sys

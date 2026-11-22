@@ -350,6 +350,15 @@ could enforce was "at least one agent is working" — the batch *size* still
 depended on the model remembering, which is what the owner asked for in five
 separate rounds.
 
+**BLOCKED-AUTH (#1093).** A locked GNOME login keyring makes `gh` and `git push` hang with no
+auth error, which the guard would otherwise read as UNREADABLE and block on forever, a loop only
+the owner can break. `session_start_context.sh`'s `keyring_state` probes the Secret Service
+(bounded; a hang or an unparseable answer is `unknown`, never `unlocked`). On `locked` the guard
+skips the planner, and `dispatch_plan.py`'s `keyring_locked` makes a failed gate read
+`BLOCKED-AUTH` instead of UNKNOWN. Either way the guard announces once per session (exit 1), then
+exits 0 while it stays locked. The probe reads only the `login` collection, so a `gh` token
+supplied through `GH_TOKEN` still reads BLOCKED-AUTH while that collection is locked.
+
 | Term | Source |
 |---|---|
 | `dispatchable` | `hooks/lib/dispatch_plan.py`, read never re-derived (#433) |

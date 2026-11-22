@@ -44,6 +44,10 @@ que rode?"* is the measurement that it didn't.
      this cadence is separate from the round.
 3. **Say what you armed**, or that all three already existed. A step that runs silently is
    indistinguishable from one that never ran.
+4. **Probe the keyring (#1093).** `bash -c 'source ~/.claude/hooks/session_start_context.sh &&
+   keyring_state'` (bounded, 8s). `locked` means `gh` hangs: skip every gh-bound step with one
+   line, `BLOCKED-AUTH: GNOME keyring locked — owner must unlock (Seahorse/re-login)`. `unknown`
+   is never read as unlocked.
 
 ### What triggers the round and the tick — and their limits
 

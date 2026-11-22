@@ -881,6 +881,39 @@ def build_plan() -> dict:
 		return _build_plan(pool)
 
 
+BLOCKED_AUTH_LABEL = "BLOCKED-AUTH"
+BLOCKED_AUTH_REASON = (
+	f"{BLOCKED_AUTH_LABEL}: GNOME keyring locked — gh cannot authenticate and hangs; "
+	"only the owner can unlock it (Seahorse or re-login)"
+)
+KEYRING_PROBE_TIMEOUT = 8.0
+
+
+def keyring_locked() -> bool:
+	"""Return True only when the GNOME login keyring is positively reported locked (#1093).
+
+	A probe that times out, errors, has no gdbus, or prints anything but ``(<true>,)`` is
+	"not known locked": the caller keeps its UNKNOWN reason, and this never reports unlocked.
+	The probe is bounded by the planner budget, and skipped (False) when that is spent.
+	"""
+	timeout = budget_timeout(KEYRING_PROBE_TIMEOUT)
+	if timeout <= 0:
+		return False
+	argv = [
+		"gdbus", "call", "--session", "--dest", "org.freedesktop.secrets",
+		"--object-path", "/org/freedesktop/secrets/collection/login",
+		"--method", "org.freedesktop.DBus.Properties.Get",
+		"org.freedesktop.Secret.Collection", "Locked",
+	]  # fmt: skip
+	try:
+		done = subprocess.run(  # noqa: S603 - fixed argv, no shell
+			argv, capture_output=True, text=True, timeout=timeout, check=False
+		)
+	except (OSError, subprocess.SubprocessError):
+		return False
+	return done.returncode == 0 and done.stdout.strip() == "(<true>,)"
+
+
 def _build_plan(pool: concurrent.futures.ThreadPoolExecutor) -> dict:
 	"""Assemble the {"dispatchable": [...], "excluded": [...]} plan for every open issue."""
 	slug = repo_slug()
@@ -913,6 +946,14 @@ def _build_plan(pool: concurrent.futures.ThreadPoolExecutor) -> dict:
 		# A timeout is never a refusal, and its stderr is bytes even under text=True (#939 review).
 		text = (exc.stderr or "") if isinstance(exc, subprocess.CalledProcessError) else ""
 		# The reason is what the Stop guards keep (they drop stderr), so a failed latch write shows there.
+		if isinstance(exc, subprocess.TimeoutExpired) and keyring_locked():
+			return {
+				"dispatchable": [],
+				"excluded": [
+					{"issue": number, "reason": BLOCKED_AUTH_REASON}
+					for number in sorted(issue_numbers, reverse=True)
+				],
+			}
 		unlatched = is_rate_limit_refusal(text) and not latch_on_refusal(text)
 		return {
 			"dispatchable": [],
@@ -978,6 +1019,8 @@ def _build_plan(pool: concurrent.futures.ThreadPoolExecutor) -> dict:
 	hot_holders: dict[str, int] | None = None  # read lazily, once: only a hot-touching candidate needs it
 	hot_read_failed = False
 
+	# A failed gate may be a gh hang behind a locked keyring: probe once, only on that path.
+	auth_blocked = live_ok and not gate_ok and keyring_locked()
 	candidates: list[dict] = []
 	excluded: list[dict] = []
 	for issue in issues:
@@ -995,7 +1038,9 @@ def _build_plan(pool: concurrent.futures.ThreadPoolExecutor) -> dict:
 			excluded.append(
 				{
 					"issue": number,
-					"reason": "free surface gate UNKNOWN (gh API failure or gate timeout) — "
+					"reason": BLOCKED_AUTH_REASON
+					if auth_blocked
+					else "free surface gate UNKNOWN (gh API failure or gate timeout) — "
 					"verify non-collision by hand",
 				}
 			)
