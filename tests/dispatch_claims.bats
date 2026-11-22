@@ -711,3 +711,30 @@ SH
     [ "$output" = "UNKNOWN" ]
     [ ! -e "$PRSTUB/gh-calls" ]
 }
+
+@test "a PR file record with no filename is UNKNOWN, not CLAIMED (#1102)" {
+    pr_stub
+    printf '[{"number":9}]' >"$PRSTUB/open-prs.json"
+    printf '[{}]' >"$PRSTUB/files-9.json"
+    printf 'open-pr\t%s\n' "a/b.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
+    run claim_files 405 "a/b.sh"
+    [ "$status" -ne 0 ]
+    [ "$output" = "UNKNOWN" ]
+}
+
+@test "a PR file list at GitHub's 3000-file cap is UNKNOWN, not CLAIMED (#1102)" {
+    pr_stub
+    printf '[{"number":9}]' >"$PRSTUB/open-prs.json"
+    jq -nc '[range(3000) | {filename: "f\(.)"}]' >"$PRSTUB/files-9.json"
+    printf 'open-pr\t%s\n' "a/b.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
+    run claim_files 405 "a/b.sh"
+    [ "$status" -ne 0 ]
+    [ "$output" = "UNKNOWN" ]
+}
+
+@test "a refresh landing after nomination cannot override a confirmed holder (#1102)" {
+    # The cache file no longer names the path, but the nomination was made before the refresh.
+    : >"$TEST_TMP/.git/pr-held-paths.tsv"
+    run _dispatch_holder $'a/b.sh\n' "" 405 "a/b.sh" $'a/b.sh\n'
+    [ "$output" = "open-pr" ]
+}

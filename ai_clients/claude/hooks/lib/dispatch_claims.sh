@@ -323,23 +323,27 @@ _dispatch_pr_slug() {
 _dispatch_open_pr_files() {
 	local slug="$1" prs n page files=""
 	prs="$(_dispatch_forge_call list "repos/$slug/pulls?state=open")" || return 1
-	jq -es 'length > 0 and all(.[]; type == "array")' <<<"$prs" >/dev/null || return 1
+	jq -es 'length > 0 and all(.[]; type == "array" and all(.[]; (.number | type) == "number"))' <<<"$prs" >/dev/null || return 1
 	for n in $(jq -r '.[].number' <<<"$prs"); do
 		page="$(_dispatch_forge_call list "repos/$slug/pulls/$n/files")" || return 1
-		jq -es 'length > 0 and all(.[]; type == "array")' <<<"$page" >/dev/null || return 1
+		# Every record needs a string filename (a `{}` would extract to `null`), and 3000 files is
+		# GitHub's hard cap on this endpoint: a list that long may be truncated, so completeness
+		# cannot be established (#1102).
+		jq -es 'length > 0 and all(.[]; type == "array" and all(.[]; (.filename | type) == "string")) and ([.[][]] | length) < 3000' <<<"$page" >/dev/null || return 1
 		files+="$(jq -r '.[].filename' <<<"$page")"$'\n'
 	done
 	printf '%s' "$files"
 }
 
-# _dispatch_holder PR_HELD_FILE LIVE_CLAIMS ISSUE PATH OPEN_PR_FILES
+# _dispatch_holder NOMINATED_PATHS LIVE_CLAIMS ISSUE PATH OPEN_PR_FILES
 # Who holds PATH against ISSUE, or empty when nobody does. An open PR wins the report because
 # it is the older, non-negotiable claim; a path this same ISSUE already holds is not a holder.
-# The cache only NOMINATES an open-PR holder; OPEN_PR_FILES (the live read) confirms it, so a PR
+# NOMINATED_PATHS is the nomination claim_files already read, never a second read of the cache file
+# (a refresh can replace it between the two reads). The cache only NOMINATES an open-PR holder; OPEN_PR_FILES (the live read) confirms it, so a PR
 # that merged since the last refresh cannot refuse a claim (#1091).
 _dispatch_holder() {
-	local pr_held="$1" live="$2" issue="$3" path="$4" open_files="$5"
-	if _dispatch_cache_holds "$pr_held" "$path" && printf '%s\n' "$open_files" | grep -qxF -- "$path"; then
+	local nominated="$1" live="$2" issue="$3" path="$4" open_files="$5"
+	if printf '%s\n' "$nominated" | grep -qxF -- "$path" && printf '%s\n' "$open_files" | grep -qxF -- "$path"; then
 		printf 'open-pr\n'
 		return 0
 	fi
@@ -387,14 +391,11 @@ claim_files() {
 	# open PRs live (#1091) — BEFORE the lock, so network latency never eats other racers'
 	# DISPATCH_CLAIM_LOCK_WAIT. A path no cache line nominates costs no call at all, and an
 	# unreadable live read is UNKNOWN, never the cache's word.
-	local open_files="" nominated=0
+	local open_files="" nominated=""
 	for path in "$@"; do
-		_dispatch_cache_holds "$pr_held" "$path" && {
-			nominated=1
-			break
-		}
+		_dispatch_cache_holds "$pr_held" "$path" && nominated+="$path"$'\n'
 	done
-	if [ "$nominated" = 1 ]; then
+	if [ -n "$nominated" ]; then
 		slug="$(_dispatch_pr_slug)" && open_files="$(_dispatch_open_pr_files "$slug")" || {
 			echo "UNKNOWN"
 			return 1
@@ -412,7 +413,7 @@ claim_files() {
 
 		live="$(_dispatch_live_claims "$claims")"
 		for path in "$@"; do
-			holder="$(_dispatch_holder "$pr_held" "$live" "$issue" "$path" "$open_files")"
+			holder="$(_dispatch_holder "$nominated" "$live" "$issue" "$path" "$open_files")"
 			if [ -n "$holder" ]; then
 				printf 'HELD:%s:%s\n' "$holder" "$path"
 				exit 1
