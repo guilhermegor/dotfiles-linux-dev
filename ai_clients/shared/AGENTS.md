@@ -61,12 +61,22 @@ teardown. Never trust printed output alone for a git write:
   rejected `git push ... | tail -3; echo $?` prints `0`. Use no pipe, or
   read `${PIPESTATUS[0]}` in the very next command.
 - After any git write, confirm it landed by comparing refs, not exit
-  codes: after a commit, `git log --oneline -1` and check HEAD moved; after
-  a push, `git rev-parse HEAD` must equal the sha from
-  `git ls-remote origin <branch>`.
-- If still unsure, read `.git/refs/heads/<branch>` (or `.git/logs/HEAD`)
-  directly — a command run through the same sandboxed environment can
-  report a state that was never durably committed.
+  codes:
+  - commit: save `git rev-parse HEAD` before it; afterwards HEAD must
+    differ from that value (an unchanged HEAD means it was rejected).
+  - push: `git rev-parse HEAD` must equal the sha from
+    `git ls-remote <remote> <ref>`, using the same remote and destination
+    ref the push named, not an assumed `origin <branch>`.
+  - tag: `git rev-parse --verify --quiet refs/tags/<tag>` must succeed,
+    and a pushed tag must appear in `git ls-remote --tags <remote> <tag>`.
+  - branch delete: `git rev-parse --verify --quiet refs/heads/<branch>`
+    must fail.
+- A read inside the writing sandbox, including `.git/refs/heads/<branch>`
+  or `.git/logs/HEAD`, sees the same overlay the write did and can report
+  a state teardown later discards. Run the confirmation from a view that
+  survives teardown: the remote (`git ls-remote`) for anything pushed, and
+  for local-only writes a later, separate invocation outside the sandbox
+  (the caller, or the next session's first command).
 
 ## Version Control
 
