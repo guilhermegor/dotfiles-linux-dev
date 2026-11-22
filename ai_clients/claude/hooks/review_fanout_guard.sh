@@ -100,11 +100,11 @@ PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-180}"
 # The cache key includes a digest of every open PR's head SHA (one REST call), so a push
 # invalidates it at once — a TTL alone would let a Stop through for a head pushed after caching.
 # What the key does NOT see: a review landing on an unchanged head, a check finishing, the rung
-# probe. Hence a plan whose `rung.status` is `unknown` is never cached (both the synchronous
-# write and the detached refresh go through publish_cache, #1084): a transient probe timeout
-# would otherwise block every Stop in the TTL on a board whose heads never change. A plan stale
-# that way lives at most CACHE_TTL_MIN minutes (a refresh's run time counts
+# probe. A plan stale that way lives at most CACHE_TTL_MIN minutes (a refresh's run time counts
 # from when it finished); it errs toward blocking on done work, or toward a late nudge.
+# The probe is the exception: a plan whose `rung.status` is `unknown` is never cached (both the
+# synchronous write and the detached refresh go through publish_cache, #1084), since a transient
+# probe timeout would otherwise block every Stop in the TTL on a board whose heads never change.
 # The key costs one REST call (20s cap) on every Stop, cache hit or not — an offline hook
 # disables the cache rather than trusting it.
 CACHE_DIR="${REVIEW_FANOUT_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/review_fanout}"

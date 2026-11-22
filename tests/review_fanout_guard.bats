@@ -1058,15 +1058,37 @@ STUB
 
 @test "a plan with rung.status unknown is used but not cached (#1084)" {
     loop_invoked
+    # Positive control: caching is live in this harness, so the empty-dir check below is not vacuous.
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+    [ "$(ls "$REVIEW_FANOUT_CACHE_DIR"/*.json 2>/dev/null | wc -l)" -eq 1 ]
+    rm -f "$REVIEW_FANOUT_CACHE_DIR"/*.json
     printf '%s\n' '{"rung":{"status":"unknown","reason":"probe timed out"},"dispatchable":[],"excluded":[]}' >"$PLAN"
     REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
     [ "$status" -eq 2 ]
     [[ "$output" == *"UNKNOWN"* ]]
-    [ -z "$(ls -A "$REVIEW_FANOUT_CACHE_DIR" 2>/dev/null)" ]
+    [ "$(ls "$REVIEW_FANOUT_CACHE_DIR"/*.json 2>/dev/null | wc -l)" -eq 0 ]
     # The probe recovers: the second Stop re-plans and must not replay the blind verdict.
     printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
     REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
     [ "$status" -eq 0 ]
+}
+
+@test "a refresh whose plan has rung.status unknown is not cached (#1084)" {
+    loop_invoked
+    cat >"$REVIEW_FANOUT_PLANNER" <<'STUB'
+import time
+
+time.sleep(2)
+print('{"rung":{"status":"unknown"},"dispatchable":[],"excluded":[]}')
+STUB
+    local lock
+    lock="$(refresh_lock)"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 REVIEW_FANOUT_PLANNER_TIMEOUT=1 REVIEW_FANOUT_REFRESH_TIMEOUT=30 run_guard
+    [ "$status" -eq 2 ]
+    wait_refresh_done "$lock"
+    [ "$(ls "$REVIEW_FANOUT_CACHE_DIR"/*.json 2>/dev/null | wc -l)" -eq 0 ]
 }
 
 @test "UNKNOWN then DIRTY on the same head: the second run excludes the PR (#1019)" {
