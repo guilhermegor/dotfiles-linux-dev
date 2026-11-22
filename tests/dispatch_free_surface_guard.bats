@@ -983,6 +983,14 @@ fake_gdbus() {
     [ -z "$output" ]
 }
 
+@test "a locked keyring makes no gh call at all, the budget gate's rate-limit reads included" {
+    fake_gdbus 'echo "(<true>,)"'
+    printf '#!/bin/bash\necho "gh $*" >>"$GH_LOG"\nexit 1\n' >"$BIN/gh"
+    run run_guard "$(transcript_dev_loop)"
+    [ "$status" -eq 1 ]
+    refute_gh_called
+}
+
 @test "an unlocked keyring leaves the planner path untouched" {
     fake_gdbus 'echo "(<false>,)"'
     stub_plan_broken

@@ -554,10 +554,11 @@ main() {
 	cached=1
 	plan="$(stop_plan_cache_read dispatch_plan "$cwd" "$transcript")" || {
 		cached=0
-		stop_budget_gate || exit 0
-		# A locked keyring makes every gh call hang to its timeout; skip the planner entirely.
+		# A locked keyring makes every gh call hang to its timeout, the budget gate's own rate-limit
+		# reads included, so the local probe runs first and skips both gate and planner.
 		[ "$(bash -c 'source "$1" && keyring_state' _ "$HOOK_DIR/session_start_context.sh" 2>/dev/null)" != locked ] ||
 			report_blocked_auth "$transcript"
+		stop_budget_gate || exit 0
 		planner_rc=0
 		plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)" || planner_rc=$?
 		# Exit 3 = the latch was written after the gate passed: a blind board, so pass (#814).
