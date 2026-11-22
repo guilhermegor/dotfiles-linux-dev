@@ -102,6 +102,9 @@ PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-180}"
 # What the key does NOT see: a review landing on an unchanged head, a check finishing, the rung
 # probe. A plan stale that way lives at most CACHE_TTL_MIN minutes (a refresh's run time counts
 # from when it finished); it errs toward blocking on done work, or toward a late nudge.
+# The probe is the exception: a plan whose `rung.status` is `unknown` is never cached (both the
+# synchronous write and the detached refresh go through publish_cache, #1084), since a transient
+# probe timeout would otherwise block every Stop in the TTL on a board whose heads never change.
 # The key costs one REST call (20s cap) on every Stop, cache hit or not — an offline hook
 # disables the cache rather than trusting it.
 CACHE_DIR="${REVIEW_FANOUT_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/review_fanout}"
@@ -547,6 +550,12 @@ publish_cache() {
 	# A plan built while GitHub still reads a PR's mergeStateStatus as UNKNOWN is used this run
 	# but never cached: the head stays the same when it settles to DIRTY (#1019).
 	if jq -e '.has_unknown_merge_state == true' <"$1" >/dev/null 2>&1; then
+		rm -f "$1"
+		return 0
+	fi
+	# Likewise a plan whose rung probe came back UNKNOWN: the key omits the probe, so caching
+	# it would replay a transient timeout as "reviewer rung UNKNOWN" for the whole TTL (#1084).
+	if [ "$(jq -r '.rung.status' <"$1" 2>/dev/null)" = "unknown" ]; then
 		rm -f "$1"
 		return 0
 	fi
