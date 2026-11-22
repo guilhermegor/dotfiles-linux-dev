@@ -28,15 +28,15 @@ _resolve_dir() {
 	esac
 }
 
-# _open_pr_elsewhere CWD BRANCH: print the head ref of an open PR whose head is HEAD or HEAD^
-# under another name. Fails open (no gh, no network, no match -> prints nothing).
+# _open_pr_elsewhere CWD BRANCH: print the head ref of an open PR whose head is one of the last 50 commits
+# of HEAD, under another name and in this repo (not a fork). Fails open (no gh, no network, no match -> prints nothing).
 _open_pr_elsewhere() {
 	local cwd="$1" branch="$2" shas
 	command -v gh >/dev/null 2>&1 || return 1
-	shas="$($GIT -C "$cwd" rev-parse HEAD HEAD^ 2>/dev/null)" || return 1
+	shas="$($GIT -C "$cwd" rev-list -n 50 HEAD 2>/dev/null)" || return 1
 	(cd "$cwd" && GH_PROMPT_DISABLED=1 timeout 20 gh api --paginate --slurp 'repos/{owner}/{repo}/pulls?state=open&per_page=100' 2>/dev/null) \
 		| jq -r --arg b "$branch" --arg s "$shas" \
-			'[flatten[] | select(.head.ref != $b and (.head.sha as $h | ($s | split("\n") | index($h))))][0].head.ref // empty' 2>/dev/null
+			'[flatten[] | select(.head.ref != $b and (.head.repo.full_name == .base.repo.full_name) and (.head.sha as $h | ($s | split("\n") | index($h))))][0].head.ref // empty' 2>/dev/null
 }
 
 # _remote_default CWD REMOTE: print REMOTE's default branch as the remote itself reports it; prints
@@ -90,11 +90,13 @@ main() {
 	# A branch tracking a differently-named remote branch (a review worktree on a PR head)
 	# updates THAT branch; pushing by local name would open a side branch (#1074).
 	# The default branch is never a target: `worktree add -b x origin/main` tracks it. An unknown
-# default (remote unreachable) means no upstream is trusted: the push goes by local name, never to another branch.
+	# default (remote unreachable) means no upstream is trusted: the push goes by local name, never to another branch.
 	remote="$($GIT -C "$cwd" config "branch.$branch.remote")" || remote=origin
 	up="$($GIT -C "$cwd" config "branch.$branch.merge")"
 	up="${up#refs/heads/}"
-	base="$(_remote_default "$cwd" "$remote")"
+	# Only an upstream that differs from the branch needs the (network) default lookup.
+	base=""
+	if [ -n "$up" ] && [ "$up" != "$branch" ] && [ "$remote" != . ]; then base="$(_remote_default "$cwd" "$remote")"; fi
 	args=(-u origin "$branch")
 	if [ -n "$up" ] && [ "$up" != "$branch" ] && [ -n "$base" ] && [ "$up" != "$base" ] && [ "$up" != master ] && [ "$up" != main ]; then
 		args=("$remote" "HEAD:refs/heads/$up")

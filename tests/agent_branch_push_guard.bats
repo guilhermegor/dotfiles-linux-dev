@@ -306,3 +306,50 @@ stale_head_fixture() {
     remote_has fix/9-thing
     [ "$(git -C "$TEST_TMP/origin.git" rev-parse develop)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
 }
+
+# --- #1078 review findings ---
+
+@test "a PR head several commits below HEAD is still detected (#1074)" {
+    add_worktree fix/9-review
+    git -C "$TEST_TMP/wt" commit -q --allow-empty -m second
+    git -C "$TEST_TMP/wt" commit -q --allow-empty -m third
+    mkdir "$TEST_TMP/bin"
+    printf '#!/bin/sh\nprintf '"'"'[{"head":{"ref":"fix/pr-head-5","sha":"%%s"}}]'"'"' "$(git rev-parse HEAD~2)"\n' >"$TEST_TMP/bin/gh"
+    chmod +x "$TEST_TMP/bin/gh"
+    PATH="$TEST_TMP/bin:$PATH" run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"fix/pr-head-5"* ]]
+    refute_remote fix/9-review
+}
+
+@test "a fork PR head is not treated as a head on origin (#1074)" {
+    add_worktree fix/9-thing
+    mkdir "$TEST_TMP/bin"
+    printf '#!/bin/sh\nprintf '"'"'[{"head":{"ref":"fix/pr-head-5","sha":"%%s","repo":{"full_name":"fork/r"}},"base":{"repo":{"full_name":"o/r"}}}]'"'"' "$(git rev-parse HEAD^)"\n' >"$TEST_TMP/bin/gh"
+    chmod +x "$TEST_TMP/bin/gh"
+    PATH="$TEST_TMP/bin:$PATH" run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"fix/pr-head-5"* ]]
+    remote_has fix/9-thing
+}
+
+@test "a branch tracking a local branch never moves a local ref (#1074)" {
+    git -C "$TEST_TMP/main" branch other
+    add_tracking_worktree fix/9-thing other
+    before="$(git -C "$TEST_TMP/main" rev-parse other)"
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$TEST_TMP/main" rev-parse other)" = "$before" ]
+}
+
+@test "the remote default is not queried when there is no differing upstream (#1074)" {
+    add_worktree fix/9-thing
+    mkdir "$TEST_TMP/bin"
+    printf '#!/bin/sh\necho "$*" >>"%s/timeout.log"\nshift\nexec "$@"\n' "$TEST_TMP" >"$TEST_TMP/bin/timeout"
+    chmod +x "$TEST_TMP/bin/timeout"
+    PATH="$TEST_TMP/bin:$PATH" run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has fix/9-thing
+    run grep -c ls-remote "$TEST_TMP/timeout.log"
+    [ "$output" = 0 ]
+}
