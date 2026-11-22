@@ -3,7 +3,7 @@ name: s:release
 description: Use when the user asks to cut a release, bump the version, or publish a package — decides whether a release is warranted and what to bump from the shipped-artifact diff and Conventional Commit types since the last tag, then delegates the publish mechanics to the matching ecosystem arm (s:release-py for PyPI, workflow-dispatch for everything else, s:release-rename when the shipped change is a package rename).
 effort: high
 argument-hint: [none — reads the repo state]
-allowed-tools: Bash(git log*), Bash(git tag*), Bash(git describe*), Bash(git diff*), Bash(git rev-parse*), Bash(rtk git log*), Bash(rtk git diff*), Bash(gh workflow*), Bash(gh run*), Bash(gh release*), Read, Glob, Grep
+allowed-tools: Bash(git log*), Bash(git tag*), Bash(git diff*), Bash(git rev-parse*), Bash(rtk git log*), Bash(rtk git diff*), Bash(gh workflow*), Bash(gh run*), Bash(gh release*), Read, Glob, Grep
 ---
 
 > **Priority:** this project's `CLAUDE.md` and `rules/*.md` take precedence over the guidance below whenever they conflict — treat this skill as a fallback, not a mandate.
@@ -47,9 +47,13 @@ which is the point of the check above.
 ## 2. Decide whether to release at all
 
 ```bash
-git describe --tags --abbrev=0          # → <last-tag>; fails if there are no tags yet
-git diff --name-only <last-tag>..HEAD -- <shipped-paths...>
+git tag --sort=-v:refname --merged origin/<default> | head -1   # → <last-tag>; empty if no tags yet
+git diff --name-only <last-tag>..origin/<default> -- <shipped-paths...>
 ```
+
+Never `git describe` for this: with two tags on one commit it can return the older one
+(dotfiles-linux-dev#1088). On a PyPI package the version floor is the max of PyPI and Test PyPI
+(`s:release-py`, step 4), not the last tag.
 
 - **No tags yet** → first release; propose the project's declared version, or `0.1.0`.
 - **Shipped diff empty** → **STOP. No release.** Say plainly: *"No shipped change since
