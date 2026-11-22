@@ -72,6 +72,16 @@ if [[ "$args" == *"actions/runs/"*"/jobs"* ]]; then
     j="JOBS_$id"; printf '%b\n' "${!j:-build\nReview threads answered}"
     exit 0
 fi
+if [[ "$args" == *"contents/.github/workflows?ref=master"* ]]; then
+    [ "${GATE_WF:-}" = fail ] && { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }
+    [ "${GATE_WF:-}" = none ] && { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+    [ "${GATE_WF:-}" = other ] && { echo ".github/workflows/parity.yml"; exit 0; }
+    echo ".github/workflows/review_gate.yml"; exit 0
+fi
+if [[ "$args" == *"/contents/"*"ref=master"* ]]; then
+    if [ "${GATE_WF:-}" = other ]; then printf 'name: README parity\n' | base64; exit 0; fi
+    printf 'name: Review threads answered\n' | base64; exit 0
+fi
 if [[ "$args" == *"/contents/"* ]]; then
     printf '%b' "${WF_CONTENT:-permissions:\n  contents: read\n}" | base64
     exit 0
@@ -81,7 +91,7 @@ if [[ "$args" == *"/check-runs"* ]]; then
     c="CHECK_$n"; c="${!c:-success}"
     [ "$c" = missing ] && exit 0
     printf 'build\t%s\t::check::\t%s\t%s\n' "$c" "${APP_ID:-15368}" "${SUITE:-1}"
-    printf 'Review threads answered\t%s\t::check::\t%s\t%s\n' "$c" "${APP_ID:-15368}" "${SUITE:-1}"
+    [ -n "${GATE_WF:-}" ] || printf 'Review threads answered\t%s\t::check::\t%s\t%s\n' "$c" "${APP_ID:-15368}" "${SUITE:-1}"
     [ -n "${EXTRA_CHECKS:-}" ] && printf '%s\n' "$EXTRA_CHECKS"
     exit 0
 fi
@@ -282,6 +292,39 @@ refute_log() {
     [ "$status" -ne 0 ]
 }
 
+@test "no gate workflow, no protection: all green check-runs merge (#1113)" {
+    GATE_WF=other PROT_404=1 run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
+}
+
+@test "no gate workflow, no protection: a red check-run still refuses (#1113)" {
+    GATE_WF=none PROT_404=1 CHECK_7=failure run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"REFUSED"* ]]
+    refute_log "PUT"
+}
+
+@test "no gate workflow: protection contexts are still required (#1113)" {
+    GATE_WF=other PROT_404=1 RULE_CTX=$'lint\t-1' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"[lint]"* ]]
+    refute_log "PUT"
+}
+
+@test "no gate workflow and no check-run at all is refused (#1113)" {
+    GATE_WF=other PROT_404=1 CHECK_7=missing run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    refute_log "PUT"
+}
+
+@test "an unreadable workflow listing is UNKNOWN, not 'no gate' (#1113)" {
+    GATE_WF=fail PROT_404=1 run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    refute_log "PUT"
+}
+
 @test "batch: one bad PR is refused, the others merge, exit non-zero" {
     STATE_8=dirty run bash "$SCRIPT" 7 8 9
     [ "$status" -ne 0 ]
@@ -463,7 +506,7 @@ refute_log() {
     FILES_7=$'.github/workflows/x?ref=sha7&a=.yml\t' run bash "$SCRIPT" 7
     [ "$status" -ne 0 ]
     [[ "$output" == *"outside [A-Za-z0-9._/-]"* ]]
-    refute_log "/contents/"
+    refute_log "/contents/.*ref=sha7"
     refute_log "PUT"
 }
 

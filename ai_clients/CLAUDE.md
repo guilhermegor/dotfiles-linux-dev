@@ -117,8 +117,10 @@ loop and a scratch script. No glob matches those shapes, and a glob cannot pin
 The wrapper takes positive integers only (no flags, so no `--admin` and no
 merge_method choice), uses REST only, and per PR requires: not a draft,
 `mergeable_state` clean, and every required check-run on the head `success`
-(the base branch's protection contexts plus `Review threads answered`). An
-unreadable protection is UNKNOWN and fails closed. The PUT is
+(the base branch's protection contexts, plus `Review threads answered` only when
+a workflow on the base branch produces it; with neither, every check-run on the
+head, and none at all is refused; #1113). An unreadable protection or workflow
+listing is UNKNOWN and fails closed. The PUT is
 `merge_method=squash` with the head sha pinned. One line per PR; non-zero exit if
 any was refused.
 

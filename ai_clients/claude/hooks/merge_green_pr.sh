@@ -13,7 +13,8 @@
 # Takes positive integers ONLY: no flags, so no --admin and no merge_method choice (always
 # squash). REST only, zero GraphQL. Per PR it refuses unless the PR is not a draft, its
 # mergeable_state is `clean`, and every required check-run on the head (the base branch's
-# protection contexts PLUS "Review threads answered") concluded `success`; an unreadable
+# protection contexts PLUS "Review threads answered" when the repo has a workflow producing it; with neither
+# that gate nor protection contexts, every check-run on the head) concluded `success`; an unreadable
 # protection is UNKNOWN and fails closed. The merge PUT pins the head sha, so a push after
 # the checks were read is refused by GitHub. Prints one line per PR; exits 1 if any was
 # refused. OWNER/REPO come from the cwd's origin: from a shell already in the repo run it
@@ -103,6 +104,27 @@ required_contexts() {
 	rules="$(gh_retry api --paginate "repos/$owner/$repo/rules/branches/$base" \
 		--jq '.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[] | [.context, ((.integration_id // -1)|tostring)] | @tsv')" || return 1
 	printf '%s\n%s\n' "$classic" "$rules" | sed '/^$/d'
+}
+
+# Does the base branch carry a workflow that produces the review gate? 0 yes, 1 no, 2 unreadable.
+# A repo without one (only a README-parity workflow, say) can never post the check, so
+# requiring it would make the wrapper unusable there (#1113). A missing .github/workflows
+# directory (404) is "no workflow"; any other read failure is UNKNOWN, never "no gate".
+repo_has_gate_workflow() {
+	local base="$1" err files f content
+	err="$(mktemp)" || return 2
+	if ! files="$(gh api "repos/$owner/$repo/contents/.github/workflows?ref=$base" \
+		--jq '.[] | select(.type=="file") | .path' 2>"$err" </dev/null)"; then
+		if grep -q 'HTTP 404' "$err"; then rm -f "$err"; return 1; fi
+		rm -f "$err"; return 2
+	fi
+	rm -f "$err"
+	while IFS= read -r f; do
+		[ -n "$f" ] || continue
+		content="$(gh_retry api "repos/$owner/$repo/contents/$f?ref=$base" --jq .content | base64 -d 2>/dev/null)" && [ -n "$content" ] || return 2
+		grep -q -F -- "$GATE_CHECK" <<<"$content" && return 0
+	done <<<"$files"
+	return 1
 }
 
 # Workflow YAML on stdin -> JSON on stdout, aliases resolved. No parser is a failure, so the
@@ -204,7 +226,14 @@ merge_one() {
 
 	required="$(required_contexts "$base")" ||
 		{ echo "#$pr UNKNOWN: cannot read the required checks of $base"; return 1; }
-	required="$(printf '%s\n%s\t-1\n' "$required" "$GATE_CHECK" | sed '/^$/d' | sort -u)"
+	# The gate is required only where a workflow produces it; with no gate and no protection or
+	# ruleset contexts, every check-run on the head is required (set below, once read).
+	repo_has_gate_workflow "$base"
+	case $? in
+		0) required="$(printf '%s\n%s\t-1\n' "$required" "$GATE_CHECK" | sed '/^$/d' | sort -u)" ;;
+		1) ;;
+		*) echo "#$pr UNKNOWN: cannot read the workflows of $base"; return 1 ;;
+	esac
 
 	# Checks API plus the commit Status API (a required context may be posted via either).
 	# State is normalised to "success"; GitHub counts skipped/neutral as passing, so they
@@ -220,6 +249,11 @@ merge_one() {
 		--jq '.statuses[] | [.context, .state, (.creator.login // "-"), "-", "-"] | @tsv')" ||
 		{ echo "#$pr UNKNOWN: cannot read commit statuses of $head"; return 1; }
 	checks="$(printf '%s\n%s\n' "$checks" "$statuses")"
+	if [ -z "$required" ]; then
+		required="$(awk -F'\t' '$3=="::check::" {print $1 "\t-1"}' <<<"$checks" | sort -u)"
+		[ -n "$required" ] ||
+			{ echo "#$pr REFUSED: no required checks and no check-run on the head to prove green"; return 1; }
+	fi
 
 	# Provenance: only matters when the PR touched a workflow. Actions app id is 15368.
 	if [ -n "$wf_changed" ]; then
