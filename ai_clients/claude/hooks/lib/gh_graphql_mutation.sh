@@ -14,7 +14,6 @@
 # Return codes: 0 done (stdout = the call's output) | 75 deferred (latched or refused, see the
 # stderr line) | 2 unknown OP (refused, no call made) | any other = the call's own failure,
 # stderr passed through. 75 is gh_budget_with_backoff's "rate limited" status: one meaning.
-set -u
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	echo "gh_graphql_mutation.sh is meant to be sourced, not executed." >&2
@@ -35,7 +34,7 @@ gh_graphql_ui_path() {
 	case "$1" in
 	enablePullRequestAutoMerge) echo "PR page > merge box > Enable auto-merge > pick method > Confirm" ;;
 	resolveReviewThread) echo "PR page > Conversation or Files changed > the thread > Resolve conversation" ;;
-	updateProjectV2ItemFieldValue) echo "Project board > the card > edit the field cell (or drag the card to the column)" ;;
+	updateProjectV2ItemFieldValue) echo "Project board > the card > edit the field cell, or drag the card to the column" ;;
 	addProjectV2ItemById) echo "Project board > + Add item > search and pick the issue or PR" ;;
 	*) return 1 ;;
 	esac

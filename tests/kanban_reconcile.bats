@@ -981,9 +981,9 @@ write_stamp() {
     run bash -c "source '$LIB'; echo \"\${KANBAN_RECONCILE_KINDS[*]}\""
     [ "$output" = "in_review closed stale offboard" ]
     for k in $output; do
-        grep -qE "(^|\s)sweep_kanban_boards $k " "$SWEEP"
+        grep -qE "^\s+sweep_kanban_boards $k " "$SWEEP"
     done
-    [ "$(grep -cE '(^|\s)sweep_kanban_boards [a-z_]+ ' "$SWEEP")" = "4" ]
+    [ "$(grep -cE '^\s+sweep_kanban_boards [a-z_]+ ' "$SWEEP")" = "4" ]
 }
 
 @test "boards: a warm-cache in_review reconcile with nothing to move costs 3 fixed gh calls, inside the estimate" {

@@ -40,6 +40,11 @@ for id in "$@"; do
   if ! [[ "$id" =~ ^PRRT_[A-Za-z0-9_-]+$ ]]; then
     echo "$id: REFUSED — not a review-thread node id" >&2; rc=1; continue
   fi
+  # Under the latch even the pre-mutation READ is a wasted GraphQL request: defer before it (#1072).
+  if gh_budget_latch_active; then
+    _ggm_defer resolveReviewThread "403 latch active" || true
+    echo "$id: DEFERRED" >&2; deferred=1; continue
+  fi
   gh_budget_log_spend 0 # one GraphQL request; cost unexposed (#922)
   state=$(gh api graphql -f id="$id" -f query='query($id:ID!){viewer{login} node(id:$id){
     ... on PullRequestReviewThread{isResolved

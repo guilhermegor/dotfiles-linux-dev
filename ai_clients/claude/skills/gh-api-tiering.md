@@ -66,7 +66,7 @@ reports the deferral line.
 7. **At most 2 retries** per action. Then stop and report; do not loop.
 8. **Verify each action over REST**, never by the page's say-so: auto-merge armed
    (`gh api repos/O/R/pulls/N --jq .auto_merge`), merged (`.merged`), thread resolved (read the
-   thread through the one GraphQL read when the budget is back, or the reply state over REST), card
+   thread through the one GraphQL read when the budget is back; REST carries no resolved state), card
    moved (once GraphQL answers). A page that looks right is not proof.
 9. **Close the tab** you opened (`tabs_close_mcp`) when done or when stopping.
 

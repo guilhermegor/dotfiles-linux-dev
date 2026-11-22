@@ -340,11 +340,11 @@ refute_mutation() {
 
 @test "under the latch the mutation is deferred (75), not a failure, and is never sent (#1072)" {
     thread false Bot User
-    printf '%s\n' "$(($(date +%s) + 600))" > "$GH_BUDGET_LATCH_FILE"
+    (source "$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/lib/gh_budget.sh" && gh_budget_latch_write 600)
     run --separate-stderr bash "$SCRIPT" PRRT_abc123
     [ "$status" -eq 75 ]
     [[ "$stderr" == *"DEFERRED resolveReviewThread"* ]]
     [[ "$stderr" == *"Resolve conversation"* ]]
-    run grep -c 'mutation(' "$GH_LOG"
-    [ "$output" = "0" ]
+    # no GraphQL request at all under the latch: neither the thread read nor the mutation
+    [ ! -s "$GH_LOG" ]
 }
