@@ -998,6 +998,24 @@ Verify all three, none implies another: **per-job conclusions** (a skipped publi
 cancelled matrix reads as success at the run level), **the tag exists**, **the release is not a
 draft** (a draft creates no tag, and tag-derived versioning then loses it silently).
 
+### When the auto-mode classifier denies the dispatch (#1094)
+
+"Cut it" is the owner's standing decision, but the classifier reads neither this skill nor
+memory: it may deny the release dispatch as a production deploy (measured on blueprintx
+2026-10-16, v0.16.152 computed and never tagged). A denial is **not** a reason to rephrase the
+command, swap `gh workflow run` for the REST `/dispatches` form, or loop through a script. Each of
+those is the same action in another spelling, and getting it past the classifier is the bypass
+the classifier exists to stop. Owner decision 2026-11-21: no broader allow rule; the denial
+becomes a reported outcome instead.
+
+- Dispatch **once**. On a denial, stop the release step. Do not retry.
+- Report it as a first-class outcome in the round's report, never buried in a step summary:
+  `release v<X.Y.Z> due, needs approval: <repo> <workflow> — denied by the auto-mode classifier`,
+  plus the exact command for the owner to run.
+- Carry on with steps 6 and 7. A release waiting for approval does not block dispatch or capture.
+- On the next round, recompute from the tag. If the owner ran it, the tag exists and the diff is
+  empty. If not, report the same line again: it is still due.
+
 ⚠️ Read the shipped paths from the packaging manifest, never from intuition. A Python-shaped default
 on a non-Python repo fails **silently and inverted** — it *suppresses* a release rather than
 erroring. `.claude/release.conf` is the declared list where one exists.
@@ -1306,6 +1324,8 @@ capture.
 - Do not conclude a path is clean from rtk-proxied `git status` / `ls` / `find`.
 - Do not force-merge past a red required check, or remove one to unblock a PR.
 - Do not ask permission to run this, and do not ask before cutting a release — see step 5.
+- Do not retry a release dispatch the auto-mode classifier denied, in any spelling. Report
+  `release vX.Y.Z due, needs approval` instead (step 5, #1094).
 - Do not arm a host-level timer (systemd, a durable cron) for the round or the reviewer-slot tick.
   `CronCreate` jobs dying with the session is the requirement from step 0, not a gap to fill with
   something durable. Disarming them when idle (Reporting) is the loop's own `CronDelete`, not a timer.
