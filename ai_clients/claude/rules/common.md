@@ -311,6 +311,14 @@ The failure mode each rule guards against, not the full reasoning:
   - Java/Kotlin → `java.math.BigDecimal`
   - Go → `github.com/shopspring/decimal`
   - Rust → `rust_decimal` crate
+- **Exception, numerical analysis:** when the value approximates an irrational
+  (`erf`, `exp`, quadrature, ODE solutions, optimisation), use `float`.
+  `Decimal` only gives more digits of an approximation that stays
+  approximate; method truncation (1e-7 to 1e-9) dwarfs representation error
+  (1e-16), and catastrophic cancellation happens in `Decimal` too. The real
+  axis is exact vs approximate, not money vs the rest. Where the two meet
+  (a float price becoming a `Decimal` ledger entry), the conversion is an
+  explicit rounding decision, never a bare cast.
 - Initialise `Decimal` from **strings**, not floats: `Decimal("0.1")` not
   `Decimal(0.1)` — constructing from a float inherits the float's imprecision.
 - **Prefer truncation (`ROUND_DOWN`) over rounding up or down** when discarding

@@ -78,6 +78,14 @@ teardown. Never trust printed output alone for a git write:
 - Use the language-native decimal library instead: `Decimal` (Python),
   `decimal.js`/`big.js` (JS/TS), `BigDecimal` (Java/Kotlin),
   `shopspring/decimal` (Go), `rust_decimal` (Rust).
+- Exception, numerical analysis: when the value approximates an irrational
+  (`erf`, `exp`, quadrature, ODE solutions, optimisation), use `float`.
+  `Decimal` only gives more digits of an approximation that stays
+  approximate; method truncation (1e-7 to 1e-9) dwarfs representation error
+  (1e-16), and catastrophic cancellation happens in `Decimal` too. The real
+  axis is exact vs approximate, not money vs the rest. Where the two meet
+  (a float price becoming a `Decimal` ledger entry), the conversion is an
+  explicit rounding decision, never a bare cast.
 - Initialise from strings, not floats — `Decimal("0.1")`, never
   `Decimal(0.1)` — constructing from a float inherits the float's
   imprecision.
