@@ -62,6 +62,21 @@ classify_worktree_diff() {
 	printf 'interrupted\t%s\t%s\n' "$ins" "$del"
 }
 
+# Phantom dirty index (dotfiles-linux-dev#1080): another worktree advanced this branch, so the
+# index stayed put and shows staged "M" files that are only the reverse of newer commits.
+# Deterministic test: the index tree equals the tree of a commit in `git log HEAD`, and the
+# working files match the index (nothing unstaged, nothing untracked). Prints that commit's
+# short sha, or nothing. The log is capped — this hook must stay fast; past the cap it fails
+# toward reporting.
+stale_index_commit() {
+	local path="$1" tree
+	tree="$(git -C "$path" write-tree 2>/dev/null)" || return 1
+	git -C "$path" diff --quiet 2>/dev/null || return 1
+	[ -z "$(git -C "$path" ls-files --others --exclude-standard 2>/dev/null)" ] || return 1
+	git -C "$path" log HEAD -n 200 --format='%T %h' 2>/dev/null \
+		| awk -v t="$tree" '$1==t{print $2; found=1; exit} END{exit !found}'
+}
+
 # owner/repo parsed from the origin remote URL, no network call. Empty when there is no
 # GitHub origin (a non-GitHub repo skips the whole GitHub half, silently).
 fanout_repo_slug() {
@@ -235,12 +250,19 @@ fanout_worktrees() {
 				fi
 
 				if [ "$uncommitted" -gt 0 ]; then
-					local verdict ins del anon_note=""
-					IFS=$'\t' read -r verdict ins del <<<"$(classify_worktree_diff "$path" "$default_branch")"
+					local verdict ins del anon_note="" stale_sha
 					case "$branch" in
 					worktree-agent-*) anon_note=" [anonymous branch, no issue reference]" ;;
 					esac
-					if [ "$verdict" = "stale" ]; then
+					if stale_sha="$(stale_index_commit "$path")"; then
+						verdict="stale-index"
+					else
+						IFS=$'\t' read -r verdict ins del <<<"$(classify_worktree_diff "$path" "$default_branch")"
+					fi
+					if [ "$verdict" = "stale-index" ]; then
+						printf '[fan-out] worktree %s: %s uncommitted file(s) — stale-index (== %s), stale revert, do NOT rescue%s\n' \
+							"$name" "$uncommitted" "$stale_sha" "$anon_note"
+					elif [ "$verdict" = "stale" ]; then
 						printf '[fan-out] worktree %s: %s uncommitted file(s) — stale revert, do NOT rescue (+%s/-%s already on origin)%s\n' \
 							"$name" "$uncommitted" "$ins" "$del" "$anon_note"
 					else

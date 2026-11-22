@@ -238,3 +238,39 @@ make_unattached_commit() {
     [ "$status" -eq 0 ]
     [[ "$output" != *"branch noup2"* ]]
 }
+
+# --- dotfiles-linux-dev#1080 gap 2: phantom dirty index ---
+
+# Worktree wtS sits on branch stale1 at commit S1; a second (throwaway) worktree then
+# advances the same branch to S2, so wtS keeps an index that is the reverse of S2.
+advance_branch_elsewhere() {
+    local branch="$1" other="$BATS_TEST_TMPDIR/other-$1"
+    git -C "$work" worktree add --quiet --detach "$other" "$branch"
+    echo newer >"$other/newer.txt"
+    git -C "$other" add newer.txt
+    git -C "$other" commit --quiet -m 'feat: newer commit'
+    git -C "$work" update-ref "refs/heads/$branch" "$(git -C "$other" rev-parse HEAD)"
+    git -C "$work" worktree remove --force "$other"
+}
+
+@test "index equal to an ancestor commit's tree is a stale-index, not interrupted work" {
+    wtS="$BATS_TEST_TMPDIR/wtS"
+    git -C "$work" worktree add --quiet -b stale1 "$wtS" master
+    s1="$(git -C "$wtS" rev-parse --short HEAD)"
+    advance_branch_elsewhere stale1
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtS: 1 uncommitted file(s) — stale-index (== $s1)"* ]]
+    [[ "$output" != *"INTERRUPTED WORK"* ]]
+}
+
+@test "genuine staged work is not mistaken for a stale-index" {
+    wtS="$BATS_TEST_TMPDIR/wtS"
+    git -C "$work" worktree add --quiet -b stale2 "$wtS" master
+    echo real >"$wtS/real.txt"
+    git -C "$wtS" add real.txt
+    run fanout_worktrees "$work" 0 '[]'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"worktree wtS: 1 uncommitted file(s) — INTERRUPTED WORK"* ]]
+    [[ "$output" != *"stale-index"* ]]
+}
