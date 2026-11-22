@@ -359,3 +359,30 @@ lesson() {
 	[ "$status" -ne 0 ]
 	[[ "$output" == *"blueprintx-lessons"* ]]
 }
+
+# --- dotfiles-linux-dev#1090: the mirror lands at the repo root, never under the cwd ---------
+
+@test "run from a subdirectory, the mirror is written at the repo root, not under the subdirectory" {
+	GITREPO="$TEST_TMP/myrepo"
+	mkdir -p "$GITREPO/sub/deep"
+	git -C "$GITREPO" init -q
+	git -C "$GITREPO" remote add origin git@github.com:o/myrepo.git
+	lesson "$BX_STORE" "matches-repo" "myrepo"
+	cd "$GITREPO/sub/deep"
+	run bash "$GEN"
+	[ "$status" -eq 0 ]
+	[ -f "$GITREPO/.specs/_lessons/blueprintx-lessons.md" ]
+	[ ! -e "$GITREPO/sub/deep/.specs" ]
+}
+
+@test "an explicit subdirectory argument also resolves to the repo root" {
+	GITREPO="$TEST_TMP/myrepo"
+	mkdir -p "$GITREPO/sub"
+	git -C "$GITREPO" init -q
+	git -C "$GITREPO" remote add origin git@github.com:o/myrepo.git
+	lesson "$BX_STORE" "matches-repo" "myrepo"
+	run bash "$GEN" "$GITREPO/sub"
+	[ "$status" -eq 0 ]
+	[ -f "$GITREPO/.specs/_lessons/blueprintx-lessons.md" ]
+	[ ! -e "$GITREPO/sub/.specs" ]
+}
