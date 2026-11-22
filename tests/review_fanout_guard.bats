@@ -1056,6 +1056,19 @@ STUB
     [[ "$output" == *"UNREADABLE"* ]]
 }
 
+@test "a plan with rung.status unknown is used but not cached (#1084)" {
+    loop_invoked
+    printf '%s\n' '{"rung":{"status":"unknown","reason":"probe timed out"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    [ -z "$(ls -A "$REVIEW_FANOUT_CACHE_DIR" 2>/dev/null)" ]
+    # The probe recovers: the second Stop re-plans and must not replay the blind verdict.
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+}
+
 @test "UNKNOWN then DIRTY on the same head: the second run excludes the PR (#1019)" {
     loop_invoked
     # Run 1: #530 reads UNKNOWN, so the planner still dispatches it and marks the plan.
