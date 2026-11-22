@@ -386,3 +386,14 @@ lesson() {
 	[ -f "$GITREPO/.specs/_lessons/blueprintx-lessons.md" ]
 	[ ! -e "$GITREPO/sub/.specs" ]
 }
+
+@test "with no origin remote, a subdirectory run still names the repo root's basename" {
+	GITREPO="$TEST_TMP/myrepo"
+	mkdir -p "$GITREPO/sub/deep"
+	git -C "$GITREPO" init -q
+	lesson "$BX_STORE" "matches-repo" "myrepo"
+	cd "$GITREPO/sub/deep"
+	run bash "$GEN"
+	[ "$status" -eq 0 ]
+	grep -qF "matches-repo.md" "$GITREPO/.specs/_lessons/blueprintx-lessons.md"
+}
