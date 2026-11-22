@@ -91,12 +91,26 @@ teardown. Never trust printed output alone for a git write:
 
 ## Numeric Precision
 
-- Never use `float` for values where precision matters (money,
-  measurements, aggregations, comparisons) — IEEE 754 binary floats cannot
-  represent most decimal fractions exactly, and errors accumulate silently.
+- Never use binary floating point (`float` in Python, `double`/`f64`/
+  `float64` elsewhere) for exact decimal-domain values: money, counted
+  quantities, accounting aggregates, and comparisons/equality on those.
+  IEEE 754 binary floats cannot represent most decimal fractions exactly,
+  and errors accumulate silently.
 - Use the language-native decimal library instead: `Decimal` (Python),
   `decimal.js`/`big.js` (JS/TS), `BigDecimal` (Java/Kotlin),
   `shopspring/decimal` (Go), `rust_decimal` (Rust).
+- Exception, numerical analysis: when the value is the output of an
+  approximating method (series, quadrature, ODE solver, optimiser, special
+  functions like `erf`/`exp`), use binary64 floating point. `Decimal` only
+  gives more digits of an approximation that stays approximate; method
+  error typically far exceeds binary64's ~1e-16 relative rounding error
+  (high-order methods can approach it, and then representation error
+  matters again), and catastrophic cancellation happens in `Decimal` too.
+  The real axis is exact vs approximate, not money vs the rest. Where the
+  two meet (a float price becoming a `Decimal` ledger entry), convert
+  explicitly, choosing places and rounding mode, e.g.
+  `Decimal(str(x)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)`, never a
+  bare `Decimal(x)` cast.
 - Initialise from strings, not floats — `Decimal("0.1")`, never
   `Decimal(0.1)` — constructing from a float inherits the float's
   imprecision.
@@ -107,5 +121,4 @@ teardown. Never trust printed output alone for a git write:
   it (tax, regulatory reporting).
 - Ask for the required precision before writing `Decimal` code instead of
   hardcoding a default: money/prices → 2 places, exchange rates/
-  percentages → 4 places, quantities/weights → 3 places, scientific
-  measurements → 10 places.
+  percentages → 4 places, quantities/weights → 3 places.

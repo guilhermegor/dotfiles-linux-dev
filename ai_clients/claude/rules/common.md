@@ -315,9 +315,11 @@ The failure mode each rule guards against, not the full reasoning:
 
 ## Numeric Precision
 
-- **Never use `float` for values where precision matters** (money, measurements,
-  aggregations, comparisons). IEEE 754 binary floats cannot represent most decimal
-  fractions exactly — errors accumulate silently.
+- **Never use binary floating point** (`float` in Python, `double`/`f64`/
+  `float64` elsewhere) **for exact decimal-domain values**: money, counted
+  quantities, accounting aggregates, and comparisons/equality on those.
+  IEEE 754 binary floats cannot represent most decimal fractions exactly —
+  errors accumulate silently.
 - **Use the language-native decimal library instead:**
   - Python → `from decimal import Decimal`
   - JavaScript/TypeScript → [`decimal.js`](https://github.com/MikeMcl/decimal.js)
@@ -325,6 +327,18 @@ The failure mode each rule guards against, not the full reasoning:
   - Java/Kotlin → `java.math.BigDecimal`
   - Go → `github.com/shopspring/decimal`
   - Rust → `rust_decimal` crate
+- **Exception, numerical analysis:** when the value is the output of an
+  approximating method (series, quadrature, ODE solver, optimiser, special
+  functions like `erf`/`exp`), use binary64 floating point. `Decimal` only
+  gives more digits of an approximation that stays approximate; method
+  error typically far exceeds binary64's ~1e-16 relative rounding error
+  (high-order methods can approach it, and then representation error
+  matters again), and catastrophic cancellation happens in `Decimal` too.
+  The real axis is exact vs approximate, not money vs the rest. Where the
+  two meet (a float price becoming a `Decimal` ledger entry), convert
+  explicitly, choosing places and rounding mode, e.g.
+  `Decimal(str(x)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)`, never a
+  bare `Decimal(x)` cast.
 - Initialise `Decimal` from **strings**, not floats: `Decimal("0.1")` not
   `Decimal(0.1)` — constructing from a float inherits the float's imprecision.
 - **Prefer truncation (`ROUND_DOWN`) over rounding up or down** when discarding
@@ -339,7 +353,6 @@ The failure mode each rule guards against, not the full reasoning:
   - Exchange rates / unit prices → suggest 4 decimal places (`0.0001`)
   - Percentages / ratios → suggest 4 decimal places (`0.0001`)
   - Quantities / weights → suggest 3 decimal places (`0.001`)
-  - Scientific measurements → suggest 10 decimal places (`0.0000000001`)
 
   Example prompt to the developer:
   > "I'll use `Decimal` with **2 decimal places, truncation** for `price`.
