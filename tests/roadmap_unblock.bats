@@ -1481,7 +1481,7 @@ run_board_cfg() {
         gh() {
             case \"\$1 \$2\" in
             'project list') echo '{\"projects\":[{\"number\":24,\"id\":\"PVT_24\",\"title\":\"Roadmap\"},{\"number\":5,\"id\":\"PVT_5\",\"title\":\"widget kanban\"}]}' ;;
-            'api graphql') echo '{\"data\":{\"repositoryOwner\":{\"projectV2\":{\"fields\":{\"nodes\":[{\"name\":\"Status\",\"id\":\"F_1\",\"options\":[{\"name\":\"Ready\",\"id\":\"O_READY\"}]}]}}}}}' ;;   # fields(first:30) read, #1089
+            'api graphql') [[ \"\$*\" == *'fields(first:30)'* ]] || return 1; echo '{\"data\":{\"repositoryOwner\":{\"projectV2\":{\"fields\":{\"nodes\":[{\"name\":\"Status\",\"id\":\"F_1\",\"options\":[{\"name\":\"Ready\",\"id\":\"O_READY\"}]}]}}}}}' ;;   # fields(first:30) read, #1089
             *) return 1 ;;
             esac
         }

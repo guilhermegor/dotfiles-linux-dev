@@ -224,7 +224,7 @@ case "\$1 \$2" in
                 [ -f "$TEST_TMP/throttled" ] && echo 'gh: API rate limit exceeded (RATE_LIMIT)' >&2
                 exit 1
             else
-                jq -c '{data:{repositoryOwner:{projectV2:{fields:{nodes:.fields}}}}}' "$TEST_TMP/fields.json"
+                jq -c '{data:{repositoryOwner:{projectV2:{fields:{pageInfo:{hasNextPage:(.hasNext // false)},nodes:.fields}}}}}' "$TEST_TMP/fields.json"
             fi
         else
             exit 1
@@ -456,7 +456,28 @@ run_reconcile() {
     [[ "$output" != *"items(first"* ]]
 }
 
-@test "Status column read: field-list fails but GraphQL is healthy, falls back and succeeds" {
+@test "board fields: more than 30 fields is UNKNOWN, never read as no Status field (#1089)" {
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    jq '.hasNext = true' "$TEST_TMP/fields.json" > "$TEST_TMP/f.json" && mv "$TEST_TMP/f.json" "$TEST_TMP/fields.json"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=unknown"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "board fields: the read is logged as 1 point, not 0 (#1089)" {
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_fake_gh
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    run_reconcile
+    [ -n "$(awk '$3 == 1' "$TEST_TMP/spend.tsv")" ]
+}
+
+@test "Status column read: a healthy fields read succeeds (stubbed names, #567)" {
     write_board_cache
     write_prs 10
     write_closing 10 "42:OPEN"
@@ -469,7 +490,7 @@ run_reconcile() {
     [[ "$output" == *"moved issue #42 to In review"* ]]
 }
 
-@test "Status column read: field-list fails, GraphQL fallback also fails: UNKNOWN board unreadable" {
+@test "Status column read: the fields read fails: UNKNOWN board unreadable" {
     write_board_cache
     write_prs 10
     write_items "$(item ITEM_42 Backlog 42)"
@@ -483,7 +504,7 @@ run_reconcile() {
     refute_gh 'item-edit'
 }
 
-@test "Status column read: field-list fails, GraphQL confirms a throttle: UNKNOWN throttled" {
+@test "Status column read: the fields read is refused with a rate limit: UNKNOWN throttled" {
     write_board_cache
     write_prs 10
     write_items "$(item ITEM_42 Backlog 42)"

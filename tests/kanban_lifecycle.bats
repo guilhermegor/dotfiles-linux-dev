@@ -627,8 +627,6 @@ run_hook_resp() {
     run run_hook "gh pr create --title x"
     [ "$status" -eq 0 ]
     [[ "$output" == *"moved issue"* ]]
-    run "$FAKE_BIN/gh" project field-list 1 --owner o --format json
-    [ "$status" -ne 0 ]
 }
 
 @test "gh project list returning unparseable JSON warns instead of reading as no board" {
