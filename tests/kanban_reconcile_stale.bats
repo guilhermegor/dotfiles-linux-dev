@@ -83,7 +83,9 @@ write_fake_gh() {
 echo "\$*" >> "$GH_LOG"
 case "\$1 \$2" in
     "project list") echo '{"projects":[{"title":"repo kanban","number":1,"id":"PVT_1"}]}' ;;
-    "project field-list") cat "$TEST_TMP/fields.json" ;;
+    "api graphql") # the only board-fields read (#1089); the porcelain field-list is not stubbed
+        [[ "\$*" == *"fields(first:100)"* ]] || exit 1
+        jq -c '{data:{repositoryOwner:{projectV2:{fields:{nodes:.fields}}}}}' "$TEST_TMP/fields.json" ;;
     "project item-list") cat "$TEST_TMP/items.json" ;;
     "project item-edit") [ -f "$TEST_TMP/fail-item-edit" ] && exit 1; echo ok ;;
     *)
@@ -323,8 +325,9 @@ run_reconcile() {
 #!/bin/bash
 case "\$1 \$2" in
     "project list") echo '{"projects":[{"title":"repo kanban","number":1,"id":"PVT_1"}]}' ;;
-    "project field-list") cat "$TEST_TMP/fields.json" ;;
-    "api graphql") echo "API rate limit already exceeded" >&2; exit 1 ;;
+    "api graphql")
+        [[ "\$*" == *"fields(first:100)"* ]] && { jq -c '{data:{repositoryOwner:{projectV2:{fields:{nodes:.fields}}}}}' "$TEST_TMP/fields.json"; exit 0; }
+        echo "API rate limit already exceeded" >&2; exit 1 ;;
     *) exit 1 ;;
 esac
 EOF
@@ -341,7 +344,10 @@ EOF
     [[ "$output" == *"STATUS=unknown"* ]]
     [[ "$output" == *"hit the 500 cap"* ]]
     [[ "$output" != *"throttled"* ]]
-    refute_gh 'graphql'
+    # no graphql call other than the board-fields read (so no throttle probe of any spelling)
+    grep -q 'fields(first:100)' "$GH_LOG" # the log is populated, so the check below is not vacuous
+    run bash -c "grep 'graphql' '$GH_LOG' | grep -v 'fields(first:100)'"
+    [ "$status" -ne 0 ]
 }
 
 @test "a failed move is reported, not claimed" {

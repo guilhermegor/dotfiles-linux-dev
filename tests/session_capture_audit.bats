@@ -643,3 +643,22 @@ merged_and_deleted() {
 	run_report ""
 	[[ "$output" == *"repair steps in $CLAUDE_CONFIG_DIR/session-audit/ai-state-sync.md"* ]]
 }
+
+# --- dotfiles-linux-dev#1090: a subdirectory cwd looks for the mirror at the repo root --------
+
+@test "check_mirrors run from a subdirectory finds the mirror at the repo root" {
+	OTHER_REPO="$TEST_TMP/filings-cvm"
+	mkdir -p "$OTHER_REPO/.specs/_lessons" "$OTHER_REPO/sub"
+	git -C "$OTHER_REPO" init -q
+	git -C "$OTHER_REPO" remote add origin https://github.com/guilhermegor/filings-cvm.git
+
+	printf '# origin-lesson\n\n- **Tier:** language-common\n- **Origin:** filings-cvm\n' \
+		>"$STORE/origin-lesson.md"
+	printf -- '- origin-lesson.md\n' >>"$STORE/README.md"
+	printf 'Ported over: origin-lesson.md\n' >"$OTHER_REPO/.specs/_lessons/claude-toolchain-lessons.md"
+
+	run bash -c "cd '$OTHER_REPO/sub' && PATH='$TEST_TMP/bin:$PATH' GH_ISSUES='' \
+		GH_ARGV_LOG='$TEST_TMP/gh_argv' bash '$HOOK' </dev/null"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"originated here"* ]]
+}

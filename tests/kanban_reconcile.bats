@@ -170,10 +170,6 @@ case "\$1 \$2" in
     "project list")
         echo '{"projects":[{"title":"repo kanban","number":1,"id":"PVT_1"}]}'
         ;;
-    "project field-list")
-        [ -f "$TEST_TMP/fail-field-list" ] && exit 1
-        cat "$TEST_TMP/fields.json"
-        ;;
     "pr list")
         [ -f "$TEST_TMP/fail-pr-list" ] && exit 1
         cat "$TEST_TMP/prs.txt" 2>/dev/null
@@ -218,11 +214,18 @@ case "\$1 \$2" in
             if [ "\$(cat "\$f")" = "REFUSED" ]; then echo 'GraphQL: API rate limit already exceeded for user ID 1' >&2; exit 1; fi
             cat "\$f"
         elif printf '%s' "\$full" | grep -q 'fields(first'; then
+            # the only board-fields read (#1089); the porcelain field-list is deliberately not stubbed
             f="$TEST_TMP/status-fallback.json"
-            [ -f "\$f" ] || exit 1
-            [ "\$(cat "\$f")" = "FAIL" ] && exit 1
-            if [ "\$(cat "\$f")" = "REFUSED" ]; then echo 'GraphQL: API rate limit already exceeded for user ID 1' >&2; exit 1; fi
-            cat "\$f"
+            if [ -f "\$f" ]; then
+                [ "\$(cat "\$f")" = "FAIL" ] && exit 1
+                if [ "\$(cat "\$f")" = "REFUSED" ]; then echo 'GraphQL: API rate limit already exceeded for user ID 1' >&2; exit 1; fi
+                cat "\$f"
+            elif [ -f "$TEST_TMP/fail-field-list" ]; then
+                [ -f "$TEST_TMP/throttled" ] && echo 'gh: API rate limit exceeded (RATE_LIMIT)' >&2
+                exit 1
+            else
+                jq -c '{data:{repositoryOwner:{projectV2:{fields:{pageInfo:{hasNextPage:(.hasNext // false)},nodes:.fields}}}}}' "$TEST_TMP/fields.json"
+            fi
         else
             exit 1
         fi
@@ -421,7 +424,7 @@ run_reconcile() {
     [[ "$output" == *"moved issue #42 to In review after a board-cache refresh"* ]]
     [[ "$output" != *"FAILED to move issue #42"* ]]
     # The refresh is real: the board was re-discovered rather than re-read from the stale cache.
-    run grep -c 'project field-list' "$GH_LOG"
+    run grep -c 'fields(first:100)' "$GH_LOG"
     [ "$output" -ge 2 ]
 }
 
@@ -437,7 +440,47 @@ run_reconcile() {
 
 # --- dotfiles-linux-dev#567: gh project throttle vs a genuinely unreadable board ------------------------
 
-@test "Status column read: field-list fails but GraphQL is healthy, falls back and succeeds" {
+# #1089: `gh project field-list` also requests items(first:100) and bills 101 GraphQL points.
+# The board fields must come from one minimal fields(first:100) query; the fake gh does not stub
+# the porcelain command at all, so a revert fails the move below as well as these greps.
+@test "board fields: read with fields(first:100) only, never project field-list or items (#1089)" {
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"moved issue #42 to In review"* ]]
+    grep -q 'api graphql.*fields(first:100)' "$GH_LOG"
+    refute_gh 'project field-list'
+    run grep 'fields(first:100)' "$GH_LOG"
+    [[ "$output" != *"items(first"* ]]
+}
+
+@test "board fields: more than 100 fields is UNKNOWN, never read as no Status field (#1089)" {
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    jq '.hasNext = true' "$TEST_TMP/fields.json" > "$TEST_TMP/f.json" && mv "$TEST_TMP/f.json" "$TEST_TMP/fields.json"
+    write_fake_gh
+    run_reconcile
+    [[ "$output" == *"STATUS=unknown"* ]]
+    refute_gh 'item-edit'
+}
+
+@test "board fields: the read is logged as 1 point, not 0 (#1089)" {
+    write_prs 10
+    write_closing 10 "42:OPEN"
+    write_items "$(item ITEM_42 Backlog 42)"
+    write_fake_gh
+    export GH_BUDGET_SPEND_LOG="$TEST_TMP/spend.tsv"
+    run_reconcile
+    # one 1-point spend line per fields read, so a 0-point log cannot satisfy it
+    calls="$(grep -c 'fields(first:100)' "$GH_LOG")"
+    [ "$calls" -ge 1 ]
+    [ "$(awk '$3 == 1' "$TEST_TMP/spend.tsv" | wc -l)" -ge "$calls" ]
+}
+
+@test "Status column read: a healthy fields read succeeds (stubbed names, #567)" {
     write_board_cache
     write_prs 10
     write_closing 10 "42:OPEN"
@@ -450,7 +493,7 @@ run_reconcile() {
     [[ "$output" == *"moved issue #42 to In review"* ]]
 }
 
-@test "Status column read: field-list fails, GraphQL fallback also fails: UNKNOWN board unreadable" {
+@test "Status column read: the fields read fails: UNKNOWN board unreadable" {
     write_board_cache
     write_prs 10
     write_items "$(item ITEM_42 Backlog 42)"
@@ -464,7 +507,7 @@ run_reconcile() {
     refute_gh 'item-edit'
 }
 
-@test "Status column read: field-list fails, GraphQL confirms a throttle: UNKNOWN throttled" {
+@test "Status column read: the fields read is refused with a rate limit: UNKNOWN throttled" {
     write_board_cache
     write_prs 10
     write_items "$(item ITEM_42 Backlog 42)"

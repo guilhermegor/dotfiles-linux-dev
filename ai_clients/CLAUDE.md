@@ -375,13 +375,17 @@ check-and-append under `flock` to `$(git rev-parse --git-common-dir)/dispatch-cl
 (shared by every worktree, never tracked) and prints `CLAIMED` / `HELD:<holder>:<path>` /
 `UNKNOWN`. Three points that are **not** obvious from the file:
 
-1. **Zero API calls, by contract.** Measured 2026-09-17: 8 agents in one batch
+1. **No API call on the normal path, by contract.** Measured 2026-09-17: 8 agents in one batch
    each ran `gate_free_surface` inside their own claim step (33 branches, one
    compare call each) and the shared 5000/h quota hit 0 within seconds, twice —
    every claim then failed closed, correctly, and the wave stalled. So the
    orchestrator calls `refresh_pr_held_paths <owner> <repo>` **once per round**,
    writing `pr-held-paths.tsv` beside the registry, and `claim_files` reads only
-   that file plus the registry.
+   that file plus the registry. The one exception (#1091): a path the cache
+   nominates as open-PR-held is confirmed against the open PRs over REST (1 + N
+   reads) before it is refused, since the cache is stale between refreshes; an
+   unreadable read is `UNKNOWN`. Only OPEN PRs block — a pushed branch with no PR
+   is covered by local claims and `elsewhere` files, not by this read.
 2. **The lock is a separate `.lock` file, never the registry.** A writer replaces
    the registry by `mv` (the only atomic rewrite), so locking the registry itself
    lets the next claimer lock the *new* inode while the holder still holds the old
