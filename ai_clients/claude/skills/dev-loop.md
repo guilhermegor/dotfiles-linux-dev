@@ -935,18 +935,21 @@ Runs **before** any reviewer rung is spent. The planner's `merge_ready` list (se
 #646) names PRs whose review gate is green on the current head (reviewed or carried forward), with
 every check green, blocked only on being `BEHIND`. Take them in this order:
 
-1. **Update only the head of the merge queue** (`update-branch`), the first `merge_ready` PR. No
-   reviewer, no rung. `merge_ready` exists only in serial-drain (strict up-to-date) mode, where
-   every merge puts the others behind again, so updating them all in parallel fires the whole CI
-   matrix once per PR for updates the next merge discards (dotfiles-linux-dev#1082). Update the
-   next PR when the previous one merges (step 4). Count queued runs
-   (`gh api "repos/<o>/<r>/actions/runs?status=queued&per_page=1" --jq .total_count`) and put it
-   in the round report next to the in-progress count, so CI saturation shows as the bottleneck.
+1. **Update only the head of the merge queue** (`update-branch`): the lowest-numbered
+   `merge_ready` PR (the planner sorts the list by PR number). No reviewer, no rung. `merge_ready`
+   exists only in serial-drain (strict up-to-date) mode, where every merge puts the others behind
+   again, so updating them all in parallel fires the whole CI matrix once per PR for updates the
+   next merge discards (dotfiles-linux-dev#1082). Advance to the next `merge_ready` PR whenever
+   the head leaves the queue for any reason: it merged, its CI went red, step 3 sent it back to
+   review, or it was closed. A head that stalls must not stall the queue. Count queued runs
+   (`rtk gh api "repos/<o>/<r>/actions/runs?status=queued&per_page=1" --jq .total_count`) and put
+   it in the round report next to the in-progress count, so CI saturation shows as the
+   bottleneck. It is a lower bound: runs held by a concurrency group are not `queued`.
 2. **Wait for CI, then read the repo's own review gate on the new head.** Never re-derive coverage.
 3. **Re-review only the PRs whose gate now reports the review superseded** (a conflict resolution
    or new code changed the PR's own patch) — they re-enter the planner as ordinary `dispatchable`.
-4. **Merge one at a time, pinned to the head SHA, as each turns green.** Every merge puts the rest
-   behind again, so repeat step 1 for the next in line.
+4. **Merge one at a time, pinned to the head SHA, as each turns green.** Then repeat step 1 for
+   the new queue head; if it is already up to date, go straight to step 2.
 
 ⚠️ **Depends on the gate carrying reviews forward** (blueprintx#698/#699: a review survives while the
 PR's own patch fingerprint is unchanged). Without it every update costs a full review of unchanged
