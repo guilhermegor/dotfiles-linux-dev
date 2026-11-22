@@ -1073,6 +1073,22 @@ STUB
     printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
     REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
     [ "$status" -eq 0 ]
+    [ "$(ls "$REVIEW_FANOUT_CACHE_DIR"/*.json 2>/dev/null | wc -l)" -eq 1 ]
+}
+
+@test "a refresh whose plan has rung.status ok is cached (#1084 control)" {
+    loop_invoked
+    cat >"$REVIEW_FANOUT_PLANNER" <<'STUB'
+import time
+
+time.sleep(2)
+print('{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}')
+STUB
+    local lock
+    lock="$(refresh_lock)"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 REVIEW_FANOUT_PLANNER_TIMEOUT=1 REVIEW_FANOUT_REFRESH_TIMEOUT=30 run_guard
+    wait_refresh_done "$lock"
+    [ "$(ls "$REVIEW_FANOUT_CACHE_DIR"/*.json 2>/dev/null | wc -l)" -eq 1 ]
 }
 
 @test "a refresh whose plan has rung.status unknown is not cached (#1084)" {
