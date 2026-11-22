@@ -934,6 +934,14 @@ can and returns, rather than holding the session on one PR.
 19 unreviewed PRs through the primary rung alone is ~15 hours of pure waiting. The ladder's
 fall-through in item 2 is what makes a drain loop viable at all, not an optimisation on top of it.
 
+⚠️ **"At most one queue" is `flock -n <lockfile> <queue command>` (or a pidfile test), never an
+inline `pgrep -f PATTERN && echo RUNNING || start X`.** The guard's own shell command line holds the
+pattern and `X ARGS`, so `pgrep` matches itself; a bracket trick (`1[01]`) stops only the literal
+half. Measured twice on blueprintx, 2026-11-11: a chain wrapper hung forever waiting on itself, and
+a guard printed `RUNNING` and launched nothing, leaving 5 PRs unreviewed until someone read the
+output. If a `pgrep` check is unavoidable, run it in its own Bash call, never chained to the start
+(lesson `pgrep-guard-matches-its-own-command-line`, dotfiles-linux-dev#1083).
+
 🔴 **Blocked on, and not silently worked around:**
 - **dotfiles-linux-dev#473** — a false `FREE` classification from `slot_classify.py` would spend the ask
   into a rate-limited wall instead of falling through to the ladder, the exact failure this step
