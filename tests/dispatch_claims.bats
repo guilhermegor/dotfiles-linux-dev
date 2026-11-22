@@ -238,6 +238,7 @@ open_pr_holds() {
     pr_stub
     printf 'open-pr\t%s\n' "x/y.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
     run claim_files 405 "a/b.sh"
+    [ "$status" -eq 0 ]
     [ "$output" = "CLAIMED" ]
     [ ! -e "$PRSTUB/gh-calls" ]
 }
@@ -699,4 +700,14 @@ SH
     [[ "$output" == "HELD:elsewhere#92:src/held.sh" ]]
     run claim_files 5 "src/free.sh"
     [ "$output" = "CLAIMED" ]
+}
+
+@test "a malformed DISPATCH_PR_REPO is UNKNOWN, never put in an API path (#1102)" {
+    pr_stub
+    export DISPATCH_PR_REPO='o/r/../../x'
+    printf 'open-pr\t%s\n' "a/b.sh" >"$TEST_TMP/.git/pr-held-paths.tsv"
+    run claim_files 405 "a/b.sh"
+    [ "$status" -ne 0 ]
+    [ "$output" = "UNKNOWN" ]
+    [ ! -e "$PRSTUB/gh-calls" ]
 }

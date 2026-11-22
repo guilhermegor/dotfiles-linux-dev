@@ -307,11 +307,11 @@ _dispatch_cache_holds() {
 _dispatch_pr_slug() {
 	local url slug
 	if [ -n "${DISPATCH_PR_REPO:-}" ]; then
-		printf '%s\n' "$DISPATCH_PR_REPO"
-		return 0
+		slug="$DISPATCH_PR_REPO"
+	else
+		url="$($DISPATCH_CLAIMS_GIT remote get-url origin 2>/dev/null)" || return 1
+		slug="$(sed -E 's#\.git$##; s#^(git@github\.com:|(https?|ssh)://([^@/]+@)?github\.com[:/])##' <<<"$url")"
 	fi
-	url="$($DISPATCH_CLAIMS_GIT remote get-url origin 2>/dev/null)" || return 1
-	slug="$(sed -E 's#\.git$##; s#^(git@github\.com:|(https?|ssh)://([^@/]+@)?github\.com[:/])##' <<<"$url")"
 	[[ "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
 	printf '%s\n' "$slug"
 }
@@ -389,7 +389,10 @@ claim_files() {
 	# unreadable live read is UNKNOWN, never the cache's word.
 	local open_files="" nominated=0
 	for path in "$@"; do
-		_dispatch_cache_holds "$pr_held" "$path" && nominated=1
+		_dispatch_cache_holds "$pr_held" "$path" && {
+			nominated=1
+			break
+		}
 	done
 	if [ "$nominated" = 1 ]; then
 		slug="$(_dispatch_pr_slug)" && open_files="$(_dispatch_open_pr_files "$slug")" || {
