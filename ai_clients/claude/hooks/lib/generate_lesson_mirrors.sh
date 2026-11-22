@@ -9,7 +9,9 @@
 # `Origin: dotfiles-dev` lessons were missing from the hand-maintained mirror.
 # Regenerating removes that drift class instead of detecting it.
 #
-# Usage:  generate_lesson_mirrors.sh [repo-root]   (default: $PWD)
+# Usage:  generate_lesson_mirrors.sh [repo-root]   (default: $PWD; a path inside a work
+#         tree resolves to that work tree's root — a linked worktree or submodule gets
+#         its own root; a path outside any work tree, .git/ included, is kept as-is)
 #
 # For each store in LESSON_STORES (lib/lesson_mirrors.sh) that expects a mirror
 # in this repo (mirror_expected_for_repo() — same predicate session_capture_audit.sh's
@@ -168,6 +170,11 @@ main() {
 		printf 'Invalid repository root: %s\n' "${1:-$PWD}" >&2
 		return 1
 	}
+	# Normalise to the repo ROOT: run from a subdirectory, the mirror (and the repo
+	# identity's basename fallback) used to land under that subdirectory, outside the
+	# git-ignored root .specs/_lessons/ (dotfiles-linux-dev#1090). Outside any repo
+	# the given path (or $PWD) is kept as-is.
+	cwd="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$cwd")"
 
 	# repo="$(basename "$cwd")" alone made a DIRECTORY NAME production configuration
 	# (dotfiles-linux-dev#536) — prefer the `origin` remote, basename only as a fallback,

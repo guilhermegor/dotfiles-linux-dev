@@ -234,6 +234,9 @@ check_mirrors() {
 	# generate_lesson_mirrors.sh), not hand-typed — a gap here means "regenerate it",
 	# never "go hand-append an entry".
 	local cwd="$1" repo entry store mirror_base kind target_repo legacy_dir resolved mirror rel file name
+	# The generator writes the mirror at the repo ROOT (dotfiles-linux-dev#1090); a
+	# subdirectory cwd must look there too. Non-repo paths are kept as-is.
+	cwd="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$cwd")"
 	repo="$(resolve_repo_identity_only "$cwd")" || return 0
 	for entry in "${LESSON_STORES[@]}"; do
 		IFS='|' read -r store mirror_base kind target_repo legacy_dir <<<"$entry"
