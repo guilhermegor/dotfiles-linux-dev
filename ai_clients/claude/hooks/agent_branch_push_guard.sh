@@ -34,9 +34,20 @@ _open_pr_elsewhere() {
 	local cwd="$1" branch="$2" shas
 	command -v gh >/dev/null 2>&1 || return 1
 	shas="$($GIT -C "$cwd" rev-parse HEAD HEAD^ 2>/dev/null)" || return 1
-	(cd "$cwd" && GH_PROMPT_DISABLED=1 timeout 20 gh api 'repos/{owner}/{repo}/pulls?state=open&per_page=100' 2>/dev/null) \
+	(cd "$cwd" && GH_PROMPT_DISABLED=1 timeout 20 gh api --paginate --slurp 'repos/{owner}/{repo}/pulls?state=open&per_page=100' 2>/dev/null) \
 		| jq -r --arg b "$branch" --arg s "$shas" \
-			'[.[] | select(.head.ref != $b and (.head.sha as $h | ($s | split("\n") | index($h))))][0].head.ref // empty' 2>/dev/null
+			'[flatten[] | select(.head.ref != $b and (.head.sha as $h | ($s | split("\n") | index($h))))][0].head.ref // empty' 2>/dev/null
+}
+
+# _remote_default CWD REMOTE: print REMOTE's default branch, from the local origin/HEAD or else
+# the remote itself; prints nothing when neither can say (the caller then trusts no upstream).
+_remote_default() {
+	local cwd="$1" remote="$2" d
+
+	d="$($GIT -C "$cwd" symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null)"
+	[ -z "$d" ] || { printf '%s' "${d#"$remote"/}"; return 0; }
+	GIT_TERMINAL_PROMPT=0 timeout 10 $GIT -C "$cwd" ls-remote --symref "$remote" HEAD 2>/dev/null \
+		| awk '$1 == "ref:" { sub("refs/heads/", "", $2); print $2; exit }'
 }
 
 main() {
@@ -79,14 +90,14 @@ main() {
 
 	# A branch tracking a differently-named remote branch (a review worktree on a PR head)
 	# updates THAT branch; pushing by local name would open a side branch (#1074).
-	# The default branch is never a target: `worktree add -b x origin/main` tracks it.
+	# The default branch is never a target: `worktree add -b x origin/main` tracks it. An unknown
+# default means no upstream is trusted: pushing by local name cannot overwrite a branch.
 	remote="$($GIT -C "$cwd" config "branch.$branch.remote")" || remote=origin
 	up="$($GIT -C "$cwd" config "branch.$branch.merge")"
 	up="${up#refs/heads/}"
-	base="$($GIT -C "$cwd" symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null)"
-	base="${base#"$remote"/}"
+	base="$(_remote_default "$cwd" "$remote")"
 	args=(-u origin "$branch")
-	if [ -n "$up" ] && [ "$up" != "$branch" ] && [ "$up" != "${base:-main}" ] && [ "$up" != master ] && [ "$up" != main ]; then
+	if [ -n "$up" ] && [ "$up" != "$branch" ] && [ -n "$base" ] && [ "$up" != "$base" ] && [ "$up" != master ] && [ "$up" != main ]; then
 		args=("$remote" "HEAD:refs/heads/$up")
 	elif [ -z "$up" ] && head_ref="$(_open_pr_elsewhere "$cwd" "$branch")" && [ -n "$head_ref" ]; then
 		echo "agent_branch_push_guard: HEAD is the head of an open PR on '$head_ref'; not creating side branch $branch. Push explicitly: git push origin HEAD:$head_ref" >&2

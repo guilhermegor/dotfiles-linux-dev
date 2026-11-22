@@ -6,7 +6,7 @@
 setup() {
     HOOK="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/agent_branch_push_guard.sh"
     TEST_TMP="$(mktemp -d)"
-    git init -q --bare "$TEST_TMP/origin.git"
+    git init -q --bare -b main "$TEST_TMP/origin.git"
     git init -q -b main "$TEST_TMP/main"
     cd "$TEST_TMP/main" || return 1
     git config user.email t@t && git config user.name t
@@ -243,4 +243,36 @@ add_tracking_worktree() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"fix/pr-head-5"* ]]
     refute_remote fix/9-review
+}
+
+@test "the open-PR lookup reads every page, so a PR head on page 2 is found (#1074)" {
+    add_worktree fix/9-review
+    mkdir "$TEST_TMP/bin"
+    # Without --paginate --slurp the stub serves page 1 only (no match); with them, two pages.
+    cat >"$TEST_TMP/bin/gh" <<'STUB'
+#!/bin/bash
+case "$*" in
+    *--paginate*--slurp*)
+        printf '[[{"head":{"ref":"other","sha":"0"}}],[{"head":{"ref":"fix/pr-head-5","sha":"%s"}}]]' "$(git rev-parse HEAD^)" ;;
+    *) printf '[{"head":{"ref":"other","sha":"0"}}]' ;;
+esac
+STUB
+    chmod +x "$TEST_TMP/bin/gh"
+    PATH="$TEST_TMP/bin:$PATH" run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"fix/pr-head-5"* ]]
+    refute_remote fix/9-review
+}
+
+@test "an upstream equal to the remote default is never pushed when origin/HEAD is absent (#1074)" {
+    git -C "$TEST_TMP/origin.git" symbolic-ref HEAD refs/heads/develop
+    git -C "$TEST_TMP/main" push -q origin main:refs/heads/develop
+    git -C "$TEST_TMP/main" fetch -q origin
+    run git -C "$TEST_TMP/main" symbolic-ref -q refs/remotes/origin/HEAD
+    [ "$status" -ne 0 ]
+    add_tracking_worktree fix/9-thing origin/develop
+    run run_hook "$TEST_TMP/wt"
+    [ "$status" -eq 0 ]
+    remote_has fix/9-thing
+    [ "$(git -C "$TEST_TMP/origin.git" rev-parse develop)" != "$(git -C "$TEST_TMP/wt" rev-parse HEAD)" ]
 }
