@@ -9,6 +9,9 @@
 # "none" = unresolvable); REFS_<suite> = its referenced (reusable) workflows; JOBS_<suite> =
 # the run's job names (default build + the review gate); WF_CONTENT = a changed workflow's
 # content at the head (default: safe permissions); RUN_FAIL makes the actions/runs read fail.
+# Dependabot provenance (#1076): HEAD_REF_<n> (default dependabot/pip/x), HEAD_REPO_<n>
+# (default acme/widgets), COMMITS_<n> = raw "author<TAB>committer<TAB>verified" rows (default
+# one verified dependabot[bot] commit via web-flow), COMMITS_FAIL makes the commits read fail.
 
 setup() {
     SCRIPT="$BATS_TEST_DIRNAME/../ai_clients/claude/hooks/merge_green_pr.sh"
@@ -87,6 +90,11 @@ if [[ "$args" == *"/status"* ]]; then
     s="STATUS_$n"; [ -n "${!s:-}" ] && printf '%s\n' "${!s}"
     exit 0
 fi
+if [[ "$args" == *"/pulls/"*"/commits"* ]]; then
+    [ -n "${COMMITS_FAIL:-}" ] && exit 1
+    c="COMMITS_$(pr_of)"
+    printf '%b\n' "${!c:-dependabot[bot]\tweb-flow\ttrue}"; exit 0
+fi
 if [[ "$args" == *"/pulls/"* ]]; then
     n="$(pr_of)"
     s="STATE_$n"; s="${!s:-clean}"
@@ -94,7 +102,9 @@ if [[ "$args" == *"/pulls/"* ]]; then
     d="DRAFT_$n"; d="${!d:-false}"
     f="FILES_$n"; cf="$(printf '%s\n' "${!f:-x}" | grep -c .)"
     c="CHANGED_$n"; c="${!c:-$cf}"
-    printf 'sha%s\t%s\t%s\tmaster\t%s\t%s\n' "$n" "$s" "$d" "$a" "$c"
+    hr="HEAD_REF_$n"; hp="HEAD_REPO_$n"
+    printf 'sha%s\t%s\t%s\tmaster\t%s\t%s\t%s\t%s\tacme/widgets\n' "$n" "$s" "$d" "$a" "$c" \
+        "${!hr:-dependabot/pip/x}" "${!hp:-acme/widgets}"
     exit 0
 fi
 exit 1
@@ -512,11 +522,79 @@ refute_log() {
 }
 
 @test "refuses a PR authored by someone else" {
-    AUTHOR_8=dependabot run bash "$SCRIPT" 7 8
+    AUTHOR_8="renovate[bot]" run bash "$SCRIPT" 7 8
     [ "$status" -ne 0 ]
     [[ "$output" == *"#7 MERGED"* ]]
     [[ "$output" == *"#8 REFUSED: author"* ]]
     refute_log "pulls/8/merge"
+}
+
+@test "merges a green Dependabot PR touching only pyproject.toml and poetry.lock (#1076)" {
+    AUTHOR_7="dependabot[bot]" FILES_7=$'pyproject.toml\t\npoetry.lock\t' run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
+}
+
+@test "a Dependabot PR editing a required check's workflow is still refused by rule (2) (#1076)" {
+    AUTHOR_7="dependabot[bot]" FILES_7=$'.github/workflows/ci.yml\t' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"required check ["* ]]
+    refute_log "PUT"
+}
+
+@test "a plain 'dependabot' login is refused, and the message names both accepted authors (#1076)" {
+    AUTHOR_7=dependabot run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"#7 REFUSED: author 'dependabot' is not 'acme' or dependabot[bot]"* ]]
+    refute_log "PUT"
+}
+
+@test "the Dependabot login match is case-insensitive (#1076)" {
+    AUTHOR_7="Dependabot[bot]" run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
+}
+
+@test "a dependabot PR carrying a human-authored commit is refused (#1076)" {
+    COMMITS_7=$'dependabot[bot]\tweb-flow\ttrue\nmallory\tmallory\ttrue' AUTHOR_7="dependabot[bot]" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"#7 REFUSED: dependabot PR carries a commit"* ]]
+    refute_log "PUT"
+}
+
+@test "a dependabot PR with an unverified commit is refused (#1076)" {
+    COMMITS_7=$'dependabot[bot]\tmallory\tfalse' AUTHOR_7="dependabot[bot]" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"#7 REFUSED: dependabot PR carries a commit"* ]]
+    refute_log "PUT"
+}
+
+@test "a dependabot PR whose head ref is not dependabot/* is refused (#1076)" {
+    HEAD_REF_7="feature/x" AUTHOR_7="dependabot[bot]" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"#7 REFUSED: dependabot PR head ref"* ]]
+    refute_log "PUT"
+}
+
+@test "a dependabot PR from another repo is refused (#1076)" {
+    HEAD_REPO_7="mallory/widgets" AUTHOR_7="dependabot[bot]" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"#7 REFUSED: dependabot PR head repo"* ]]
+    refute_log "PUT"
+}
+
+@test "an unreadable commit list is UNKNOWN for a dependabot PR (#1076)" {
+    COMMITS_FAIL=1 AUTHOR_7="dependabot[bot]" run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"#7 UNKNOWN: cannot read the PR's commits"* ]]
+    refute_log "PUT"
+}
+
+@test "an owner PR never reads commits or needs a dependabot head ref (#1076)" {
+    HEAD_REF_7="feature/x" COMMITS_FAIL=1 run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
+    refute_log "pulls/7/commits"
 }
 
 @test "fails closed when the authenticated user cannot be read" {
