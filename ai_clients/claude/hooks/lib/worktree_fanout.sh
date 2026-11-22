@@ -102,9 +102,17 @@ classify_worktree_diff() {
 # working files match the index (nothing unstaged, nothing untracked). Prints that commit's
 # short sha, or nothing. The log is capped — this hook must stay fast; past the cap it fails
 # toward reporting.
+# `git write-tree` takes index.lock and rewrites the index (measured on git 2.43: held lock
+# fails it, mtime moves), and this hook runs while a live agent may be using the worktree —
+# so the tree is computed from a private COPY of the index, never the live one.
 stale_index_commit() {
-	local path="$1" tree
-	tree="$(git -C "$path" write-tree 2>/dev/null)" || return 1
+	local path="$1" tree idx
+	idx="$(mktemp -u)"
+	cp "$(git -C "$path" rev-parse --path-format=absolute --git-path index 2>/dev/null)" "$idx" 2>/dev/null \
+		|| return 1
+	tree="$(GIT_INDEX_FILE="$idx" git -C "$path" write-tree 2>/dev/null)"
+	rm -f "$idx"
+	[ -n "$tree" ] || return 1
 	git -C "$path" diff --quiet 2>/dev/null || return 1
 	[ -z "$(git -C "$path" ls-files --others --exclude-standard 2>/dev/null)" ] || return 1
 	git -C "$path" log HEAD -n 200 --format='%T %h' 2>/dev/null \
@@ -177,31 +185,42 @@ branch_content_shipped() {
 # Second pass (dotfiles-linux-dev#1080): local branches checked out in NO worktree. The
 # worktree walk never sees them, yet a killed agent's commits can sit on one (opendata-rfb:
 # local `main` held an unpushed scaffold commit while the walk printed dirty=0 unpushed=0).
-# `[ahead N]` comes from for-each-ref's upstream:track; a branch with no upstream and no
-# remote ref of its own gets the same cherry + content test as the worktree pass. Reported
-# only, never added to the RESUME list: there is no agent worktree to SendMessage to.
+# The count comes from the first oracle that applies: the branch's OWN remote ref
+# (origin/<b>..<b>, whatever its upstream is configured to — #457), else a live upstream's
+# `[ahead N]` (for-each-ref's upstream:track), else — no upstream, or one whose remote branch
+# was deleted (`[gone]`, the post-merge shape) — `git cherry` against origin/<default>, the
+# same test as the worktree pass. Whichever counted, a merged PR or content already on
+# origin/<default> settles it as shipped. Every undecidable step falls toward reporting.
+# Reported only, never added to the RESUME list: there is no agent worktree to SendMessage to.
 # $3 is the newline-delimited set of branches the walk already covered.
 fanout_unattached_branches() {
 	local cwd="$1" default_branch="$2" attached="$3" merged_heads="$4"
-	local b upstream track n
+	local b upstream track ref n msg
 
-	while IFS='|' read -r b upstream track; do
+	# `~` separates the fields: git forbids it in ref names, unlike `|`. `lstrip=2`, not
+	# `short`: a tag named like the branch makes `short` print "heads/<b>".
+	while IFS='~' read -r b upstream track; do
 		[ -n "$b" ] || continue
 		case "$attached" in *$'\n'"$b"$'\n'*) continue ;; esac
-		if [ -n "$upstream" ]; then
-			[[ "$track" =~ ahead\ ([0-9]+) ]] || continue
-			printf '[fan-out] branch %s (no worktree): %s commit(s) not pushed\n' "$b" "${BASH_REMATCH[1]}"
-			continue
+		ref="refs/heads/$b"
+		if git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$b" >/dev/null 2>&1; then
+			n="$(git -C "$cwd" rev-list --count "refs/remotes/origin/$b..$ref" 2>/dev/null)"
+			msg='not pushed'
+		elif [ -n "$upstream" ] && [ "$track" != "[gone]" ]; then
+			n=0
+			[[ "$track" =~ ahead\ ([0-9]+) ]] && n="${BASH_REMATCH[1]}"
+			msg='not pushed'
+		else
+			[ -n "$default_branch" ] && [ "$b" != "$default_branch" ] || continue
+			n="$(git -C "$cwd" cherry "origin/$default_branch" "$ref" 2>/dev/null | grep -c '^+')"
+			msg='never pushed — no upstream'
 		fi
-		[ -n "$default_branch" ] && [ "$b" != "$default_branch" ] || continue
-		git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$b" >/dev/null 2>&1 && continue
-		merged_pr_covers_head "$cwd" "$b" "$merged_heads" "refs/heads/$b" && continue
-		n="$(git -C "$cwd" cherry "origin/$default_branch" "refs/heads/$b" 2>/dev/null | grep -c '^+')"
 		[ "${n:-0}" -gt 0 ] || continue
-		branch_content_shipped "$cwd" "$default_branch" "refs/heads/$b" && continue
-		printf '[fan-out] branch %s (no worktree): %s commit(s) never pushed — no upstream\n' "$b" "$n"
+		merged_pr_covers_head "$cwd" "$b" "$merged_heads" "$ref" && continue
+		branch_content_shipped "$cwd" "$default_branch" "$ref" && continue
+		printf '[fan-out] branch %s (no worktree): %s commit(s) %s\n' "$b" "$n" "$msg"
 	done < <(git -C "$cwd" for-each-ref refs/heads \
-		--format='%(refname:short)|%(upstream:short)|%(upstream:track)' 2>/dev/null)
+		--format='%(refname:lstrip=2)~%(upstream:short)~%(upstream:track)' 2>/dev/null)
 }
 
 # `git worktree list` entries for THIS repo (parallel-agent worktrees included) — unpushed
@@ -231,10 +250,12 @@ fanout_worktrees() {
 			;;
 		"branch "*)
 			branch="${line#branch refs/heads/}"
-			attached+="$branch"$'\n'
 			;;
 		"")
 			if [ -n "$path" ] && [ -d "$path" ]; then
+				# Covered only when the directory exists: a prunable worktree (dir deleted)
+				# is skipped here, so its branch must fall through to the unattached pass.
+				[ -z "$branch" ] || attached+="$branch"$'\n'
 				name="$(basename "$path")"
 				uncommitted="$(git -C "$path" status --porcelain 2>/dev/null | wc -l | tr -d '[:space:]')"
 				[ -n "$uncommitted" ] || uncommitted=0
