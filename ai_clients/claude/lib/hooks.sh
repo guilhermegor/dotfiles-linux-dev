@@ -113,6 +113,7 @@ install_hooks() {
     copy_hook_file "pr_self_assign.sh" "$hooks_dir"
     copy_hook_file "rtk_worktree_passthrough.sh" "$hooks_dir"
     copy_hook_file "stale_local_ref_guard.sh" "$hooks_dir"
+    copy_hook_file "primary_checkout_subagent_guard.sh" "$hooks_dir"
     copy_hook_file "ai_state_sync.sh" "$hooks_dir"
     # Manual/periodic report (dotfiles-linux-dev#441) — installed so it CAN be run by
     # hand or by /session-closeout, deliberately never wired to a settings.json
