@@ -267,6 +267,8 @@ STUB
 @test "an upstream equal to the remote default is never pushed when origin/HEAD is absent (#1074)" {
     git -C "$TEST_TMP/origin.git" symbolic-ref HEAD refs/heads/develop
     git -C "$TEST_TMP/main" push -q origin main:refs/heads/develop
+    # git >= 2.48 fetch creates origin/HEAD on its own; this test needs it absent.
+    git -C "$TEST_TMP/main" config remote.origin.followRemoteHEAD never
     git -C "$TEST_TMP/main" fetch -q origin
     run git -C "$TEST_TMP/main" symbolic-ref -q refs/remotes/origin/HEAD
     [ "$status" -ne 0 ]
