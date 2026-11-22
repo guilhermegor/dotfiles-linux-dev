@@ -93,7 +93,18 @@ An agent killed mid-flight leaves work in its worktree. A worktree is torn down;
   fi
   [ "$d" != "0" ] || { [ "$u" != "0" ] && [ "$u" != "NO-REMOTE" ]; } && echo "$b dirty=$d unpushed=$u"
 done
+# Second pass (#1080): local branches checked out in NO worktree are invisible above. Anchored
+# on the track field (a branch NAME containing "ahead" must not match); `|| true` because grep
+# exits 1 on no match. Branches with no upstream or a `[gone]` one show no `[ahead N]` at all.
+/usr/bin/git for-each-ref refs/heads --format='%(refname:lstrip=2) %(upstream:track)' \
+  | grep -E ' \[ahead [0-9]+' || true
+/usr/bin/git for-each-ref refs/heads --format='%(refname:lstrip=2) %(upstream) %(upstream:track)' \
+  | awk 'NF==1 || /\[gone\]/ {print $1" NO-UPSTREAM-OR-GONE"}'
 ```
+
+The loop above also misses a phantom dirty index (`dirty=N` that is only the reverse of newer
+commits) and dirty work already on `origin/<default>`; `hooks/lib/worktree_fanout.sh` classifies
+both (`stale-index (== <sha>)`, reverse-apply), so prefer its verdict over the raw `dirty=` count.
 
 🔴 **`@{upstream}`, never `origin/$b`.** On a **detached HEAD** — every `--detach` worktree, which
 is the normal shape for inspecting a PR — `rev-parse --abbrev-ref HEAD` prints the literal string
