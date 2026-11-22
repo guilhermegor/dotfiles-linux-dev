@@ -24,6 +24,10 @@
 # case. Coverage is Python-only (ast.dump is a Python-specific check): any non-.py file in the
 # shipped diff, or a file ast.dump can't parse, is treated as a real change and never suppressed.
 #
+# dotfiles-linux-dev#1108: "last tag" is the highest version tag merged into origin/<base>
+# (`git tag --sort=-v:refname --merged`, pre-releases ranked below their release), not
+# `git describe`'s nearest tag — a lower tag cut nearer the ref made the guard diff the wrong range.
+#
 # dotfiles-linux-dev#836: every diff/log/describe runs against origin/<base> (fetched first, see
 # resolve_base_ref), never the checkout's HEAD — the release workflow builds the remote tree.
 #
@@ -54,7 +58,7 @@ main() {
     resolve_base_ref || exit 0                           # origin/<base> unresolvable → cannot reason
     ref="$BASE_REF"
     dispatch_targets_other_ref "$command" "${ref#origin/}" && exit 0
-    last_tag="$(git describe --tags --abbrev=0 "$ref" 2>/dev/null)" || exit 0   # no tags → first release
+    last_tag="$(highest_merged_tag "${ref#origin/}" "$ref")" || exit 0   # no tags → first release
 
     mapfile -t paths < <(shipped_paths "$ref")
     shipped_diff_empty "$last_tag" "$ref" "${paths[@]}" && block_no_shipped_change "$last_tag" "$ref" "${paths[@]}"
@@ -64,6 +68,18 @@ main() {
     signal="$(highest_signal "$last_tag" "$ref")"
     bump="$(bump_axis "$last_tag" "$version")" || exit 0
     advise_if_overbump "$last_tag" "$version" "$signal" "$bump"
+}
+
+highest_merged_tag() {
+    # dotfiles-linux-dev#1108: the HIGHEST tag merged into <ref>, not the nearest. `git describe`
+    # returns the nearest tag, so a lower tag cut from a nearer commit (a hotfix, a backport) hid the
+    # real latest release. Version-sort descending; `versionsort.suffix=-` ranks 1.2.0-rc1 BELOW
+    # 1.2.0. No `v[0-9]*` filter: repos that tag without a `v` prefix must keep working. Fails
+    # (no output) when no tag is merged, so the caller treats it as a first release.
+    local base="$1" ref="$2" tag
+    GIT_TERMINAL_PROMPT=0 timeout 10 git fetch --quiet --tags origin "$base" 2>/dev/null || true
+    tag="$(git -c versionsort.suffix=- tag --sort=-v:refname --merged "$ref" 2>/dev/null | head -1)"
+    [[ -n "$tag" ]] && printf '%s' "$tag"
 }
 
 is_release_dispatch() {

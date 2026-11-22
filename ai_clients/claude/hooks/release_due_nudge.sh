@@ -19,6 +19,10 @@
 # is OFFLINE and ADVISORY only; the authoritative next-version-across-both-indices computation stays
 # in the skill (it needs the network). This hook just points at the gap.
 #
+# dotfiles-linux-dev#1108: "the last release" is the HIGHEST version tag merged into the ref
+# (`git tag --sort=-v:refname --merged`, pre-releases ranked below their release), not
+# `git describe`'s nearest tag — a lower tag cut nearer the ref made this diff the wrong range.
+#
 # Hook I/O contract: PostToolUse, so the tool already ran — this never blocks. It fails OPEN
 # everywhere (no jq, no gh, not a watched command, no tags, not a publishable repo, any error) by
 # exiting 0 silently; when a release is due (or clearly not) it emits an additionalContext note.
@@ -123,13 +127,16 @@ check_release_due() {
     local root="$1" ref="$2" last_tag signal next
     local -a paths
 
-    # No tags at all (fresh repo): describe fails, we exit silently — there is no floor to bump
+    # No tags at all (fresh repo): the lookup fails, we exit silently — there is no floor to bump
     # from, so "since the last release" is undefined and this hook has nothing to say (the s:release
     # skill's first-publish path handles that case, not this advisory hook).
-    # `--abbrev=0` also guarantees last_tag is reachable from ref (git describe only walks ref's own
-    # ancestry), so it is always an ancestor of ref by construction — the "tag not an ancestor of
-    # HEAD" edge case cannot arise from how last_tag is derived here.
-    last_tag="$(git describe --tags --abbrev=0 "$ref" 2>/dev/null)" || exit 0
+    # dotfiles-linux-dev#1108: the HIGHEST tag merged into ref, not `git describe`'s nearest — a lower
+    # tag cut nearer the ref (hotfix/backport) would otherwise win. `versionsort.suffix=-` ranks
+    # 1.2.0-rc1 below 1.2.0; no `v[0-9]*` filter, so unprefixed tags work. `--merged` keeps last_tag
+    # an ancestor of ref by construction.
+    git fetch --quiet --tags origin "${ref#origin/}" 2>/dev/null || true
+    last_tag="$(git -c versionsort.suffix=- tag --sort=-v:refname --merged "$ref" 2>/dev/null | head -1)"
+    [[ -n "$last_tag" ]] || exit 0
 
     mapfile -t paths < <(shipped_paths "$ref")
     if shipped_diff_empty "$last_tag" "$ref" "${paths[@]}"; then
