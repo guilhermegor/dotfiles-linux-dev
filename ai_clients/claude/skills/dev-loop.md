@@ -170,6 +170,9 @@ The only reliable signal was inspecting the worktree and asking the forge for PR
    preserves the transcript, so the agent continues at zero re-reading cost; a new `Agent` starts
    from nothing and **re-does work already committed** — exactly the cost an exhausted quota cannot
    afford. Measured: four agents resumed by `SendMessage` continued cleanly from where they died.
+   Brief the resumed agent to first check its worktree still exists (the harness removes an
+   unchanged one); if not, it creates its own by explicit path before any git command, never
+   falling back to the primary checkout (`primary_checkout_subagent_guard.sh`, #1081).
    Re-claim its surface when you resume it (`claim_files <issue> <paths…>`, idempotent for the same
    issue) so the registry counts it in flight; the Stop guard also counts a `SendMessage` resume
    for `DISPATCH_CLAIM_TTL`, after which a finished agent no longer counts (#729). A resumed

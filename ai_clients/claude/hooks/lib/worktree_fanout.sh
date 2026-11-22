@@ -223,6 +223,23 @@ fanout_unattached_branches() {
 		--format='%(refname:lstrip=2)~%(upstream:short)~%(upstream:track)' 2>/dev/null)
 }
 
+# The primary checkout's `core.bare` must be false. A fan-out once flipped it to true
+# (blueprintx 2026-10-08): every git call in the primary failed while the worktrees kept
+# working, so agent work looked healthy and the stop hooks' "UNREADABLE" read as a rate limit
+# (dotfiles-linux-dev#1081). Say what is wrong, and the remedy, instead of staying silent.
+fanout_primary_bare_check() {
+	local main out
+	main="$(git -C "$1" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
+	[ -n "$main" ] || return 0
+	# A deliberately bare repo (worktrees hung off `repo.git`) is also "bare"; only a primary
+	# that still has a `.git` directory inside it is a working tree whose core.bare flipped.
+	[ -d "$main/.git" ] || return 0
+	out="$(git -C "$main" rev-parse --is-bare-repository 2>/dev/null)"
+	[ "$out" = "true" ] || return 0
+	printf '[fan-out] PRIMARY CHECKOUT BROKEN: %s reports bare=true (core.bare flipped); git fails there while worktrees still work — run `git -C %s config core.bare false`\n' \
+		"$main" "$main"
+}
+
 # `git worktree list` entries for THIS repo (parallel-agent worktrees included) — unpushed
 # commits, classified dirty state, and (when the GitHub half answered) a branch that was
 # pushed but never got a PR. One walk, no per-branch `gh` calls.
@@ -233,6 +250,7 @@ fanout_worktrees() {
 	local -a interrupted_names=()
 	local attached=$'\n'
 
+	fanout_primary_bare_check "$cwd"
 	if [ "$github_ok" = "1" ]; then
 		pr_branches="$(printf '%s' "$json" | jq -r '.[].headRefName' 2>/dev/null)"
 		# "<branch>\t<headRefOid>" of every merged PR, from the same query — no per-branch call.

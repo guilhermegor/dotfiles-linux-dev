@@ -1343,7 +1343,14 @@ def main() -> int:
 	try:
 		print(json.dumps(build_plan()))
 	except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-		print(f"review_fanout_plan: could not read the board -- {exc}", file=sys.stderr)
+		# First stderr line of the failed command: a crash (e.g. a bare primary checkout, #1081)
+		# and a rate limit need different remedies, and `str(exc)` carries neither.
+		err = getattr(exc, "stderr", None) or ""
+		if isinstance(err, bytes):  # TimeoutExpired keeps bytes even under text=True
+			err = err.decode(errors="replace")
+		first = (err.strip().splitlines() or [""])[0]
+		detail = f" -- {first}" if first else ""
+		print(f"review_fanout_plan: could not read the board -- {exc}{detail}", file=sys.stderr)
 		return 1
 	return 0
 

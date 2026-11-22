@@ -296,6 +296,10 @@
           },
           {
             "type": "command",
+            "command": "bash \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/primary_checkout_subagent_guard.sh\""
+          },
+          {
+            "type": "command",
             "command": "bash \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/release_dispatch_guard.sh\""
           },
           {
