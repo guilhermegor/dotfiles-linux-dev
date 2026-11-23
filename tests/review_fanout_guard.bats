@@ -230,7 +230,7 @@ wait_refresh_done() {
     run_guard
     [ "$status" -eq 2 ]
     [[ "$output" == *"failing: yamllint"* ]]
-    [[ "$output" == *"still running: bats (unit tests)"* ]]
+    [[ "$output" == *"running at last read: bats (unit tests)"* ]]
     [[ "$output" == *"ambiguous check name: Review threads answered"* ]]
 }
 
@@ -1440,6 +1440,29 @@ plan_two_prs() {
     [ "$output" -gt 120 ]
 }
 
+@test "a cached plan is not reused past a pending-ask deadline (#1123)" {
+    local pulls="$TEST_TMP/pulls.json"
+    printf '[{"number":520,"head":{"sha":"aaaa"},"updated_at":"2026-11-22T10:00:00Z"}]\n' >"$pulls"
+    cat >"$TEST_TMP/bin/gh" <<STUB
+#!/bin/sh
+while [ \$# -gt 0 ]; do
+    [ "\$1" = "--jq" ] && { jq -r "\$2" "$pulls"; exit 0; }
+    shift
+done
+exit 1
+STUB
+    loop_invoked
+    plan_with_work
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    # Overwrite the cached plan with an expired pending exclusion; the planner (PLAN) still has work.
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[{"pr":520,"reason":"primary review requested x — verdict pending","pending_until":"2000-01-01T00:00:00Z"}]}' >"$TEST_TMP/cached.json"
+    cp "$TEST_TMP/cached.json" "$REVIEW_FANOUT_CACHE_DIR"/*.json
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#520"* ]]
+}
+
 @test "a review landing on an unchanged head invalidates the cached plan (#1115)" {
     # A ladder review posted on the current head leaves the head SHA alone, but bumps the PR's
     # updated_at; the key must see it. This stub runs the real --jq filter over a REST-shaped
@@ -1456,8 +1479,6 @@ exit 1
 STUB
     loop_invoked
     plan_with_work
-    # No running checks, or the cache is bypassed by design (#1123) and the control proves nothing.
-    sed -i 's/"running":\["bats (unit tests)"\]/"running":[]/' "$PLAN"
     REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
     [ "$status" -eq 2 ]
     [[ "$output" == *"#520"* ]]

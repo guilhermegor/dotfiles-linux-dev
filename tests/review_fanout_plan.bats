@@ -2061,3 +2061,35 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
 }
+
+@test "an ask from a Bot-typed author without a [bot] suffix is not an ask (#1123)" {
+    stub_gh_prs <<EOF
+[{"number":1125,"headRefOid":"abcd1125","mergeStateStatus":"BLOCKED","isDraft":false,
+  "author":{"login":"guilhermegor"},"reviews":[],
+  "comments":[{"body":"@coderabbitai review","createdAt":"$(ago 300)","author":{"login":"scanner","__typename":"Bot"}}],
+  "commits":[{"oid":"abcd1125","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+}
+
+@test "a bot-skipped refusal after an ask is not pending (#1123)" {
+    stub_gh_prs <<EOF
+[{"number":1126,"headRefOid":"abcd1126","mergeStateStatus":"BLOCKED","isDraft":false,
+  "author":{"login":"guilhermegor"},"reviews":[],
+  "comments":[{"body":"@coderabbitai review","createdAt":"$(ago 300)","author":{"login":"guilhermegor"}},
+    {"body":"Review skipped — Bot user detected","createdAt":"$(ago 270)","author":{"login":"coderabbitai"}}],
+  "commits":[{"oid":"abcd1126","committedDate":"$(ago 3600)"}],"statusCheckRollup":[]}]
+EOF
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+}
+
+@test "a pending exclusion carries the deadline the guard checks (#1123)" {
+    pending_ask_fixture 3600 300
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.excluded[0].pending_until | length' <<<"$output")" -eq 20 ]
+}

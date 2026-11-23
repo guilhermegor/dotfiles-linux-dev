@@ -711,10 +711,9 @@ main() {
 	fi
 	plan=""
 	planner_rc=0
-	# A cached plan that lists running checks is never reused: the key cannot see a check finish,
-	# so its "[still running: ...]" annotation went stale (#1123).
+	# A cached plan is not reused once a pending-ask exclusion has passed its deadline (#1123).
 	if [ -n "$cache" ] && [ -n "$(find "$cache" -mmin "-$CACHE_TTL_MIN" 2>/dev/null)" ] \
-		&& jq -e '[.dispatchable[]?.checks.running // [] | length] | add // 0 | . == 0' "$cache" >/dev/null 2>&1; then
+		&& jq -e 'all(.excluded[]?; (.pending_until // "9") > (now | todate))' "$cache" >/dev/null 2>&1; then
 		plan="$(cat "$cache")"
 	elif [ -n "$cache" ] && refresh_running "$lock"; then
 		# A planner started now would just time out too, 90s per Stop, while the refresh runs.
@@ -782,7 +781,7 @@ main() {
 		  + (if ((.checks.failing // []) | length) > 0
 		     then "  [failing: \((.checks.failing) | join(", "))]" else "" end)
 		  + (if ((.checks.running // []) | length) > 0
-		     then "  [still running: \((.checks.running) | join(", "))]" else "" end)
+		     then "  [running at last read: \((.checks.running) | join(", "))]" else "" end)
 		  + (if ((.checks.ambiguous // []) | length) > 0
 		     then "  [ambiguous check name: \((.checks.ambiguous) | join(", "))]" else "" end)')"
 	[ -n "$dispatchable" ] || exit 0

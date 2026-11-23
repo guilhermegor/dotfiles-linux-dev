@@ -144,7 +144,7 @@ OPEN_PR_LIST_CAP = 200
 PR_SELECTION = (
 	"number headRefOid baseRefName mergeStateStatus isDraft author{login} "
 	"reviews(last:100){totalCount nodes{state body submittedAt commit{oid} author{login __typename}}} "
-	"comments(last:100){totalCount nodes{body createdAt author{login}}} "
+	"comments(last:100){totalCount nodes{body createdAt author{login __typename}}} "
 	"commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{"
 	"__typename ... on CheckRun{name status conclusion} "
 	"... on StatusContext{context state}}}}}}}"
@@ -377,7 +377,10 @@ def _rest_node(pr: dict) -> dict:
 				{
 					"body": c.get("body"),
 					"createdAt": c.get("created_at"),
-					"author": {"login": (c.get("user") or {}).get("login")},
+					"author": {
+						"login": (c.get("user") or {}).get("login"),
+						"__typename": (c.get("user") or {}).get("type"),
+					},
 				}
 				for c in comments
 			]
@@ -426,7 +429,10 @@ def _complete_window(pr: dict) -> dict:
 			{
 				"body": c.get("body"),
 				"createdAt": c.get("created_at"),
-				"author": {"login": (c.get("user") or {}).get("login")},
+				"author": {
+						"login": (c.get("user") or {}).get("login"),
+						"__typename": (c.get("user") or {}).get("type"),
+					},
 			}
 			for c in comments
 		]
@@ -859,11 +865,13 @@ def pending_ask(pr: dict, head_time: datetime.datetime, now: datetime.datetime) 
 	"""
 	asks = []
 	for comment in pr.get("comments") or []:
-		login = (comment.get("author") or {}).get("login") or ""
+		who = comment.get("author") or {}
+		login = who.get("login") or ""
 		body = (comment.get("body") or "").lstrip().lower()
 		posted = parse_ts(comment.get("createdAt"))
 		if (
 			posted is None
+			or who.get("__typename") == "Bot"
 			or login.lower().endswith("[bot]")
 			or login.lower() in REVIEWER_LOGINS
 			or not body.startswith(ASK_PREFIXES)
@@ -1152,7 +1160,8 @@ def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None
 			f"already covered: this head is a merge-only update, its PR patch equals that of "
 			f"reviewed head {covered[:12]} (#736)"
 		)
-	asked = pending_ask(pr, head_time, now)
+	# A permanent refusal (bot-authored PR) is not pending: the ladder path stays open.
+	asked = None if bot_skipped(pr) else pending_ask(pr, head_time, now)
 	if asked:
 		return f"primary review requested {asked} — verdict pending"
 	# Last: every PR-specific reason above is the more useful one to read (#818).
@@ -1348,7 +1357,14 @@ def build_plan() -> dict:
 			continue
 		reason = exclusion_reason(pr, now, rung)
 		if reason is not None:
-			excluded.append({"pr": number, "reason": reason})
+			entry = {"pr": number, "reason": reason}
+			if reason.startswith("primary review requested"):
+				# The guard must not serve this plan past the deadline (#1123).
+				ask = parse_ts(pending_ask(pr, head_commit_time(pr), now))
+				entry["pending_until"] = (ask + datetime.timedelta(minutes=PENDING_ASK_MINUTES)).strftime(
+					"%Y-%m-%dT%H:%M:%SZ"
+				)
+			excluded.append(entry)
 			continue
 		dispatchable.append(
 			{
