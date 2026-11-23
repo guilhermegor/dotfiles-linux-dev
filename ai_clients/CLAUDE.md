@@ -1163,6 +1163,19 @@ needs no link at all. Membership is the whitelist in the git dir's `info/exclude
 (`/*` then explicit `!` entries; `*.jsonl`, `.env*`, `.credentials.json` re-denied
 last), rewritten on every run so a whitelist change deploys with the hooks.
 
+**Private include list (#1126).** A private artifact (say a skill with internal content)
+lives only in the private repo, and this public repo never names it. The owner writes
+`~/.claude/ai-state-sync.include`, one path per line relative to `~/.claude`, `#` comments
+allowed, e.g. `/skills/private-example/`. `hooks/lib/ai_state_include.sh` is the one parser:
+`ai_state_sync.sh` splices the lines into `info/exclude` after the fixed whitelist and before
+the final denies (so `*.jsonl`, `.env*`, `.credentials.json` still win), generating the parent
+re-includes gitignore needs (`!/skills/`, `/skills/*`, `!/skills/private-example/`), and
+`prune_orphans` never offers a covered artifact for removal. Lines starting with `!`, containing
+`..`, or under `/projects/` are ignored with a stderr note. The file is itself whitelisted, so
+it syncs. Missing or unreadable file: exactly the previous behaviour. `deploy_drift.sh` only
+compares source to live, so a live-only private skill is never flagged. Tests:
+`tests/ai_state_include.bats`.
+
 **`issue-trackers.conf` lives in the state repo**, not here: it is owner-specific
 config (which trackers the owner's repos use), this repo is public, and a deployed copy
 would need a per-machine override anyway.
