@@ -679,6 +679,8 @@ _kb_run_kind() {
 		# that sources only this lib works too (#1119). _kb_lib_dir is fixed at source time.
 		if [[ "$kind" == "closed" ]]; then
 			declare -F reconcile_kanban_done >/dev/null || source "$_kb_lib_dir/kanban_reconcile_done.sh"
+			# without it a claimed No-Status issue silently reads as Ready, not In progress
+			declare -F dispatch_claimed_issues >/dev/null || source "$_kb_lib_dir/dispatch_claims.sh"
 			reconcile_kanban_done "$owner" "$repo" "$dir" || rc=$?
 			_KB_REPORT="${RECONCILE_DONE_REPORT-reconcile_kanban_done did not run (rc=$rc)}"
 		else

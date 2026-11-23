@@ -1196,3 +1196,24 @@ EOF
         [[ "$output" == *"$want"* ]]
     done
 }
+
+# CodeRabbit on #1122: the standalone closed arm must also load dispatch_claims.sh, or an open
+# No-Status issue with a live claim but no pushed branch is placed in Ready instead of In progress.
+@test "closed: standalone run sees a live dispatch claim on a No-Status issue (#1119)" {
+    local repo="$TEST_TMP/repo"
+    git init -q "$repo"
+    git -C "$repo" config user.email t@t.example
+    git -C "$repo" config user.name t
+    git -C "$repo" commit -q --allow-empty -m init
+    git -C "$repo" remote add origin "$repo"
+    write_closed_stale_gh open
+    echo '{"items":[{"id":"ITEM_42","content":{"type":"Issue","number":42,"repository":"owner/repo"}}]}' \
+        > "$TEST_TMP/items.json"
+    (cd "$repo" && source "$(dirname "$LIB")/dispatch_claims.sh" && claim_files 42 some/file.sh) >/dev/null
+    run env KANBAN_CHECKOUT_ROOT="$TEST_TMP/checkouts" bash -c "source '$LIB'; \
+        _kb_checkout() { echo '$repo'; }; \
+        _kb_run_kind closed owner repo '$repo'; echo \"rc=\$?\"; \
+        printf '%s\n' \"\$_KB_REPORT\""
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"moved issue #42 from No Status to In progress"* ]]
+}
