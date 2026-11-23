@@ -1136,3 +1136,17 @@ write_stamp() {
     run_reconcile
     [[ "$output" == *"UNKNOWN (throttled)"* ]]
 }
+
+@test "closed/stale: a caller sourcing only kanban_reconcile.sh still finds the sibling libs (#1119)" {
+    write_fake_gh
+    local kind
+    for kind in closed stale; do
+        run env KANBAN_CHECKOUT_ROOT="$TEST_TMP/checkouts" bash -c "source '$LIB'; \
+            _kb_checkout() { echo '$TEST_TMP'; }; \
+            _kb_run_kind $kind owner repo '$TEST_TMP'; echo \"rc=\$?\"; \
+            printf '%s\n' \"\$_KB_REPORT\""
+        [[ "$output" != *"command not found"* ]]
+        [[ "$output" != *"comando não encontrado"* ]]
+        [[ "$output" != *"rc=127"* ]]
+    done
+}

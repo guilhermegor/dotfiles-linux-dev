@@ -674,10 +674,16 @@ _kb_run_kind() {
 			_KB_REPORT="no local checkout of $owner/$repo (cwd's origin differs; none under ${KANBAN_CHECKOUT_ROOT:-$HOME/github}/$repo)"
 			return 1
 		fi
+		# The siblings are sourced by subagent_stop_sweep.sh today; load them here so a caller
+		# that sources only this lib works too (#1119).
+		local lib_dir
+		lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 		if [[ "$kind" == "closed" ]]; then
+			declare -F reconcile_kanban_done >/dev/null || source "$lib_dir/kanban_reconcile_done.sh"
 			reconcile_kanban_done "$owner" "$repo" "$dir" || rc=$?
 			_KB_REPORT="$RECONCILE_DONE_REPORT"
 		else
+			declare -F reconcile_kanban_stale >/dev/null || source "$lib_dir/kanban_reconcile_stale.sh"
 			reconcile_kanban_stale "$owner" "$repo" "$dir" || rc=$?
 			_KB_REPORT="$RECONCILE_STALE_REPORT"
 		fi
