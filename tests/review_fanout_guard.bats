@@ -230,7 +230,7 @@ wait_refresh_done() {
     run_guard
     [ "$status" -eq 2 ]
     [[ "$output" == *"failing: yamllint"* ]]
-    [[ "$output" == *"still running: bats (unit tests)"* ]]
+    [[ "$output" == *"running at last read: bats (unit tests)"* ]]
     [[ "$output" == *"ambiguous check name: Review threads answered"* ]]
 }
 
@@ -1438,6 +1438,33 @@ plan_two_prs() {
     run bash -c "grep -oP 'REVIEW_FANOUT_PLANNER_TIMEOUT:-\K[0-9]+' '$GUARD'"
     [ "$status" -eq 0 ]
     [ "$output" -gt 120 ]
+}
+
+@test "a cached plan is not reused past a pending-ask deadline (#1123)" {
+    local pulls="$TEST_TMP/pulls.json"
+    printf '[{"number":520,"head":{"sha":"aaaa"},"updated_at":"2026-11-22T10:00:00Z"}]\n' >"$pulls"
+    cat >"$TEST_TMP/bin/gh" <<STUB
+#!/bin/sh
+while [ \$# -gt 0 ]; do
+    [ "\$1" = "--jq" ] && { jq -r "\$2" "$pulls"; exit 0; }
+    shift
+done
+exit 1
+STUB
+    loop_invoked
+    plan_with_work
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    # Overwrite the cached plan with an expired pending exclusion; the planner (PLAN) still has work.
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[{"pr":520,"reason":"primary review requested x — verdict pending","pending_until":"2000-01-01T00:00:00Z"}]}' >"$TEST_TMP/cached.json"
+    cp "$TEST_TMP/cached.json" "$REVIEW_FANOUT_CACHE_DIR"/*.json
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#520"* ]]
+    # The re-plan replaced the rejected cache: the next Stop reuses it instead of re-planning.
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
 }
 
 @test "a review landing on an unchanged head invalidates the cached plan (#1115)" {
