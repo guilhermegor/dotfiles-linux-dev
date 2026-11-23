@@ -53,6 +53,7 @@ set -u
 _gb_dir="${BASH_SOURCE[0]%/*}" # no slash (sourced by bare filename): the dir is cwd
 [[ "$_gb_dir" == "${BASH_SOURCE[0]}" ]] && _gb_dir=.
 source "$_gb_dir/gh_budget.sh"
+_kb_lib_dir="$(cd "$_gb_dir" && pwd)" # absolute, so a later cd by the caller cannot break lookups
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	echo "kanban_reconcile.sh is meant to be sourced, not executed." >&2
@@ -675,15 +676,15 @@ _kb_run_kind() {
 			return 1
 		fi
 		# The siblings are sourced by subagent_stop_sweep.sh today; load them here so a caller
-		# that sources only this lib works too (#1119).
-		local lib_dir
-		lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+		# that sources only this lib works too (#1119). _kb_lib_dir is fixed at source time.
 		if [[ "$kind" == "closed" ]]; then
-			declare -F reconcile_kanban_done >/dev/null || source "$lib_dir/kanban_reconcile_done.sh"
+			declare -F reconcile_kanban_done >/dev/null || source "$_kb_lib_dir/kanban_reconcile_done.sh"
 			reconcile_kanban_done "$owner" "$repo" "$dir" || rc=$?
 			_KB_REPORT="$RECONCILE_DONE_REPORT"
 		else
-			declare -F reconcile_kanban_stale >/dev/null || source "$lib_dir/kanban_reconcile_stale.sh"
+			# stale also calls _krd_open_issue_facts, which lives in the done lib
+			declare -F _krd_open_issue_facts >/dev/null || source "$_kb_lib_dir/kanban_reconcile_done.sh"
+			declare -F reconcile_kanban_stale >/dev/null || source "$_kb_lib_dir/kanban_reconcile_stale.sh"
 			reconcile_kanban_stale "$owner" "$repo" "$dir" || rc=$?
 			_KB_REPORT="$RECONCILE_STALE_REPORT"
 		fi
