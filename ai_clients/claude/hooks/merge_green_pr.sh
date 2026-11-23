@@ -109,12 +109,12 @@ required_contexts() {
 # Does the base branch carry a workflow that produces the review gate? 0 yes, 1 no, 2 unreadable.
 # A repo without one (only a README-parity workflow, say) can never post the check, so
 # requiring it would make the wrapper unusable there (#1113). A missing .github/workflows
-# directory (404) is "no workflow"; any other read failure is UNKNOWN, never "no gate".
+# directory (404), or one holding no .yml/.yaml, is "no workflow"; any other read failure is UNKNOWN, never "no gate".
 repo_has_gate_workflow() {
-	local base="$1" err files f content
+	local base="$1" err files f content parsed
 	err="$(mktemp)" || return 2
 	if ! files="$(gh api "repos/$owner/$repo/contents/.github/workflows?ref=$base" \
-		--jq '.[] | select(.type=="file") | .path' 2>"$err" </dev/null)"; then
+		--jq '.[] | select(.type=="file" and (.name | test("\\.ya?ml$"))) | .path' 2>"$err" </dev/null)"; then
 		if grep -q 'HTTP 404' "$err"; then rm -f "$err"; return 1; fi
 		rm -f "$err"; return 2
 	fi
@@ -122,7 +122,10 @@ repo_has_gate_workflow() {
 	while IFS= read -r f; do
 		[ -n "$f" ] || continue
 		content="$(gh_retry api "repos/$owner/$repo/contents/$f?ref=$base" --jq .content | base64 -d 2>/dev/null)" && [ -n "$content" ] || return 2
-		grep -q -F -- "$GATE_CHECK" <<<"$content" && return 0
+		parsed="$(workflow_json <<<"$content")" && [ -n "$parsed" ] || return 2
+		# Parsed, so comments are gone and quoting is decoded. A job named for the gate or a
+		# step that POSTs it (this repo's own workflows do both) produces it.
+		jq -e --arg g "$GATE_CHECK" '[(.jobs // {})[] | (.name // empty), (.steps[]? | .run // empty)] | any(.[]; type == "string" and contains($g))' <<<"$parsed" >/dev/null 2>&1 && return 0
 	done <<<"$files"
 	return 1
 }

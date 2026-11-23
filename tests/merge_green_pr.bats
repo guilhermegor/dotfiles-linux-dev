@@ -74,13 +74,18 @@ if [[ "$args" == *"actions/runs/"*"/jobs"* ]]; then
 fi
 if [[ "$args" == *"contents/.github/workflows?ref=master"* ]]; then
     [ "${GATE_WF:-}" = fail ] && { echo "gh: Server Error (HTTP 500)" >&2; exit 1; }
+    [ "${GATE_WF:-}" = quoted ] && { echo ".github/workflows/g.yml"; exit 0; }
     [ "${GATE_WF:-}" = none ] && { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
     [ "${GATE_WF:-}" = other ] && { echo ".github/workflows/parity.yml"; exit 0; }
+    [ "${GATE_WF:-}" = keep ] && { echo ".github/workflows/parity.yml"; echo ".github/workflows/.gitkeep"; exit 0; }
+    [ "${GATE_WF:-}" = script ] && { echo ".github/workflows/post.yml"; exit 0; }
     echo ".github/workflows/review_gate.yml"; exit 0
 fi
 if [[ "$args" == *"/contents/"*"ref=master"* ]]; then
-    if [ "${GATE_WF:-}" = other ]; then printf 'name: README parity\n' | base64; exit 0; fi
-    printf 'name: Review threads answered\n' | base64; exit 0
+    if [ "${GATE_WF:-}" = script ]; then printf 'jobs:\n  x:\n    steps:\n      - run: |\n          echo "{name:\\"Review threads answered\\"}"\n' | base64; exit 0; fi
+    if [ "${GATE_WF:-}" = quoted ]; then printf 'jobs:\n  g:\n    name: "Review threads answered"\n' | base64; exit 0; fi
+    if [ "${GATE_WF:-}" = other ] || [ "${GATE_WF:-}" = keep ]; then printf '# Review threads answered is not produced here\njobs:\n  p:\n    name: README parity\n' | base64; exit 0; fi
+    printf 'jobs:\n  g:\n    name: Review threads answered\n' | base64; exit 0
 fi
 if [[ "$args" == *"/contents/"* ]]; then
     printf '%b' "${WF_CONTENT:-permissions:\n  contents: read\n}" | base64
@@ -91,7 +96,7 @@ if [[ "$args" == *"/check-runs"* ]]; then
     c="CHECK_$n"; c="${!c:-success}"
     [ "$c" = missing ] && exit 0
     printf 'build\t%s\t::check::\t%s\t%s\n' "$c" "${APP_ID:-15368}" "${SUITE:-1}"
-    [ -n "${GATE_WF:-}" ] || printf 'Review threads answered\t%s\t::check::\t%s\t%s\n' "$c" "${APP_ID:-15368}" "${SUITE:-1}"
+    case "${GATE_WF:-}" in ""|quoted|script) ;; *) false ;; esac && printf 'Review threads answered\t%s\t::check::\t%s\t%s\n' "$c" "${APP_ID:-15368}" "${SUITE:-1}"
     [ -n "${EXTRA_CHECKS:-}" ] && printf '%s\n' "$EXTRA_CHECKS"
     exit 0
 fi
@@ -310,6 +315,20 @@ refute_log() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"[lint]"* ]]
     refute_log "PUT"
+}
+
+@test "a .gitkeep next to the workflows does not make the listing UNKNOWN (#1113)" {
+    GATE_WF=keep PROT_404=1 run bash "$SCRIPT" 7
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"#7 MERGED"* ]]
+}
+
+@test "a quoted job name and a script-posted gate both count as the gate (#1113)" {
+    for m in quoted script; do
+        GATE_WF=$m PROT_404=1 CHECK_7=missing run bash "$SCRIPT" 7
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"Review threads answered"* ]]
+    done
 }
 
 @test "no gate workflow and no check-run at all is refused (#1113)" {
