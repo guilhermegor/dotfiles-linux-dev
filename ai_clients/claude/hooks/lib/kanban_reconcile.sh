@@ -53,7 +53,7 @@ set -u
 _gb_dir="${BASH_SOURCE[0]%/*}" # no slash (sourced by bare filename): the dir is cwd
 [[ "$_gb_dir" == "${BASH_SOURCE[0]}" ]] && _gb_dir=.
 source "$_gb_dir/gh_budget.sh"
-_kb_lib_dir="$(cd "$_gb_dir" && pwd)" # absolute, so a later cd by the caller cannot break lookups
+_kb_lib_dir="$(CDPATH='' cd -- "$_gb_dir" >/dev/null && pwd)" # absolute, so a later cd by the caller cannot break lookups
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	echo "kanban_reconcile.sh is meant to be sourced, not executed." >&2
@@ -680,13 +680,13 @@ _kb_run_kind() {
 		if [[ "$kind" == "closed" ]]; then
 			declare -F reconcile_kanban_done >/dev/null || source "$_kb_lib_dir/kanban_reconcile_done.sh"
 			reconcile_kanban_done "$owner" "$repo" "$dir" || rc=$?
-			_KB_REPORT="$RECONCILE_DONE_REPORT"
+			_KB_REPORT="${RECONCILE_DONE_REPORT-reconcile_kanban_done did not run (rc=$rc)}"
 		else
 			# stale also calls _krd_open_issue_facts, which lives in the done lib
 			declare -F _krd_open_issue_facts >/dev/null || source "$_kb_lib_dir/kanban_reconcile_done.sh"
 			declare -F reconcile_kanban_stale >/dev/null || source "$_kb_lib_dir/kanban_reconcile_stale.sh"
 			reconcile_kanban_stale "$owner" "$repo" "$dir" || rc=$?
-			_KB_REPORT="$RECONCILE_STALE_REPORT"
+			_KB_REPORT="${RECONCILE_STALE_REPORT-reconcile_kanban_stale did not run (rc=$rc)}"
 		fi
 		return "$rc"
 		;;
