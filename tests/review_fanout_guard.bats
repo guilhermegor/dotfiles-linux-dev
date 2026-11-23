@@ -1461,6 +1461,10 @@ STUB
     REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
     [ "$status" -eq 2 ]
     [[ "$output" == *"#520"* ]]
+    # The re-plan replaced the rejected cache: the next Stop reuses it instead of re-planning.
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
 }
 
 @test "a review landing on an unchanged head invalidates the cached plan (#1115)" {

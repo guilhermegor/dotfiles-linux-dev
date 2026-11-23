@@ -711,6 +711,7 @@ main() {
 	fi
 	plan=""
 	planner_rc=0
+	planned=0
 	# A cached plan is not reused once a pending-ask exclusion has passed its deadline (#1123).
 	if [ -n "$cache" ] && [ -n "$(find "$cache" -mmin "-$CACHE_TTL_MIN" 2>/dev/null)" ] \
 		&& jq -e 'all(.excluded[]?; (.pending_until // "9") > (now | todate))' "$cache" >/dev/null 2>&1; then
@@ -719,6 +720,7 @@ main() {
 		# A planner started now would just time out too, 90s per Stop, while the refresh runs.
 		block_unreadable "review fan-out plan not cached yet — a background refresh is already running (up to ${REFRESH_TIMEOUT}s); the next Stop reads its cached plan. Not the same as empty."
 	else
+		planned=1
 		plan="$(cd "$cwd" && timeout "$PLANNER_TIMEOUT" python3 "$PLANNER" 2>/dev/null)" || planner_rc=$?
 		# Exit 3 = the latch was written after the gate passed: pass, do not block (#814).
 		[ "$planner_rc" -ne 3 ] || exit 0
@@ -748,7 +750,9 @@ main() {
 		block_unreadable "review fan-out plan UNREADABLE (planner failed, timed out, or printed something that is not the documented object) — not the same as empty."
 	fi
 
-	if [ -n "$cache" ] && [ -z "$(find "$cache" -mmin "-$CACHE_TTL_MIN" 2>/dev/null)" ]; then
+	# Also replace a fresh cache the guard just rejected (an expired pending ask, #1123), or every
+	# later Stop would re-plan until its TTL lapsed.
+	if [ -n "$cache" ] && { [ "$planned" -eq 1 ] || [ -z "$(find "$cache" -mmin "-$CACHE_TTL_MIN" 2>/dev/null)" ]; }; then
 		mkdir -p "$CACHE_DIR" && tmp="$(mktemp "$cache.XXXXXX")" \
 			&& printf '%s' "$plan" >"$tmp" && publish_cache "$tmp" "$cache"
 		rm -f "${tmp:-}"
