@@ -1136,3 +1136,84 @@ write_stamp() {
     run_reconcile
     [[ "$output" == *"UNKNOWN (throttled)"* ]]
 }
+
+# A gh stub answering what BOTH closed (Done) and stale reconciles read, for a board with a Ready
+# column: one In-review card #42, an issue #42 whose state is $1, one unmerged-closed PR.
+write_closed_stale_gh() {
+    cat > "$TEST_TMP/fields.json" <<'JSON'
+{"fields":[{"name":"Status","id":"FIELD_1","options":[
+    {"name":"Ready","id":"OPT_READY"},{"name":"In progress","id":"OPT_PROGRESS"},
+    {"name":"In review","id":"OPT_REVIEW"},{"name":"Done","id":"OPT_DONE"}]}]}
+JSON
+    echo '{"items":[{"id":"ITEM_42","status":"In review","content":{"type":"Issue","number":42,"repository":"owner/repo"}}]}' \
+        > "$TEST_TMP/items.json"
+    echo "[{\"number\":42,\"state\":\"$1\",\"labels\":[]}]" > "$TEST_TMP/issues.json"
+    echo '[]' > "$TEST_TMP/prs-open.json"
+    echo '[{"state":"closed","merged_at":null,"author_association":"OWNER","head":{"ref":"fix/42-thing"},"body":""}]' \
+        > "$TEST_TMP/prs-closed.json"
+    cat > "$FAKE_BIN/gh" <<EOF
+#!/bin/bash
+echo "\$*" >> "$GH_LOG"
+case "\$1 \$2" in
+    "project list") echo '{"projects":[{"title":"repo kanban","number":1,"id":"PVT_1"}]}' ;;
+    "api graphql")
+        [[ "\$*" == *"fields(first:100)"* ]] || exit 1
+        jq -c '{data:{repositoryOwner:{projectV2:{fields:{nodes:.fields}}}}}' "$TEST_TMP/fields.json" ;;
+    "project item-list") cat "$TEST_TMP/items.json" ;;
+    "project item-edit") echo ok ;;
+    *)
+        [ "\$1" = api ] || exit 1
+        case "\$2" in
+            repos/*/issues\?*) cat "$TEST_TMP/issues.json" ;;
+            repos/*/issues/[0-9]*) jq -c '.[0]' "$TEST_TMP/issues.json" ;;
+            repos/*/pulls\?state=open*) cat "$TEST_TMP/prs-open.json" ;;
+            repos/*/pulls\?state=closed*) cat "$TEST_TMP/prs-closed.json" ;;
+            *) exit 1 ;;
+        esac ;;
+esac
+EOF
+    chmod +x "$FAKE_BIN/gh"
+}
+
+# #1119: a caller sourcing ONLY kanban_reconcile.sh must reach the sibling libs, and the stale
+# arm must also pull in the done lib (it calls _krd_open_issue_facts from there).
+@test "closed/stale: a caller sourcing only kanban_reconcile.sh succeeds on both kinds (#1119)" {
+    local repo="$TEST_TMP/repo" kind issue_state want
+    git init -q "$repo"
+    git -C "$repo" config user.email t@t.example
+    git -C "$repo" config user.name t
+    git -C "$repo" commit -q --allow-empty -m init
+    git -C "$repo" remote add origin "$repo"
+    for kind in closed stale; do
+        issue_state=open; want="moved issue #42 to Ready"
+        [ "$kind" = closed ] && { issue_state=closed; want="moved issue #42 to Done"; }
+        write_closed_stale_gh "$issue_state"
+        run env KANBAN_CHECKOUT_ROOT="$TEST_TMP/checkouts" bash -c "source '$LIB'; \
+            _kb_checkout() { echo '$repo'; }; \
+            _kb_run_kind $kind owner repo '$repo'; echo \"rc=\$?\"; \
+            printf '%s\n' \"\$_KB_REPORT\""
+        [[ "$output" == *"rc=0"* ]]
+        [[ "$output" == *"$want"* ]]
+    done
+}
+
+# CodeRabbit on #1122: the standalone closed arm must also load dispatch_claims.sh, or an open
+# No-Status issue with a live claim but no pushed branch is placed in Ready instead of In progress.
+@test "closed: standalone run sees a live dispatch claim on a No-Status issue (#1119)" {
+    local repo="$TEST_TMP/repo"
+    git init -q "$repo"
+    git -C "$repo" config user.email t@t.example
+    git -C "$repo" config user.name t
+    git -C "$repo" commit -q --allow-empty -m init
+    git -C "$repo" remote add origin "$repo"
+    write_closed_stale_gh open
+    echo '{"items":[{"id":"ITEM_42","content":{"type":"Issue","number":42,"repository":"owner/repo"}}]}' \
+        > "$TEST_TMP/items.json"
+    (cd "$repo" && source "$(dirname "$LIB")/dispatch_claims.sh" && claim_files 42 some/file.sh) >/dev/null
+    run env KANBAN_CHECKOUT_ROOT="$TEST_TMP/checkouts" bash -c "source '$LIB'; \
+        _kb_checkout() { echo '$repo'; }; \
+        _kb_run_kind closed owner repo '$repo'; echo \"rc=\$?\"; \
+        printf '%s\n' \"\$_KB_REPORT\""
+    [[ "$output" == *"rc=0"* ]]
+    [[ "$output" == *"moved issue #42 from No Status to In progress"* ]]
+}
