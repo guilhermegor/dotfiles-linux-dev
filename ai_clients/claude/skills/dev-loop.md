@@ -930,6 +930,23 @@ with no further session involvement — measured in this repo, a re-run flipped 
 auto-merge fired on its own. **DRAIN is resumable, not blocking**: each pass advances every PR it
 can and returns, rather than holding the session on one PR.
 
+⚠️ **A merge wait outlasts every queued `Review threads answered` run (#1114).** Each answer
+comment and review re-triggers the gate, so one head carries several runs, and an
+`issue_comment`-triggered run creates its check-run on the head only once it starts. Waiting for
+the newest check-run to go green is not enough. Wait in two stages, then merge:
+
+```bash
+# 1) the run the answer comment created: runs on the default branch, so find it by event + time
+until [ "$(gh api "repos/$R/actions/runs?event=issue_comment&created=>$COMMENT_AT" \
+    --jq '[.workflow_runs[]|select(.status!="completed")]|length')" = 0 ]; do sleep 20; done
+# 2) no run of the gate name on the head still non-completed
+until [ "$(gh api "repos/$R/commits/$HEAD/check-runs?per_page=100" \
+    --jq '[.check_runs[]|select(.name=="Review threads answered" and .status!="completed")]|length')" = 0 ]; do sleep 20; done
+```
+
+`merge_green_pr.sh` reports `gate run still queued` when that is why it refused. This bounded
+wait is the exception to the no-`sleep` rule above only inside a single PR's merge step.
+
 ⚠️ **Never assume reviews are free and serial.** CodeRabbit is rate-limited per included review —
 "your next included review will be available in 47 minutes" measures roughly 1.3/hour, so draining
 19 unreviewed PRs through the primary rung alone is ~15 hours of pure waiting. The ladder's

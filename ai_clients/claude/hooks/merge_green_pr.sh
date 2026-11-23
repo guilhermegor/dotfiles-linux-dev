@@ -295,7 +295,14 @@ merge_one() {
 			bad="$bad [$name]"
 		fi
 	done <<<"$required"
-	[ -z "$bad" ] || { echo "#$pr REFUSED: required check not green:$bad"; return 1; }
+	if [ -n "$bad" ]; then
+		# A same-name gate run still queued/in progress is a wait, not a failure (#1114).
+		queued=""
+		awk -F'\t' -v g="$GATE_CHECK" '$1==g && $3=="::check::" && $2=="pending" {f=1} END {exit !f}' <<<"$checks" &&
+			queued=" (gate run still queued, wait for it)"
+		echo "#$pr REFUSED: required check not green:$bad$queued"
+		return 1
+	fi
 
 	# The PUT is never retried: a call that succeeded server-side but errored client-side
 	# would be re-sent into a 405/409 and misreported. On failure, ask whether it merged.
