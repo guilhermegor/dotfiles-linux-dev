@@ -711,7 +711,10 @@ main() {
 	fi
 	plan=""
 	planner_rc=0
-	if [ -n "$cache" ] && [ -n "$(find "$cache" -mmin "-$CACHE_TTL_MIN" 2>/dev/null)" ]; then
+	# A cached plan that lists running checks is never reused: the key cannot see a check finish,
+	# so its "[still running: ...]" annotation went stale (#1123).
+	if [ -n "$cache" ] && [ -n "$(find "$cache" -mmin "-$CACHE_TTL_MIN" 2>/dev/null)" ] \
+		&& jq -e '[.dispatchable[]?.checks.running // [] | length] | add // 0 | . == 0' "$cache" >/dev/null 2>&1; then
 		plan="$(cat "$cache")"
 	elif [ -n "$cache" ] && refresh_running "$lock"; then
 		# A planner started now would just time out too, 90s per Stop, while the refresh runs.

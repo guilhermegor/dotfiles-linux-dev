@@ -1456,6 +1456,8 @@ exit 1
 STUB
     loop_invoked
     plan_with_work
+    # No running checks, or the cache is bypassed by design (#1123) and the control proves nothing.
+    sed -i 's/"running":\["bats (unit tests)"\]/"running":[]/' "$PLAN"
     REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
     [ "$status" -eq 2 ]
     [[ "$output" == *"#520"* ]]

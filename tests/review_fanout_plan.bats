@@ -2017,3 +2017,47 @@ EOS
     run python3 "$PLANNER"
     [ "$(jq -r '.dispatchable[0].ladder' <<<"$output")" = "backlog" ]
 }
+
+# --- a primary review ask in flight is pending, not missing (#1123) ---------------------
+
+# pending_ask_fixture HEAD_AGE ASK_AGE [REPLY] — a PR whose head is HEAD_AGE seconds old, with
+# a human `@coderabbitai review` ask ASK_AGE seconds old and an optional CodeRabbit reply.
+pending_ask_fixture() {
+    local reply=""
+    [ -n "${3:-}" ] && reply=",{\"body\":\"$3\",\"createdAt\":\"$(ago $(($2 - 30)))\",\"author\":{\"login\":\"coderabbitai\"}}"
+    stub_gh_prs <<EOF
+[{"number":1123,"headRefOid":"abcd1123","mergeStateStatus":"BLOCKED","isDraft":false,
+  "author":{"login":"guilhermegor"},"reviews":[],
+  "comments":[{"body":"@coderabbitai review","createdAt":"$(ago "$2")","author":{"login":"guilhermegor"}}${reply}],
+  "commits":[{"oid":"abcd1123","committedDate":"$(ago "$1")"}],"statusCheckRollup":[]}]
+EOF
+}
+
+@test "an ask newer than the head, unrefused and fresh, is excluded as pending (#1123)" {
+    pending_ask_fixture 3600 300
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 0 ]
+    [[ "$(reason_for 1123)" == "primary review requested "*" — verdict pending" ]]
+}
+
+@test "an ask older than the head is dispatchable (#1123)" {
+    pending_ask_fixture 3600 7200
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+}
+
+@test "an ask past the TTL is dispatchable (#1123)" {
+    pending_ask_fixture 7200 3600
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+}
+
+@test "a refused ask is dispatchable (#1123)" {
+    pending_ask_fixture 3600 300 "Rate limit exceeded, please try again later"
+    run python3 "$PLANNER"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.dispatchable | length' <<<"$output")" -eq 1 ]
+}

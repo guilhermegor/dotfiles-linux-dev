@@ -214,6 +214,12 @@ REVIEWER_LOGINS = frozenset({"coderabbitai", "coderabbitai[bot]"})
 BOT_SKIP_PHRASE = "review skipped"
 BOT_SKIP_DETAIL = "bot user detected"
 
+# A primary review asked for after the head commit is "pending" for this long (#1123), then the
+# PR returns to dispatchable. A refusal (rate limit / "Action not completed") ends it early.
+PENDING_ASK_MINUTES = float(os.environ.get("REVIEW_FANOUT_PENDING_ASK_MINUTES", "30"))
+ASK_PREFIXES = ("@coderabbitai review", "@coderabbitai full review")
+ASK_REFUSAL_PHRASES = ("rate limit", "action not completed")
+
 # The repo's own review gate, read by name from the rollup (#705) and never re-derived. Green on
 # a head no review names means the review was carried forward (blueprintx#698/#699).
 REVIEW_GATE_CHECK = os.environ.get("REVIEW_FANOUT_GATE_CHECK", "Review threads answered")
@@ -843,6 +849,46 @@ def bot_skipped(pr: dict) -> bool:
 	return False
 
 
+def pending_ask(pr: dict, head_time: datetime.datetime, now: datetime.datetime) -> str | None:
+	"""Return the timestamp of an in-flight primary review ask, None when there is none (#1123).
+
+	An ask is a non-bot comment opening with ``@coderabbitai review`` / ``full review``. It is
+	pending when it postdates the head commit, is younger than ``PENDING_ASK_MINUTES`` and no
+	reviewer comment after it refuses (rate limit, "Action not completed"). Only the newest ask
+	counts; the data is the comment window the planner already read.
+	"""
+	asks = []
+	for comment in pr.get("comments") or []:
+		login = (comment.get("author") or {}).get("login") or ""
+		body = (comment.get("body") or "").lstrip().lower()
+		posted = parse_ts(comment.get("createdAt"))
+		if (
+			posted is None
+			or login.lower().endswith("[bot]")
+			or login.lower() in REVIEWER_LOGINS
+			or not body.startswith(ASK_PREFIXES)
+		):
+			continue
+		asks.append((posted, comment.get("createdAt")))
+	if not asks:
+		return None
+	posted, stamp = max(asks)
+	if posted <= head_time or (now - posted).total_seconds() > PENDING_ASK_MINUTES * 60:
+		return None
+	for comment in pr.get("comments") or []:
+		login = ((comment.get("author") or {}).get("login") or "").lower()
+		body = (comment.get("body") or "").lower()
+		answered = parse_ts(comment.get("createdAt"))
+		if (
+			login in REVIEWER_LOGINS
+			and answered is not None
+			and answered > posted
+			and any(phrase in body for phrase in ASK_REFUSAL_PHRASES)
+		):
+			return None
+	return stamp
+
+
 def ladder_reason(pr: dict, now: datetime.datetime) -> str | None:
 	"""Return why a DISPATCHABLE PR belongs on the fallback ladder regardless of slot state.
 
@@ -1106,6 +1152,9 @@ def exclusion_reason(pr: dict, now: datetime.datetime, rung: dict) -> str | None
 			f"already covered: this head is a merge-only update, its PR patch equals that of "
 			f"reviewed head {covered[:12]} (#736)"
 		)
+	asked = pending_ask(pr, head_time, now)
+	if asked:
+		return f"primary review requested {asked} — verdict pending"
 	# Last: every PR-specific reason above is the more useful one to read (#818).
 	return no_rung_until_reset(now)
 
