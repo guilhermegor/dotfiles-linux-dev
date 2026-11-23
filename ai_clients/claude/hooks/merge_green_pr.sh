@@ -155,7 +155,7 @@ bot_provenance() {
 
 merge_one() {
 	local pr="$1" info head state draft base author changed try head_ref head_repo base_repo
-	local required checks statuses bad name files wf_changed wf_live wpath rname suite
+	local required checks statuses bad queued name files wf_changed wf_live wpath rname suite
 	local rid rpath refs jobs backed content wf parsed
 
 	# mergeable_state is computed lazily: poll while GitHub still says unknown/null.
@@ -297,8 +297,10 @@ merge_one() {
 	done <<<"$required"
 	if [ -n "$bad" ]; then
 		# A same-name gate run still queued/in progress is a wait, not a failure (#1114).
+		# Only when the gate is the sole refusal: a real failure must not read as a wait.
 		queued=""
-		awk -F'\t' -v g="$GATE_CHECK" '$1==g && $3=="::check::" && $2=="pending" {f=1} END {exit !f}' <<<"$checks" &&
+		[ "$bad" = " [$GATE_CHECK]" ] &&
+			awk -F'\t' -v g="$GATE_CHECK" '$1==g && $3=="::check::" && $2=="pending" {f=1} END {exit !f}' <<<"$checks" &&
 			queued=" (gate run still queued, wait for it)"
 		echo "#$pr REFUSED: required check not green:$bad$queued"
 		return 1

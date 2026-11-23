@@ -930,22 +930,26 @@ with no further session involvement — measured in this repo, a re-run flipped 
 auto-merge fired on its own. **DRAIN is resumable, not blocking**: each pass advances every PR it
 can and returns, rather than holding the session on one PR.
 
-⚠️ **A merge wait outlasts every queued `Review threads answered` run (#1114).** Each answer
+⚠️ **A merge outlasts every queued `Review threads answered` run (#1114).** Each answer
 comment and review re-triggers the gate, so one head carries several runs, and an
-`issue_comment`-triggered run creates its check-run on the head only once it starts. Waiting for
-the newest check-run to go green is not enough. Wait in two stages, then merge:
+`issue_comment`-triggered run creates its check-run on the head only once it starts. The newest
+check-run being green is not enough. Test two stages once per DRAIN pass, with no `sleep`: if
+either is non-zero, skip the PR and re-test it on the next pass (or arm auto-merge).
 
 ```bash
-# 1) the run the answer comment created: runs on the default branch, so find it by event + time
-until [ "$(gh api "repos/$R/actions/runs?event=issue_comment&created=>$COMMENT_AT" \
-    --jq '[.workflow_runs[]|select(.status!="completed")]|length')" = 0 ]; do sleep 20; done
-# 2) no run of the gate name on the head still non-completed
-until [ "$(gh api "repos/$R/commits/$HEAD/check-runs?per_page=100" \
-    --jq '[.check_runs[]|select(.name=="Review threads answered" and .status!="completed")]|length')" = 0 ]; do sleep 20; done
+# R=owner/repo  HEAD=PR head sha from origin/<head-ref>  COMMENT_AT=answer comment's
+# created_at, UTC with a trailing Z (an +hh:mm offset breaks the unencoded query)
+# 1) gate runs the answer comment created: they run on the default branch, so find them
+#    by event + time, scoped to the gate workflows (review_threads, review_retry, ...)
+gh api "repos/$R/actions/runs?event=issue_comment&created=>$COMMENT_AT&per_page=100" \
+    --jq '[.workflow_runs[]|select(.name|startswith("review_"))|select(.status!="completed")]|length'
+# 2) gate check-runs on the head still non-completed (filter=all sees older runs too)
+gh api "repos/$R/commits/$HEAD/check-runs?filter=all&per_page=100" \
+    --jq '[.check_runs[]|select(.name=="Review threads answered" and .status!="completed")]|length'
 ```
 
-`merge_green_pr.sh` reports `gate run still queued` when that is why it refused. This bounded
-wait is the exception to the no-`sleep` rule above only inside a single PR's merge step.
+Both must print `0` (an empty or errored read is not `0`: treat it as pending). Then run
+`merge_green_pr.sh`, which reports `gate run still queued` when that is the only reason it refused.
 
 ⚠️ **Never assume reviews are free and serial.** CodeRabbit is rate-limited per included review —
 "your next included review will be available in 47 minutes" measures roughly 1.3/hour, so draining
