@@ -35,6 +35,11 @@
 # ~/.qwen, ~/.copilot and ~/.kimi-code hold no authored state beyond the AGENTS.md
 # `make ai_clients` already deploys, so they have no invocation.
 #
+# Private include list (#1126): <claude dir>/ai-state-sync.include, one path per line
+# (e.g. /skills/private-example/), is parsed by hooks/lib/ai_state_include.sh and spliced
+# into info/exclude after the fixed whitelist and BEFORE the final denies. It is itself
+# synced, so the public repo never names what it lists.
+#
 # Env: AI_STATE_REPO (default guilhermegor/ai-clients-state), AI_STATE_REMOTE
 # (full URL override, used by tests), AI_STATE_GIT_DIR, AI_STATE_WORK_TREE,
 # AI_STATE_TIMEOUT (seconds per network call, default 20).
@@ -66,6 +71,8 @@ AI_STATE_SQLITE="${AI_STATE_SQLITE:-}" # DB file names (relative to the work tre
 HOOK=0 # 1 under --hook: always exit 0, speak only on a pull conflict
 MODE=""
 SECRET_HELD=""
+DENIES=""
+INCLUDE_FILE=""
 REFUSAL=""
 
 # Whitelist, never a blacklist: ignore everything at the top level, re-include
@@ -77,12 +84,16 @@ CLAUDE_WHITELIST='/*
 !/specs/
 !/plans/
 !/issue-trackers.conf
+!/ai-state-sync.include
 !/projects/
 /projects/*
 !/projects/*/
 /projects/*/*
-!/projects/*/memory/
-*.jsonl
+!/projects/*/memory/'
+
+# Re-denied AFTER the owner's include list (ai_state_include.sh), so an include line can
+# never re-admit transcripts or credentials.
+CLAUDE_DENIES='*.jsonl
 .env
 .env.*
 .credentials.json'
@@ -103,6 +114,8 @@ select_client() {
             BRANCH="main"
             HANDOFF="$CLAUDE_DIR/session-audit/ai-state-sync.md"
             WHITELIST="$CLAUDE_WHITELIST"
+            DENIES="$CLAUDE_DENIES"
+            INCLUDE_FILE="$CLAUDE_DIR/ai-state-sync.include"
             AI_STATE_GIT_DIR="${AI_STATE_GIT_DIR:-$HOME/.ai-clients-state/claude.git}"
             AI_STATE_WORK_TREE="${AI_STATE_WORK_TREE:-$CLAUDE_DIR}"
             ;;
@@ -139,9 +152,26 @@ g() { git --git-dir="$AI_STATE_GIT_DIR" --work-tree="$AI_STATE_WORK_TREE" "$@"; 
 net() { GIT_TERMINAL_PROMPT=0 timeout "$AI_STATE_TIMEOUT" "$@"; }
 say() { printf '%s\n' "[ai-state-sync] $*"; }
 
+# The helper sits in hooks/lib next to this script, or under ~/.claude/hooks/lib when this
+# file runs as the standalone ~/.local/bin/ai-state-sync copy. Neither found = no extra paths.
+load_include_lib() {
+    local d lib
+    [ -n "$INCLUDE_FILE" ] || return 1
+    for d in "$(dirname "${BASH_SOURCE[0]}")/lib" "$CLAUDE_DIR/hooks/lib"; do
+        lib="$d/ai_state_include.sh"
+        # shellcheck source=lib/ai_state_include.sh
+        [ -r "$lib" ] && { . "$lib"; return 0; }
+    done
+    return 1
+}
+
 write_excludes() {
     mkdir -p "$AI_STATE_GIT_DIR/info"
-    printf '%s\n' "$WHITELIST" >"$AI_STATE_GIT_DIR/info/exclude"
+    {
+        printf '%s\n' "$WHITELIST"
+        load_include_lib && ai_state_include_excludes "$INCLUDE_FILE" 2>/dev/null
+        [ -z "$DENIES" ] || printf '%s\n' "$DENIES"
+    } >"$AI_STATE_GIT_DIR/info/exclude"
 }
 
 configure_repo() {
