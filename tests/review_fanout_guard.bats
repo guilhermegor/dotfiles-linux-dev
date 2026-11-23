@@ -1459,9 +1459,12 @@ STUB
     REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
     [ "$status" -eq 2 ]
     [[ "$output" == *"#520"* ]]
+    # Positive control: nothing moved, so the cached plan must be served (proves run 1 cached).
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
     # The review lands: head unchanged, PR activity timestamp moved, plan now covers it.
     printf '[{"number":520,"head":{"sha":"aaaa"},"updated_at":"2026-11-22T10:01:00Z"}]\n' >"$pulls"
-    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
     REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
     [ "$status" -eq 0 ]
 }
