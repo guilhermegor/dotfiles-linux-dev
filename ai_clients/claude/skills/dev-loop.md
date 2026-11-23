@@ -1342,10 +1342,14 @@ Every brief carries:
   `git diff <sha>^ <sha> --stat`, never `git log -1` alone. Measured: a genuinely empty commit
   passed every hook with full "success" output, and a foreign commit leaked from a sibling agent
   onto the wrong branch the same way (dotfiles-linux-dev#162);
-- when `isolation: "worktree"` is in play, prefer an explicit `git worktree add <own-path>` over
-  trusting the harness-provided directory to be exclusively yours if its identity is ever in
-  doubt — two agents were measured sharing one physical worktree directory, one wiping the
-  other's files mid-task (dotfiles-linux-dev#162);
+- with `isolation: "worktree"`, commit on the harness-provided branch and publish with
+  `git push origin HEAD:refs/heads/<type>/<N>-<slug>`; never `git worktree add` or
+  `git checkout -b` from inside it — the isolated-worktree guard refuses the first and the
+  classifier then denies the second, leaving the agent stuck (measured on #1114; #1120). Only
+  a NON-isolated agent (the primary-checkout guard case, #1081) uses an explicit
+  `git worktree add <own-path>` rather than trusting a shared directory — two agents were
+  measured sharing one physical worktree directory, one wiping the other's files mid-task
+  (dotfiles-linux-dev#162);
 - 🔴 **never `git stash`, and never `git checkout` of another branch, inside a worktree you did not
   create** — the stash stack and the checkout are both shared across worktrees; copy to the
   scratchpad instead (step 1);
