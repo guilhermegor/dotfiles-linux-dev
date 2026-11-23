@@ -1439,3 +1439,32 @@ plan_two_prs() {
     [ "$status" -eq 0 ]
     [ "$output" -gt 120 ]
 }
+
+@test "a review landing on an unchanged head invalidates the cached plan (#1115)" {
+    # A ladder review posted on the current head leaves the head SHA alone, but bumps the PR's
+    # updated_at; the key must see it. This stub runs the real --jq filter over a REST-shaped
+    # fixture, which the plain $HEADS stub cannot: it would pass without any fix.
+    local pulls="$TEST_TMP/pulls.json"
+    printf '[{"number":520,"head":{"sha":"aaaa"},"updated_at":"2026-11-22T10:00:00Z"}]\n' >"$pulls"
+    cat >"$TEST_TMP/bin/gh" <<STUB
+#!/bin/sh
+while [ \$# -gt 0 ]; do
+    [ "\$1" = "--jq" ] && { jq -r "\$2" "$pulls"; exit 0; }
+    shift
+done
+exit 1
+STUB
+    loop_invoked
+    plan_with_work
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#520"* ]]
+    # Positive control: nothing moved, so the cached plan must be served (proves run 1 cached).
+    printf '%s\n' '{"rung":{"status":"ok"},"dispatchable":[],"excluded":[]}' >"$PLAN"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 2 ]
+    # The review lands: head unchanged, PR activity timestamp moved, plan now covers it.
+    printf '[{"number":520,"head":{"sha":"aaaa"},"updated_at":"2026-11-22T10:01:00Z"}]\n' >"$pulls"
+    REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
+    [ "$status" -eq 0 ]
+}

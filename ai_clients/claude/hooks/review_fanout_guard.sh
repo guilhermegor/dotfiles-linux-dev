@@ -99,9 +99,10 @@ PLANNER_TIMEOUT="${REVIEW_FANOUT_PLANNER_TIMEOUT:-180}"
 # timeout the planner is re-run detached with REFRESH_TIMEOUT so the next Stop finds it.
 # The cache key includes a digest of every open PR's head SHA (one REST call), so a push
 # invalidates it at once — a TTL alone would let a Stop through for a head pushed after caching.
-# What the key does NOT see: a review landing on an unchanged head, a check finishing, the rung
-# probe. A plan stale that way lives at most CACHE_TTL_MIN minutes (a refresh's run time counts
-# from when it finished); it errs toward blocking on done work, or toward a late nudge.
+# The key also carries each PR's updated_at, so a review or comment on an unchanged head
+# invalidates it (#1115); it still does NOT see a check finishing or the rung probe. A plan
+# stale that way lives at most CACHE_TTL_MIN minutes (a refresh's run time counts from when it
+# finished); it errs toward blocking on done work, or toward a late nudge.
 # The probe is the exception: a plan whose `rung.status` is `unknown` is never cached (both the
 # synchronous write and the detached refresh go through publish_cache, #1084), since a transient
 # probe timeout would otherwise block every Stop in the TTL on a board whose heads never change.
@@ -486,12 +487,14 @@ review_dispatch_running() {
 }
 
 # open_pr_heads CWD
-# Prints a digest of "<number>:<head sha>" for every open PR, or fails. A failure means the
-# cache cannot be proven current, so the caller runs with no cache at all.
+# Prints a digest of "<number>:<head sha>:<updated_at>" for every open PR, or fails. updated_at
+# moves when a review or comment lands, so a ladder review on an unchanged head invalidates the
+# cache too (#1115). A failure means the cache cannot be proven current, so the caller runs with
+# no cache at all.
 open_pr_heads() {
 	local out
 	out="$(cd "$1" && timeout 20 gh api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' \
-		--jq '.[] | "\(.number):\(.head.sha)"' 2>/dev/null)" || return 1
+		--jq '.[] | "\(.number):\(.head.sha):\(.updated_at)"' 2>/dev/null)" || return 1
 	printf '%s\n' "$out" | sort | cksum | cut -d' ' -f1
 }
 
