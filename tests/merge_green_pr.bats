@@ -167,6 +167,22 @@ refute_log() {
     refute_log "PUT"
 }
 
+@test "a queued gate run beside a green one is reported as still queued (#1114)" {
+    EXTRA_CHECKS=$'Review threads answered\tpending\t::check::\t15368\t1' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"gate run still queued"* ]]
+    refute_log "PUT"
+}
+
+@test "a queued gate run does not mask a failing non-gate check (#1114)" {
+    STATUS_7=$'ci/extra\tfailure\tci-bot' RULE_CTX="ci/extra" \
+        EXTRA_CHECKS=$'Review threads answered\tpending\t::check::\t15368\t1' run bash "$SCRIPT" 7
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"ci/extra"* ]]
+    [[ "$output" != *"gate run still queued"* ]]
+    refute_log "PUT"
+}
+
 @test "a non-gate status from another creator counts" {
     STATUS_7=$'ci/extra\tsuccess\tci-bot' RULE_CTX="ci/extra" run bash "$SCRIPT" 7
     [ "$status" -eq 0 ]
