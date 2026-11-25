@@ -300,11 +300,11 @@ lesson() {
 # must not have `make lessons_mirror` hard-fail on every repo forever.
 
 @test "falls back to the declared legacy directory when the renamed store is absent" {
-	OTHER="$TEST_TMP/wwdates"
+	OTHER="$TEST_TMP/otherrepo"
 	mkdir -p "$OTHER"
 	rm -rf "$DF_STORE"
 	mkdir -p "$DF_LEGACY"
-	lesson "$DF_LEGACY" "toolchain-fix" "wwdates"
+	lesson "$DF_LEGACY" "toolchain-fix" "otherrepo"
 
 	run bash "$GEN" "$OTHER"
 	[ "$status" -eq 0 ]
@@ -315,11 +315,11 @@ lesson() {
 }
 
 @test "the legacy fallback never writes to or deletes the legacy directory" {
-	OTHER="$TEST_TMP/wwdates"
+	OTHER="$TEST_TMP/otherrepo"
 	mkdir -p "$OTHER"
 	rm -rf "$DF_STORE"
 	mkdir -p "$DF_LEGACY"
-	lesson "$DF_LEGACY" "toolchain-fix" "wwdates"
+	lesson "$DF_LEGACY" "toolchain-fix" "otherrepo"
 
 	run bash "$GEN" "$OTHER"
 	[ "$status" -eq 0 ]
@@ -328,10 +328,10 @@ lesson() {
 }
 
 @test "the current directory is preferred over the legacy one when both exist" {
-	OTHER="$TEST_TMP/wwdates"
+	OTHER="$TEST_TMP/otherrepo"
 	mkdir -p "$OTHER" "$DF_LEGACY"
-	lesson "$DF_STORE" "current-fix" "wwdates"
-	lesson "$DF_LEGACY" "legacy-fix" "wwdates"
+	lesson "$DF_STORE" "current-fix" "otherrepo"
+	lesson "$DF_LEGACY" "legacy-fix" "otherrepo"
 
 	run bash "$GEN" "$OTHER"
 	[ "$status" -eq 0 ]
@@ -342,7 +342,7 @@ lesson() {
 }
 
 @test "still fails loudly when NEITHER the current nor the legacy directory exists" {
-	OTHER="$TEST_TMP/wwdates"
+	OTHER="$TEST_TMP/otherrepo"
 	mkdir -p "$OTHER"
 	rm -rf "$DF_STORE"
 	# DF_LEGACY was never created in this test.
