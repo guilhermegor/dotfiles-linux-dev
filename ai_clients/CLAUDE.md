@@ -1169,7 +1169,10 @@ lives only in the private repo, and this public repo never names it. The owner w
 allowed, e.g. `/skills/private-example/`. `hooks/lib/ai_state_include.sh` is the one parser:
 `ai_state_sync.sh` splices the lines into `info/exclude` after the fixed whitelist and before
 the final denies (so `*.jsonl`, `.env*`, `.credentials.json` still win), generating the parent
-re-includes gitignore needs (`!/skills/`, `/skills/*`, `!/skills/private-example/`), and
+re-includes gitignore needs (`!/skills/`, `/skills/*`, `!/skills/private-example/`; none for
+a path inside a directory the whitelist already re-includes whole, such as `/memory/`, where
+`/memory/*` would stop new memory files syncing; listed paths are literal, so `[`, `*`, `?`
+are escaped), and
 `prune_orphans` never offers a covered artifact for removal. Lines starting with `!`, containing
 `..`, or under `/projects/` are ignored with a stderr note. The file is itself whitelisted, so
 it syncs. Missing or unreadable file: exactly the previous behaviour. `deploy_drift.sh` only

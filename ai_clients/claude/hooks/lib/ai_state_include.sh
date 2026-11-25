@@ -28,23 +28,57 @@ ai_state_include_paths() {
     done <"$file"
 }
 
+# A listed path is literal, so the gitignore pattern characters in it are escaped.
+_ai_state_glob_escape() {
+    local s="$1" out="" c i
+    for ((i = 0; i < ${#s}; i++)); do
+        c="${s:i:1}"
+        [[ "$c" == [][*?\\] ]] && out+='\'
+        out+="$c"
+    done
+    printf '%s' "$out"
+}
+
+# Echoes each path the whitelist text re-includes whole: a glob-free `!X` line that no later
+# ignore line narrows again (`!/projects/` is followed by `/projects/*`, so it is not whole).
+_ai_state_whitelisted_paths() {
+    local -a lines=()
+    local i j x
+    mapfile -t lines <<<"$1"
+    for i in "${!lines[@]}"; do
+        [[ "${lines[i]}" == '!/'* && "${lines[i]}" != *[][*?\\]* ]] || continue
+        x="${lines[i]#!}"
+        x="${x%/}"
+        for ((j = i + 1; j < ${#lines[@]}; j++)); do
+            [[ "${lines[j]}" != '!'* && "${lines[j]}" == "$x/"* ]] && continue 2
+        done
+        printf '%s\n' "$x"
+    done
+}
+
 # Echoes gitignore lines re-including every listed path. With `/*` ignored, git needs each
 # ancestor re-included then its children re-ignored: /a/b/ => !/a/ /a/* !/a/b/. Ancestor
 # lines are emitted once (a repeated `/a/*` would re-ignore an earlier include), and a path
-# nested under another listed path is dropped as already covered.
+# nested under another listed path is dropped as already covered. The optional second
+# argument is the fixed whitelist: a path inside a directory it already re-includes whole
+# emits nothing, since `/memory/*` would re-ignore every unlisted file there.
 ai_state_include_excludes() {
-    local -a paths=()
-    local p q prefix comp rest last dir
+    local -a paths=() whole=()
+    local p q w prefix comp rest last dir
     local -A seen=()
     mapfile -t paths < <(ai_state_include_paths "$1")
+    mapfile -t whole < <(_ai_state_whitelisted_paths "${2:-}")
     for p in "${paths[@]}"; do
+        for w in "${whole[@]}"; do
+            [[ -n "$w" && ("${p%/}" == "$w" || "${p%/}" == "$w"/*) ]] && continue 2
+        done
         for q in "${paths[@]}"; do
-            [[ "$p" != "$q" && "${p%/}/" == "${q%/}/"* ]] && continue 2
+            [[ "${p%/}" != "${q%/}" && "${p%/}/" == "${q%/}/"* ]] && continue 2
         done
         prefix=""
         rest="${p#/}"
         while [[ -n "$rest" ]]; do
-            comp="${rest%%/*}"
+            comp="$(_ai_state_glob_escape "${rest%%/*}")"
             [[ "$rest" == */* ]] && rest="${rest#*/}" || rest=""
             last=0
             [[ -z "$rest" ]] && last=1

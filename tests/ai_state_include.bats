@@ -71,6 +71,28 @@ refute_ignored() {
     refute_ignored skills/other/SKILL.md
 }
 
+@test "both spellings of one directory still include it" {
+    printf '/skills/private-example\n/skills/private-example/\n' >"$INC"
+    setup_sync
+    refute_ignored skills/private-example/SKILL.md
+}
+
+@test "glob characters in a listed path match only that literal path" {
+    printf '/skills/private[1]/\n' >"$INC"
+    mkdir -p "$CLAUDE_CONFIG_DIR/skills/private[1]" "$CLAUDE_CONFIG_DIR/skills/private1"
+    setup_sync
+    refute_ignored 'skills/private[1]/SKILL.md'
+    ignored skills/private1/SKILL.md
+}
+
+@test "an include under a whitelisted directory keeps its siblings synced" {
+    printf '/memory/private/\n' >"$INC"
+    mkdir -p "$CLAUDE_CONFIG_DIR/memory/private"
+    setup_sync
+    refute_ignored memory/other.md
+    refute_ignored memory/private/x.md
+}
+
 @test "bang and dotdot lines are rejected" {
     printf '!/skills/other/\n/skills/../memory/\n' >"$INC"
     run bash -c "source '$LIB'; ai_state_include_paths '$INC'"

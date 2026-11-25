@@ -169,7 +169,7 @@ write_excludes() {
     mkdir -p "$AI_STATE_GIT_DIR/info"
     {
         printf '%s\n' "$WHITELIST"
-        load_include_lib && ai_state_include_excludes "$INCLUDE_FILE" 2>/dev/null
+        load_include_lib && ai_state_include_excludes "$INCLUDE_FILE" "$WHITELIST" 2>/dev/null
         [ -z "$DENIES" ] || printf '%s\n' "$DENIES"
     } >"$AI_STATE_GIT_DIR/info/exclude"
 }
