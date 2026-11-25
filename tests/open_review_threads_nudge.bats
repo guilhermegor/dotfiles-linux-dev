@@ -53,7 +53,11 @@ case "$1 $2" in
         var="PR_STATE_${number}"
         printf '%s\n' "${!var:-OPEN}"
     else
-        [ -n "${PR_VIEW_NUMBER:-}" ] && echo "$PR_VIEW_NUMBER"
+        # PR_VIEW_ONLY_IN=<dir name>: the branch has a PR only in that checkout, so a test can tell
+        # which repo the hook actually ran in (dotfiles-linux-dev#1125).
+        if [ -z "${PR_VIEW_ONLY_IN:-}" ] || [ "$PR_VIEW_ONLY_IN" = "$(basename "$PWD")" ]; then
+            [ -n "${PR_VIEW_NUMBER:-}" ] && echo "$PR_VIEW_NUMBER"
+        fi
     fi
     ;;
 "repo view")
@@ -889,4 +893,57 @@ checks_fixture() {
     run bash -c "payload false sess-other | '$HOOK'"
     [ "$status" -eq 0 ]
     [ ! -f "$future" ]
+}
+
+# --- the repo judged is the one the loop ran for, not the cwd (dotfiles-linux-dev#1125) ----------
+
+# other_repo NAME -> a second checkout under DEV_LOOP_REPOS_ROOT. The hook's own cwd stays in
+# $REPO: the orchestrator having moved away from the loop's repo to read something.
+other_repo() {
+    export DEV_LOOP_REPOS_ROOT="$REPO/repos"
+    mkdir -p "$DEV_LOOP_REPOS_ROOT/$1"
+    git -C "$DEV_LOOP_REPOS_ROOT/$1" init -q -b main
+    git -C "$DEV_LOOP_REPOS_ROOT/$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+}
+
+# slash_dev_loop ARGS -> write a transcript holding a `/dev-loop ARGS` slash-command record.
+slash_dev_loop() {
+    TRANSCRIPT="$REPO/transcript.jsonl"
+    jq -nc --arg a "$1" '{type: "user", message: {content:
+        ("<command-message>dev-loop</command-message>\n<command-name>/dev-loop</command-name>\n<command-args>" + $a + "</command-args>")}}' \
+        >"$TRANSCRIPT"
+    export TRANSCRIPT
+}
+
+@test "judges the repo named by /dev-loop, not the repo the orchestrator moved into" {
+    other_repo alpha
+    slash_dev_loop alpha
+    # Only alpha's branch has a PR, and it carries an unanswered finding; $REPO has none.
+    export PR_VIEW_ONLY_IN=alpha PR_VIEW_NUMBER=55
+    problem_fixture 55 a.sh
+    run bash -c 'payload false sess-1125 "$TRANSCRIPT" | "$0"' "$HOOK"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"PR #55"* ]]
+    [[ "$output" == *"repo judged: $DEV_LOOP_REPOS_ROOT/alpha (from the /dev-loop invocation"* ]]
+}
+
+@test "a bare /dev-loop falls back to the cwd and the message says so" {
+    other_repo alpha
+    slash_dev_loop ""
+    export PR_VIEW_ONLY_IN="$(basename "$REPO")" PR_VIEW_NUMBER=55
+    problem_fixture 55 a.sh
+    run bash -c 'payload false sess-1125 "$TRANSCRIPT" | "$0"' "$HOOK"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"repo judged: $REPO (cwd fallback: the last /dev-loop invocation named no repo)"* ]]
+}
+
+@test "a named path that is no git checkout is UNKNOWN, never a pass on the cwd repo" {
+    other_repo alpha
+    slash_dev_loop "$REPO/no-such-repo"
+    export PR_VIEW_ONLY_IN="$(basename "$REPO")" PR_VIEW_NUMBER=55
+    problem_fixture 55 a.sh
+    run bash -c 'payload false sess-1125 "$TRANSCRIPT" | "$0"' "$HOOK"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    [[ "$output" != *"PR #55"* ]]
 }

@@ -110,6 +110,8 @@ ROSTER_FILE='.review-bots.yaml'
 # calling it).
 # shellcheck source=lib/review_thread_gate.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/review_thread_gate.sh"
+# shellcheck source=lib/loop_repo.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/loop_repo.sh"
 
 # _status_check_query
 # A SECOND, narrower GraphQL query than the gate's own -- adds `isRequired` (GitHub's
@@ -666,6 +668,24 @@ _repo_wide_scan() {
 	return 0
 }
 
+# _emit_labelled_verdict NUMBER PREFIX
+# _emit_verdict with the repo judged named first (#1125): a verdict about the wrong repo reads as
+# an answer, so every message says which repo it is about and where that came from. Silent
+# verdicts (exit 0 with no message) stay silent.
+_emit_labelled_verdict() {
+	local err rc
+	err="$(_emit_verdict "$@" 2>&1 >/dev/null)"
+	rc=$?
+	if [ -n "$err" ]; then
+		{
+			echo "open_review_threads_nudge: $LOOP_REPO_LABEL"
+			echo
+			printf '%s\n' "$err"
+		} >&2
+	fi
+	return "$rc"
+}
+
 main() {
 	local payload active number repo owner name session_id transcript
 
@@ -679,6 +699,12 @@ main() {
 	# decidable at all -- empty is fine, _apply_delegation_filter/_delegated_agent_for_path both
 	# fail closed (never delegated) on it.
 	transcript="$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)"
+
+	# The repo the loop ran for, never the ambient cwd alone (#1125): every git/gh call below
+	# resolves its repo from the working directory, so move there once. loop_repo_resolve falls
+	# back to the cwd, and says so.
+	loop_repo_resolve "$transcript" "$PWD" || { loop_repo_unknown_message open_review_threads_nudge; exit 2; }
+	cd "$LOOP_REPO_DIR" || exit 0
 
 	git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
@@ -697,7 +723,7 @@ main() {
 		gate_pr_thread_state "$owner" "$name" "$number" "$ROSTER_FILE"
 		[ "$GATE_STATUS" = "running" ] && _reclassify_running "$owner" "$name" "$number"
 		[ "$GATE_STATUS" = "problems" ] && _apply_delegation_filter "$transcript"
-		_emit_verdict "$number" ""
+		_emit_labelled_verdict "$number" ""
 		exit $?
 	fi
 
@@ -712,7 +738,7 @@ main() {
 	_repo_wide_scan "$owner" "$name" "$session_id" "$transcript" || exit 0
 	[ -n "$REPORT_NUMBER" ] || exit 0
 
-	_emit_verdict "$REPORT_NUMBER" "[repo-wide scan, no PR for this branch/HEAD] "
+	_emit_labelled_verdict "$REPORT_NUMBER" "[repo-wide scan, no PR for this branch/HEAD] "
 	exit $?
 }
 
