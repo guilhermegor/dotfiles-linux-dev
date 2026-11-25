@@ -2393,6 +2393,10 @@ registry entry gets a <code>note:</code> line. Tests: <code>tests/kanban_reconci
 decision-blocked issues. Standing exclusions live in <code>~/.claude/tasks/owner-decisions-exclusions.txt</code>,
 never in code. Source is flat <code>skills/owner-decisions.md</code> (the installer globs <code>*.md</code>); an unreadable
 source prints <code>UNREADABLE</code>, never "none". Tests: <code>tests/owner_decisions.bats</code>.</p>
+<p>Gate rows (#1130, #1132): <code>od_gate_pending</code> lists open PRs touching a gate-protected path without
+<code>gate-change-approved</code>, or whose <code>gate</code> check failed on the <code>GATE_CHANGE_OK</code> refusal. Paths come only
+from the workflow step that mentions the label (<code>-e &lt;path&gt;</code> lines); reads are paginated, an unreadable
+one is an <code>unreadable</code> row, not "none". Gate rows dedupe in their own <code>gate|&lt;ref&gt;</code> namespace.</p>
 <h2 id="stop-guard-budget-and-plan-cache-dotfiles-linux-dev814">Stop-guard budget and plan cache (dotfiles-linux-dev#814)<a class="headerlink" href="#stop-guard-budget-and-plan-cache-dotfiles-linux-dev814" title="Permanent link">&para;</a></h2>
 <p><code>Stop</code> runs after every main-session turn, so the three Stop guards
 (<code>dispatch_free_surface_guard.sh</code>, <code>round_dispatch_guard.sh</code>, <code>review_fanout_guard.sh</code>) used to
@@ -2426,6 +2430,18 @@ drained the shared GraphQL bucket in minutes. <code>hooks/lib/stop_budget.sh</co
 </ul>
 <p><code>review_fanout_guard.sh</code> keeps its own per-heads cache (#696); it only gained the gate. The
 planners' remaining GraphQL (<code>closingIssuesReferences</code>, review threads) was not moved to REST here.</p>
+<p><strong>Which repo the guards judge (#1125, #1131).</strong> The Stop payload's <code>.cwd</code> is where the shell
+stands, not what the loop was told: an orchestrator that <code>cd</code>s into another repo only to read an
+issue moved the guards onto it (<code>/dev-loop blueprintx</code> plus a <code>cd ~/github/greenfield</code> demanded 11
+greenfield issues on every turn end). <code>hooks/lib/loop_repo.sh</code>'s <code>loop_repo_resolve TRANSCRIPT CWD</code>
+is the one implementation; the three guards above and <code>open_review_threads_nudge.sh</code> all call it.
+It parses the LAST <code>dev-loop</code> invocation in the transcript (a Skill <code>tool_use</code> or a <code>/dev-loop</code>
+slash command, via jq) and takes the first word of its args: a path, <code>owner/name</code>
+(<code>&lt;$DEV_LOOP_REPOS_ROOT, default ~/github&gt;/name</code>) or a bare name, which must be a git work tree.
+No invocation, or one naming no repo (a bare word that is no checkout reads as free text), falls
+back to the cwd, labelled as a fallback in every guard message. A path or <code>owner/name</code> that is no
+checkout is <code>UNKNOWN</code>: the guard blocks once with <code>loop_repo_unknown_message</code>, never judging the
+cwd repo instead.</p>
 <p><strong>Planner timeouts (#960).</strong> <code>dispatch_plan.py</code> runs the free-surface gate under
 <code>DISPATCH_PLAN_GATE_TIMEOUT</code> (default 45s), on top of <code>DISPATCH_PLAN_GH_TIMEOUT</code> per <code>gh</code> call. The
 gate pages every PR the repo ever had (100 per serial GraphQL request), so it grows with PR
