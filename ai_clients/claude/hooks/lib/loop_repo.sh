@@ -31,6 +31,7 @@
 #   LOOP_REPO_SOURCE  invocation | cwd | unknown
 #   LOOP_REPO_LABEL   one line naming the repo and where it came from, for every guard message
 set -u
+LOOP_REPO_LABEL="${LOOP_REPO_LABEL:-}"
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	echo "loop_repo.sh is meant to be sourced, not executed." >&2
@@ -42,8 +43,9 @@ fi
 # flattened), possibly empty. No output = no invocation recorded. Parsed with jq, never grepped:
 # key-value spacing is not part of the JSONL contract.
 loop_invocation_args() {
-	jq -r '
-		.message.content? as $content
+	jq -R -r '
+		fromjson?
+		| .message.content? as $content
 		| ( $content[]?
 			| select(type == "object" and .type == "tool_use" and .name == "Skill"
 				and (.input.skill == "dev-loop" or .input.skill == "s:dev-loop"))
@@ -51,7 +53,7 @@ loop_invocation_args() {
 		  ( select(.type == "user")
 			| ($content | if type == "string" then .
 				else ([.[]? | select(type == "object" and .type == "text") | .text // ""] | join("\n")) end)
-			| select(contains("<command-name>/dev-loop</command-name>"))
+			| select(test("<command-name>/([A-Za-z0-9_-]+:)?dev-loop</command-name>"))
 			| (capture("<command-args>(?<a>[^<]*)</command-args>")? // {a: ""}).a
 			| gsub("[\n\t]"; " ") )
 	' "$1" 2>/dev/null
@@ -67,7 +69,8 @@ _loop_repo_first_word() {
 }
 
 _loop_repo_is_checkout() {
-	[ -d "$1" ] && "${GIT:-/usr/bin/git}" -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1
+	# `--is-inside-work-tree` exits 0 and prints "false" inside a .git dir or a bare repo.
+	[ -d "$1" ] && [ "$("${GIT:-git}" -C "$1" rev-parse --is-inside-work-tree 2>/dev/null)" = true ]
 }
 
 # _loop_repo_candidate WORD
@@ -79,7 +82,9 @@ _loop_repo_candidate() {
 	\~/*) printf 'path %s\n' "$HOME/${word#\~/}" ;;
 	/*) printf 'path %s\n' "$word" ;;
 	*)
-		if [[ "$word" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+		if [[ "$word" == ./* || "$word" == ../* ]]; then
+			: # a relative path names no repo under the root; fall back to the cwd
+		elif [[ "$word" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
 			printf 'repo %s\n' "$root/${word#*/}"
 		elif [[ "$word" =~ ^[A-Za-z0-9._-]+$ ]]; then
 			printf 'bare %s\n' "$root/$word"

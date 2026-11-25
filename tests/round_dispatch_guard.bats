@@ -228,3 +228,45 @@ PY
     [[ "$output" == *"UNKNOWN"* ]]
     [[ "$output" != *"#222"* ]]
 }
+
+@test "one malformed transcript line does not hide a later dev-loop invocation" {
+    other_repo alpha
+    other_repo beta
+    dev_loop_args alpha
+    echo '{"message":{"content":[{"type":"tex' >>"$TRANSCRIPT"
+    dev_loop_args beta
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#333"* ]]
+}
+
+@test "a plugin-namespaced /s:dev-loop slash command names the repo too" {
+    other_repo alpha
+    dev_loop_args ""
+    jq -nc '{type: "user", message: {content:
+        "<command-name>/s:dev-loop</command-name>\n<command-args>alpha</command-args>"}}' >>"$TRANSCRIPT"
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#111"* ]]
+}
+
+@test "a .git directory is no work tree: UNKNOWN, not a checkout" {
+    other_repo alpha
+    dev_loop_args "$DEV_LOOP_REPOS_ROOT/alpha/.git"
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+}
+
+@test "a ./relative first word is not looked up under the repos root" {
+    other_repo alpha
+    dev_loop_args "./alpha"
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#222"* ]]
+    [[ "$output" == *"cwd fallback"* ]]
+}
