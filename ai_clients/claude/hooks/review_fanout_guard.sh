@@ -118,52 +118,6 @@ REFRESH_TIMEOUT="${REVIEW_FANOUT_REFRESH_TIMEOUT:-900}"
 UNKNOWN_BLOCKS_BEFORE_ANNOUNCE="${REVIEW_FANOUT_UNKNOWN_BLOCKS:-1}"
 [[ $UNKNOWN_BLOCKS_BEFORE_ANNOUNCE =~ ^[0-9]+$ ]] || UNKNOWN_BLOCKS_BEFORE_ANNOUNCE=1
 
-# dev_loop_invoked TRANSCRIPT
-# Pure data: did this session's transcript ever run s:dev-loop? MIRRORS
-# dispatch_free_surface_guard.sh's own function of the same name rather than sharing it —
-# #405 holds that file, and a second writer on it is a guaranteed conflict. Three shapes
-# count, all measured off real transcripts (dotfiles-linux-dev#404); a session that never ran the
-# loop in ANY of them is not this hook's concern and must never be blocked:
-#   1. a Skill tool_use, bare ("dev-loop");
-#   2. a Skill tool_use, fully-qualified ("s:dev-loop") — some invocation paths serialise the
-#      namespaced form, and nothing is measured to prefer one, so both count;
-#   3. a `/dev-loop` slash command, typed or replayed from a cron schedule. Both land as a
-#      plain user-role message whose content is a bare STRING carrying the literal
-#      <command-name>/dev-loop</command-name> marker — which is why shape 1's
-#      `.message.content[]?` walk sees none of them: `[]?` over a string yields nothing
-#      rather than an error, so the miss was silent.
-# Parsed with jq, never grepped for the whole object: key-value spacing is not part of the
-# JSONL contract, so a literal '"skill":"dev-loop"' match silently misses a record serialized
-# as '"skill": "dev-loop"' and the hook never fires.
-dev_loop_invoked() {
-	local transcript="$1"
-	[ -r "$transcript" ] || return 1
-
-	if jq -e 'select(.message.content != null)
-		| .message.content[]?
-		| select(.type == "tool_use"
-			and .name == "Skill"
-			and (.input.skill == "dev-loop" or .input.skill == "s:dev-loop"))' \
-		"$transcript" >/dev/null 2>&1
-	then
-		return 0
-	fi
-
-	# `select(contains(...))` at the tail, never a bare `contains(...)`: `jq -e`'s exit status
-	# reflects only the LAST value the program emits across the whole JSONL stream, and every
-	# other user-role record in a real transcript (an Agent's tool_result is also
-	# `.type == "user"`) reaches this same pipeline and would emit an explicit `false` —
-	# which, landing after a real match, flips -e's verdict back to failure. `select` emits
-	# NOTHING for a non-match, so only a real match can be the last value on the stream.
-	jq -e 'select(.type == "user" and .message.content != null)
-		| .message.content
-		| if type == "string" then .
-		  else ([.[]? | select(.type == "text") | .text // ""] | join("\n"))
-		  end
-		| select(contains("<command-name>/dev-loop</command-name>"))' \
-		"$transcript" >/dev/null 2>&1
-}
-
 # The `name` a review dispatch MUST pass to the Agent tool, as a pattern. `name` is a
 # structured, pattern-validated Agent-tool parameter the DISPATCHER sets — not prose inferred
 # from `description`, which is exactly the weak-proxy mistake `reviewer_ladder.sh` records for
@@ -683,7 +637,7 @@ main() {
 	[ -n "$transcript" ] && [ -r "$transcript" ] || exit 0
 	session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null)"
 
-	dev_loop_invoked "$transcript" || exit 0
+	loop_round_invoked "$transcript" || exit 0
 	# The repo the loop ran for, never the payload cwd alone (#1125): the orchestrator may have
 	# moved elsewhere just to read. loop_repo_resolve falls back to that cwd, and says so.
 	loop_repo_resolve "$transcript" "$cwd" || { loop_repo_unknown_message review_fanout_guard; exit 2; }
