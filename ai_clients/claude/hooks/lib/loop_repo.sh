@@ -65,16 +65,19 @@ loop_invocation_args() {
 # `<command-name>/dev-loop</command-name>` (or `/s:dev-loop`) marker. A user turn that merely
 # mentions `/dev-loop` has no marker and does not count. Guards needing the stream in order
 # (round_dispatch_guard) prepend this to their own program; the rest call loop_round_invoked.
-LOOP_ROUND_JQ='def loop_round($c):
-	( $c[]?
-		| select(type == "object" and .type == "tool_use" and .name == "Skill"
-			and (.input.skill == "dev-loop" or .input.skill == "s:dev-loop"))
-		| "LOOP" ),
-	( select(.type == "user")
-		| ($c | if type == "string" then .
-			else ([.[]? | select(type == "object" and .type == "text") | .text // ""] | join("\n")) end)
-		| select(test("<command-name>/([A-Za-z0-9_-]+:)?dev-loop</command-name>"))
-		| "LOOP" );
+# `loop_block` is the per-block half (a Skill tool_use), `loop_command($c)` the per-record half
+# (a user turn), split so a caller walking blocks in order can interleave its own tokens.
+LOOP_ROUND_JQ='def loop_block:
+	select(type == "object" and .type == "tool_use" and .name == "Skill"
+		and (.input.skill == "dev-loop" or .input.skill == "s:dev-loop"))
+	| "LOOP";
+def loop_command($c):
+	select(.type == "user")
+	| ($c | if type == "string" then .
+		else ([.[]? | select(type == "object" and .type == "text") | .text // ""] | join("\n")) end)
+	| select(test("<command-name>/([A-Za-z0-9_-]+:)?dev-loop</command-name>"))
+	| "LOOP";
+def loop_round($c): ($c[]? | loop_block), loop_command($c);
 '
 
 # loop_round_invoked TRANSCRIPT

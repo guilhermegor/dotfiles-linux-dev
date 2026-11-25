@@ -85,6 +85,20 @@ run_hook() {
     [ "$status" -eq 2 ]
 }
 
+@test "Skill(dev-loop) then Agent in ONE record: the agent satisfies the round" {
+    printf '%s\n' '{"message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"dev-loop"}},{"type":"tool_use","name":"Agent","input":{"description":"ship 433"}}]}}' >> "$TRANSCRIPT"
+    planner '{"dispatchable":[{"issue":433,"surface":["a"]}],"excluded":[]}'
+    run run_hook
+    [ "$status" -eq 0 ]
+}
+
+@test "Agent then Skill(dev-loop) in ONE record: the new round is NOT satisfied" {
+    printf '%s\n' '{"message":{"content":[{"type":"tool_use","name":"Agent","input":{"description":"earlier"}},{"type":"tool_use","name":"Skill","input":{"skill":"dev-loop"}}]}}' >> "$TRANSCRIPT"
+    planner '{"dispatchable":[{"issue":433,"surface":["a"]}],"excluded":[]}'
+    run run_hook
+    [ "$status" -eq 2 ]
+}
+
 @test "every candidate excluded with a named reason is the legitimate zero case" {
     tool_use Skill '{"skill":"dev-loop"}'
     planner '{"dispatchable":[],"excluded":[{"issue":426,"reason":"surface held by live agent"}]}'

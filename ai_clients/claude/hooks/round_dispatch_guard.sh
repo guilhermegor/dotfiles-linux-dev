@@ -67,9 +67,9 @@ round_events() {
 	jq -r "$LOOP_ROUND_JQ"'select(.message.content != null)
 		| .message.content as $c
 		| ( $c[]?
-			| select(type == "object" and .type == "tool_use" and .name == "Agent")
-			| "AGENT" ),
-		  loop_round($c)' "$1" 2>/dev/null
+			| select(type == "object" and .type == "tool_use")
+			| if .name == "Agent" then "AGENT" else loop_block end ),
+		  loop_command($c)' "$1" 2>/dev/null
 }
 
 # dispatched_this_round EVENTS
