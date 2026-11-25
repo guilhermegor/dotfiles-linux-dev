@@ -2398,8 +2398,10 @@ source prints <code>UNREADABLE</code>, never "none". Tests: <code>tests/owner_de
 from the workflow step that mentions the label (<code>-e &lt;path&gt;</code> lines); reads are paginated, an unreadable
 one is an <code>unreadable</code> row, not "none". Gate rows dedupe in their own <code>gate|&lt;ref&gt;</code> namespace.</p>
 <h2 id="stop-guard-budget-and-plan-cache-dotfiles-linux-dev814">Stop-guard budget and plan cache (dotfiles-linux-dev#814)<a class="headerlink" href="#stop-guard-budget-and-plan-cache-dotfiles-linux-dev814" title="Permanent link">&para;</a></h2>
-<p><code>Stop</code> runs after every main-session turn, so the three Stop guards
-(<code>dispatch_free_surface_guard.sh</code>, <code>round_dispatch_guard.sh</code>, <code>review_fanout_guard.sh</code>) used to
+<p><code>Stop</code> runs after every main-session turn, so the three budgeted Stop guards
+(<code>dispatch_free_surface_guard.sh</code>, <code>round_dispatch_guard.sh</code>, <code>review_fanout_guard.sh</code>; they share one
+round recogniser, <code>loop_round_invoked</code> in <code>hooks/lib/loop_repo.sh</code>, dotfiles-linux-dev#1135)
+used to
 re-plan from scratch each time and never consulted the #445 latch; a long <code>/dev-loop</code> session
 drained the shared GraphQL bucket in minutes. <code>hooks/lib/stop_budget.sh</code> is the one fix:</p>
 <ul>
