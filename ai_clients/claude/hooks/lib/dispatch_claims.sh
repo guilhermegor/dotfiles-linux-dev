@@ -539,6 +539,10 @@ claim_review_ask() {
 #     reason   why it waits on the owner (tabs/newlines flattened to spaces)
 #     backup   durable path holding the work (a patch, a branch)
 #     epoch    when it was parked
+#   A `worktree` line made by park_owner from a real checkout carries a seventh field,
+#   `d:<path>\x1f<path>...`: the dirty paths at the moment of parking (#1141). The Stop guard
+#   blocks on any dirty path outside that set, so unrelated dirt cannot hide behind the parked
+#   work. A six-field line (a `thread`, or a worktree git could not be read in) has no set.
 #
 # An entry expires by ANCHOR, not by clock: once the worktree HEAD or the PR head no longer equals
 # the anchor, the entry is ignored, because the owner acting (or anyone pushing) changed what was
@@ -549,15 +553,30 @@ dispatch_parked_file() {
 	printf '%s/parked-owner.tsv\n' "$dir"
 }
 
+# parked_dirty_set DIR
+# `d:` plus the dirty paths of DIR (tracked changes vs HEAD, staged or not, and untracked files)
+# joined by 0x1f; empty when DIR is no readable checkout. Real git, never the rtk proxy.
+parked_dirty_set() {
+	local dir="${1:-}" paths
+	paths="$({
+		/usr/bin/git -C "$dir" diff --name-only -z HEAD 2>/dev/null
+		/usr/bin/git -C "$dir" ls-files --others --exclude-standard -z 2>/dev/null
+	} | tr '\0' '\037')" || return 0
+	[ -n "$(/usr/bin/git -C "$dir" rev-parse --git-dir 2>/dev/null)" ] || return 0
+	printf 'd:%s' "$paths"
+}
+
 # park_owner KIND TARGET ANCHOR REASON BACKUP
 # Prints PARKED (return 0) or UNKNOWN (return 1: a field is empty, no flock, no git dir).
-# Re-parking a KIND+TARGET replaces its line.
+# Re-parking a KIND+TARGET replaces its line. ANCHOR must be a hex sha of 7-64 chars: anything
+# else (a tab, a newline) would make the line fail the six-field check and be silently ignored.
 park_owner() {
 	local kind="${1:-}" target="${2:-}" anchor="${3:-}" reason="${4:-}" backup="${5:-}"
 	local file lock f
 	for f in "$target" "$anchor" "$reason" "$backup"; do
 		[ -n "$f" ] || kind=""
 	done
+	[[ "$anchor" =~ ^[0-9a-f]{7,64}$ ]] || kind=""
 	[[ "$kind" == worktree || "$kind" == thread ]] || {
 		echo "UNKNOWN"
 		return 1
@@ -574,6 +593,8 @@ park_owner() {
 	target="$(printf '%s' "$target" | tr '\t\n\r' '   ')"
 	reason="$(printf '%s' "$reason" | tr '\t\n\r' '   ')"
 	backup="$(printf '%s' "$backup" | tr '\t\n\r' '   ')"
+	local dirty=""
+	[[ "$kind" != worktree ]] || dirty="$(parked_dirty_set "$target")"
 	(
 		flock -w "${DISPATCH_CLAIM_LOCK_WAIT:-10}" 9 || {
 			echo "UNKNOWN"
@@ -583,15 +604,22 @@ park_owner() {
 		# never replace it with only the new line. An absent registry is a valid empty one.
 		local kept=""
 		if [ -e "$file" ]; then
-			kept="$(awk -F'\t' -v k="$kind" -v t="$target" '!($1 == k && $2 == t)' "$file" 2>/dev/null)" || {
+			[ -f "$file" ] || {
+				echo "UNKNOWN"
+				exit 1
+			}
+			# ENVIRON, never -v: awk -v would interpret a backslash in the target.
+			kept="$(PK="$kind" PT="$target" awk -F'\t' '!($1 == ENVIRON["PK"] && $2 == ENVIRON["PT"])' "$file" 2>/dev/null)" || {
 				echo "UNKNOWN"
 				exit 1
 			}
 		fi
 		{
 			[ -z "$kept" ] || printf '%s\n' "$kept"
-			printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$kind" "$target" "$anchor" "$reason" "$backup" "$(date +%s)"
+			printf '%s\t%s\t%s\t%s\t%s\t%s%s\n' "$kind" "$target" "$anchor" "$reason" "$backup" \
+				"$(date +%s)" "${dirty:+$'\t'$dirty}"
 		} >"$file.tmp" && mv -f "$file.tmp" "$file" || {
+			rm -f "$file.tmp"
 			echo "UNKNOWN"
 			exit 1
 		}
@@ -614,7 +642,7 @@ parked_owner_lookup() {
 	# ENVIRON, never -v: awk -v would interpret backslashes inside a path.
 	out="$(PK="$kind" PT="$target" PA="$anchor" awk -F'\t' '
 		BEGIN { k = ENVIRON["PK"]; t = ENVIRON["PT"]; a = ENVIRON["PA"]; pre = (substr(t, length(t)) == "#") }
-		NF == 6 && $1 == k && $3 == a && ($2 == t || (pre && substr($2, 1, length(t)) == t))' "$file")" || return 2
+		(NF == 6 || NF == 7) && $1 == k && $3 == a && ($2 == t || (pre && substr($2, 1, length(t)) == t))' "$file")" || return 2
 	[ -n "$out" ] || return 1
 	printf '%s\n' "$out"
 }
@@ -627,6 +655,8 @@ parked_owner_lookup() {
 parked_owner_announce_once() {
 	local session="${1:-nosession}" label="$2" lines="$3" marker
 	marker="${TMPDIR:-/tmp}/parked_owner.${label}.${session//[^A-Za-z0-9_-]/_}.$(printf '%s' "$lines" | cksum | cut -d' ' -f1).announced"
+	# Markers are per session and never reused, so anything older than a day is dead weight.
+	find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'parked_owner.*.announced' -mtime +1 -delete 2>/dev/null
 	[ -e "$marker" ] && return 1
 	: >"$marker" 2>/dev/null
 	return 0

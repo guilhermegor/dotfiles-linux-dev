@@ -92,3 +92,18 @@ park() { # REASON  (parks the worktree at its current HEAD)
     run bash -c "jq -nc --arg c '$WT' '{cwd: \$c, stop_hook_active: true}' | '$HOOK'"
     [ "$status" -eq 0 ]
 }
+
+@test "new dirt outside the set recorded at park time blocks the stop (#1141)" {
+    park "owner-only commit"
+    echo new >"$WT/unrelated.txt"
+    run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"unrelated.txt"* ]]
+}
+
+@test "a further edit to an already-parked path stays parked (#1141)" {
+    park "owner-only commit"
+    echo more >>"$WT/f.txt"
+    run_hook
+    [ "$status" -eq 1 ]
+}

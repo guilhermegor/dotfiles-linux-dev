@@ -25,6 +25,22 @@ command -v jq >/dev/null 2>&1 || exit 0
 # shellcheck source=lib/dispatch_claims.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/dispatch_claims.sh"
 
+# parked_dirt_outside CWD LINES
+# Prints the dirty paths of CWD that the parked line did not record. Prints nothing when the line
+# carries no recorded set (six fields, the pre-#1141 shape) or every dirty path is inside it.
+# A set is the seventh field, `d:<path>` entries joined by 0x1f (lib/dispatch_claims.sh).
+parked_dirt_outside() {
+	local cwd="$1" lines="$2" recorded current path
+	recorded="$(printf '%s\n' "$lines" | awk -F'\t' 'NF == 7 { print substr($7, 3); exit }' | tr '\037' '\n')"
+	printf '%s\n' "$lines" | awk -F'\t' 'NF == 7 { f = 1 } END { exit !f }' || return 0
+	current="$(parked_dirty_set "$cwd")"
+	current="${current#d:}"
+	while IFS= read -r path; do
+		[ -n "$path" ] || continue
+		printf '%s\n' "$recorded" | grep -qxF -- "$path" || printf '%s\n' "$path"
+	done < <(printf '%s' "$current" | tr '\037' '\n')
+}
+
 # report_if_parked CWD SESSION_ID
 # A worktree declared parked on the owner (dotfiles-linux-dev#1139, lib/dispatch_claims.sh) is
 # reported ONCE per session instead of blocking every turn: the agent cannot finish it, and a
@@ -36,6 +52,9 @@ report_if_parked() {
 	top="$($GIT -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || return 0
 	head="$($GIT -C "$cwd" rev-parse HEAD 2>/dev/null)" || return 0
 	lines="$(cd "$cwd" && parked_owner_lookup worktree "$top" "$head")" || return 0
+	# #1141: HEAD alone is a weak anchor, so a line that recorded its dirty set at park time
+	# only covers those paths; any other dirty path means the park does not vouch for it.
+	[ -z "$(parked_dirt_outside "$cwd" "$lines")" ] || return 0
 	# exit 1, never 0: a Stop hook surfaces stderr on any non-zero but discards it on 0.
 	parked_owner_announce_once "$session" worktree "$lines" || exit 0
 	{

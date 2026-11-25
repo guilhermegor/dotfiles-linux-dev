@@ -504,8 +504,13 @@ _emit_verdict() {
 	parked)
 		# Said once per session. exit 1 (via the return) surfaces stderr; 0 would discard it.
 		parked_owner_announce_once "$NUDGE_SESSION_ID" threads "$GATE_DETAIL" || return 0
+		# #1141: a repo-wide detail can span several PRs (`  <pr>#<thread>: ...` lines).
+		local parked_prs scope
+		parked_prs="$(printf '%s\n' "$GATE_DETAIL" | sed -n 's/^ *\([0-9][0-9]*\)#.*/\1/p' | sort -u | grep -c .)"
+		scope="PR #${number}"
+		[ "$parked_prs" -le 1 ] || scope="${parked_prs} PRs (first #${number})"
 		{
-			echo "${prefix}PR #${number}: every unfinished review thread is parked on the owner, not blocking:"
+			echo "${prefix}${scope}: every unfinished review thread is parked on the owner, not blocking:"
 			echo
 			printf '%s\n' "$GATE_DETAIL"
 			echo
