@@ -3096,6 +3096,22 @@ replace real directories on a fresh machine, and degrades on Windows. The work-t
 needs no link at all. Membership is the whitelist in the git dir's <code>info/exclude</code>
 (<code>/*</code> then explicit <code>!</code> entries; <code>*.jsonl</code>, <code>.env*</code>, <code>.credentials.json</code> re-denied
 last), rewritten on every run so a whitelist change deploys with the hooks.</p>
+<p><strong>Private include list (#1126).</strong> A private artifact (say a skill with internal content)
+lives only in the private repo, and this public repo never names it. The owner writes
+<code>~/.claude/ai-state-sync.include</code>, one path per line relative to <code>~/.claude</code>, <code>#</code> comments
+allowed, e.g. <code>/skills/private-example/</code>. <code>hooks/lib/ai_state_include.sh</code> is the one parser:
+<code>ai_state_sync.sh</code> splices the lines into <code>info/exclude</code> after the fixed whitelist and before
+the final denies (so <code>*.jsonl</code>, <code>.env*</code>, <code>.credentials.json</code> still win), generating the parent
+re-includes gitignore needs (<code>!/skills/</code>, <code>/skills/*</code>, <code>!/skills/private-example/</code>; none for
+a path inside a directory the whitelist already re-includes whole, such as <code>/memory/</code>, where
+<code>/memory/*</code> would stop new memory files syncing; listed paths are literal, so <code>[</code>, <code>*</code>, <code>?</code>
+are escaped), and
+<code>prune_orphans</code> never offers a covered artifact for removal. Lines starting with <code>!</code>, containing
+<code>..</code>, empty/<code>/</code>, or under <code>/projects/</code> are ignored (the parser notes them on stderr;
+the sync discards that stream, so run it by hand to see them). The file is itself whitelisted, so
+it syncs. Missing or unreadable file: exactly the previous behaviour. <code>deploy_drift.sh</code> only
+compares source to live, so a live-only private skill is never flagged. Tests:
+<code>tests/ai_state_include.bats</code>.</p>
 <p><strong><code>issue-trackers.conf</code> lives in the state repo</strong>, not here: it is owner-specific
 config (which trackers the owner's repos use), this repo is public, and a deployed copy
 would need a per-machine override anyway.</p>
