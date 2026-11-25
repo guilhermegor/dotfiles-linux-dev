@@ -609,6 +609,9 @@ _recheck_cached_pr() {
 	fi
 	[ "$GATE_STATUS" = "running" ] && _reclassify_running "$owner" "$name" "$REPORT_NUMBER"
 	[ "$GATE_STATUS" = "problems" ] && _apply_delegation_filter "$transcript"
+	# A cached blocking PR that is parked now falls to the branch below (entry dropped, rescan),
+	# so it cannot shadow an unparked finding on a later PR.
+	_apply_parked_owner "$owner" "$name" "$REPORT_NUMBER"
 
 	case "$GATE_STATUS" in
 	running | problems) ;;
@@ -703,7 +706,10 @@ _repo_wide_scan() {
 		# turn; cache it keyed by head if the GraphQL spend ever shows it.
 		if [ "$GATE_STATUS" = "parked" ]; then
 			saw_delegated=1
-			[ -n "$parked_n" ] || { parked_n="$n"; parked_detail="$GATE_DETAIL"; }
+			# Accumulate every parked PR: the once-per-session marker hashes this text, so a
+			# second parked PR is announced with the first, never hidden behind it.
+			[ -n "$parked_n" ] || parked_n="$n"
+			parked_detail="${parked_detail:+$parked_detail$'\n'}$GATE_DETAIL"
 			continue
 		fi
 		# A non-required, indefinitely-PENDING status is not a reason to stop the scan here --

@@ -579,8 +579,17 @@ park_owner() {
 			echo "UNKNOWN"
 			exit 1
 		}
+		# Read the old lines BEFORE touching anything: a failed read must keep the old file,
+		# never replace it with only the new line. An absent registry is a valid empty one.
+		local kept=""
+		if [ -e "$file" ]; then
+			kept="$(awk -F'\t' -v k="$kind" -v t="$target" '!($1 == k && $2 == t)' "$file" 2>/dev/null)" || {
+				echo "UNKNOWN"
+				exit 1
+			}
+		fi
 		{
-			[ -f "$file" ] && awk -F'\t' -v k="$kind" -v t="$target" '!($1 == k && $2 == t)' "$file"
+			[ -z "$kept" ] || printf '%s\n' "$kept"
 			printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$kind" "$target" "$anchor" "$reason" "$backup" "$(date +%s)"
 		} >"$file.tmp" && mv -f "$file.tmp" "$file" || {
 			echo "UNKNOWN"
