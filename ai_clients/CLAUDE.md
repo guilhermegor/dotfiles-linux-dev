@@ -1174,7 +1174,8 @@ a path inside a directory the whitelist already re-includes whole, such as `/mem
 `/memory/*` would stop new memory files syncing; listed paths are literal, so `[`, `*`, `?`
 are escaped), and
 `prune_orphans` never offers a covered artifact for removal. Lines starting with `!`, containing
-`..`, or under `/projects/` are ignored with a stderr note. The file is itself whitelisted, so
+`..`, empty/`/`, or under `/projects/` are ignored (the parser notes them on stderr;
+the sync discards that stream, so run it by hand to see them). The file is itself whitelisted, so
 it syncs. Missing or unreadable file: exactly the previous behaviour. `deploy_drift.sh` only
 compares source to live, so a live-only private skill is never flagged. Tests:
 `tests/ai_state_include.bats`.

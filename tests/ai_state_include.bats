@@ -96,9 +96,18 @@ refute_ignored() {
 @test "bang and dotdot lines are rejected" {
     printf '!/skills/other/\n/skills/../memory/\n' >"$INC"
     run bash -c "source '$LIB'; ai_state_include_paths '$INC'"
-    [ -z "${output//*ignoring*/}" ]
+    [[ "$output" == *"ignoring include line: !/skills/other/"* ]]
+    [[ "$output" == *"ignoring include line: /skills/../memory/"* ]]
     run bash -c "source '$LIB'; ai_state_include_paths '$INC' 2>/dev/null"
     [ -z "$output" ]
+}
+
+@test "root and bare projects lines are rejected and protect nothing" {
+    printf '/\n//\n/projects\nprojects\n' >"$INC"
+    run bash -c "source '$LIB'; ai_state_include_paths '$INC' 2>/dev/null"
+    [ -z "$output" ]
+    run bash -c "source '$LIB'; ai_state_include_covers '$INC' skills/other"
+    [ "$status" -ne 0 ]
 }
 
 @test "missing include file means the current whitelist exactly" {

@@ -19,7 +19,9 @@ ai_state_include_paths() {
         line="${line#"${line%%[![:space:]]*}"}"
         line="${line%"${line##*[![:space:]]}"}"
         [[ -z "$line" || "$line" == \#* ]] && continue
-        if [[ "$line" == '!'* || "$line" == *..* || "$line" == /projects/* || "$line" == projects/* ]]; then
+        # An empty or root path would match every artifact in the prune guard.
+        [[ -n "${line//\//}" ]] || { printf '[ai-state-sync] ignoring include line: %s\n' "$line" >&2; continue; }
+        if [[ "$line" == '!'* || "$line" == *..* || "$line" == /projects/* || "$line" == projects/* || "$line" == /projects || "$line" == projects ]]; then
             printf '[ai-state-sync] ignoring include line: %s\n' "$line" >&2
             continue
         fi
