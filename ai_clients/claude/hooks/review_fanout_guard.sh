@@ -90,6 +90,8 @@ command -v python3 >/dev/null 2>&1 || exit 0
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/stop_budget.sh
 source "$HOOK_DIR/lib/stop_budget.sh"
+# shellcheck source=lib/loop_repo.sh
+source "$HOOK_DIR/lib/loop_repo.sh"
 PLANNER="${REVIEW_FANOUT_PLANNER:-$HOOK_DIR/lib/review_fanout_plan.py}"
 # Must exceed the planner's RUNG_TIMEOUT (120 s) plus its gh calls, or the planner is killed
 # before the probe can report its own timeout reason (#877).
@@ -574,6 +576,7 @@ block_unreadable() {
 	# as before (#965 keeps the fail-open case).
 	[ "${REVIEW_PRS_IN_FLIGHT:- }" = " " ] || exit 0
 	{
+		echo "review_fanout_guard: $LOOP_REPO_LABEL"
 		echo "review_fanout_guard: $1"
 		echo
 		echo "s:dev-loop step 4b (REVIEW FAN-OUT) cannot tell right now which open PRs need a"
@@ -680,9 +683,12 @@ main() {
 	[ -n "$transcript" ] && [ -r "$transcript" ] || exit 0
 	session_id="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null)"
 
-	$GIT -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
-
 	dev_loop_invoked "$transcript" || exit 0
+	# The repo the loop ran for, never the payload cwd alone (#1125): the orchestrator may have
+	# moved elsewhere just to read. loop_repo_resolve falls back to that cwd, and says so.
+	loop_repo_resolve "$transcript" "$cwd" || { loop_repo_unknown_message review_fanout_guard; exit 2; }
+	cwd="$LOOP_REPO_DIR"
+	$GIT -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 	# Only an unresolved REVIEW dispatch counts, and only for ITS OWN PR (#965): one running
 	# review-pr-N no longer silences the guard for every other dispatchable PR. An unrelated
 	# agent in flight counts for nothing — see review_dispatch_running's own header.
@@ -795,6 +801,8 @@ main() {
 	# and never counted as a reason to block.
 	merge_ready="$(printf '%s' "$plan" | jq -r '.merge_ready[]? | "  #\(.pr)  head \((.head // "")[0:8])"')"
 	{
+		echo "review_fanout_guard: $LOOP_REPO_LABEL"
+		echo
 		echo "Open PRs need a reviewer on their CURRENT head and no review agent was started —"
 		echo "do not stop here without dispatching the fan-out."
 		echo

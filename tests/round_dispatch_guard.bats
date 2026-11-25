@@ -147,3 +147,126 @@ run_hook() {
     run run_hook true
     [ "$status" -eq 0 ]
 }
+
+# --- the repo judged is the one the loop ran for, not the cwd (dotfiles-linux-dev#1125) ---------
+
+# other_repo NAME -> a second git checkout under DEV_LOOP_REPOS_ROOT; the Stop payload's cwd stays
+# in the first repo (TEST_TMP), which is the orchestrator having `cd`'d away from the loop's repo.
+other_repo() {
+    export DEV_LOOP_REPOS_ROOT="$TEST_TMP/repos"
+    mkdir -p "$DEV_LOOP_REPOS_ROOT/$1"
+    git -C "$DEV_LOOP_REPOS_ROOT/$1" init -q -b main
+    git -C "$DEV_LOOP_REPOS_ROOT/$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+}
+
+# dev_loop_args ARGS -> a Skill call on dev-loop carrying ARGS. This guard's own round_events only
+# counts the Skill shape as a loop invocation; the slash-command shape is covered by the guards
+# that read it (dispatch_free_surface_guard.bats, review_fanout_guard.bats).
+dev_loop_args() {
+    tool_use Skill "$(jq -nc --arg a "$1" '{skill: "dev-loop", args: $a}')"
+}
+
+# planner_per_repo -> a stub planner whose answer depends on the repo it is run in:
+# alpha has #111 dispatchable, beta #333, anything else #222.
+planner_per_repo() {
+    cat >"$ROUND_DISPATCH_PLANNER" <<'PY'
+import os
+issue = {"alpha": 111, "beta": 333}.get(os.path.basename(os.getcwd()), 222)
+print('{"dispatchable":[{"issue":%d,"surface":["x"]}],"excluded":[]}' % issue)
+PY
+}
+
+@test "judges the repo named by /dev-loop, not the repo the orchestrator cd'd into" {
+    other_repo alpha
+    dev_loop_args alpha
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#111"* ]]
+    [[ "$output" != *"#222"* ]]
+    [[ "$output" == *"repo judged: $DEV_LOOP_REPOS_ROOT/alpha (from the /dev-loop invocation"* ]]
+}
+
+@test "a Skill call with a path in its args names the repo too" {
+    other_repo alpha
+    tool_use Skill "{\"skill\":\"dev-loop\",\"args\":\"$DEV_LOOP_REPOS_ROOT/alpha — resolve the open issue\"}"
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#111"* ]]
+    [[ "$output" != *"#222"* ]]
+}
+
+@test "the LAST dev-loop invocation decides the repo" {
+    other_repo alpha
+    other_repo beta
+    dev_loop_args alpha
+    dev_loop_args beta
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#333"* ]]
+    [[ "$output" == *"/beta (from the /dev-loop invocation"* ]]
+}
+
+@test "a bare dev-loop names no repo: falls back to the cwd and says so" {
+    other_repo alpha
+    tool_use Skill '{"skill":"dev-loop"}'
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#222"* ]]
+    [[ "$output" == *"repo judged: $TEST_TMP (cwd fallback: the last /dev-loop invocation named no repo)"* ]]
+}
+
+@test "a named path that is no git checkout is UNKNOWN, never a pass on the cwd repo" {
+    other_repo alpha
+    dev_loop_args "$TEST_TMP/no-such-repo"
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    [[ "$output" != *"#222"* ]]
+}
+
+@test "one malformed transcript line does not hide a later dev-loop invocation" {
+    other_repo alpha
+    other_repo beta
+    dev_loop_args alpha
+    echo '{"message":{"content":[{"type":"tex' >>"$TRANSCRIPT"
+    dev_loop_args beta
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#333"* ]]
+}
+
+@test "a plugin-namespaced /s:dev-loop slash command names the repo too" {
+    other_repo alpha
+    dev_loop_args ""
+    jq -nc '{type: "user", message: {content:
+        "<command-name>/s:dev-loop</command-name>\n<command-args>alpha</command-args>"}}' >>"$TRANSCRIPT"
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#111"* ]]
+}
+
+@test "a .git directory is no work tree: UNKNOWN, not a checkout" {
+    other_repo alpha
+    dev_loop_args "$DEV_LOOP_REPOS_ROOT/alpha/.git"
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+}
+
+@test "a ./relative first word is not looked up under the repos root" {
+    other_repo alpha
+    dev_loop_args "./alpha"
+    planner_per_repo
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#222"* ]]
+    [[ "$output" == *"cwd fallback"* ]]
+}

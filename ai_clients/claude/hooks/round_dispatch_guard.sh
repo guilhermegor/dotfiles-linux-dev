@@ -49,6 +49,8 @@ command -v jq >/dev/null 2>&1 || exit 0
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/stop_budget.sh
 source "$HOOK_DIR/lib/stop_budget.sh"
+# shellcheck source=lib/loop_repo.sh
+source "$HOOK_DIR/lib/loop_repo.sh"
 PLANNER="${ROUND_DISPATCH_PLANNER:-$HOOK_DIR/lib/dispatch_plan.py}"
 # 60s, not 30: dispatch_plan.py measured 39s on 2026-10-03 15:40Z under a GitHub
 # burst (every Stop read UNREADABLE) and 17s at 21:15Z after #605/#576 cut its
@@ -125,6 +127,10 @@ main() {
 	# Same cache as dispatch_free_surface_guard.sh (key dispatch_plan); gate before spending (#814).
 	cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
 	[ -n "$cwd" ] || cwd="${CLAUDE_PROJECT_DIR:-$PWD}"
+	# The repo the loop ran for, never the payload cwd alone (#1125): the orchestrator may have
+	# moved elsewhere just to read. loop_repo_resolve falls back to that cwd, and says so.
+	loop_repo_resolve "$transcript" "$cwd" || { loop_repo_unknown_message round_dispatch_guard; exit 2; }
+	cwd="$LOOP_REPO_DIR"
 	cached=1
 	plan="$(stop_plan_cache_read dispatch_plan "$cwd" "$transcript")" || {
 		cached=0
@@ -146,6 +152,7 @@ main() {
 		and all(.excluded[]; (.issue | type == "number") and ((.reason // "") | length > 0))
 	' >/dev/null 2>&1; then
 		{
+			echo "round_dispatch_guard: $LOOP_REPO_LABEL"
 			echo "round_dispatch_guard: dispatch plan UNREADABLE (planner failed, timed out, or"
 			echo "printed something that is not the documented object) — not the same as empty."
 			echo
@@ -166,6 +173,8 @@ main() {
 
 	excluded="$(printf '%s' "$plan" | jq -r '.excluded[]? | "  #\(.issue)  \(.reason)"')"
 	{
+		echo "round_dispatch_guard: $LOOP_REPO_LABEL"
+		echo
 		echo "This dev-loop round has dispatchable candidates and started no agent — do not"
 		echo "stop here without dispatching."
 		echo
