@@ -818,6 +818,17 @@ SH
     [ "$status" -eq 2 ]
 }
 
+@test "park_owner keeps earlier entries when the registry cannot be read (#1139 review)" {
+    park_owner worktree /w/a abc "first" /tmp/b.patch
+    chmod 000 "$TEST_TMP/.git/parked-owner.tsv"
+    run park_owner worktree /w/b abc "second" /tmp/b.patch
+    chmod 600 "$TEST_TMP/.git/parked-owner.tsv"
+    [ "$status" -ne 0 ]
+    [ "$output" = "UNKNOWN" ]
+    [ "$(wc -l <"$TEST_TMP/.git/parked-owner.tsv")" -eq 1 ]
+    grep -q first "$TEST_TMP/.git/parked-owner.tsv"
+}
+
 @test "a missing parked-owner.tsv is simply not parked (#1139)" {
     run parked_owner_lookup worktree /w/r abc
     [ "$status" -eq 1 ]

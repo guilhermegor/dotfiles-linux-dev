@@ -530,6 +530,32 @@ parked_setup() {
     [ "$status" -eq 0 ]
 }
 
+@test "parked: repo-wide, two parked PRs are both reported, not only the first (#1139 review)" {
+    parked_setup
+    export PR_VIEW_NUMBER="" PR_LIST=$'42\n43'
+    problem_fixture 42
+    problem_fixture 43
+    park_thread "42#PRRT_x" aaa111 "why"
+    park_thread "43#PRRT_x" aaa111 "why"
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"43#PRRT_x"* ]]
+}
+
+@test "parked: a cached blocking PR that turns parked rescans and still finds a later PR (#1139 review)" {
+    parked_setup
+    export PR_VIEW_NUMBER="" PR_LIST=$'42\n43'
+    problem_fixture 42
+    problem_fixture 43
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"PR #42"* ]]
+    park_thread "42#PRRT_x" aaa111 "why"
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"PR #43"* ]]
+}
+
 @test "parked: an unreadable parked-owner.tsv fails closed (#1139)" {
     parked_setup
     problem_fixture 42
