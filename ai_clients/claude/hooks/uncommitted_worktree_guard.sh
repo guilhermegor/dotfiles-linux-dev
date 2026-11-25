@@ -54,7 +54,8 @@ report_if_parked() {
 	lines="$(cd "$cwd" && parked_owner_lookup worktree "$top" "$head")" || return 0
 	# #1141: HEAD alone is a weak anchor, so a line that recorded its dirty set at park time
 	# only covers those paths; any other dirty path means the park does not vouch for it.
-	[ -z "$(parked_dirt_outside "$cwd" "$lines")" ] || return 0
+	# $top, not $cwd: the set is recorded relative to the root, and ls-files is cwd-relative.
+	[ -z "$(parked_dirt_outside "$top" "$lines")" ] || return 0
 	# exit 1, never 0: a Stop hook surfaces stderr on any non-zero but discards it on 0.
 	parked_owner_announce_once "$session" worktree "$lines" || exit 0
 	{

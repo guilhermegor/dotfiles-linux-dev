@@ -560,6 +560,8 @@ parked_dirty_set() {
 	local dir="${1:-}" paths
 	paths="$({
 		/usr/bin/git -C "$dir" diff --name-only -z HEAD 2>/dev/null
+		# Index-only change (staged, worktree copy back at HEAD): in neither diff HEAD nor others.
+		/usr/bin/git -C "$dir" diff --cached --name-only -z HEAD 2>/dev/null
 		/usr/bin/git -C "$dir" ls-files --others --exclude-standard -z 2>/dev/null
 	} | tr '\0' '\037')" || return 0
 	[ -n "$(/usr/bin/git -C "$dir" rev-parse --git-dir 2>/dev/null)" ] || return 0
