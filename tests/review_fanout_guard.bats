@@ -1495,3 +1495,62 @@ STUB
     REVIEW_FANOUT_CACHE_TTL_MIN=10 run_guard
     [ "$status" -eq 0 ]
 }
+
+# --- the repo judged is the one the loop ran for, not the cwd (dotfiles-linux-dev#1125) -----------
+
+# other_repo NAME -> a second checkout under DEV_LOOP_REPOS_ROOT. The payload's cwd stays in the
+# first repo (TEST_TMP): the orchestrator having moved away from the loop's repo to read something.
+other_repo() {
+    export DEV_LOOP_REPOS_ROOT="$TEST_TMP/repos"
+    mkdir -p "$DEV_LOOP_REPOS_ROOT/$1"
+    /usr/bin/git -C "$DEV_LOOP_REPOS_ROOT/$1" init -q -b main
+    /usr/bin/git -C "$DEV_LOOP_REPOS_ROOT/$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+}
+
+# slash_dev_loop ARGS -> a `/dev-loop ARGS` slash-command record.
+slash_dev_loop() {
+    jq -nc --arg a "$1" '{type: "user", message: {content:
+        ("<command-message>dev-loop</command-message>\n<command-name>/dev-loop</command-name>\n<command-args>" + $a + "</command-args>")}}' \
+        >>"$TRANSCRIPT"
+}
+
+# planner_per_repo -> a planner whose answer depends on the repo it runs in: alpha has PR 111
+# needing a reviewer, anything else PR 222.
+planner_per_repo() {
+    cat >"$REVIEW_FANOUT_PLANNER" <<'PY'
+import os
+pr = 111 if os.path.basename(os.getcwd()) == "alpha" else 222
+print('{"rung":{"status":"ok","runtime":"qwen","model":"m"},"dispatchable":[{"pr":%d,"head":"abcdef0123"}],"excluded":[]}' % pr)
+PY
+}
+
+@test "judges the repo named by /dev-loop, not the repo the orchestrator moved into" {
+    other_repo alpha
+    slash_dev_loop alpha
+    planner_per_repo
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#111"* ]]
+    [[ "$output" != *"#222"* ]]
+    [[ "$output" == *"repo judged: $DEV_LOOP_REPOS_ROOT/alpha (from the /dev-loop invocation"* ]]
+}
+
+@test "a bare /dev-loop falls back to the cwd and the message says so" {
+    other_repo alpha
+    slash_dev_loop ""
+    planner_per_repo
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"#222"* ]]
+    [[ "$output" == *"repo judged: $TEST_TMP (cwd fallback: the last /dev-loop invocation named no repo)"* ]]
+}
+
+@test "a named path that is no git checkout is UNKNOWN, never a pass on the cwd repo" {
+    other_repo alpha
+    slash_dev_loop "$TEST_TMP/no-such-repo"
+    planner_per_repo
+    run_guard
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    [[ "$output" != *"#222"* ]]
+}
