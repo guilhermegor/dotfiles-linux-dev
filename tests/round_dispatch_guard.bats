@@ -148,6 +148,59 @@ run_hook() {
     [ "$status" -eq 0 ]
 }
 
+# --- every shape a round arrives in counts (dotfiles-linux-dev#1133) ---------------------------
+
+# user_turn TEXT -> a plain-string user turn, the shape a slash command or cron prompt lands as.
+user_turn() {
+    jq -nc --arg t "$1" '{type: "user", message: {role: "user", content: $t}}' >> "$TRANSCRIPT"
+}
+
+@test "a round run as skill s:dev-loop is a round: blocks with no agent started" {
+    tool_use Skill '{"skill":"s:dev-loop"}'
+    planner '{"dispatchable":[{"issue":433,"surface":["a"]}],"excluded":[]}'
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"started no agent"* ]]
+}
+
+@test "a round run as the /dev-loop slash command is a round: blocks with no agent started" {
+    user_turn $'<command-message>dev-loop</command-message>\n<command-name>/dev-loop</command-name>\n<command-args>blueprintx</command-args>'
+    planner '{"dispatchable":[{"issue":433,"surface":["a"]}],"excluded":[]}'
+    run run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"started no agent"* ]]
+}
+
+@test "a /s:dev-loop slash command is a round too" {
+    user_turn '<command-name>/s:dev-loop</command-name>'
+    planner '{"dispatchable":[{"issue":433,"surface":["a"]}],"excluded":[]}'
+    run run_hook
+    [ "$status" -eq 2 ]
+}
+
+@test "an agent started after a /dev-loop slash command satisfies the round" {
+    user_turn '<command-name>/dev-loop</command-name>'
+    tool_use Agent '{"description":"ship 433"}'
+    planner '{"dispatchable":[{"issue":433,"surface":["a"]}],"excluded":[]}'
+    run run_hook
+    [ "$status" -eq 0 ]
+}
+
+@test "an agent started BEFORE a /dev-loop slash command does not satisfy the round" {
+    tool_use Agent '{"description":"an earlier round"}'
+    user_turn '<command-name>/dev-loop</command-name>'
+    planner '{"dispatchable":[{"issue":433,"surface":["a"]}],"excluded":[]}'
+    run run_hook
+    [ "$status" -eq 2 ]
+}
+
+@test "a user turn merely mentioning dev-loop is not a round" {
+    user_turn 'please explain what /dev-loop does'
+    planner '{"dispatchable":[{"issue":433,"surface":["a"]}],"excluded":[]}'
+    run run_hook
+    [ "$status" -eq 0 ]
+}
+
 # --- the repo judged is the one the loop ran for, not the cwd (dotfiles-linux-dev#1125) ---------
 
 # other_repo NAME -> a second git checkout under DEV_LOOP_REPOS_ROOT; the Stop payload's cwd stays
@@ -159,9 +212,7 @@ other_repo() {
     git -C "$DEV_LOOP_REPOS_ROOT/$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 }
 
-# dev_loop_args ARGS -> a Skill call on dev-loop carrying ARGS. This guard's own round_events only
-# counts the Skill shape as a loop invocation; the slash-command shape is covered by the guards
-# that read it (dispatch_free_surface_guard.bats, review_fanout_guard.bats).
+# dev_loop_args ARGS -> a Skill call on dev-loop carrying ARGS.
 dev_loop_args() {
     tool_use Skill "$(jq -nc --arg a "$1" '{skill: "dev-loop", args: $a}')"
 }
