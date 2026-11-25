@@ -759,48 +759,48 @@ SH
 # Line format: kind<TAB>target<TAB>anchor<TAB>reason<TAB>backup<TAB>epoch
 
 @test "park_owner records one six-field line beside the claims registry (#1139)" {
-    run park_owner worktree /w/review-1 abc123 "owner-only commit" /tmp/b.patch
+    run park_owner worktree /w/review-1 abc1234 "owner-only commit" /tmp/b.patch
     [ "$status" -eq 0 ]
     [ "$output" = "PARKED" ]
     run awk -F'\t' 'END { print NR, NF, $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/) }' \
         "$TEST_TMP/.git/parked-owner.tsv"
-    [ "$output" = "1 6 worktree /w/review-1 abc123 owner-only commit /tmp/b.patch 1" ]
+    [ "$output" = "1 6 worktree /w/review-1 abc1234 owner-only commit /tmp/b.patch 1" ]
 }
 
 @test "parked_owner_lookup matches only while the anchor is unchanged (#1139)" {
-    park_owner worktree /w/review-1 abc123 "why" /tmp/b.patch
-    run parked_owner_lookup worktree /w/review-1 abc123
+    park_owner worktree /w/review-1 abc1234 "why" /tmp/b.patch
+    run parked_owner_lookup worktree /w/review-1 abc1234
     [ "$status" -eq 0 ]
     [[ "$output" == *"why"* ]]
-    refute parked_owner_lookup worktree /w/review-1 def456
+    refute parked_owner_lookup worktree /w/review-1 def4567
 }
 
 @test "parked_owner_lookup never matches an empty anchor or another target or kind (#1139)" {
-    park_owner worktree /w/review-1 abc123 "why" /tmp/b.patch
+    park_owner worktree /w/review-1 abc1234 "why" /tmp/b.patch
     refute parked_owner_lookup worktree /w/review-1 ""
-    refute parked_owner_lookup worktree /w/other abc123
-    refute parked_owner_lookup thread /w/review-1 abc123
+    refute parked_owner_lookup worktree /w/other abc1234
+    refute parked_owner_lookup thread /w/review-1 abc1234
 }
 
 @test "parked_owner_lookup with a trailing # matches every thread of that PR (#1139)" {
-    park_owner thread "1321#PRRT_a" abc123 "r1" /tmp/b.patch
-    park_owner thread "1321#PRRT_b" abc123 "r2" /tmp/b.patch
-    park_owner thread "99#PRRT_c" abc123 "r3" /tmp/b.patch
-    run parked_owner_lookup thread "1321#" abc123
+    park_owner thread "1321#PRRT_a" abc1234 "r1" /tmp/b.patch
+    park_owner thread "1321#PRRT_b" abc1234 "r2" /tmp/b.patch
+    park_owner thread "99#PRRT_c" abc1234 "r3" /tmp/b.patch
+    run parked_owner_lookup thread "1321#" abc1234
     [ "$status" -eq 0 ]
     [ "$(printf '%s\n' "$output" | wc -l)" -eq 2 ]
 }
 
 @test "re-parking the same target replaces its line instead of duplicating it (#1139)" {
-    park_owner worktree /w/review-1 abc123 "first" /tmp/b.patch
-    park_owner worktree /w/review-1 def456 "second" /tmp/b.patch
+    park_owner worktree /w/review-1 abc1234 "first" /tmp/b.patch
+    park_owner worktree /w/review-1 def4567 "second" /tmp/b.patch
     [ "$(wc -l <"$TEST_TMP/.git/parked-owner.tsv")" -eq 1 ]
-    run parked_owner_lookup worktree /w/review-1 def456
+    run parked_owner_lookup worktree /w/review-1 def4567
     [[ "$output" == *"second"* ]]
 }
 
 @test "park_owner flattens tabs and newlines in the reason so the line stays six fields (#1139)" {
-    park_owner worktree /w/r abc "a"$'\t'"b"$'\n'"c" /tmp/b.patch
+    park_owner worktree /w/r abcdef1 "a"$'\t'"b"$'\n'"c" /tmp/b.patch
     run awk -F'\t' '{ print NF }' "$TEST_TMP/.git/parked-owner.tsv"
     [ "$output" = "6" ]
 }
@@ -814,14 +814,15 @@ SH
 
 @test "an unreadable parked-owner.tsv is status 2, never a quiet 'not parked' (#1139)" {
     mkdir "$TEST_TMP/.git/parked-owner.tsv"
-    run parked_owner_lookup worktree /w/r abc
+    run parked_owner_lookup worktree /w/r abcdef1
     [ "$status" -eq 2 ]
 }
 
 @test "park_owner keeps earlier entries when the registry cannot be read (#1139 review)" {
-    park_owner worktree /w/a abc "first" /tmp/b.patch
+    [ "$(id -u)" -ne 0 ] || skip "root reads a chmod 000 file"
+    park_owner worktree /w/a abcdef1 "first" /tmp/b.patch
     chmod 000 "$TEST_TMP/.git/parked-owner.tsv"
-    run park_owner worktree /w/b abc "second" /tmp/b.patch
+    run park_owner worktree /w/b abcdef1 "second" /tmp/b.patch
     chmod 600 "$TEST_TMP/.git/parked-owner.tsv"
     [ "$status" -ne 0 ]
     [ "$output" = "UNKNOWN" ]
@@ -830,6 +831,51 @@ SH
 }
 
 @test "a missing parked-owner.tsv is simply not parked (#1139)" {
-    run parked_owner_lookup worktree /w/r abc
+    run parked_owner_lookup worktree /w/r abcdef1
+    [ "$status" -eq 1 ]
+}
+
+@test "re-parking a target with a backslash replaces its line, never duplicates it (#1141)" {
+    park_owner worktree '/w/a\nb' abcdef1 "first" /tmp/b.patch
+    park_owner worktree '/w/a\nb' abcdef1 "second" /tmp/b.patch
+    [ "$(wc -l <"$TEST_TMP/.git/parked-owner.tsv")" -eq 1 ]
+    grep -q second "$TEST_TMP/.git/parked-owner.tsv"
+}
+
+@test "park_owner refuses an anchor that is not a 7-64 char hex sha (#1141)" {
+    for bad in "abcdef1"$'\t'"x" "abc" "xyzxyzxyz" "abcdef1"$'\n'"abcdef1"; do
+        run park_owner worktree /w/r "$bad" "why" /tmp/b.patch
+        [ "$status" -ne 0 ]
+        [ "$output" = "UNKNOWN" ]
+    done
+    [ ! -e "$TEST_TMP/.git/parked-owner.tsv" ]
+}
+
+@test "park_owner refuses a registry path that is a directory, writing nothing into it (#1141)" {
+    mkdir "$TEST_TMP/.git/parked-owner.tsv"
+    run park_owner worktree /w/r abcdef1 "why" /tmp/b.patch
+    [ "$status" -ne 0 ]
+    [ "$output" = "UNKNOWN" ]
+    [ -z "$(ls -A "$TEST_TMP/.git/parked-owner.tsv")" ]
+}
+
+@test "a parked worktree records its dirty paths as a seventh field (#1141)" {
+    echo x >"$TEST_TMP/dirty.txt"
+    run park_owner worktree "$TEST_TMP" abcdef1 "why" /tmp/b.patch
+    [ "$output" = "PARKED" ]
+    run awk -F'\t' '{ print NF }' "$TEST_TMP/.git/parked-owner.tsv"
+    [ "$output" = "7" ]
+    run parked_owner_lookup worktree "$TEST_TMP" abcdef1
+    [ "$status" -eq 0 ]
+}
+
+@test "stale announce markers are swept, a fresh one is kept (#1141)" {
+    export TMPDIR="$TEST_TMP/tmp"
+    mkdir -p "$TMPDIR"
+    touch -d '3 days ago' "$TMPDIR/parked_owner.threads.old.1.announced"
+    run parked_owner_announce_once s1 threads "x"
+    [ "$status" -eq 0 ]
+    [ ! -e "$TMPDIR/parked_owner.threads.old.1.announced" ]
+    run parked_owner_announce_once s1 threads "x"
     [ "$status" -eq 1 ]
 }

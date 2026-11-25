@@ -92,3 +92,48 @@ park() { # REASON  (parks the worktree at its current HEAD)
     run bash -c "jq -nc --arg c '$WT' '{cwd: \$c, stop_hook_active: true}' | '$HOOK'"
     [ "$status" -eq 0 ]
 }
+
+@test "new dirt outside the set recorded at park time blocks the stop (#1141)" {
+    park "owner-only commit"
+    echo new >"$WT/unrelated.txt"
+    run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"unrelated.txt"* ]]
+}
+
+@test "from a subdirectory cwd, a new root-level untracked file still blocks (#1141 review)" {
+    mkdir "$WT/sub"
+    park "owner-only commit"
+    echo new >"$WT/unrelated.txt"
+    run bash -c "jq -nc --arg c '$WT/sub' '{cwd: \$c, session_id: \"s\"}' | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"unrelated.txt"* ]]
+}
+
+@test "from a subdirectory cwd, a parked untracked path stays parked (#1141 review)" {
+    mkdir "$WT/sub"
+    echo u >"$WT/sub/u.txt"
+    park "owner-only commit"
+    run bash -c "jq -nc --arg c '$WT/sub' '{cwd: \$c, session_id: \"s\"}' | '$HOOK'"
+    [ "$status" -eq 1 ]
+}
+
+@test "a staged change whose worktree copy equals HEAD is new dirt (#1141 review)" {
+    echo g >"$WT/g.txt"
+    git -C "$WT" add g.txt
+    git -C "$WT" commit -q -m g
+    park "owner-only commit"
+    echo changed >"$WT/g.txt"
+    git -C "$WT" add g.txt
+    echo g >"$WT/g.txt"
+    run_hook
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"g.txt"* ]]
+}
+
+@test "a further edit to an already-parked path stays parked (#1141)" {
+    park "owner-only commit"
+    echo more >>"$WT/f.txt"
+    run_hook
+    [ "$status" -eq 1 ]
+}

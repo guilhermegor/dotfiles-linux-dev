@@ -435,7 +435,7 @@ parked_setup() {
     HOOK_LIB="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib/dispatch_claims.sh"
     export TMPDIR="$REPO/tmp"
     mkdir -p "$TMPDIR"
-    export PR_VIEW_NUMBER=42 PR_HEAD_OID=aaa111
+    export PR_VIEW_NUMBER=42 PR_HEAD_OID=aaa1111
 }
 
 @test "parked: with NO parked entry the same finding still blocks (should-fail witness, #1139)" {
@@ -448,7 +448,7 @@ parked_setup() {
 @test "parked: a live entry at the PR head reports once per session, then stays quiet (#1139)" {
     parked_setup
     problem_fixture 42
-    park_thread "42#PRRT_x" aaa111 "fix staged behind GATE_CHANGE_OK"
+    park_thread "42#PRRT_x" aaa1111 "fix staged behind GATE_CHANGE_OK"
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 1 ]
     [[ "$output" == *"fix staged behind GATE_CHANGE_OK"* ]]
@@ -461,7 +461,7 @@ parked_setup() {
 @test "parked: the entry expires when the PR head moves (#1139)" {
     parked_setup
     problem_fixture 42
-    park_thread "42#PRRT_x" aaa111 "why"
+    park_thread "42#PRRT_x" aaa1111 "why"
     export PR_HEAD_OID=bbb222
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 2 ]
@@ -470,7 +470,7 @@ parked_setup() {
 @test "parked: a push between the head read and the thread-id read keeps it blocking (#1140)" {
     parked_setup
     problem_fixture 42
-    park_thread "42#PRRT_x" aaa111 "why"
+    park_thread "42#PRRT_x" aaa1111 "why"
     export PR_HEAD_MOVES_TO=bbb222
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 2 ]
@@ -479,7 +479,7 @@ parked_setup() {
 @test "parked: a finding with no parked entry beside a parked one still blocks (#1139)" {
     parked_setup
     two_problem_fixture 42
-    park_thread "42#PRRT_x" aaa111 "why"
+    park_thread "42#PRRT_x" aaa1111 "why"
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 2 ]
 }
@@ -487,8 +487,8 @@ parked_setup() {
 @test "parked: one entry per finding parks them all (#1139)" {
     parked_setup
     two_problem_fixture 42
-    park_thread "42#PRRT_x" aaa111 "why"
-    park_thread "42#PRRT_y" aaa111 "why"
+    park_thread "42#PRRT_x" aaa1111 "why"
+    park_thread "42#PRRT_y" aaa1111 "why"
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 1 ]
 }
@@ -507,7 +507,7 @@ parked_setup() {
                 {author: {login: "coderabbitai", __typename: "Bot"}, body: $body}]}}]},
         comments: {totalCount: 0, nodes: []}
     }}}}' >"$FIXTURE_DIR/42.json"
-    park_thread "42#PRRT_x" aaa111 "why"
+    park_thread "42#PRRT_x" aaa1111 "why"
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 2 ]
     [[ "$output" == *"b.sh"* ]]
@@ -516,7 +516,7 @@ parked_setup() {
 @test "parked: unreadable thread ids keep the verdict blocking (#1139)" {
     parked_setup
     problem_fixture 42
-    park_thread "42#PRRT_x" aaa111 "why"
+    park_thread "42#PRRT_x" aaa1111 "why"
     export THREAD_IDS_FAIL=1
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 2 ]
@@ -527,7 +527,7 @@ parked_setup() {
     export PR_VIEW_NUMBER="" PR_LIST=$'42\n43'
     problem_fixture 42
     problem_fixture 43
-    park_thread "42#PRRT_x" aaa111 "why"
+    park_thread "42#PRRT_x" aaa1111 "why"
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 2 ]
     [[ "$output" == *"PR #43"* ]]
@@ -537,7 +537,7 @@ parked_setup() {
     parked_setup
     export PR_VIEW_NUMBER="" PR_LIST=$'42'
     problem_fixture 42
-    park_thread "42#PRRT_x" aaa111 "why"
+    park_thread "42#PRRT_x" aaa1111 "why"
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 1 ]
     [[ "$output" == *"PR #42"* ]]
@@ -550,8 +550,8 @@ parked_setup() {
     export PR_VIEW_NUMBER="" PR_LIST=$'42\n43'
     problem_fixture 42
     problem_fixture 43
-    park_thread "42#PRRT_x" aaa111 "why"
-    park_thread "43#PRRT_x" aaa111 "why"
+    park_thread "42#PRRT_x" aaa1111 "why"
+    park_thread "43#PRRT_x" aaa1111 "why"
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 1 ]
     [[ "$output" == *"43#PRRT_x"* ]]
@@ -565,7 +565,7 @@ parked_setup() {
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 2 ]
     [[ "$output" == *"PR #42"* ]]
-    park_thread "42#PRRT_x" aaa111 "why"
+    park_thread "42#PRRT_x" aaa1111 "why"
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 2 ]
     [[ "$output" == *"PR #43"* ]]
@@ -582,10 +582,22 @@ parked_setup() {
 @test "parked: an unreadable PR head fails closed (#1139)" {
     parked_setup
     problem_fixture 42
-    park_thread "42#PRRT_x" aaa111 "why"
+    park_thread "42#PRRT_x" aaa1111 "why"
     export PR_HEAD_OID=""
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 2 ]
+}
+
+@test "parked: repo-wide header says N PRs when the detail spans several (#1141)" {
+    parked_setup
+    export PR_VIEW_NUMBER="" PR_LIST=$'42\n43'
+    problem_fixture 42
+    problem_fixture 43
+    park_thread "42#PRRT_x" aaa1111 "why"
+    park_thread "43#PRRT_x" aaa1111 "why"
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"2 PRs"* ]]
 }
 
 # --- dotfiles-linux-dev#516: delegated to a live, same-session agent covering the thread's path --------
