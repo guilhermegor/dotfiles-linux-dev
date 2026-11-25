@@ -428,3 +428,74 @@ _gate_fixture_gh() {
     run od_gate_pending owner/repo
     [ "$status" -eq 1 ]
 }
+
+# --- review follow-ups on #1132 --------------------------------------------------------------
+
+@test "should-pass: only the approval step's -e paths are gate-protected" {
+    _gate_fixture_gh
+    PRS='[{"number":1,"state":"open","merged_at":null,"head":{"sha":"aaa"},"labels":[]},
+          {"number":2,"state":"open","merged_at":null,"head":{"sha":"bbb"},"labels":[]}]'
+    gh() {
+        local a="$*"
+        [[ "$a" == *"contents/.github/workflows/gate.yml"* ]] && {
+            printf '%s\n' '    steps:' '      - name: unrelated' '        run: |' \
+                '          grep -Fx \' '            -e README.md || true' \
+                '      - name: gate' '        run: |' '          grep -Fx \' \
+                '            -e .review-bots.yaml || true' '          grep -Fxq gate-change-approved'
+            return 0
+        }
+        [[ "$a" == *"contents/.github/workflows"* ]] && { echo .github/workflows/gate.yml; return 0; }
+        [[ "$a" == *"pulls/1/files"* ]] && { echo README.md; return 0; }
+        [[ "$a" == *"pulls/2/files"* ]] && { echo .review-bots.yaml; return 0; }
+        return 0
+    }
+    run od_gate_pending owner/repo
+    [ "$status" -eq 0 ]
+    [[ "$output" == *$'2\ttouches gate-protected .review-bots.yaml'* ]]
+    [[ "$output" != *"README.md"* ]]
+}
+
+@test "should-pass: a refusal annotation that only appears on page 2 is found" {
+    _gate_fixture_gh
+    PRS='[{"number":4,"state":"open","merged_at":null,"head":{"sha":"ddd"},"labels":[]}]'
+    gh() {
+        local a="$*"
+        [[ "$a" == *"contents/.github/workflows"* ]] && return 0
+        [[ "$a" == *"commits/ddd/check-runs"* ]] && { echo 901; return 0; }
+        if [[ "$a" == *"check-runs/901/annotations"* ]]; then
+            echo 'page one noise'
+            [[ "$a" == *"--paginate"* ]] && echo 'GATE_CHANGE_OK required'
+            return 0
+        fi
+        return 1
+    }
+    run od_gate_pending owner/repo
+    [[ "$output" == *$'4\tgate check failed on the GATE_CHANGE_OK refusal'* ]]
+}
+
+@test "should-fail: an unreadable annotation read is rc 1, not a clean none" {
+    _gate_fixture_gh
+    PRS='[{"number":4,"state":"open","merged_at":null,"head":{"sha":"ddd"},"labels":[]}]'
+    gh() {
+        local a="$*"
+        [[ "$a" == *"contents/.github/workflows"* ]] && return 0
+        [[ "$a" == *"commits/ddd/check-runs"* ]] && { echo 901; return 0; }
+        return 1
+    }
+    run od_gate_pending owner/repo
+    [ "$status" -eq 1 ]
+}
+
+@test "should-pass: a PR with a decision row and a gate row keeps both" {
+    PR_JSON='[{"number":9,"title":"feat: y","state":"open","merged_at":null,"body":"Decide whether to enable the surface expansion."}]'
+    GATE_PENDING=$'9\ttouches gate-protected .review-bots.yaml, lacks label gate-change-approved'
+    run owner_decisions_collect
+    [[ "$output" == *"Approve gate change on PR owner/repo#9"* ]]
+    [[ "$output" == *"surface expansion"* ]]
+}
+
+@test "should-pass: an exact repeat of the same decision kind is still suppressed" {
+    GATE_PENDING=$'9\twhy one\n9\twhy two'
+    run owner_decisions_collect
+    [ "$(grep -o 'Approve gate change on PR owner/repo#9' <<<"$output" | wc -l)" -eq 1 ]
+}

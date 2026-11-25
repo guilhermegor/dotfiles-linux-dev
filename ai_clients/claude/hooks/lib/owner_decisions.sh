@@ -72,6 +72,21 @@ OD_GATE_REFUSAL_RE='GATE_CHANGE_OK|gate-change-ok|gate-weakening change'
 # The repo declares its gate-protected paths itself: the workflow step that honours the approval
 # label lists them as `-e <path>` lines. Never a path list here. rc 0 with no output = the repo
 # declares none; rc 1 = unreadable (a 404 on the workflows dir alone means no workflows).
+# `-e <path>` lines of only those workflow steps (a `- key:` list item) that mention the approval
+# label, so an unrelated `-e` in another step never becomes gate-protected.
+_od_step_paths() {
+	awk -v label="$OD_GATE_LABEL" '
+		function flush() { if (index(buf, label)) printf "%s", out; buf = ""; out = "" }
+		/^[[:space:]]*- [A-Za-z_-]+:/ { flush() }
+		{
+			buf = buf $0 "\n"
+			if (match($0, /^[[:space:]]*-e [^[:space:]\\]+/)) {
+				s = substr($0, RSTART, RLENGTH); sub(/^[[:space:]]*-e /, "", s); out = out s "\n"
+			}
+		}
+		END { flush() }'
+}
+
 _od_gate_paths() {
 	local repo="$1" listing err wf body
 	err="$(mktemp)" || return 1
@@ -85,8 +100,7 @@ _od_gate_paths() {
 		[[ "$wf" == *.yml || "$wf" == *.yaml ]] || continue
 		body="$(gh api -H 'Accept: application/vnd.github.raw' "repos/$repo/contents/$wf" 2>/dev/null)" \
 			|| return 1
-		grep -qF -- "$OD_GATE_LABEL" <<<"$body" || continue
-		sed -n 's/^[[:space:]]*-e \([^[:space:]\\]*\).*/\1/p' <<<"$body"
+		_od_step_paths <<<"$body"
 	done <<<"$listing"
 }
 
@@ -109,7 +123,7 @@ od_gate_pending() {
 				2>/dev/null)" || return 1
 			while IFS= read -r run; do
 				[[ -n "$run" ]] || continue
-				text="$(gh api "repos/$repo/check-runs/$run/annotations" --jq '.[].message' 2>/dev/null)" \
+				text="$(gh api --paginate "repos/$repo/check-runs/$run/annotations" --jq '.[].message' 2>/dev/null)" \
 					|| return 1
 				if grep -qE -- "$OD_GATE_REFUSAL_RE" <<<"$text"; then
 					hit="gate check failed on the GATE_CHANGE_OK refusal (override is terminal-only)"
@@ -257,12 +271,16 @@ _od_rows() {
 # (an issue blocked by a decision is also a decision-blocked card: the first row wins).
 _od_filter_excluded() {
 	local file="${OWNER_DECISIONS_EXCLUDE_FILE:-$HOME/.claude/tasks/owner-decisions-exclusions.txt}"
-	local kind ref decision context excl=""
+	local kind ref decision context key excl=""
 	local -A seen=()
 	[[ -r "$file" ]] && excl="$(sed -e 's/[[:space:]]#[[:space:]].*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^#\([[:space:]]\|$\)/d' -e '/^$/d' "$file")"
 	while IFS=$'\t' read -r kind ref decision context; do
-		[[ -n "$ref" && -z "${seen[$ref]:-}" ]] || continue
-		seen[$ref]=1
+		# A gate row is a distinct decision from a flagged-PR/card/issue row on the same ref
+		# (different advice), so it dedupes in its own namespace; the other kinds still share one.
+		key="$ref"
+		[[ "$kind" == gate ]] && key="gate|$ref"
+		[[ -n "$ref" && -z "${seen[$key]:-}" ]] || continue
+		seen[$key]=1
 		grep -qxF -- "$ref" <<<"$excl" && continue
 		# `#N` names an issue/PR number, so it never matches a branch or workflow ref.
 		case "$kind" in
