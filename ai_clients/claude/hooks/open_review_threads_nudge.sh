@@ -430,6 +430,9 @@ _apply_parked_owner() {
 	head="$(gh pr view "$number" --repo "$owner/$name" --json headRefOid --jq .headRefOid 2>/dev/null)"
 	lines="$(parked_owner_lookup thread "${number}#" "$head")" || return 0
 	ids="$(_unresolved_thread_ids "$owner" "$name" "$number")" || return 0
+	# A push between the head read and the id read would leave an entry anchored to the old head
+	# vouching for threads on the new one; an unreadable re-read is empty and fails closed too.
+	[ "$(gh pr view "$number" --repo "$owner/$name" --json headRefOid --jq .headRefOid 2>/dev/null)" = "$head" ] || return 0
 	while read -r id; do
 		[ -n "$id" ] || continue
 		printf '%s\n' "$lines" | cut -f2 | grep -qxF -- "${number}#${id}" || return 0

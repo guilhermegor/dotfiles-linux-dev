@@ -50,8 +50,14 @@ case "$1 $2" in
     # which is a different call shape than the fast path's `--json number,state -q '...'` with no
     # number argument at all.
     if [ "$json" = "headRefOid" ]; then
-        # The PR head a parked-owner thread entry is anchored to (#1139).
-        printf '%s\n' "${PR_HEAD_OID:-}"
+        # The PR head a parked-owner thread entry is anchored to (#1139). PR_HEAD_MOVES_TO: a push
+        # lands after the first head read, so every later read answers the new head.
+        if [ -n "${PR_HEAD_MOVES_TO:-}" ] && [ -e "$FIXTURE_DIR/.head_read" ]; then
+            printf '%s\n' "$PR_HEAD_MOVES_TO"
+        else
+            : >"$FIXTURE_DIR/.head_read"
+            printf '%s\n' "${PR_HEAD_OID:-}"
+        fi
     elif [ "$json" = "state" ] && [ "$jqfilter" = ".state" ]; then
         var="PR_STATE_${number}"
         printf '%s\n' "${!var:-OPEN}"
@@ -457,6 +463,15 @@ parked_setup() {
     problem_fixture 42
     park_thread "42#PRRT_x" aaa111 "why"
     export PR_HEAD_OID=bbb222
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 2 ]
+}
+
+@test "parked: a push between the head read and the thread-id read keeps it blocking (#1140)" {
+    parked_setup
+    problem_fixture 42
+    park_thread "42#PRRT_x" aaa111 "why"
+    export PR_HEAD_MOVES_TO=bbb222
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 2 ]
 }
