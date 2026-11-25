@@ -9,6 +9,9 @@
 # Always interactive — it asks before removing anything. Source is the authority,
 # so anything here is recoverable from git history.
 
+# shellcheck source=../hooks/lib/ai_state_include.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/ai_state_include.sh"
+
 # type → "<source subdir>:<source ext>:<dest subdir>:<layout>"
 # layout: flat  → <dest>/<name><ext>
 #         nested→ <dest>/<name>/SKILL.md
@@ -55,7 +58,7 @@ prune_orphans() {
 _prune_file_artifacts() {
     local -a orphan_paths=()
     local -a orphan_labels=()
-    local type spec src ext dest layout name
+    local type spec src ext dest layout name rel
 
     for type in "${!PRUNE_TARGETS[@]}"; do
         spec="${PRUNE_TARGETS[$type]}"
@@ -65,6 +68,9 @@ _prune_file_artifacts() {
 
         while read -r name; do
             [[ -n "$name" ]] || continue
+            # Owner-listed private artifacts live only in the private state repo (#1126).
+            if [[ "$layout" == "nested" ]]; then rel="$type/$name"; else rel="$type/$name$ext"; fi
+            ai_state_include_covers "$CLAUDE_DIR/ai-state-sync.include" "$rel" && continue
             if [[ "$layout" == "nested" ]]; then
                 orphan_paths+=("$dest/$name")
             else
