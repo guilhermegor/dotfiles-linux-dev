@@ -389,6 +389,24 @@ $line"
 	GATE_DETAIL="$annotated"
 }
 
+# _unresolved_thread_ids OWNER REPO NUMBER
+# One id per unresolved review thread. Non-zero on a failed read, a malformed body, or a PR with
+# more threads than one page (completeness cannot be shown). Thread node ids exist only in GraphQL.
+_unresolved_thread_ids() {
+	local out
+	out="$(gh api graphql -F owner="$1" -F repo="$2" -F number="$3" -f query='
+query ParkedThreadIds($owner:String!, $repo:String!, $number:Int!) {
+  repository(owner:$owner, name:$repo) {
+    pullRequest(number:$number) {
+      reviewThreads(first:100) { totalCount nodes { id isResolved } }
+    }
+  }
+}' 2>/dev/null)" || return 1
+	printf '%s' "$out" | jq -er '.data.repository.pullRequest.reviewThreads
+		| select((.nodes | type) == "array" and .totalCount == (.nodes | length))
+		| .nodes[] | select(.isResolved | not) | .id' 2>/dev/null
+}
+
 # _apply_parked_owner OWNER REPO NUMBER
 # Findings parked on the owner (dotfiles-linux-dev#1139, lib/dispatch_claims.sh): when the verdict is
 # `problems` and EVERY finding line is covered by a live `thread` entry for this PR, turn it into
@@ -397,20 +415,26 @@ $line"
 # without the fix (#825), so the agent can do nothing and the guard re-blocking only trains
 # the operator to ignore it.
 #
-# Coverage is by COUNT, not by thread id: the shared gate's detail lines name a path, never a
-# thread id, so an entry `<pr>#<thread-id>` cannot be matched to one line. One live entry per
-# finding line parks them all; a new unparked finding makes lines exceed entries and the verdict
-# stays `problems`. ponytail: count, not identity; upgrade path is the gate exposing thread ids.
+# Coverage is by thread ID. The gate's detail lines name a path, never an id, so for a PR with a
+# live entry this reads the PR's unresolved thread ids itself (one GraphQL read, only then): every
+# unresolved thread must have a live entry `<pr>#<id>`, and the finding lines must not outnumber
+# those parked threads (that catches a non-thread finding, or a resolved-but-unanswered thread).
+# A parked thread that was since resolved or answered therefore cannot vouch for a new one.
 # Live means the entry's anchor equals the PR head read NOW. Every unreadable step (state file,
-# head) leaves the verdict untouched, i.e. fails closed.
+# head, thread ids, a truncated page) leaves the verdict untouched, i.e. fails closed.
 _apply_parked_owner() {
-	local owner="$1" name="$2" number="$3" head lines parked findings pf
+	local owner="$1" name="$2" number="$3" head lines ids id parked=0 findings pf
 	[ "$GATE_STATUS" = "problems" ] || return 0
 	pf="$(dispatch_parked_file)" || return 0
 	[ -e "$pf" ] || return 0 # nothing declared: no extra call for the common case
 	head="$(gh pr view "$number" --repo "$owner/$name" --json headRefOid --jq .headRefOid 2>/dev/null)"
 	lines="$(parked_owner_lookup thread "${number}#" "$head")" || return 0
-	parked="$(printf '%s\n' "$lines" | grep -c .)"
+	ids="$(_unresolved_thread_ids "$owner" "$name" "$number")" || return 0
+	while read -r id; do
+		[ -n "$id" ] || continue
+		printf '%s\n' "$lines" | cut -f2 | grep -qxF -- "${number}#${id}" || return 0
+		parked=$((parked + 1))
+	done <<<"$ids"
 	findings="$(printf '%s\n' "$GATE_DETAIL" | grep -c .)"
 	[ "$parked" -ge "$findings" ] || return 0
 	GATE_STATUS="parked"

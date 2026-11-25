@@ -108,6 +108,10 @@ case "$1 $2" in
         esac
     done
     echo "$num" >>"$GRAPHQL_LOG"
+    # THREAD_IDS_FAIL=1: only the parked-owner thread-id read (#1139) fails.
+    if [ "${THREAD_IDS_FAIL:-0}" = 1 ] && printf '%s' "$query" | grep -q ParkedThreadIds; then
+        exit 1
+    fi
     # dotfiles-linux-dev#491's fix issues a SECOND graphql query (adds `isRequired`) to split a
     # genuinely-running CheckRun from an unbounded-PENDING StatusContext, distinct from the
     # gate's own reviewThreads/running query -- route each to its own fixture file.
@@ -205,7 +209,7 @@ problem_fixture() {
     jq -nc --arg body "$body" '{data: {repository: {pullRequest: {
         reviewThreads: {
             totalCount: 1,
-            nodes: [{isResolved: false, path: "a.sh", comments: {
+            nodes: [{id: "PRRT_x", isResolved: false, path: "a.sh", comments: {
                 totalCount: 1,
                 nodes: [{author: {login: "coderabbitai", __typename: "Bot"}, body: $body}]
             }}]
@@ -413,7 +417,7 @@ two_problem_fixture() {
     local body
     body="$(printf 'x%.0s' {1..150})"
     jq -nc --arg body "$body" '{data: {repository: {pullRequest: {
-        reviewThreads: {totalCount: 2, nodes: ["a.sh", "b.sh"] | map({isResolved: false, path: ., comments: {
+        reviewThreads: {totalCount: 2, nodes: [["a.sh", "PRRT_x"], ["b.sh", "PRRT_y"]] | map({id: .[1], isResolved: false, path: .[0], comments: {
             totalCount: 1,
             nodes: [{author: {login: "coderabbitai", __typename: "Bot"}, body: $body}]
         }})},
@@ -472,6 +476,35 @@ parked_setup() {
     park_thread "42#PRRT_y" aaa111 "why"
     run bash -c "payload false s1 | '$HOOK'"
     [ "$status" -eq 1 ]
+}
+
+@test "parked: T1 parked then gone, plus an unparked T2 on the same head, blocks (#1139)" {
+    parked_setup
+    local body
+    body="$(printf 'x%.0s' {1..150})"
+    # T1 resolved and answered by a human (no longer a finding); T2 is new and unparked.
+    jq -nc --arg body "$body" '{data: {repository: {pullRequest: {
+        reviewThreads: {totalCount: 2, nodes: [
+            {id: "PRRT_x", isResolved: true, path: "a.sh", comments: {totalCount: 2, nodes: [
+                {author: {login: "coderabbitai", __typename: "Bot"}, body: $body},
+                {author: {login: "guilhermegor", __typename: "User"}, body: $body}]}},
+            {id: "PRRT_new", isResolved: false, path: "b.sh", comments: {totalCount: 1, nodes: [
+                {author: {login: "coderabbitai", __typename: "Bot"}, body: $body}]}}]},
+        comments: {totalCount: 0, nodes: []}
+    }}}}' >"$FIXTURE_DIR/42.json"
+    park_thread "42#PRRT_x" aaa111 "why"
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"b.sh"* ]]
+}
+
+@test "parked: unreadable thread ids keep the verdict blocking (#1139)" {
+    parked_setup
+    problem_fixture 42
+    park_thread "42#PRRT_x" aaa111 "why"
+    export THREAD_IDS_FAIL=1
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 2 ]
 }
 
 @test "parked: repo-wide, a parked PR never hides a real finding on a later PR (#1139)" {
