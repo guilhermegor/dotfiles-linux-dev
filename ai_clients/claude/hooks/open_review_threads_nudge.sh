@@ -112,6 +112,8 @@ ROSTER_FILE='.review-bots.yaml'
 source "$(dirname "${BASH_SOURCE[0]}")/lib/review_thread_gate.sh"
 # shellcheck source=lib/loop_repo.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/loop_repo.sh"
+# shellcheck source=lib/dispatch_claims.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/dispatch_claims.sh"
 
 # _status_check_query
 # A SECOND, narrower GraphQL query than the gate's own -- adds `isRequired` (GitHub's
@@ -387,6 +389,61 @@ $line"
 	GATE_DETAIL="$annotated"
 }
 
+# _unresolved_thread_ids OWNER REPO NUMBER
+# One id per unresolved review thread. Non-zero on a failed read, a malformed body, or a PR with
+# more threads than one page (completeness cannot be shown). Thread node ids exist only in GraphQL.
+_unresolved_thread_ids() {
+	local out
+	out="$(gh api graphql -F owner="$1" -F repo="$2" -F number="$3" -f query='
+query ParkedThreadIds($owner:String!, $repo:String!, $number:Int!) {
+  repository(owner:$owner, name:$repo) {
+    pullRequest(number:$number) {
+      reviewThreads(first:100) { totalCount nodes { id isResolved } }
+    }
+  }
+}' 2>/dev/null)" || return 1
+	printf '%s' "$out" | jq -er '.data.repository.pullRequest.reviewThreads
+		| select((.nodes | type) == "array" and .totalCount == (.nodes | length))
+		| .nodes[] | select(.isResolved | not) | .id' 2>/dev/null
+}
+
+# _apply_parked_owner OWNER REPO NUMBER
+# Findings parked on the owner (dotfiles-linux-dev#1139, lib/dispatch_claims.sh): when the verdict is
+# `problems` and EVERY finding line is covered by a live `thread` entry for this PR, turn it into
+# `parked` (reported once per session, never blocking). A thread's fix can be staged behind an
+# owner-only commit, and replying before it is pushed would turn the review gate green on a head
+# without the fix (#825), so the agent can do nothing and the guard re-blocking only trains
+# the operator to ignore it.
+#
+# Coverage is by thread ID. The gate's detail lines name a path, never an id, so for a PR with a
+# live entry this reads the PR's unresolved thread ids itself (one GraphQL read, only then): every
+# unresolved thread must have a live entry `<pr>#<id>`, and the finding lines must not outnumber
+# those parked threads (that catches a non-thread finding, or a resolved-but-unanswered thread).
+# A parked thread that was since resolved or answered therefore cannot vouch for a new one.
+# Live means the entry's anchor equals the PR head read NOW. Every unreadable step (state file,
+# head, thread ids, a truncated page) leaves the verdict untouched, i.e. fails closed.
+_apply_parked_owner() {
+	local owner="$1" name="$2" number="$3" head lines ids id parked=0 findings pf
+	[ "$GATE_STATUS" = "problems" ] || return 0
+	pf="$(dispatch_parked_file)" || return 0
+	[ -e "$pf" ] || return 0 # nothing declared: no extra call for the common case
+	head="$(gh pr view "$number" --repo "$owner/$name" --json headRefOid --jq .headRefOid 2>/dev/null)"
+	lines="$(parked_owner_lookup thread "${number}#" "$head")" || return 0
+	ids="$(_unresolved_thread_ids "$owner" "$name" "$number")" || return 0
+	# A push between the head read and the id read would leave an entry anchored to the old head
+	# vouching for threads on the new one; an unreadable re-read is empty and fails closed too.
+	[ "$(gh pr view "$number" --repo "$owner/$name" --json headRefOid --jq .headRefOid 2>/dev/null)" = "$head" ] || return 0
+	while read -r id; do
+		[ -n "$id" ] || continue
+		printf '%s\n' "$lines" | cut -f2 | grep -qxF -- "${number}#${id}" || return 0
+		parked=$((parked + 1))
+	done <<<"$ids"
+	findings="$(printf '%s\n' "$GATE_DETAIL" | grep -c .)"
+	[ "$parked" -ge "$findings" ] || return 0
+	GATE_STATUS="parked"
+	GATE_DETAIL="$(printf '%s\n' "$lines" | awk -F'\t' '{ print "  " $2 ": " $4 " (backup: " $5 ")" }')"
+}
+
 # _emit_verdict NUMBER PREFIX
 # Prints the human-facing message for the current $GATE_STATUS/$GATE_DETAIL (set by a prior
 # gate_pr_thread_state call) and returns the exit code the hook should use. A non-empty PREFIX
@@ -443,6 +500,19 @@ _emit_verdict() {
 		;;
 	clean)
 		return 0
+		;;
+	parked)
+		# Said once per session. exit 1 (via the return) surfaces stderr; 0 would discard it.
+		parked_owner_announce_once "$NUDGE_SESSION_ID" threads "$GATE_DETAIL" || return 0
+		{
+			echo "${prefix}PR #${number}: every unfinished review thread is parked on the owner, not blocking:"
+			echo
+			printf '%s\n' "$GATE_DETAIL"
+			echo
+			echo "Said once per session. The declaration expires when the PR head moves"
+			echo "(parked-owner.tsv, dotfiles-linux-dev#1139); a new finding blocks as usual."
+		} >&2
+		return 1
 		;;
 	delegated)
 		# dotfiles-linux-dev#516: every remaining finding is answered-but-unresolved AND covered by a
@@ -542,6 +612,9 @@ _recheck_cached_pr() {
 	fi
 	[ "$GATE_STATUS" = "running" ] && _reclassify_running "$owner" "$name" "$REPORT_NUMBER"
 	[ "$GATE_STATUS" = "problems" ] && _apply_delegation_filter "$transcript"
+	# A cached blocking PR that is parked now falls to the branch below (entry dropped, rescan),
+	# so it cannot shadow an unparked finding on a later PR.
+	_apply_parked_owner "$owner" "$name" "$REPORT_NUMBER"
 
 	case "$GATE_STATUS" in
 	running | problems) ;;
@@ -571,7 +644,7 @@ _recheck_cached_pr() {
 # be read — the caller's fail-open case.
 _repo_wide_scan() {
 	local owner="$1" name="$2" session_id="$3" transcript="$4" cache now ts age cached prs n state
-	local saw_delegated=0
+	local saw_delegated=0 parked_n="" parked_detail=""
 
 	cache="$(_scan_cache_path "$session_id" "$owner" "$name" 2>/dev/null)" || cache=""
 	if [ -n "$cache" ] && [ -r "$cache" ]; then
@@ -627,6 +700,20 @@ _repo_wide_scan() {
 		fi
 		if [ "$GATE_STATUS" = "problems" ]; then
 			_apply_delegation_filter "$transcript"
+			_apply_parked_owner "$owner" "$name" "$n"
+		fi
+		# #1139: every finding on this PR is parked on the owner. Same "not the finding this scan
+		# looks for" shape as delegated, so a parked PR cannot hide a real finding on a later one;
+		# it is reported (once) only when nothing else blocks. Never cached, like delegated: the
+		# entry's liveness is the PR head NOW. ponytail: a parked PR costs a full re-scan per
+		# turn; cache it keyed by head if the GraphQL spend ever shows it.
+		if [ "$GATE_STATUS" = "parked" ]; then
+			saw_delegated=1
+			# Accumulate every parked PR: the once-per-session marker hashes this text, so a
+			# second parked PR is announced with the first, never hidden behind it.
+			[ -n "$parked_n" ] || parked_n="$n"
+			parked_detail="${parked_detail:+$parked_detail$'\n'}$GATE_DETAIL"
+			continue
 		fi
 		# A non-required, indefinitely-PENDING status is not a reason to stop the scan here --
 		# it never blocks, so it must not be mistaken for the one finding this scan is looking
@@ -652,6 +739,12 @@ _repo_wide_scan() {
 			break
 		fi
 	done <<<"$prs"
+
+	if [ -z "$REPORT_NUMBER" ] && [ -n "$parked_n" ]; then
+		REPORT_NUMBER="$parked_n"
+		GATE_STATUS="parked"
+		GATE_DETAIL="$parked_detail"
+	fi
 
 	# dotfiles-linux-dev#516 (CodeRabbit review on PR #574): a "delegated" PR is excused only while its
 	# agent is LIVE, and liveness is exactly the kind of fact a cache must not extend past its own
@@ -699,6 +792,7 @@ main() {
 	# decidable at all -- empty is fine, _apply_delegation_filter/_delegated_agent_for_path both
 	# fail closed (never delegated) on it.
 	transcript="$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)"
+	NUDGE_SESSION_ID="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null)"
 
 	# The repo the loop ran for, never the ambient cwd alone (#1125): every git/gh call below
 	# resolves its repo from the working directory, so move there once. loop_repo_resolve falls
@@ -723,6 +817,7 @@ main() {
 		gate_pr_thread_state "$owner" "$name" "$number" "$ROSTER_FILE"
 		[ "$GATE_STATUS" = "running" ] && _reclassify_running "$owner" "$name" "$number"
 		[ "$GATE_STATUS" = "problems" ] && _apply_delegation_filter "$transcript"
+		_apply_parked_owner "$owner" "$name" "$number"
 		_emit_labelled_verdict "$number" ""
 		exit $?
 	fi
@@ -738,6 +833,7 @@ main() {
 	_repo_wide_scan "$owner" "$name" "$session_id" "$transcript" || exit 0
 	[ -n "$REPORT_NUMBER" ] || exit 0
 
+	_apply_parked_owner "$owner" "$name" "$REPORT_NUMBER"
 	_emit_labelled_verdict "$REPORT_NUMBER" "[repo-wide scan, no PR for this branch/HEAD] "
 	exit $?
 }
