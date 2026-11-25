@@ -14,6 +14,10 @@
 #   od_report_remote REPO  branch_prune.sh REPORT-REMOTE branch names (dry-run) of REPO's own
 #                          local checkout; rc 3 = no checkout, rc 1 = pass unreadable
 #   od_issue_json REPO     open issues labelled hitl, or state:blocked by a decision
+#   od_gate_pending REPO   open PRs waiting on an owner-only gate approval ("N<TAB>why"): they touch
+#                          a path the repo's own workflow declares gate-protected and lack the
+#                          `gate-change-approved` label, or a gate check failed on the
+#                          GATE_CHANGE_OK refusal text (#1130)
 #
 # Every provider returns non-zero when its read fails; the row then becomes
 # `UNREADABLE (not "none")`, never an empty source. A provider must capture `gh`'s own status
@@ -34,7 +38,7 @@
 # `#N` (any repo), `branch:<name>` (any repo), `branch:<owner/repo>:<name>` or
 # `workflow:<owner/N>/<name>`; text after ` # ` is the reason.
 #
-# ⚠️ Routine loop actions (merge, release, dispatch) are never decisions: only the five sources
+# ⚠️ Routine loop actions (merge, release, dispatch) are never decisions: only the six sources
 # above produce rows, and none of them keys on a merge/release/dispatch event.
 set -u
 
@@ -60,6 +64,77 @@ od_issue_json() {
 		all+="$raw"$'\n'
 	done
 	jq -s 'add // [] | unique_by(.number)' <<<"$all"
+}
+
+OD_GATE_LABEL='gate-change-approved'
+OD_GATE_REFUSAL_RE='GATE_CHANGE_OK|gate-change-ok|gate-weakening change'
+
+# The repo declares its gate-protected paths itself: the workflow step that honours the approval
+# label lists them as `-e <path>` lines. Never a path list here. rc 0 with no output = the repo
+# declares none; rc 1 = unreadable (a 404 on the workflows dir alone means no workflows).
+# `-e <path>` lines of only those workflow steps (a `- key:` list item) that mention the approval
+# label, so an unrelated `-e` in another step never becomes gate-protected.
+_od_step_paths() {
+	awk -v label="$OD_GATE_LABEL" '
+		function flush() { if (index(buf, label)) printf "%s", out; buf = ""; out = "" }
+		/^[[:space:]]*- [A-Za-z_-]+:/ { flush() }
+		{
+			buf = buf $0 "\n"
+			if (match($0, /^[[:space:]]*-e [^[:space:]\\]+/)) {
+				s = substr($0, RSTART, RLENGTH); sub(/^[[:space:]]*-e /, "", s); out = out s "\n"
+			}
+		}
+		END { flush() }'
+}
+
+_od_gate_paths() {
+	local repo="$1" listing err wf body
+	err="$(mktemp)" || return 1
+	if ! listing="$(gh api "repos/$repo/contents/.github/workflows" --jq '.[].path' 2>"$err")"; then
+		if grep -q 'HTTP 404' "$err"; then rm -f "$err"; return 0; fi
+		rm -f "$err"
+		return 1
+	fi
+	rm -f "$err"
+	while IFS= read -r wf; do
+		[[ "$wf" == *.yml || "$wf" == *.yaml ]] || continue
+		body="$(gh api -H 'Accept: application/vnd.github.raw' "repos/$repo/contents/$wf" 2>/dev/null)" \
+			|| return 1
+		_od_step_paths <<<"$body"
+	done <<<"$listing"
+}
+
+od_gate_pending() {
+	local repo="$1" json paths pr sha labelled files hit runs run text
+	json="$(od_pr_json "$repo")" || return 1
+	paths="$(_od_gate_paths "$repo")" || return 1
+	while IFS=$'\t' read -r pr sha labelled; do
+		[[ -n "$pr" ]] || continue
+		hit=""
+		if [[ "$labelled" != "true" && -n "$paths" ]]; then
+			files="$(gh api --paginate "repos/$repo/pulls/$pr/files" \
+				--jq '.[] | .filename, (.previous_filename // empty)' 2>/dev/null)" || return 1
+			hit="$(grep -Fx -f <(printf '%s\n' "$paths") <<<"$files" | head -1)"
+			[[ -n "$hit" ]] && hit="touches gate-protected $hit, lacks label $OD_GATE_LABEL"
+		fi
+		if [[ -z "$hit" ]]; then
+			runs="$(gh api --paginate "repos/$repo/commits/$sha/check-runs" \
+				--jq '.check_runs[] | select(.conclusion == "failure" and (.name | test("gate"; "i"))) | .id' \
+				2>/dev/null)" || return 1
+			while IFS= read -r run; do
+				[[ -n "$run" ]] || continue
+				text="$(gh api --paginate "repos/$repo/check-runs/$run/annotations" --jq '.[].message' 2>/dev/null)" \
+					|| return 1
+				if grep -qE -- "$OD_GATE_REFUSAL_RE" <<<"$text"; then
+					hit="gate check failed on the GATE_CHANGE_OK refusal (override is terminal-only)"
+					break
+				fi
+			done <<<"$runs"
+		fi
+		[[ -z "$hit" ]] || printf '%s\t%s\n' "$pr" "$hit"
+	done < <(jq -r --arg l "$OD_GATE_LABEL" '.[] | select(.state == "open" and .merged_at == null)
+		| [.number, .head.sha, (any(.labels[]?; .name == $l))] | @tsv' <<<"$json")
+	return 0
 }
 
 od_board_report() {
@@ -165,6 +240,11 @@ _od_rows() {
 		else
 			printf 'unreadable\t-\towner-decision issues of %s\t\n' "$repo"
 		fi
+		if line="$(od_gate_pending "$repo")"; then
+			awk -F'\t' -v repo="$repo" 'NF >= 2 {printf "gate\t%s#%s\tApprove gate change on PR %s#%s\t%s\n", repo, $1, repo, $1, $2}' <<<"$line"
+		else
+			printf 'unreadable\t-\tgate approvals of %s\t\n' "$repo"
+		fi
 		rc=0
 		line="$(od_report_remote "$repo")" || rc=$?
 		if ((rc == 0)); then
@@ -191,16 +271,20 @@ _od_rows() {
 # (an issue blocked by a decision is also a decision-blocked card: the first row wins).
 _od_filter_excluded() {
 	local file="${OWNER_DECISIONS_EXCLUDE_FILE:-$HOME/.claude/tasks/owner-decisions-exclusions.txt}"
-	local kind ref decision context excl=""
+	local kind ref decision context key excl=""
 	local -A seen=()
 	[[ -r "$file" ]] && excl="$(sed -e 's/[[:space:]]#[[:space:]].*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^#\([[:space:]]\|$\)/d' -e '/^$/d' "$file")"
 	while IFS=$'\t' read -r kind ref decision context; do
-		[[ -n "$ref" && -z "${seen[$ref]:-}" ]] || continue
-		seen[$ref]=1
+		# A gate row is a distinct decision from a flagged-PR/card/issue row on the same ref
+		# (different advice), so it dedupes in its own namespace; the other kinds still share one.
+		key="$ref"
+		[[ "$kind" == gate ]] && key="gate|$ref"
+		[[ -n "$ref" && -z "${seen[$key]:-}" ]] || continue
+		seen[$key]=1
 		grep -qxF -- "$ref" <<<"$excl" && continue
 		# `#N` names an issue/PR number, so it never matches a branch or workflow ref.
 		case "$kind" in
-		pr | issue | card) grep -qxF -- "#${ref##*#}" <<<"$excl" && continue ;;
+		pr | issue | card | gate) grep -qxF -- "#${ref##*#}" <<<"$excl" && continue ;;
 		# A ref is `branch:<owner/repo>:<name>` (git forbids ':' in a branch name); a bare
 		# `branch:<name>` entry hides that name in every repo.
 		branch) grep -qxF -- "branch:${ref#branch:*:}" <<<"$excl" && continue ;;
@@ -216,6 +300,7 @@ _od_advice() {
 	card) printf 'Record the answer on the card and drop the decision: blocker\tPro: card becomes pickable. Con: decision then binds later work\n' ;;
 	workflow) printf 'Switch it on in the Projects UI if the automation is wanted\tPro: board stays in sync without the loop. Con: one more automation to watch\n' ;;
 	branch) printf 'Delete if the missing lines are superseded, else open a PR\tPro: removes dead branch. Con: deleting loses unmerged work\n' ;;
+	gate) printf 'Add the gate-change-approved label, or re-run the commit with GATE_CHANGE_OK in a terminal\tPro: unblocks a gate-file PR only you may approve. Con: approves an edit to the gate itself\n' ;;
 	issue) printf 'Answer on the issue and relabel it\tPro: frees the item for dispatch. Con: a wrong answer is re-work\n' ;;
 	esac
 }

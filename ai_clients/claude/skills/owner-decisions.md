@@ -36,6 +36,7 @@ again after being answered (dotfiles-linux-dev#1033). The list now comes from a 
 |---|---|
 | open PRs | body says "decide whether", "surface expansion", "expands the (public) surface", "disabled feature", "feature (is) disabled" or "judg(e)ment call" |
 | board cards | a Blocked card whose "Blocked by" field or body line holds `decision:` (read-only: judged with `roadmap_unblock.sh`'s helpers, never its mutating reconcile) |
+| gate approvals | an open PR that touches a path the repo's own workflow declares gate-protected (the `-e <path>` lines of the step that honours `gate-change-approved`, read at runtime, never listed here) and lacks that label, or whose failing gate check annotation carries the `GATE_CHANGE_OK` refusal text |
 | Projects workflows | reported OFF; the API cannot enable them |
 | origin branches | `branch_prune.sh` dry-run reports `REPORT-REMOTE`, run in every board repo's own checkout (cwd when its origin matches, else `$KANBAN_CHECKOUT_ROOT`/`~/github`/`<repo>`); a repo with no checkout prints `UNREADABLE ... (no local checkout)` |
 | issues | labelled `hitl`, or `state:blocked` with a `decision:` blocker |
