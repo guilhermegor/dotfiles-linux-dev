@@ -60,17 +60,28 @@ PLANNER_TIMEOUT="${ROUND_DISPATCH_PLANNER_TIMEOUT:-60}"
 
 # round_events TRANSCRIPT
 # The round's tool_use stream reduced to the two tokens that decide this hook:
-# LOOP for a Skill call on dev-loop, AGENT for an Agent dispatch, in transcript
-# order. Parsed with jq, never grepped — key-value spacing is not part of the
-# JSONL contract, so a literal '"skill":"dev-loop"' match silently misses a
-# record serialized with a space and the hook never fires.
+# LOOP for a dev-loop invocation, AGENT for an Agent dispatch, in transcript
+# order. A round arrives in three shapes, the same ones loop_repo.sh's
+# loop_invocation_args reads (dotfiles-linux-dev#1133): a Skill tool_use named
+# `dev-loop` or `s:dev-loop`, and a `/dev-loop` (or `/s:dev-loop`) slash command,
+# typed or replayed by cron, which lands as a user turn whose content is a bare
+# string — the `[]?` walk over tool_use blocks sees none of those. Parsed with
+# jq, never grepped — key-value spacing is not part of the JSONL contract, so a
+# literal '"skill":"dev-loop"' match silently misses a record serialized with a
+# space and the hook never fires.
 round_events() {
 	jq -r 'select(.message.content != null)
-		| .message.content[]?
-		| select(.type == "tool_use")
-		| if (.name == "Skill" and .input.skill == "dev-loop") then "LOOP"
-		  elif (.name == "Agent") then "AGENT"
-		  else empty end' "$1" 2>/dev/null
+		| .message.content as $c
+		| ( $c[]?
+			| select(type == "object" and .type == "tool_use")
+			| if (.name == "Skill" and (.input.skill == "dev-loop" or .input.skill == "s:dev-loop")) then "LOOP"
+			  elif (.name == "Agent") then "AGENT"
+			  else empty end ),
+		  ( select(.type == "user")
+			| ($c | if type == "string" then .
+				else ([.[]? | select(type == "object" and .type == "text") | .text // ""] | join("\n")) end)
+			| select(test("<command-name>/([A-Za-z0-9_-]+:)?dev-loop</command-name>"))
+			| "LOOP" )' "$1" 2>/dev/null
 }
 
 # dispatched_this_round EVENTS
