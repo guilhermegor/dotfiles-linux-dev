@@ -611,8 +611,10 @@ one is an `unreadable` row, not "none". Gate rows dedupe in their own `gate|<ref
 
 ## Stop-guard budget and plan cache (dotfiles-linux-dev#814)
 
-`Stop` runs after every main-session turn, so the three Stop guards
-(`dispatch_free_surface_guard.sh`, `round_dispatch_guard.sh`, `review_fanout_guard.sh`) used to
+`Stop` runs after every main-session turn, so the three budgeted Stop guards
+(`dispatch_free_surface_guard.sh`, `round_dispatch_guard.sh`, `review_fanout_guard.sh`; they share one
+round recogniser, `loop_round_invoked` in `hooks/lib/loop_repo.sh`, dotfiles-linux-dev#1135)
+used to
 re-plan from scratch each time and never consulted the #445 latch; a long `/dev-loop` session
 drained the shared GraphQL bucket in minutes. `hooks/lib/stop_budget.sh` is the one fix:
 

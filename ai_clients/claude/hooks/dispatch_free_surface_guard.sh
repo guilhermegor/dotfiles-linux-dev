@@ -93,54 +93,6 @@ PLANNER_TIMEOUT="${DISPATCH_GUARD_PLANNER_TIMEOUT:-60}"
 # (dotfiles-linux-dev#540, measured: 34 names on every Stop). Only the newest N are ever printed.
 FAILED_AGENTS_MAX="${DISPATCH_GUARD_FAILED_AGENTS_MAX:-10}"
 
-# dev_loop_invoked TRANSCRIPT
-# Pure data: did this session's transcript ever run s:dev-loop? Three shapes count, all
-# measured off real transcripts (dotfiles-linux-dev#404) — a session that never ran the loop in
-# ANY of them is not this hook's concern, and must never fire:
-#   1. a Skill tool_use, bare ("dev-loop") — the original, and still correct for a direct
-#      Skill-tool invocation.
-#   2. a Skill tool_use, fully-qualified ("s:dev-loop") — some invocation paths serialise the
-#      namespaced form; nothing here is measured to prefer one over the other, so both count.
-#   3. a `/dev-loop` slash-command invocation — typed directly, or replayed from a CronCreate
-#      schedule (the step-0 cron this guard exists to make routine). Both land as a plain
-#      user-role message carrying the literal `<command-name>/dev-loop</command-name>`
-#      marker; message.content is ordinarily a bare string for this shape (never an array of
-#      tool_use blocks), which is exactly why shape 1's `.message.content[]?` walk sees zero
-#      of these — `[]?` over a string yields nothing, not an error, so the miss was silent.
-# Parsed with jq, never grepped for the whole object: key-value spacing is not part of the
-# JSONL contract, so a literal '"skill":"dev-loop"' match silently misses a record serialized
-# as '"skill": "dev-loop"'.
-dev_loop_invoked() {
-	local transcript="$1"
-	[ -r "$transcript" ] || return 1
-
-	if jq -e 'select(.message.content != null)
-		| .message.content[]?
-		| select(.type == "tool_use"
-			and .name == "Skill"
-			and (.input.skill == "dev-loop" or .input.skill == "s:dev-loop"))' \
-		"$transcript" >/dev/null 2>&1
-	then
-		return 0
-	fi
-
-	# `select(contains(...))` at the tail, never a bare `contains(...)`: `jq -e`'s exit status
-	# reflects only the LAST value this program emits across the whole JSONL stream, and every
-	# other user-role message in a real transcript (e.g. an Agent's tool_result, which is also
-	# `.type == "user"`) reaches this same pipeline and would emit an explicit `false` — which,
-	# landing after a real match, would flip -e's verdict back to failure. `select` instead
-	# emits NOTHING for a non-matching line, the same "backtrack, don't emit false" contract
-	# shape 1's chain of `select`s already relies on — so only a real match can be the last
-	# (or only) value on the stream (dotfiles-linux-dev#404, caught by this fix's own repro).
-	jq -e 'select(.type == "user" and .message.content != null)
-		| .message.content
-		| if type == "string" then .
-		  else ([.[]? | select(.type == "text") | .text // ""] | join("\n"))
-		  end
-		| select(contains("<command-name>/dev-loop</command-name>"))' \
-		"$transcript" >/dev/null 2>&1
-}
-
 # _agent_result_text TRANSCRIPT ID
 # The literal text of the tool_result matching a dispatched Agent's tool_use id, or empty if
 # none has landed yet. content is normalised the same way for both shapes seen in real
@@ -548,7 +500,7 @@ main() {
 	transcript="$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)"
 	[ -n "$transcript" ] || exit 0
 
-	dev_loop_invoked "$transcript" || exit 0
+	loop_round_invoked "$transcript" || exit 0
 	# The repo the loop ran for, never the payload cwd alone (#1125): the orchestrator may have
 	# moved elsewhere just to read. loop_repo_resolve falls back to that cwd, and says so.
 	loop_repo_resolve "$transcript" "$cwd" || { loop_repo_unknown_message dispatch_free_surface_guard; exit 2; }
