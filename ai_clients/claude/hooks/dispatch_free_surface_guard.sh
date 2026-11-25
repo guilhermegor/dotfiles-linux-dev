@@ -78,6 +78,8 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HOOK_DIR/lib/dispatch_claims.sh"
 # shellcheck source=lib/stop_budget.sh
 source "$HOOK_DIR/lib/stop_budget.sh"
+# shellcheck source=lib/loop_repo.sh
+source "$HOOK_DIR/lib/loop_repo.sh"
 
 # How far before a dispatch a claim may sit and still be read as that dispatch's own (#872).
 DISPATCH_CLAIM_ADOPT_WINDOW="${DISPATCH_CLAIM_ADOPT_WINDOW:-300}"
@@ -451,6 +453,8 @@ gh() {
 # routine silence is the defect this hook exists to catch (dotfiles-linux-dev#396).
 report_unreadable() {
 	{
+		echo "dispatch_free_surface_guard: $LOOP_REPO_LABEL"
+		echo
 		echo "free dispatch surface UNREADABLE ($1) — not the same as empty."
 		echo
 		echo "s:dev-loop step 6 (DISPATCH) cannot tell right now which issues are"
@@ -544,9 +548,12 @@ main() {
 	transcript="$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)"
 	[ -n "$transcript" ] || exit 0
 
-	$GIT -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
-
 	dev_loop_invoked "$transcript" || exit 0
+	# The repo the loop ran for, never the payload cwd alone (#1125): the orchestrator may have
+	# moved elsewhere just to read. loop_repo_resolve falls back to that cwd, and says so.
+	loop_repo_resolve "$transcript" "$cwd" || { loop_repo_unknown_message dispatch_free_surface_guard; exit 2; }
+	cwd="$LOOP_REPO_DIR"
+	$GIT -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 	inflight_dispatch_issues "$transcript" "$cwd"
 
 	# One planner result per repo per TTL window, shared with round_dispatch_guard.sh; a cache
@@ -624,6 +631,8 @@ main() {
 	if [ -n "$missing" ]; then
 		{
 			rescue_note "$remaining"
+			echo "dispatch_free_surface_guard: $LOOP_REPO_LABEL"
+			echo
 			echo "Dispatchable issues are not covered by anything in flight — do not stop here"
 			echo "without dispatching one agent per issue below."
 			echo
@@ -669,6 +678,8 @@ main() {
 	if [ -n "$undeclared" ] && [ "$slots" -gt 0 ]; then
 		{
 			rescue_note "$remaining"
+			echo "dispatch_free_surface_guard: $LOOP_REPO_LABEL"
+			echo
 			echo "Nothing is dispatchable, but these issues have no declared file surface —"
 			echo "UNDECLARED is reported, never assumed free, and never dispatched on a guess."
 			echo
