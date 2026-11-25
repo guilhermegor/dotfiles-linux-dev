@@ -604,6 +604,11 @@ decision-blocked issues. Standing exclusions live in `~/.claude/tasks/owner-deci
 never in code. Source is flat `skills/owner-decisions.md` (the installer globs `*.md`); an unreadable
 source prints `UNREADABLE`, never "none". Tests: `tests/owner_decisions.bats`.
 
+Gate rows (#1130, #1132): `od_gate_pending` lists open PRs touching a gate-protected path without
+`gate-change-approved`, or whose `gate` check failed on the `GATE_CHANGE_OK` refusal. Paths come only
+from the workflow step that mentions the label (`-e <path>` lines); reads are paginated, an unreadable
+one is an `unreadable` row, not "none". Gate rows dedupe in their own `gate|<ref>` namespace.
+
 ## Stop-guard budget and plan cache (dotfiles-linux-dev#814)
 
 `Stop` runs after every main-session turn, so the three Stop guards
@@ -638,6 +643,19 @@ drained the shared GraphQL bucket in minutes. `hooks/lib/stop_budget.sh` is the 
 
 `review_fanout_guard.sh` keeps its own per-heads cache (#696); it only gained the gate. The
 planners' remaining GraphQL (`closingIssuesReferences`, review threads) was not moved to REST here.
+
+**Which repo the guards judge (#1125, #1131).** The Stop payload's `.cwd` is where the shell
+stands, not what the loop was told: an orchestrator that `cd`s into another repo only to read an
+issue moved the guards onto it (`/dev-loop blueprintx` plus a `cd ~/github/greenfield` demanded 11
+greenfield issues on every turn end). `hooks/lib/loop_repo.sh`'s `loop_repo_resolve TRANSCRIPT CWD`
+is the one implementation; the three guards above and `open_review_threads_nudge.sh` all call it.
+It parses the LAST `dev-loop` invocation in the transcript (a Skill `tool_use` or a `/dev-loop`
+slash command, via jq) and takes the first word of its args: a path, `owner/name`
+(`<$DEV_LOOP_REPOS_ROOT, default ~/github>/name`) or a bare name, which must be a git work tree.
+No invocation, or one naming no repo (a bare word that is no checkout reads as free text), falls
+back to the cwd, labelled as a fallback in every guard message. A path or `owner/name` that is no
+checkout is `UNKNOWN`: the guard blocks once with `loop_repo_unknown_message`, never judging the
+cwd repo instead.
 
 **Planner timeouts (#960).** `dispatch_plan.py` runs the free-surface gate under
 `DISPATCH_PLAN_GATE_TIMEOUT` (default 45s), on top of `DISPATCH_PLAN_GH_TIMEOUT` per `gh` call. The
