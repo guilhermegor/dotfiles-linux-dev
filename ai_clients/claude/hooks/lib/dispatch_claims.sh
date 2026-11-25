@@ -526,6 +526,103 @@ claim_review_ask() {
 	) 9>>"$lock"
 }
 
+# Parked on the owner (dotfiles-linux-dev#1139). Two Stop guards (uncommitted_worktree_guard.sh,
+# open_review_threads_nudge.sh) re-blocked every turn on work only the owner can finish: a staged
+# commit behind an owner-only gate, and the review thread whose fix is that commit. Neither could
+# tell "abandoned" from "parked", so a guard cried wolf until the operator stopped reading it.
+# This is the declaration, as DATA beside the claims registry, never session knowledge:
+#
+#   parked-owner.tsv, one line per parked item, six tab-separated fields:
+#     kind     `worktree` or `thread`
+#     target   worktree: its absolute toplevel path; thread: `<pr>#<thread-id>`
+#     anchor   worktree: its HEAD sha; thread: the PR head sha, both at the moment of parking
+#     reason   why it waits on the owner (tabs/newlines flattened to spaces)
+#     backup   durable path holding the work (a patch, a branch)
+#     epoch    when it was parked
+#
+# An entry expires by ANCHOR, not by clock: once the worktree HEAD or the PR head no longer equals
+# the anchor, the entry is ignored, because the owner acting (or anyone pushing) changed what was
+# parked. Same lock as claim_files, for the reason claim_review_ask documents.
+dispatch_parked_file() {
+	local dir
+	dir="$(dispatch_state_dir)" || return 1
+	printf '%s/parked-owner.tsv\n' "$dir"
+}
+
+# park_owner KIND TARGET ANCHOR REASON BACKUP
+# Prints PARKED (return 0) or UNKNOWN (return 1: a field is empty, no flock, no git dir).
+# Re-parking a KIND+TARGET replaces its line.
+park_owner() {
+	local kind="${1:-}" target="${2:-}" anchor="${3:-}" reason="${4:-}" backup="${5:-}"
+	local file lock f
+	for f in "$target" "$anchor" "$reason" "$backup"; do
+		[ -n "$f" ] || kind=""
+	done
+	[[ "$kind" == worktree || "$kind" == thread ]] || {
+		echo "UNKNOWN"
+		return 1
+	}
+	command -v flock >/dev/null 2>&1 || {
+		echo "UNKNOWN"
+		return 1
+	}
+	file="$(dispatch_parked_file)" && lock="$(dispatch_claims_lock)" || {
+		echo "UNKNOWN"
+		return 1
+	}
+	# Flatten, never `<<<` (a herestring's trailing newline would become a trailing space).
+	target="$(printf '%s' "$target" | tr '\t\n\r' '   ')"
+	reason="$(printf '%s' "$reason" | tr '\t\n\r' '   ')"
+	backup="$(printf '%s' "$backup" | tr '\t\n\r' '   ')"
+	(
+		flock -w "${DISPATCH_CLAIM_LOCK_WAIT:-10}" 9 || {
+			echo "UNKNOWN"
+			exit 1
+		}
+		{
+			[ -f "$file" ] && awk -F'\t' -v k="$kind" -v t="$target" '!($1 == k && $2 == t)' "$file"
+			printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$kind" "$target" "$anchor" "$reason" "$backup" "$(date +%s)"
+		} >"$file.tmp" && mv -f "$file.tmp" "$file" || {
+			echo "UNKNOWN"
+			exit 1
+		}
+		echo "PARKED"
+	) 9>>"$lock"
+}
+
+# parked_owner_lookup KIND TARGET ANCHOR
+# ANCHOR is the CURRENT worktree HEAD / PR head. Prints every live matching line and returns 0;
+# returns 1 when nothing is parked (also: an empty argument, which must never match) and 2 when the
+# file exists but cannot be read, so a caller can fail CLOSED on 2. A TARGET ending in `#` matches
+# every thread of that PR (`1321#`). No lock: a writer replaces the file by mv, so a reader sees
+# the old file or the new one, never half of either.
+parked_owner_lookup() {
+	local kind="${1:-}" target="${2:-}" anchor="${3:-}" file out
+	[ -n "$kind" ] && [ -n "$target" ] && [ -n "$anchor" ] || return 1
+	file="$(dispatch_parked_file)" || return 1
+	[ -e "$file" ] || return 1
+	[ -f "$file" ] && [ -r "$file" ] || return 2
+	# ENVIRON, never -v: awk -v would interpret backslashes inside a path.
+	out="$(PK="$kind" PT="$target" PA="$anchor" awk -F'\t' '
+		BEGIN { k = ENVIRON["PK"]; t = ENVIRON["PT"]; a = ENVIRON["PA"]; pre = (substr(t, length(t)) == "#") }
+		NF == 6 && $1 == k && $3 == a && ($2 == t || (pre && substr($2, 1, length(t)) == t))' "$file")" || return 2
+	[ -n "$out" ] || return 1
+	printf '%s\n' "$out"
+}
+
+# parked_owner_announce_once SESSION_ID LABEL LINES
+# The once-per-session half, same marker idea as round_dispatch_guard.sh's announce_no_planner: the
+# marker is keyed by session AND by the parked lines, so a second, different parked item is still
+# said out loud once. Returns 0 when this call is the first (the caller prints, then exits 1,
+# because exit 0 discards stderr), 1 when it was already said.
+parked_owner_announce_once() {
+	local session="${1:-nosession}" label="$2" lines="$3" marker
+	marker="${TMPDIR:-/tmp}/parked_owner.${label}.${session//[^A-Za-z0-9_-]/_}.$(printf '%s' "$lines" | cksum | cut -d' ' -f1).announced"
+	[ -e "$marker" ] && return 1
+	: >"$marker" 2>/dev/null
+	return 0
+}
+
 # refresh_pr_held_paths OWNER REPO
 # The ONE gate read per round (scope 5). Requires lib/free_surface.sh to be sourced already —
 # it is the gate's own file and this one does not duplicate it. Writes `<holder>\t<path>`.

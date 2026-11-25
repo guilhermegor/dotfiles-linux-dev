@@ -49,7 +49,10 @@ case "$1 $2" in
     # live re-check added for #423 asks `--json state --jq .state` for an explicit PR number,
     # which is a different call shape than the fast path's `--json number,state -q '...'` with no
     # number argument at all.
-    if [ "$json" = "state" ] && [ "$jqfilter" = ".state" ]; then
+    if [ "$json" = "headRefOid" ]; then
+        # The PR head a parked-owner thread entry is anchored to (#1139).
+        printf '%s\n' "${PR_HEAD_OID:-}"
+    elif [ "$json" = "state" ] && [ "$jqfilter" = ".state" ]; then
         var="PR_STATE_${number}"
         printf '%s\n' "${!var:-OPEN}"
     else
@@ -396,6 +399,119 @@ checks_fixture() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"PR #42"* ]]
     [[ "$output" != *"repo-wide"* ]]
+}
+
+# --- #1139: findings parked behind an owner-only step are reported once, not re-blocked --------
+
+# park_thread TARGET ANCHOR REASON
+park_thread() {
+    (cd "$REPO" && source "$HOOK_LIB" && park_owner thread "$1" "$2" "$3" /tmp/b.patch)
+}
+
+# two_problem_fixture NUM -- two unanswered bot-only threads on different paths.
+two_problem_fixture() {
+    local body
+    body="$(printf 'x%.0s' {1..150})"
+    jq -nc --arg body "$body" '{data: {repository: {pullRequest: {
+        reviewThreads: {totalCount: 2, nodes: ["a.sh", "b.sh"] | map({isResolved: false, path: ., comments: {
+            totalCount: 1,
+            nodes: [{author: {login: "coderabbitai", __typename: "Bot"}, body: $body}]
+        }})},
+        comments: {totalCount: 0, nodes: []}
+    }}}}' >"$FIXTURE_DIR/$1.json"
+}
+
+parked_setup() {
+    HOOK_LIB="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks/lib/dispatch_claims.sh"
+    export TMPDIR="$REPO/tmp"
+    mkdir -p "$TMPDIR"
+    export PR_VIEW_NUMBER=42 PR_HEAD_OID=aaa111
+}
+
+@test "parked: with NO parked entry the same finding still blocks (should-fail witness, #1139)" {
+    parked_setup
+    problem_fixture 42
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 2 ]
+}
+
+@test "parked: a live entry at the PR head reports once per session, then stays quiet (#1139)" {
+    parked_setup
+    problem_fixture 42
+    park_thread "42#PRRT_x" aaa111 "fix staged behind GATE_CHANGE_OK"
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"fix staged behind GATE_CHANGE_OK"* ]]
+    [[ "$output" == *"PR #42"* ]]
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "parked: the entry expires when the PR head moves (#1139)" {
+    parked_setup
+    problem_fixture 42
+    park_thread "42#PRRT_x" aaa111 "why"
+    export PR_HEAD_OID=bbb222
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 2 ]
+}
+
+@test "parked: a finding with no parked entry beside a parked one still blocks (#1139)" {
+    parked_setup
+    two_problem_fixture 42
+    park_thread "42#PRRT_x" aaa111 "why"
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 2 ]
+}
+
+@test "parked: one entry per finding parks them all (#1139)" {
+    parked_setup
+    two_problem_fixture 42
+    park_thread "42#PRRT_x" aaa111 "why"
+    park_thread "42#PRRT_y" aaa111 "why"
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 1 ]
+}
+
+@test "parked: repo-wide, a parked PR never hides a real finding on a later PR (#1139)" {
+    parked_setup
+    export PR_VIEW_NUMBER="" PR_LIST=$'42\n43'
+    problem_fixture 42
+    problem_fixture 43
+    park_thread "42#PRRT_x" aaa111 "why"
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"PR #43"* ]]
+}
+
+@test "parked: repo-wide, with only a parked PR open it is reported once (#1139)" {
+    parked_setup
+    export PR_VIEW_NUMBER="" PR_LIST=$'42'
+    problem_fixture 42
+    park_thread "42#PRRT_x" aaa111 "why"
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"PR #42"* ]]
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 0 ]
+}
+
+@test "parked: an unreadable parked-owner.tsv fails closed (#1139)" {
+    parked_setup
+    problem_fixture 42
+    mkdir "$REPO/.git/parked-owner.tsv"
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 2 ]
+}
+
+@test "parked: an unreadable PR head fails closed (#1139)" {
+    parked_setup
+    problem_fixture 42
+    park_thread "42#PRRT_x" aaa111 "why"
+    export PR_HEAD_OID=""
+    run bash -c "payload false s1 | '$HOOK'"
+    [ "$status" -eq 2 ]
 }
 
 # --- dotfiles-linux-dev#516: delegated to a live, same-session agent covering the thread's path --------

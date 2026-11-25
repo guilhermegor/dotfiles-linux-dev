@@ -754,3 +754,71 @@ SH
     [ "$status" -ne 0 ]
     [ "$output" = "UNKNOWN" ]
 }
+
+# --- parked-owner.tsv: work parked behind an owner-only step (#1139) ------------------------
+# Line format: kind<TAB>target<TAB>anchor<TAB>reason<TAB>backup<TAB>epoch
+
+@test "park_owner records one six-field line beside the claims registry (#1139)" {
+    run park_owner worktree /w/review-1 abc123 "owner-only commit" /tmp/b.patch
+    [ "$status" -eq 0 ]
+    [ "$output" = "PARKED" ]
+    run awk -F'\t' 'END { print NR, NF, $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/) }' \
+        "$TEST_TMP/.git/parked-owner.tsv"
+    [ "$output" = "1 6 worktree /w/review-1 abc123 owner-only commit /tmp/b.patch 1" ]
+}
+
+@test "parked_owner_lookup matches only while the anchor is unchanged (#1139)" {
+    park_owner worktree /w/review-1 abc123 "why" /tmp/b.patch
+    run parked_owner_lookup worktree /w/review-1 abc123
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"why"* ]]
+    refute parked_owner_lookup worktree /w/review-1 def456
+}
+
+@test "parked_owner_lookup never matches an empty anchor or another target or kind (#1139)" {
+    park_owner worktree /w/review-1 abc123 "why" /tmp/b.patch
+    refute parked_owner_lookup worktree /w/review-1 ""
+    refute parked_owner_lookup worktree /w/other abc123
+    refute parked_owner_lookup thread /w/review-1 abc123
+}
+
+@test "parked_owner_lookup with a trailing # matches every thread of that PR (#1139)" {
+    park_owner thread "1321#PRRT_a" abc123 "r1" /tmp/b.patch
+    park_owner thread "1321#PRRT_b" abc123 "r2" /tmp/b.patch
+    park_owner thread "99#PRRT_c" abc123 "r3" /tmp/b.patch
+    run parked_owner_lookup thread "1321#" abc123
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s\n' "$output" | wc -l)" -eq 2 ]
+}
+
+@test "re-parking the same target replaces its line instead of duplicating it (#1139)" {
+    park_owner worktree /w/review-1 abc123 "first" /tmp/b.patch
+    park_owner worktree /w/review-1 def456 "second" /tmp/b.patch
+    [ "$(wc -l <"$TEST_TMP/.git/parked-owner.tsv")" -eq 1 ]
+    run parked_owner_lookup worktree /w/review-1 def456
+    [[ "$output" == *"second"* ]]
+}
+
+@test "park_owner flattens tabs and newlines in the reason so the line stays six fields (#1139)" {
+    park_owner worktree /w/r abc "a"$'\t'"b"$'\n'"c" /tmp/b.patch
+    run awk -F'\t' '{ print NF }' "$TEST_TMP/.git/parked-owner.tsv"
+    [ "$output" = "6" ]
+}
+
+@test "park_owner refuses missing fields rather than recording half an entry (#1139)" {
+    run park_owner worktree /w/r "" "why" /tmp/b.patch
+    [ "$status" -ne 0 ]
+    [ "$output" = "UNKNOWN" ]
+    [ ! -e "$TEST_TMP/.git/parked-owner.tsv" ]
+}
+
+@test "an unreadable parked-owner.tsv is status 2, never a quiet 'not parked' (#1139)" {
+    mkdir "$TEST_TMP/.git/parked-owner.tsv"
+    run parked_owner_lookup worktree /w/r abc
+    [ "$status" -eq 2 ]
+}
+
+@test "a missing parked-owner.tsv is simply not parked (#1139)" {
+    run parked_owner_lookup worktree /w/r abc
+    [ "$status" -eq 1 ]
+}
