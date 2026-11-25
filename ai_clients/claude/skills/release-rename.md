@@ -14,10 +14,11 @@ major bump — see step 2). You own the **order of operations**, the **local-sta
 **sweep**, which `s:release-py` does not cover. The publish mechanics themselves stay in
 `s:release-py`.
 
-Measured on four renames: `filings-cvm` / `filings-b3` / `filings-rfb` → `opendata-*`
-(2026-11-11/12) and `pure-docs-br` → `purepii-br` (purepii-br#63, shipped as purepii-br 2.0.0 on
-2026-11-19, shim-less break, 20-version backfill on both indexes), plus one queued (the
-`purecalendars` rename, purecalendars#75). Every step below cost real time once.
+Measured on five renames: `filings-cvm` / `filings-b3` / `filings-rfb` → `opendata-*`
+(2026-11-11/12), `pure-docs-br` → `purepii-br` (purepii-br#63, shipped as purepii-br 2.0.0 on
+2026-11-19, shim-less break, 20-version backfill on both indexes), and the `purecalendars`
+rename (purecalendars#75, shipped as purecalendars 4.0.0 on 2026-11-20). Every step below cost
+real time once.
 
 ⚠️ **The forge redirects, so nothing forces the issue.** GitHub redirects the old repo URL and old
 clones keep working, so a half-done rename produces no error — it produces drift. Verify each
