@@ -131,24 +131,24 @@ _tokenize_segment() {
 }
 
 # _skip_redirections
-# Sets `_REDIR_NEXT` to the index in `_CMD_WORDS` of the first word that is not a leading redirection
+# Sets `_CCM_REDIR_NEXT` to the index in `_CMD_WORDS` of the first word that is not a leading redirection
 # (#1158): `[n]>f`, `[n]>>f`, `<f`, `[n]>&m`, `&>f`, `<<tag`, `<<<word`, `<>f`, `{fd}>f`, each also in
 # the separated form (`> f`). A word that is an operator alone eats the next word as its target.
 # Over-reading only: a word that merely looks like a redirection is skipped. The split-mode
 # tokenizer cuts `>&2` at its `&` (and `2>&1`, `&>f`), so a bare fd word (`2`, `1-`, `-`) at the
 # start is the tail of such a cut and is skipped too.
-_REDIR_RE='^([0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\}|&)?(>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)(.*)$'
+_CCM_REDIR_RE='^([0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\}|&)?(>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)(.*)$'
 _skip_redirections() {
     local i=0 w
     while w="${_CMD_WORDS[i]:-}"; [[ -n "$w" ]]; do
-        if [[ "$w" =~ $_REDIR_RE ]]; then
+        if [[ "$w" =~ $_CCM_REDIR_RE ]]; then
             [[ -n "${BASH_REMATCH[3]}" ]] || i=$((i + 1))
         elif [[ ! "$w" =~ ^([0-9]+-?|-)$ ]]; then
             break
         fi
         i=$((i + 1))
     done
-    _REDIR_NEXT=$i
+    _CCM_REDIR_NEXT=$i
 }
 
 # _words_invoke_commit
@@ -162,7 +162,7 @@ _words_invoke_commit() {
 
     # Redirections may come BEFORE the command word (`>/dev/null git commit`, #1158).
     _skip_redirections
-    i=$_REDIR_NEXT
+    i=$_CCM_REDIR_NEXT
 
     # `rtk` / `rtk proxy` prefix (RTK.md's proxy and its raw escape hatch).
     if [[ "${words[i]:-}" && "${words[i]##*/}" == "rtk" ]]; then
@@ -225,7 +225,11 @@ command_has_git_commit() {
     COMMIT_COMMAND_GIT_DIR=""
     # The last two readings turn the clobber redirect `>|` into `>` (#1158): the `|` of `>|f git
     # commit` is no pipe, but the split below cannot tell. Added to the first two, never instead.
-    for reading in "$command" "$joined" "${command//>|/>}" "${joined//>|/>}"; do
+    local -a readings=("$command" "$joined")
+    if [[ "$command" == *'>|'* || "$joined" == *'>|'* ]]; then
+        readings+=("${command//>|/>}" "${joined//>|/>}")
+    fi
+    for reading in "${readings[@]}"; do
         while IFS= read -r segment; do
             _segment_invokes_commit "$segment" && return 0
         done <<< "$(printf '%s' "$reading" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
@@ -247,14 +251,35 @@ _MSG_SEP=$'\x1f'
 # Tokenize COMMAND once with the quote-aware split mode and call CALLBACK with `_CMD_WORDS` set to
 # each simple command in turn. Quoted `;`/`&`/`|` never split, and nothing is evaluated.
 _for_each_command() {
-    local w cb="$2"
+    _CCM_SEEN=()
+    _CCM_PASS=1
+    _for_each_command_pass "$1" "$2"
+    # A command with `>|` gets a second reading with `>|` read as `>` (#1158): the `|` of
+    # `>|f git commit` is no pipe, but the split cannot tell. Only commands the first reading did
+    # not already produce reach the callback, so nothing is called twice.
+    if [[ "$1" == *'>|'* ]]; then
+        _CCM_PASS=2
+        _for_each_command_pass "${1//>|/>}" "$2"
+    fi
+}
+
+_for_each_command_pass() {
+    local w cb="$2" key seen dup
     local -a all
     _CMD_WORDS=()
     _tokenize_segment "$1" split
     all=("${_SEGMENT_WORDS[@]:-}")
     for w in "${all[@]}" "$_BOUNDARY"; do
         if [[ "$w" == "$_BOUNDARY" ]]; then
-            "$cb"
+            key="${_CMD_WORDS[*]}"
+            if ((_CCM_PASS == 1)); then
+                _CCM_SEEN+=("$key")
+                "$cb"
+            else
+                dup=0
+                for seen in "${_CCM_SEEN[@]}"; do [[ "$seen" == "$key" ]] && dup=1; done
+                ((dup)) || "$cb"
+            fi
             _CMD_WORDS=()
         else
             _CMD_WORDS+=("$w")
