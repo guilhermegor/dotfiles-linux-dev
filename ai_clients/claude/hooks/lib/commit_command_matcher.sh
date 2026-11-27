@@ -277,8 +277,9 @@ _strip_heredoc_bodies() {
         tag != "" { t = $0; sub(/^\t+/, "", t); if (t == tag) tag = ""; next }
         {
             n = length($0); i = 1
+            bw = 1   # bw: the previous char was an unescaped, unquoted word boundary
             while (i <= n) {
-                c = substr($0, i, 1)
+                c = substr($0, i, 1); pb = bw; bw = 0
                 if (q == "\047") { if (c == "\047") q = ""; i++; continue }
                 if (q == "A") {
                     if (c == "\\") i++
@@ -290,12 +291,13 @@ _strip_heredoc_bodies() {
                     else if (c == q) q = ""
                     i++; continue
                 }
+                if (c ~ /[ \t;&|(]/) bw = 1
                 if (c == "\\") { i += 2; continue }
                 if (c == "\047" || c == "\"") { q = c; i++; continue }
                 if (c == "$" && substr($0, i + 1, 1) ~ /[\047"]/) {
                     q = substr($0, i + 1, 1); if (q == "\047") q = "A"; i += 2; continue
                 }
-                if (c == "#" && (i == 1 || substr($0, i - 1, 1) ~ /[ \t;&|(]/)) break
+                if (c == "#" && pb) break
                 if (c == "<" && substr($0, i, 3) == "<<<") { i += 3; continue }
                 if (c == "<" && substr($0, i, 2) == "<<") {
                     rest = substr($0, i + 2); sub(/^-?[ \t]*/, "", rest)

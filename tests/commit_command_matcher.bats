@@ -251,6 +251,15 @@ _has_commit() {
     _has_commit $'echo $\'it\\\'s\'\ngit commit -m x\necho \''
 }
 
+@test "TOKENIZER: a # inside a string with escaped quotes is not a comment (#1148 review)" {
+    _has_commit $'echo "a \\" # \\" b"; git commit -m x'
+}
+
+@test "STRIP: an escaped space before # keeps it a word char, so a later <<EOF still opens (#1148 review)" {
+    run _strip $'echo a\\ #b <<EOF\nbody\nEOF\necho after'
+    [ "$output" = $'echo a\\ #b <<EOF\necho after' ]
+}
+
 @test "TOKENIZER: a git commit inside an escaped-quote string is still only an argument" {
     run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo "say \\"git commit -m x\\""'
     [ "$status" -eq 1 ]
