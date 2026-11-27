@@ -330,6 +330,21 @@ _sees_no_verify() {
     [ "$status" -eq 0 ]
 }
 
+@test "GAP1: a double-quote spanning lines, then a # comment ending in a backslash" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo "a\nb" # note \\\ngit commit -m x'
+    [ "$status" -eq 0 ]
+}
+
+@test "GAP1: a single-quote spanning lines, then a # comment ending in a backslash" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo \'a\nb\' # note \\\ngit commit -m x'
+    [ "$status" -eq 0 ]
+}
+
+@test "GAP1: a # right after a closing paren is a comment" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'(true)# note \\\ngit commit -m x'
+    [ "$status" -eq 0 ]
+}
+
 @test "GAP1: a # inside quotes does not stop a real continuation" {
     run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo "a # b" && git \\\n commit -m x'
     [ "$status" -eq 0 ]

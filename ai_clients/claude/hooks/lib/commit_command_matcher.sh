@@ -183,8 +183,9 @@ _segment_invokes_commit() {
 # (over-read only).
 _join_continuations() {
     awk '
-        function comment(s,   i, n, c, q, pb) {
-            n = length(s); q = ""; pb = 1
+        # q (the open quote, if any) is global: it carries across physical lines.
+        function comment(s,   i, n, c, pb) {
+            n = length(s); pb = (q == "")
             for (i = 1; i <= n; i++) {
                 c = substr(s, i, 1)
                 if (q == "\047") { if (c == q) q = ""; pb = 0; continue }
@@ -192,14 +193,15 @@ _join_continuations() {
                 if (q != "") { if (c == q) q = ""; pb = 0; continue }
                 if (c == "#" && pb) return 1
                 if (c == "\047" || c == "\"") q = c
-                pb = (c ~ /[ \t;&|(]/)
+                pb = (c ~ /[ \t;&|()]/)
             }
             return 0
         }
         {
             buf = buf $0
+            cm = comment($0)   # always scan, so the quote state stays current
             match(buf, /\\+$/)
-            if (RLENGTH % 2 == 1 && !comment(buf)) { buf = substr(buf, 1, length(buf) - 1); next }
+            if (RLENGTH % 2 == 1 && !cm) { buf = substr(buf, 1, length(buf) - 1); next }
             print buf; buf = ""
         }
         END { if (buf != "") print buf }
@@ -392,7 +394,7 @@ _strip_heredoc_bodies() {
             }
         }
         { out[++m] = $0; if (nt > 0) { pending = 1; ci = 1 } }
-        END { if (q != "" || depth > 0 || bad) for (k = 1; k <= NR; k++) print raw[k]; else for (k = 1; k <= m; k++) print out[k] }
+        END { if (q != "" || depth > 0 || bad || pending) for (k = 1; k <= NR; k++) print raw[k]; else for (k = 1; k <= m; k++) print out[k] }
     ' "${1:--}"
 }
 
