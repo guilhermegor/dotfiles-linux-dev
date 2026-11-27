@@ -342,6 +342,86 @@ assert_stdin_refused() {
     assert_allowed "$cmd"
 }
 
+# --- per-subcommand options, per-commit sources, composed -C (#1145 round 3) ------------------
+
+@test "git commit -o is --only and takes no value" {
+    assert_refused 'git commit -o "--no-verify" -m x -- README'
+    assert_refused 'git commit -o --no-verify -m x'
+}
+
+@test "value-taking options differ per subcommand" {
+    assert_allowed 'git commit --reuse-message "--no-verify"'
+    assert_allowed 'git commit --fixup "--no-verify"'
+    assert_allowed 'git merge -s "--no-verify" topic'
+    assert_allowed 'git merge --strategy-option "--no-verify" topic'
+    assert_allowed 'git push --repo "--no-verify" origin'
+    assert_refused 'git merge -s ours --no-verify topic'
+    assert_refused 'git push --repo origin --no-verify'
+}
+
+@test "refuses the marker in the SECOND of two heredoc-fed commits" {
+    cmd="$(printf '%s\n' "git commit -F - <<'A'" 'feat: a' 'A' \
+        "git commit -F - <<'B'" 'feat: b' '' 'gate-change-ok: z' 'B')"
+    assert_refused "$cmd"
+}
+
+@test "allows two clean heredoc-fed commits" {
+    cmd="$(printf '%s\n' "git commit -F - <<'A'" 'feat: a' 'A' \
+        "git commit -F - <<'B'" 'feat: b' 'B')"
+    assert_allowed "$cmd"
+}
+
+@test "composes repeated git -C in order" {
+    mkdir -p a/b
+    printf 'feat: decoy\n' > a/msg.txt
+    printf 'chore: x\n\ngate-change-ok: because\n' > a/b/msg.txt
+    assert_refused 'git -C a -C b commit -F msg.txt'
+}
+
+@test "an absolute git -C resets earlier ones" {
+    mkdir -p a
+    printf 'chore: x\n\ngate-change-ok: because\n' > "$TEST_TMP/msg.txt"
+    mkdir -p other
+    printf 'feat: decoy\n' > a/msg.txt
+    assert_refused "git -C a -C $TEST_TMP commit -F msg.txt"
+}
+
+@test "refuses git commit -n and clusters carrying n, the short --no-verify" {
+    assert_refused 'git commit -n -m x'
+    assert_refused 'git commit -nm x'
+    assert_refused 'git commit -anm x'
+    assert_allowed 'git push -n origin HEAD'
+    assert_allowed 'git merge -n topic'
+    assert_allowed 'git commit -am x'
+}
+
+@test "refuses an unambiguous abbreviation of --no-verify" {
+    assert_refused 'git commit --no-veri -m x'
+    assert_refused 'git push --no-verif origin HEAD'
+}
+
+@test "reads abbreviated --message and --file" {
+    printf 'chore: x\n\ngate-change-ok: because\n' > msg.txt
+    assert_refused 'git commit --fil msg.txt'
+    assert_refused 'git commit --fil=msg.txt'
+    assert_refused 'git commit --mess "gate-change-ok: x"'
+    assert_refused 'git commit -aF msg.txt'
+}
+
+@test "git global options with values do not hide the subcommand" {
+    assert_refused 'git --git-dir x --work-tree y commit --no-verify -m z'
+    assert_refused 'git -c user.name=x commit --no-verify -m z'
+}
+
+@test "refuses a core.hooksPath override, which disables every hook" {
+    assert_refused 'git -c core.hooksPath=/dev/null commit -m x'
+    assert_refused 'git -c core.hookspath=/dev/null push origin HEAD'
+}
+
+@test "words after -- are pathspecs, not options" {
+    assert_allowed 'git commit -m x -- --no-verify'
+}
+
 @test "allows non-Bash tools and empty commands" {
     run bash -c "jq -nc '{tool_name:\"Read\",tool_input:{file_path:\"x\"}}' | '$GUARD'"
     [ "$status" -eq 0 ]
