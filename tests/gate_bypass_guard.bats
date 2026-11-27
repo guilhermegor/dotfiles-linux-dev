@@ -229,6 +229,99 @@ assert_allowed() {
     [ "$status" -eq 2 ]
 }
 
+# --- directory-changing constructs the guard did not understand: fail closed -----------------
+
+assert_unresolved() {
+    run run_guard "$1"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"absolute -F path"* ]]
+}
+
+@test "fails closed on a relative -F after command/builtin/eval cd" {
+    mkdir sub
+    printf 'chore: x\n\ngate-change-ok: because\n' > sub/msg.txt
+    printf 'feat: decoy\n' > msg.txt
+    assert_unresolved 'command cd sub && git commit -F msg.txt'
+    assert_unresolved 'builtin cd sub && git commit -F msg.txt'
+    assert_unresolved 'eval "cd sub" && git commit -F msg.txt'
+}
+
+@test "fails closed on a relative -F after a subshell or sh -c" {
+    mkdir sub
+    printf 'chore: x\n\ngate-change-ok: because\n' > sub/msg.txt
+    printf 'feat: decoy\n' > msg.txt
+    assert_unresolved '( cd sub; git commit -F msg.txt )'
+    assert_unresolved '(cd sub && git commit -F msg.txt)'
+    assert_unresolved "sh -c 'cd sub' && git commit -F msg.txt"
+    assert_unresolved 'env -C sub git commit -F msg.txt'
+}
+
+@test "a quoted word containing cd after the commit flags does not trip the rule" {
+    printf 'feat: fine\n' > msg.txt
+    assert_allowed 'git commit -F msg.txt --author "cd <a@b.c>"'
+}
+
+@test "scans the message of a commit behind a wrapper (env, command, sudo)" {
+    printf 'chore: x\n\ngate-change-ok: because\n' > "$TEST_TMP/abs.txt"
+    assert_refused "env FOO=1 git commit -F $TEST_TMP/abs.txt"
+    assert_refused "command git commit -F $TEST_TMP/abs.txt"
+    assert_refused 'sudo git commit -m x -m "gate-change-ok: y"'
+}
+
+@test "a literal cd head is still understood" {
+    mkdir sub
+    printf 'feat: fine\n' > sub/msg.txt
+    assert_allowed 'cd sub && git commit -F msg.txt'
+}
+
+# --- option values are not flags ---------------------------------------------------------------
+
+@test "allows --no-verify as the VALUE of a value-taking option" {
+    assert_allowed 'git commit -m "--no-verify"'
+    assert_allowed 'git commit --message "--no-verify"'
+    assert_allowed 'git commit -am "--no-verify"'
+    assert_allowed 'git commit -m x --author "--no-verify"'
+    assert_allowed 'git push -o "--no-verify" origin HEAD'
+    assert_allowed 'git commit --message=--no-verify'
+    assert_allowed 'git commit -m--no-verify'
+}
+
+@test "still refuses the flag next to a value-taking option" {
+    assert_refused 'git commit --no-verify -m x'
+    assert_refused 'git commit -m x --no-verify'
+    assert_refused 'git commit -am x --no-verify'
+    assert_refused 'git push -o ci.skip --no-verify origin HEAD'
+}
+
+# --- -F - (stdin): scan only the commit's own heredoc and upstream pipeline --------------------
+
+@test "allows -F - heredoc when an unrelated heredoc holds the marker" {
+    cmd="$(printf '%s\n' "cat > n.txt <<'EOF'" 'gate-change-ok: doc' 'EOF' \
+        "git commit -F - <<'MSG'" 'feat: fine' 'MSG')"
+    assert_allowed "$cmd"
+}
+
+@test "refuses -F - heredoc whose own body holds the marker, even with another heredoc" {
+    cmd="$(printf '%s\n' "cat > n.txt <<'EOF'" 'plain' 'EOF' \
+        "git commit -F - <<'MSG'" 'feat: x' '' 'gate-change-ok: y' 'MSG')"
+    assert_refused "$cmd"
+}
+
+@test "refuses the marker in the pipeline feeding -F -" {
+    assert_refused "printf '%s\n' 'gate-change-ok: because' | git commit -F -"
+}
+
+@test "allows an ordinary pipeline into -F - and ignores chained commands" {
+    assert_allowed "printf 'feat: fine\n' | git commit -F -"
+    assert_allowed "echo 'gate-change-ok: x' && printf 'feat: fine\n' | git commit -F -"
+}
+
+@test "falls back to scanning everything when the stdin source is unknown" {
+    assert_allowed 'git commit -F - < msg.txt'
+    cmd="$(printf '%s\n' "cat > x <<'E'" 'gate-change-ok: z' 'E' 'git commit -F - < msg.txt')"
+    assert_refused "$cmd"
+}
+
 @test "allows non-Bash tools and empty commands" {
     run bash -c "jq -nc '{tool_name:\"Read\",tool_input:{file_path:\"x\"}}' | '$GUARD'"
     [ "$status" -eq 0 ]

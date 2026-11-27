@@ -61,13 +61,37 @@ _has_expansion() {
     [[ "$1" == *[\$\`~*?\[]* ]]
 }
 
+# _words_change_dir_unknowably: return 0 when the words of this simple command carry any construct
+# that can change the directory other than a plain leading `cd <dir>`: a directory builtin or a
+# wrapper (pushd popd builtin command eval exec env source), a shell started with -c, or subshell
+# and substitution syntax. Inverted on purpose: anything not understood makes the directory
+# unknown, instead of listing every spelling. On a `git commit` only the words BEFORE its
+# arguments are read, so a quoted message or option value mentioning "cd" never trips it.
+_words_change_dir_unknowably() {
+    local n="${#_CMD_WORDS[@]}" i w
+    ((_GB_SUB_AT >= 0)) && n=$_GB_SUB_AT
+    for ((i = 0; i < n; i++)); do
+        w="${_CMD_WORDS[i]}"
+        case "$w" in
+            *'('* | *')'* | *'{'* | *'}'* | *'`'*) return 0 ;;
+            pushd | popd | builtin | command | eval | exec | env | source | sh | bash | zsh | dash | ksh) return 0 ;;
+            cd) ((i == 0)) || return 0 ;;
+        esac
+    done
+    return 1
+}
+
 # _note_cd: for a `cd` simple command (global _CMD_WORDS), move the tracked directory the way the
 # shell will: a literal absolute path replaces it, a literal relative path is appended to it.
 # `cd` with no argument, `cd -`, pushd/popd or an expanded path make it unknown until the next
 # literal absolute `cd`.
 _note_cd() {
     local first="${_CMD_WORDS[0]:-}" target
-    [[ "$first" == cd || "$first" == pushd || "$first" == popd ]] || return 0
+    if _words_change_dir_unknowably; then
+        _GB_DIR_OK=0
+        return 0
+    fi
+    [[ "$first" == cd ]] || return 0
     target="${_CMD_WORDS[1]:-}"
     [[ "$target" == -- ]] && target="${_CMD_WORDS[2]:-}"
     if [[ "$first" != cd || -z "$target" || "$target" == - ]] || _has_expansion "$target"; then
@@ -112,10 +136,21 @@ block_unresolved() {
 # from the shared tokenizer, so quotes are already removed (`"--no-verify"` is `--no-verify`) and
 # a quoted commit message stays one word that can never equal a flag.
 _scan_words() {
-    local i w git_at=-1 sub="" skip_at=-1
-    _note_cd
+    local i w git_at=-1 sub="" skip_at=-1 value_next=0 sub_at=-1 gitdir=''
     for ((i = 0; i < ${#_CMD_WORDS[@]}; i++)); do
         w="${_CMD_WORDS[i]}"
+        # The word after a value-taking option is its VALUE (`-m "--no-verify"` is a message).
+        if ((value_next)); then value_next=0; continue; fi
+        if ((git_at >= 0)); then
+            [[ "$w" == -C && -z "$sub" ]] && gitdir="${_CMD_WORDS[i + 1]:-}"
+            case "$w" in
+                -m | --message | -F | --file | -C | -c | --author | --date | --cleanup | --trailer \
+                    | -t | --template | -o | --push-option | --repo | --receive-pack | -[a-zA-Z]*m)
+                    value_next=1
+                    continue
+                    ;;
+            esac
+        fi
         [[ "$w" == GATE_CHANGE_OK=* ]] && block "GATE_CHANGE_OK="
         [[ "$w" == SKIP=* && $skip_at -lt 0 ]] && skip_at=$i
         if ((git_at < 0)) && [[ "$w" == git || "$w" == */git ]]; then
@@ -123,13 +158,54 @@ _scan_words() {
             ((skip_at >= 0)) && block "SKIP= before git"
         elif ((git_at >= 0)); then
             case "$w" in
-                commit | push | merge) [[ -z "$sub" ]] && sub="$w" ;;
+                commit | push | merge) [[ -z "$sub" ]] && { sub="$w"; sub_at=$i; } ;;
                 --no-verify) [[ -n "$sub" ]] && block "--no-verify on git $sub" ;;
             esac
         fi
     done
-    ((git_at >= 0)) && [[ "$sub" == commit ]] && _words_invoke_commit && _scan_commit_message
+    _GB_SUB_AT=-1
+    [[ "$sub" == commit ]] && _GB_SUB_AT=$sub_at
+    _note_cd
+    # Located here, not by the shared matcher, so `env X=1 git commit`, `command git commit` and
+    # `sudo git commit` are scanned too.
+    if [[ "$sub" == commit ]]; then
+        _COMMIT_ARGS_FROM=$((sub_at + 1))
+        COMMIT_COMMAND_GIT_DIR="$gitdir"
+        _scan_commit_message
+    fi
     return 0
+}
+
+_STDIN_FLAG_RE='(^|[[:space:]])(-F[[:space:]]*-|--file([[:space:]]+|=)-)([[:space:]]|$)'
+_STDIN_OPENER_RE='<<-?[[:space:]]*[\x27"]?[^[:space:]\x27"<>|&;()]+[\x27"]?'
+
+# _stdin_has_gate_line: the message a `-F -` commit reads from stdin holds a gate-change-ok: line.
+# It reads exactly what feeds THAT commit: its own heredoc body, and the upstream of the pipeline
+# (`printf ... | git commit -F -`, matched loosely since the text is quoted). Commands chained
+# with && ; || and unrelated heredocs are not read. When the source cannot be identified (a
+# `< file`, process substitution, no flag found) it falls back to scanning the whole command,
+# which errs toward refusing.
+_stdin_has_gate_line() {
+    local skel piece opener tag body
+    skel="$(printf '%s' "$_GB_RAW" | _strip_heredoc_bodies)"
+    piece="$(printf '%s\n' "$skel" | sed -E 's/(&&|\|\||;)/\n/g' | grep -E -- "$_STDIN_FLAG_RE" | head -n1)"
+    if [[ -z "$piece" ]]; then
+        _msg_has_gate_line "$_GB_RAW"
+        return
+    fi
+    opener="$(printf '%s' "$piece" | grep -oE -- "$(printf '%b' "$_STDIN_OPENER_RE")" | head -n1)"
+    if [[ -n "$opener" ]]; then
+        tag="${opener#<<}"; tag="${tag#-}"; tag="${tag//[[:space:]\'\"]/}"
+        body="$(printf '%s\n' "$_GB_RAW" | awk -v tag="$tag" \
+            'go { t = $0; sub(/^\t+/, "", t); if (t == tag) exit; print } index($0, "<<") && index($0, tag) && !go { go = 1 }')"
+        _msg_has_gate_line "$body" && return 0
+    fi
+    if [[ "$piece" == *'|'* ]]; then
+        printf '%s\n' "${piece%%git *}" | grep -qiE "(^|['\"[:space:]])gate-change-ok:"
+        return
+    fi
+    [[ -n "$opener" ]] && return 1
+    _msg_has_gate_line "$_GB_RAW"
 }
 
 # _scan_commit_message: the message of THIS commit (global _CMD_WORDS), from -m values and from a
@@ -154,8 +230,7 @@ _scan_commit_message() {
         fi
         [[ "$kind" == f ]] || continue
         if [[ "$v" == - ]]; then
-            # `-F -`: the heredoc body was stripped from the parse; scan the raw command.
-            _msg_has_gate_line "$_GB_RAW" && block "gate-change-ok: line in a commit message"
+            _stdin_has_gate_line && block "gate-change-ok: line in a commit message"
         elif [[ "$v" == /* ]]; then
             _file_has_gate_line "$v" && block "gate-change-ok: line in commit message file $v"
         else
