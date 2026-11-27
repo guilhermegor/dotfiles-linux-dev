@@ -557,6 +557,122 @@ assert_desync_refused() {
     assert_allowed 'git commit -m x # fine; ok | still fine'
 }
 
+# --- inner shell text: sh -c, bash -c, eval, xargs (dotfiles-linux-dev#1150) ---------------
+
+@test "refuses --no-verify inside bash -c '...'" {
+    assert_refused "bash -c 'git commit --no-verify -m x'"
+}
+
+@test "refuses --no-verify inside sh -c \"...\" on push" {
+    assert_refused 'sh -c "git push --no-verify origin HEAD"'
+}
+
+@test "refuses git commit -n inside sh -c" {
+    assert_refused "sh -c 'git commit -n -m x'"
+}
+
+@test "refuses --no-verify inside eval" {
+    assert_refused 'eval "git commit --no-verify"'
+}
+
+@test "refuses GATE_CHANGE_OK= inside bash -lc" {
+    assert_refused "bash -lc 'GATE_CHANGE_OK=1 git commit -m x'"
+}
+
+@test "refuses SKIP= inside bash -c" {
+    assert_refused "bash -c 'SKIP=hook git commit -m x'"
+}
+
+@test "refuses a core.hooksPath override inside bash -c" {
+    assert_refused "bash -c 'git -c core.hooksPath=/dev/null commit -m x'"
+}
+
+@test "refuses a bypass nested two shells deep" {
+    assert_refused "bash -c \"sh -c 'git commit --no-verify -m x'\""
+}
+
+@test "refuses a bypass inside xargs sh -c" {
+    assert_refused "echo x | xargs sh -c 'git commit --no-verify -m x'"
+}
+
+@test "refuses a bypass in xargs git" {
+    assert_refused 'echo x | xargs git commit --no-verify -m'
+}
+
+@test "refuses a bypass in an inner shell after cd" {
+    assert_refused "cd /tmp && bash -c 'git merge --no-verify topic'"
+}
+
+@test "fails closed on an inner git command built with an expansion" {
+    assert_refused 'bash -c "git commit $flags -m x"'
+}
+
+@test "fails closed on an inner git command with command substitution" {
+    assert_refused 'sh -c "git $(echo commit) --no-verify"'
+}
+
+@test "fails closed on shells nested past the depth bound" {
+    assert_refused 'eval eval eval eval git status'
+}
+
+@test "allows a clean git command nested within the depth bound" {
+    assert_allowed 'eval eval eval git status'
+}
+
+@test "refuses a bypass after a value-taking shell option (bash -o pipefail -c)" {
+    assert_refused "bash -o pipefail -c 'git commit --no-verify -m x'"
+    assert_refused "bash +o history -c 'git commit --no-verify -m x'"
+    assert_refused "bash -co pipefail 'git commit --no-verify -m x'"
+}
+
+@test "allows a clean command after a value-taking shell option" {
+    assert_allowed "bash -o pipefail -c 'git status'"
+}
+
+@test "an inner commit is judged in the directory it ran in, not one a later cd sets" {
+    mkdir clean_dir
+    printf 'feat: x\n\ngate-change-ok: reason\n' > msg.txt
+    printf 'feat: x\n' > clean_dir/msg.txt
+    assert_refused "bash -c 'git commit -F msg.txt'; cd $PWD/clean_dir"
+    assert_refused "eval 'git commit -F msg.txt'; cd $PWD/clean_dir"
+}
+
+@test "a long eval chain that never mentions git finishes quickly" {
+    local cmd i
+    cmd='echo ok'
+    for i in $(seq 20); do cmd="eval $cmd"; done
+    run timeout 20 bash -c "jq -nc --arg c '$cmd' '{tool_name:\"Bash\",cwd:\"/tmp\",tool_input:{command:\$c}}' | '$GUARD'"
+    [ "$status" -eq 0 ]
+}
+
+@test "fails closed on an inner command whose quoted word tokenizes to git with an expansion" {
+    assert_refused "bash -c 'g\"\"it commit \$flags -m x'"
+}
+
+@test "allows bash -c 'git status'" {
+    assert_allowed "bash -c 'git status'"
+}
+
+@test "allows sh -c 'echo --no-verify'" {
+    assert_allowed "sh -c 'echo --no-verify'"
+}
+
+@test "allows eval of a harmless command" {
+    assert_allowed 'eval "echo hello"'
+}
+
+@test "allows bash -lc with a clean git commit" {
+    assert_allowed "bash -lc 'git commit -m \"feat: x\"'"
+}
+
+@test "allows a bash -c script that never mentions git, expansion or not" {
+    assert_allowed 'bash -c "echo $HOME"'
+}
+
+@test "allows bash script.sh with a -c later in its own arguments" {
+    assert_allowed 'bash script.sh -c git'
+}
+
 @test "allows non-Bash tools and empty commands" {
     run bash -c "jq -nc '{tool_name:\"Read\",tool_input:{file_path:\"x\"}}' | '$GUARD'"
     [ "$status" -eq 0 ]
