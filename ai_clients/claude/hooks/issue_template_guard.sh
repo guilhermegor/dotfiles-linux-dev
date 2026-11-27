@@ -76,7 +76,7 @@ SPEC_LIB_OK=1
 source "$SCRIPT_DIR/lib/issue_spec_complete.sh" 2>/dev/null || SPEC_LIB_OK=0
 
 # Fail CLOSED if jq (used to parse the hook payload) is unavailable (#1162).
-command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162)" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162). Install jq from a terminal outside this session (e.g. sudo apt install jq)." >&2; exit 2; }
 
 main() {
     local payload tool command root body_source labels body_path body_base=""

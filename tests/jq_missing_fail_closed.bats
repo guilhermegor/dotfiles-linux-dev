@@ -27,7 +27,7 @@ run_nojq() {
 
 assert_closed() {
     [ "$status" -eq 2 ]
-    [[ "$output" == *jq* ]]
+    [[ "$output" == *"jq not found"* ]]
 }
 
 @test "#1162 branch_requires_issue_guard blocks without jq"      { run_nojq branch_requires_issue_guard.sh; assert_closed; }
@@ -39,3 +39,13 @@ assert_closed() {
 @test "#1162 pr_merge_threads_guard blocks without jq"           { run_nojq pr_merge_threads_guard.sh; assert_closed; }
 @test "#1162 pr_template_guard blocks without jq"                { run_nojq pr_template_guard.sh; assert_closed; }
 @test "#1162 primary_checkout_subagent_guard blocks without jq"  { run_nojq primary_checkout_subagent_guard.sh; assert_closed; }
+
+@test "#1160 pr_merge_threads_guard blocks when lib/gh_budget.sh is missing" {
+    local d
+    d="$(mktemp -d)"
+    cp "$HOOKS/pr_merge_threads_guard.sh" "$d/"
+    run bash -c 'echo "{}" | bash "$1"' _ "$d/pr_merge_threads_guard.sh"
+    rm -rf "$d"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *gh_budget.sh* ]]
+}

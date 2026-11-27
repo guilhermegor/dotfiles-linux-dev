@@ -20,7 +20,7 @@
 
 set -u
 
-command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162)" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162). Install jq from a terminal outside this session (e.g. sudo apt install jq)." >&2; exit 2; }
 
 # Shared with commit_title_length_guard.sh and commit_body_wrap.sh (dotfiles-linux-dev#324) — one
 # `git commit` detection regex, not three that can drift apart.
