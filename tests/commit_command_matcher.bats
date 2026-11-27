@@ -304,3 +304,49 @@ _has_commit() {
     run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo "say \\"git commit -m x\\""'
     [ "$status" -eq 1 ]
 }
+
+# --- #1152: four gaps that hid a git commit from every guard ------------------------------------
+# Each case is the shape followed by a real `git commit --no-verify`; the commit must be seen.
+
+_sees_no_verify() {
+    run bash -c 'source "$1"
+        seen() { [[ "${_CMD_WORDS[0]:-}" == git && " ${_CMD_WORDS[*]} " == *" --no-verify "* ]] && echo SEEN; return 0; }
+        _for_each_command "$(printf "%s" "$2" | _strip_heredoc_bodies)" seen' _ "$MATCHER" "$1"
+    [[ "$output" == *SEEN* ]]
+}
+
+@test "GAP1: line continuation inside the command word (git \\<NL> commit)" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'git \\\n commit --no-verify -m x'
+    [ "$status" -eq 0 ]
+}
+
+@test "GAP1: an even backslash run before a newline is a real separator, not a continuation" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo \\\\\ngit commit -m x'
+    [ "$status" -eq 0 ]
+}
+
+@test "GAP2: partially quoted heredoc delimiter <<\"E\"OF" {
+    _sees_no_verify $'cat <<"E"OF\nbody\nEOF\ngit commit --no-verify -m x'
+}
+
+@test "GAP2: partially quoted heredoc delimiter <<E\"OF\"" {
+    _sees_no_verify $'cat <<E"OF"\nbody\nEOF\ngit commit --no-verify -m x'
+}
+
+@test "GAP2: an unterminated quote in the delimiter fails closed (input unstripped)" {
+    run _strip $'cat <<E"OF\nbody\nEOF'
+    [ "$output" = $'cat <<E"OF\nbody\nEOF' ]
+}
+
+@test "GAP3: bare arithmetic command ((x<<2)) is not a heredoc opener" {
+    _sees_no_verify $'((x<<2))\ngit commit --no-verify -m x'
+}
+
+@test "GAP4: two heredocs on one line strip both bodies" {
+    _sees_no_verify $'cat <<A <<B\na\nA\n\'\nB\ngit commit --no-verify -m x\necho \''
+}
+
+@test "GAP4: two heredocs on one line, plain strip drops both bodies" {
+    run _strip $'cat <<A <<B\na\nA\nb\nB\necho after'
+    [ "$output" = $'cat <<A <<B\necho after' ]
+}
