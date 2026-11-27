@@ -214,6 +214,21 @@ _strip() {
     [ "$output" = $'echo "$((1<<2))"\nkept' ]
 }
 
+@test "STRIP: \$( inside single quotes is literal and a later real heredoc is still stripped" {
+    run _strip $'echo \'$(\' ; git commit -F- <<\'MSG\'\nbody\nMSG\necho after'
+    [ "$output" = $'echo \'$(\' ; git commit -F- <<\'MSG\'\necho after' ]
+}
+
+@test "STRIP: \$( inside \$'..' is literal and a later real heredoc is still stripped" {
+    run _strip $'echo $\'$(\' ; git commit -F- <<\'MSG\'\nbody\nMSG\necho after'
+    [ "$output" = $'echo $\'$(\' ; git commit -F- <<\'MSG\'\necho after' ]
+}
+
+@test "STRIP: a backslash is literal in single quotes, so 'a\\' ends there" {
+    run _strip $'echo \'a\\\' ; git commit -F- <<\'MSG\'\nbody\nMSG\necho after'
+    [ "$output" = $'echo \'a\\\' ; git commit -F- <<\'MSG\'\necho after' ]
+}
+
 @test "STRIP: an unbalanced \$( fails closed and prints the whole input" {
     run _strip $'echo $(cat\ncat <<EOF\nbody\nEOF'
     [ "$output" = $'echo $(cat\ncat <<EOF\nbody\nEOF' ]
