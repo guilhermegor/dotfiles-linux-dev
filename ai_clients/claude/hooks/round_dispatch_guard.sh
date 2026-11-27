@@ -44,6 +44,7 @@
 # gets disabled, same rule as every sibling Stop hook here.
 set -u
 
+# Stop hook: its stop_hook_active loop-break needs jq, so failing closed would refuse every stop forever (#1164).
 command -v jq >/dev/null 2>&1 || exit 0
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

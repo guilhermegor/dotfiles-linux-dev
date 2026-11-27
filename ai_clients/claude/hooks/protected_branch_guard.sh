@@ -14,8 +14,8 @@
 
 set -u
 
-# jq parses the hook payload; without it we cannot inspect the command, so fail open.
-command -v jq >/dev/null 2>&1 || exit 0
+# jq parses the hook payload; without it we cannot inspect the command, so fail CLOSED (#1162).
+command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162). Install jq from a terminal outside this session (e.g. sudo apt install jq)." >&2; exit 2; }
 
 # shellcheck source=lib/commit_command_matcher.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh" || { echo "BLOCKED: cannot source lib/commit_command_matcher.sh (missing or unreadable) - guard fails closed (#1160)" >&2; exit 2; }

@@ -83,6 +83,7 @@
 set -u
 
 GIT=/usr/bin/git
+# Stop hook: its stop_hook_active loop-break needs jq, so failing closed would refuse every stop forever (#1164).
 command -v jq >/dev/null 2>&1 || exit 0
 command -v gh >/dev/null 2>&1 || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
