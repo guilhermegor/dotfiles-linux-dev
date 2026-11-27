@@ -38,6 +38,9 @@ set -u
 
 command -v jq >/dev/null 2>&1 || exit 0
 
+# shellcheck source=lib/commit_command_matcher.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh"
+
 # Prefixing the command with this makes the guard stand aside, for a genuine throwaway branch:
 #   ALLOW_UNTRACKED_BRANCH=1 git checkout -b scratch/poke-at-it
 ESCAPE_HATCH='ALLOW_UNTRACKED_BRANCH=1'
@@ -85,25 +88,6 @@ main() {
     esac
 }
 
-strip_heredoc_bodies() {
-    # Drop heredoc bodies so a git verb written inside one (an issue/PR body) is not read as a
-    # command. Copy of the helper in protected_branch_guard.sh — hooks are intentionally
-    # self-contained (like the jq payload boilerplate every guard repeats); keep the two in sync.
-    local line delim="" trimmed in_body=0
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        if (( in_body )); then
-            trimmed="${line#"${line%%[!$'\t']*}"}"
-            [[ "$trimmed" == "$delim" ]] && in_body=0
-            continue
-        fi
-        if [[ "$line" =~ \<\<-?[[:space:]]*[\"\'\\]?([[:alnum:]_]+) ]]; then
-            delim="${BASH_REMATCH[1]}"
-            in_body=1
-        fi
-        printf '%s\n' "$line"
-    done
-}
-
 segment_commands() {
     # One shell command segment per line: break on && || ; | and existing newlines, so the branch
     # regex below can anchor to a segment START and never span two commands.
@@ -119,7 +103,7 @@ extract_new_branch() {
     # rejected below and fails open (the safe miss). Residual: a git verb inside a multi-line QUOTED
     # string (not a heredoc) can still be its own segment; add a quote-aware splitter only if it bites.
     local cmd seg val re
-    cmd="$(printf '%s\n' "$1" | strip_heredoc_bodies)"
+    cmd="$(printf '%s\n' "$1" | _strip_heredoc_bodies)"
     re='^(rtk[[:space:]]+)?git[[:space:]]+(checkout|switch)([[:space:]]+[^[:space:]]+)*[[:space:]]+(-b|-B|-c|-C)[[:space:]]+("[^"]*"|'\''[^'\'']*'\''|[^[:space:]]+)'
 
     while IFS= read -r seg || [[ -n "$seg" ]]; do
