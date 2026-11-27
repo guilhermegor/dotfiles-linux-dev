@@ -82,8 +82,9 @@ _BOUNDARY=$'\x1f'
 # over-read, never under-read). The shell itself would reject such a command anyway.
 _tokenize_segment() {
     local segment="$1" split="${2:-}" char quote='' current='' started=0 i
-    local qpos=0 qcur='' qn=0 prefix_words=()
+    local qpos=0 qcur='' qn=0 prefix_words=() was soft_keep=() sidx
     _SEGMENT_WORDS=()
+    _SEGMENT_SOFT=()
 
     for ((i = 0; i < ${#segment}; i++)); do
         char="${segment:i:1}"
@@ -108,12 +109,13 @@ _tokenize_segment() {
             started=1
         elif [[ "$char" == '#' ]] && ((!started)); then
             while ((i + 1 < ${#segment})) && [[ "${segment:i+1:1}" != $'\n' ]]; do i=$((i + 1)); done
-        elif [[ "${_CCM_CLOBBER:-}" == 1 && "$char" == '|' && "$current" == *'>' ]]; then
-            # `>|` clobber redirect (#1158), only for _for_each_command's pass 2. \x1e marks the
-            # merge so the pass can tell which commands pass 1 cut in two; it strips it again.
-            current+=$'\x1e'"$char"
         elif [[ -n "$split" && ( "$char" == [\;\&\|] || "$char" == $'\n' ) ]]; then
+            was="$current"
             ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
+            # A `|` right after `>` is the clobber redirect `>|`, not a pipe (#1158). It still cuts
+            # here, as it always did; where it cut is kept out of band (word index of the boundary)
+            # so _for_each_command can put the command back together.
+            [[ "$char" == '|' && "$was" == *'>' ]] && _SEGMENT_SOFT+=("${#_SEGMENT_WORDS[@]}")
             _SEGMENT_WORDS+=("$_BOUNDARY")
         elif [[ "$char" == [[:space:]] ]]; then
             ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
@@ -125,8 +127,11 @@ _tokenize_segment() {
 
     if [[ -n "$quote" ]]; then
         prefix_words=("${_SEGMENT_WORDS[@]:0:qn}")
+        for sidx in ${_SEGMENT_SOFT[@]+"${_SEGMENT_SOFT[@]}"}; do ((sidx < qn)) && soft_keep+=("$sidx"); done
         _tokenize_segment "$qcur${segment:qpos+1}" "$split"
         _SEGMENT_WORDS=("${prefix_words[@]}" "${_SEGMENT_WORDS[@]}")
+        for sidx in ${_SEGMENT_SOFT[@]+"${_SEGMENT_SOFT[@]}"}; do soft_keep+=("$((sidx + qn))"); done
+        _SEGMENT_SOFT=(${soft_keep[@]+"${soft_keep[@]}"})
         return 0
     fi
 
@@ -258,52 +263,61 @@ _MSG_SEP=$'\x1f'
 # Tokenize COMMAND once with the quote-aware split mode and call CALLBACK with `_CMD_WORDS` set to
 # each simple command in turn. Quoted `;`/`&`/`|` never split, and nothing is evaluated.
 _for_each_command() {
-    # Dynamic scope: the pass function reads this, and a callback that calls back in gets its own.
-    local _CCM_PASS=1
-    _for_each_command_pass "$1" "$2"
-    # A command with `>|` gets a second reading in which that `|` is no boundary (#1158): the `|`
-    # of `>|f git commit` is a clobber redirect, but the first reading cuts there. The callback
-    # gets the original words. Pass 2 fires only a command that merged across such a cut, and
-    # not when the first piece pass 1 cut off was already a commit (`>o git commit -m x 2>|e`).
-    if [[ "$1" == *'>|'* ]]; then
-        _CCM_PASS=2
-        _for_each_command_pass "$1" "$2"
-    fi
-}
-
-_for_each_command_pass() {
-    local w cb="$2" i merged saved_dir
-    local -a all prefix clean
+    local w cb="$2" i soft=" "
+    local -a all piece_words=() piece_len=()
     _CMD_WORDS=()
-    _CCM_CLOBBER=$((_CCM_PASS == 2)) _tokenize_segment "$1" split
-    all=("${_SEGMENT_WORDS[@]:-}")
-    for w in "${all[@]}" "$_BOUNDARY"; do
+    _tokenize_segment "$1" split
+    all=("${_SEGMENT_WORDS[@]:-}" "$_BOUNDARY")
+    for i in ${_SEGMENT_SOFT[@]+"${_SEGMENT_SOFT[@]}"}; do soft+="$i "; done
+    for i in "${!all[@]}"; do
+        w="${all[i]}"
         if [[ "$w" != "$_BOUNDARY" ]]; then
             _CMD_WORDS+=("$w")
             continue
         fi
-        if ((_CCM_PASS == 1)); then
-            "$cb"
-        else
-            merged=0 prefix=() clean=()
-            for ((i = 0; i < ${#_CMD_WORDS[@]}; i++)); do
-                if ((!merged)) && [[ "${_CMD_WORDS[i]}" == *$'\x1e'* ]]; then
-                    merged=1
-                    prefix=("${clean[@]}" "${_CMD_WORDS[i]%%$'\x1e'*}")
-                fi
-                clean+=("${_CMD_WORDS[i]//$'\x1e'/}")
-            done
-            if ((merged)); then
-                saved_dir="$COMMIT_COMMAND_GIT_DIR"
-                _CMD_WORDS=("${prefix[@]}")
-                if _words_invoke_commit; then merged=0; fi
-                COMMIT_COMMAND_GIT_DIR="$saved_dir"
-                _CMD_WORDS=("${clean[@]}")
-                ((merged)) && "$cb"
-            fi
-        fi
+        piece_words+=(${_CMD_WORDS[@]+"${_CMD_WORDS[@]}"})
+        piece_len+=("${#_CMD_WORDS[@]}")
         _CMD_WORDS=()
+        # A cut at `>|` is no command boundary (#1158): keep gathering. The group fires, in source
+        # order and once, at its first real boundary.
+        [[ "$soft" == *" $i "* ]] && continue
+        _fire_group "$cb"
+        piece_words=()
+        piece_len=()
     done
+}
+
+# _fire_group CALLBACK
+# Fire CALLBACK for the commands held in the caller's `piece_words` / `piece_len` (the pieces one
+# command was cut into at `>|`). Put back together with their `|`, they are ONE command; when that
+# is a `git commit` it fires once and the pieces do not. Otherwise each piece fires as before, so
+# whatever the callbacks saw before the rejoining they still see (#1158). The cut positions are
+# word indexes kept out of band, so no byte of the input can collide with them.
+_fire_group() {
+    local cb="$1" k off=0 saved_dir="$COMMIT_COMMAND_GIT_DIR"
+    local -a joined=()
+    if ((${#piece_len[@]} > 1)); then
+        for ((k = 0; k < ${#piece_len[@]}; k++)); do
+            joined+=(${piece_words[@]+"${piece_words[@]:off:piece_len[k]}"})
+            off=$((off + piece_len[k]))
+            if ((k + 1 < ${#piece_len[@]} && piece_len[k] > 0)); then joined[${#joined[@]} - 1]+="|"; fi
+        done
+        _CMD_WORDS=(${joined[@]+"${joined[@]}"})
+        if _words_invoke_commit; then
+            COMMIT_COMMAND_GIT_DIR="$saved_dir"
+            "$cb"
+            _CMD_WORDS=()
+            return 0
+        fi
+        COMMIT_COMMAND_GIT_DIR="$saved_dir"
+    fi
+    off=0
+    for ((k = 0; k < ${#piece_len[@]}; k++)); do
+        _CMD_WORDS=(${piece_words[@]+"${piece_words[@]:off:piece_len[k]}"})
+        off=$((off + piece_len[k]))
+        "$cb"
+    done
+    _CMD_WORDS=()
 }
 
 # command_has_cd COMMAND

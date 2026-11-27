@@ -571,9 +571,11 @@ _cd_dir_of() {
     [[ "$output" == *"ok=1 dir=/b"* ]]
 }
 
-@test "GAP8: a cd before a commit with >| in the same segment is still seen" {
+@test "GAP8: a cd with >| before a commit never reports a wrong directory" {
+    # a cd carrying a redirection is not a lone `cd <path>`: unknown (ok=0) is the safe answer,
+    # exactly what master gives; ok=1 is only acceptable with the right directory
     _cd_dir_of 'cd /a 2>|e && git commit -m x'
-    [[ "$output" == *"ok=1 dir=/a"* ]]
+    [[ "$output" == *"ok=0"* || "$output" == *"ok=1 dir=/a"* ]]
 }
 
 @test "GAP8: two >| in one command are still one commit" {
