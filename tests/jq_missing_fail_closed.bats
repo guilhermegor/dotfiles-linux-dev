@@ -47,11 +47,18 @@ assert_closed() {
 @test "#1164 protected_branch_guard blocks without jq"          { run_nojq protected_branch_guard.sh; assert_closed; }
 @test "#1164 gate_bypass_guard blocks without jq"               { run_nojq gate_bypass_guard.sh; assert_closed; }
 @test "#1164 stale_local_ref_guard blocks without jq"           { run_nojq stale_local_ref_guard.sh; assert_closed; }
-@test "#1164 dispatch_free_surface_guard blocks without jq"     { run_nojq dispatch_free_surface_guard.sh; assert_closed; }
 @test "#1164 release_dispatch_guard blocks without jq"          { run_nojq release_dispatch_guard.sh; assert_closed; }
-@test "#1164 review_fanout_guard blocks without jq"             { run_nojq review_fanout_guard.sh; assert_closed; }
-@test "#1164 round_dispatch_guard blocks without jq"            { run_nojq round_dispatch_guard.sh; assert_closed; }
 @test "#1164 gh_prose_language_guard blocks without jq"         { run_nojq gh_prose_language_guard.sh; assert_closed; }
+
+# Stop hooks read stop_hook_active through jq to break their own loop; closed would refuse every stop forever.
+assert_open() {
+    [ "$status" -eq 0 ]
+}
+@test "#1164 dispatch_free_surface_guard stays fail-open without jq" { run_nojq dispatch_free_surface_guard.sh; assert_open; }
+@test "#1164 review_fanout_guard stays fail-open without jq"         { run_nojq review_fanout_guard.sh; assert_open; }
+@test "#1164 round_dispatch_guard stays fail-open without jq"        { run_nojq round_dispatch_guard.sh; assert_open; }
+@test "#1164 uncommitted_worktree_guard stays fail-open without jq"  { run_nojq uncommitted_worktree_guard.sh; assert_open; }
+@test "#1164 open_review_threads_nudge stays fail-open without jq"   { run_nojq open_review_threads_nudge.sh; assert_open; }
 
 # Meta-test: a hook carrying `command -v jq ... || exit 0` fails OPEN. That is only acceptable
 # for a hook that cannot refuse, so each one must be listed here with its reason.
@@ -68,6 +75,9 @@ ADVISORY_FAIL_OPEN=(
     "push_pr_head_guard.sh:PostToolUse, push already ran; exit 2 is a notice, not a refusal"
     "uncommitted_worktree_guard.sh:Stop hook; stop_hook_active unreadable without jq, exit 2 would loop"
     "open_review_threads_nudge.sh:Stop hook; same stop_hook_active loop risk without jq"
+    "dispatch_free_surface_guard.sh:Stop hook; loop-break needs jq, closed would refuse every stop"
+    "review_fanout_guard.sh:Stop hook; loop-break needs jq, closed would refuse every stop"
+    "round_dispatch_guard.sh:Stop hook; loop-break needs jq, closed would refuse every stop"
 )
 
 @test "#1164 fail-open jq check only in advisory-allowlisted hooks" {

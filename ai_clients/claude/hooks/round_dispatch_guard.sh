@@ -44,7 +44,8 @@
 # gets disabled, same rule as every sibling Stop hook here.
 set -u
 
-command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162). Install jq from a terminal outside this session (e.g. sudo apt install jq)." >&2; exit 2; }
+# Stop hook: its stop_hook_active loop-break needs jq, so failing closed would refuse every stop forever (#1164).
+command -v jq >/dev/null 2>&1 || exit 0
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/stop_budget.sh
