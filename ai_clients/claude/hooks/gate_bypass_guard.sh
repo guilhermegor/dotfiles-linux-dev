@@ -179,33 +179,40 @@ _scan_words() {
 _STDIN_FLAG_RE='(^|[[:space:]])(-F[[:space:]]*-|--file([[:space:]]+|=)-)([[:space:]]|$)'
 _STDIN_OPENER_RE='<<-?[[:space:]]*[\x27"]?[^[:space:]\x27"<>|&;()]+[\x27"]?'
 
+block_stdin() {
+    {
+        echo "BLOCKED: cannot read the commit message this git commit takes from stdin: $1"
+        echo
+        echo "The guard must read the message to check it for a gate-change-ok: line. The only stdin"
+        echo "source it can read is a plain <<TAG or <<-TAG heredoc attached to this commit. A"
+        echo "here-string, a pipeline, a < redirect or process substitution cannot be read, since the"
+        echo "text can be transformed on the way in. Write the message to a file and pass"
+        echo "-F <absolute file> instead, then re-run the SAME commit."
+    } >&2
+    exit 2
+}
+
 # _stdin_has_gate_line: the message a `-F -` commit reads from stdin holds a gate-change-ok: line.
-# It reads exactly what feeds THAT commit: its own heredoc body, and the upstream of the pipeline
-# (`printf ... | git commit -F -`, matched loosely since the text is quoted). Commands chained
-# with && ; || and unrelated heredocs are not read. When the source cannot be identified (a
-# `< file`, process substitution, no flag found) it falls back to scanning the whole command,
-# which errs toward refusing.
+# FAIL CLOSED: the only accepted source is a plain `<<TAG` / `<<-TAG` heredoc on the same command
+# as the flag, whose body is parsed and scanned here. Anything else (here-string `<<<`, a pipeline,
+# `< file`, process substitution, no identifiable source) is refused via block_stdin: a plain-text
+# scan of a pipeline upstream cannot see a marker built by printf escapes, base64, sed or cat.
+# Commands chained with && ; || and unrelated heredocs are not read.
 _stdin_has_gate_line() {
-    local skel piece opener tag body
+    local skel piece opener tag body rest
     skel="$(printf '%s' "$_GB_RAW" | _strip_heredoc_bodies)"
     piece="$(printf '%s\n' "$skel" | sed -E 's/(&&|\|\||;)/\n/g' | grep -E -- "$_STDIN_FLAG_RE" | head -n1)"
-    if [[ -z "$piece" ]]; then
-        _msg_has_gate_line "$_GB_RAW"
-        return
-    fi
+    [[ -n "$piece" ]] || block_stdin "no identifiable source"
+    [[ "$piece" == *'<<<'* ]] && block_stdin "here-string"
+    [[ "$piece" == *'|'* ]] && block_stdin "pipeline"
     opener="$(printf '%s' "$piece" | grep -oE -- "$(printf '%b' "$_STDIN_OPENER_RE")" | head -n1)"
-    if [[ -n "$opener" ]]; then
-        tag="${opener#<<}"; tag="${tag#-}"; tag="${tag//[[:space:]\'\"]/}"
-        body="$(printf '%s\n' "$_GB_RAW" | awk -v tag="$tag" \
-            'go { t = $0; sub(/^\t+/, "", t); if (t == tag) exit; print } index($0, "<<") && index($0, tag) && !go { go = 1 }')"
-        _msg_has_gate_line "$body" && return 0
-    fi
-    if [[ "$piece" == *'|'* ]]; then
-        printf '%s\n' "${piece%%git *}" | grep -qiE "(^|['\"[:space:]])gate-change-ok:"
-        return
-    fi
-    [[ -n "$opener" ]] && return 1
-    _msg_has_gate_line "$_GB_RAW"
+    [[ -n "$opener" ]] || block_stdin "no heredoc attached to this commit"
+    rest="${piece//"$opener"/}"
+    [[ "$rest" == *'<'* ]] && block_stdin "redirect or process substitution"
+    tag="${opener#<<}"; tag="${tag#-}"; tag="${tag//[[:space:]\'\"]/}"
+    body="$(printf '%s\n' "$_GB_RAW" | awk -v tag="$tag" \
+        'go { t = $0; sub(/^\t+/, "", t); if (t == tag) exit; print } index($0, "<<") && index($0, tag) && !go { go = 1 }')"
+    _msg_has_gate_line "$body"
 }
 
 # _scan_commit_message: the message of THIS commit (global _CMD_WORDS), from -m values and from a

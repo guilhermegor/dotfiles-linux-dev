@@ -307,19 +307,39 @@ assert_unresolved() {
     assert_refused "$cmd"
 }
 
-@test "refuses the marker in the pipeline feeding -F -" {
-    assert_refused "printf '%s\n' 'gate-change-ok: because' | git commit -F -"
+assert_stdin_refused() {
+    run run_guard "$1"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"absolute file"* ]]
 }
 
-@test "allows an ordinary pipeline into -F - and ignores chained commands" {
-    assert_allowed "printf 'feat: fine\n' | git commit -F -"
-    assert_allowed "echo 'gate-change-ok: x' && printf 'feat: fine\n' | git commit -F -"
+@test "fails closed on a here-string into -F -" {
+    assert_stdin_refused "git commit -F - <<<'gate-change-ok: x'"
+    assert_stdin_refused "git commit -F- <<< 'feat: fine'"
 }
 
-@test "falls back to scanning everything when the stdin source is unknown" {
-    assert_allowed 'git commit -F - < msg.txt'
-    cmd="$(printf '%s\n' "cat > x <<'E'" 'gate-change-ok: z' 'E' 'git commit -F - < msg.txt')"
-    assert_refused "$cmd"
+@test "fails closed on any pipeline into -F -, plain or transforming" {
+    assert_stdin_refused "printf '%s\n' 'gate-change-ok: because' | git commit -F -"
+    assert_stdin_refused "printf 'feat: fine\n' | git commit -F -"
+    assert_stdin_refused "printf 'g\x61te-change-ok: x' | git commit -F -"
+    assert_stdin_refused "echo Z2F0ZS1jaGFuZ2Utb2s6IHg= | base64 -d | git commit -F -"
+    assert_stdin_refused 'cat msg.txt | git commit -F-'
+}
+
+@test "fails closed on a < redirect, process substitution or no identifiable source" {
+    assert_stdin_refused 'git commit -F - < msg.txt'
+    assert_stdin_refused 'git commit -F - < <(printf x)'
+    assert_stdin_refused 'git commit -F -'
+}
+
+@test "a here-string next to a heredoc opener is still refused" {
+    cmd="$(printf '%s\n' "git commit -F - <<<'x' <<'MSG'" 'feat: fine' 'MSG')"
+    assert_stdin_refused "$cmd"
+}
+
+@test "an unrelated chained heredoc still does not affect a heredoc-fed commit" {
+    cmd="$(printf '%s\n' "echo hi && git commit -F- <<-MSG" 'feat: fine' 'MSG')"
+    assert_allowed "$cmd"
 }
 
 @test "allows non-Bash tools and empty commands" {
