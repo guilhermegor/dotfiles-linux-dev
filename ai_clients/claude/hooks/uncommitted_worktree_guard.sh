@@ -23,7 +23,10 @@ GIT=/usr/bin/git
 # No jq: announce once per session, never block (#1169; exit 2 would loop, see lib/jq_missing_notice.sh).
 if ! command -v jq >/dev/null 2>&1; then
 	# shellcheck source=lib/jq_missing_notice.sh
-	source "${BASH_SOURCE[0]%/*}/lib/jq_missing_notice.sh" 2>/dev/null || exit 0
+	source "$(dirname "${BASH_SOURCE[0]}")/lib/jq_missing_notice.sh" 2>/dev/null || {
+		echo "uncommitted_worktree_guard: jq not found and lib/jq_missing_notice.sh is not deployed; this Stop hook is OFF (run make ai_clients)." >&2
+		exit 1
+	}
 	jq_missing_announce uncommitted_worktree_guard.sh
 	exit $?
 fi

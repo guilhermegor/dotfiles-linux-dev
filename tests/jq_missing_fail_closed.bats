@@ -54,7 +54,7 @@ assert_closed() {
 # exit 1 surfaces stderr without blocking, every later stop exits 0. The once-per-session marker is
 # keyed on session_id read with sed (no jq), falling back to the parent PID.
 run_nojq_stop() {
-    run --separate-stderr env PATH="$NOJQ" TMPDIR="$BATS_TEST_TMPDIR" "$NOJQ/bash" -c \
+    run --separate-stderr env PATH="$NOJQ" XDG_RUNTIME_DIR="$BATS_TEST_TMPDIR" "$NOJQ/bash" -c \
         'echo "{\"session_id\":\"s-$2\"}" | "$NOJQ/bash" "$1"' _ "$HOOKS/$1" "${2:-1}"
 }
 
@@ -82,14 +82,47 @@ stop_hook_announces_once() {
 @test "#1169 uncommitted_worktree_guard announces once without jq"  { stop_hook_announces_once uncommitted_worktree_guard.sh; }
 @test "#1169 open_review_threads_nudge announces once without jq"   { stop_hook_announces_once open_review_threads_nudge.sh; }
 
-@test "#1169 unreadable session_id still announces and never blocks" {
-    run --separate-stderr env PATH="$NOJQ" TMPDIR="$BATS_TEST_TMPDIR" "$NOJQ/bash" -c \
-        'echo "{}" | "$NOJQ/bash" "$1"' _ "$HOOKS/uncommitted_worktree_guard.sh"
-    [ "$status" -eq 1 ]
+# Without a session_id the marker falls back to $PPID, which is per-spawn, not per-session (every
+# `run` gets a fresh parent): the notice then repeats on every stop. Noisier, never silent.
+@test "#1169 unreadable session_id still announces, with text, and never blocks" {
+    local i
+    for i in 1 2; do
+        run --separate-stderr env PATH="$NOJQ" XDG_RUNTIME_DIR="$BATS_TEST_TMPDIR" "$NOJQ/bash" -c \
+            'echo "{}" | "$NOJQ/bash" "$1"' _ "$HOOKS/uncommitted_worktree_guard.sh"
+        assert_announced uncommitted_worktree_guard.sh
+    done
+}
+
+# The marker is created with noclobber, so a pre-planted symlink is neither followed nor truncated.
+@test "#1169 marker is symlink-safe and lives under XDG_RUNTIME_DIR" {
+    local rt victim
+    rt="$BATS_TEST_TMPDIR/rt"; victim="$BATS_TEST_TMPDIR/victim"
+    mkdir "$rt"; echo keep >"$victim"
+    ln -s "$victim" "$rt/uncommitted_worktree_guard.nojq.s-1.announced"
+    run --separate-stderr env PATH="$NOJQ" XDG_RUNTIME_DIR="$rt" "$NOJQ/bash" -c \
+        'echo "{\"session_id\":\"s-1\"}" | "$NOJQ/bash" "$1"' _ "$HOOKS/uncommitted_worktree_guard.sh"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$victim")" = keep ]
+    run --separate-stderr env PATH="$NOJQ" XDG_RUNTIME_DIR="$rt" "$NOJQ/bash" -c \
+        'echo "{\"session_id\":\"s-2\"}" | "$NOJQ/bash" "$1"' _ "$HOOKS/uncommitted_worktree_guard.sh"
+    assert_announced uncommitted_worktree_guard.sh
+    [ -e "$rt/uncommitted_worktree_guard.nojq.s-2.announced" ]
+}
+
+# A hook copied without lib/ must not go back to a silent exit 0.
+@test "#1169 missing notice lib announces instead of failing open silently" {
+    local f
+    for f in dispatch_free_surface_guard review_fanout_guard round_dispatch_guard \
+             uncommitted_worktree_guard open_review_threads_nudge; do
+        run_without_lib "$f.sh" nojq
+        [ "$status" -eq 1 ]
+        [[ "$stderr" == *"$f"*"jq_missing_notice.sh"* ]]
+    done
 }
 
 # Meta-test: a hook carrying `command -v jq ... || exit 0` fails OPEN. That is only acceptable
 # for a hook that cannot refuse, so each one must be listed here with its reason.
+# The five Stop hooks left this list in #1169: they announce once per session, never fail open silently.
 ADVISORY_FAIL_OPEN=(
     "commit_body_wrap.sh:rewriter; reflows the message in place"
     "agent_branch_push_guard.sh:PostToolUse pusher, never blocks"
@@ -100,7 +133,6 @@ ADVISORY_FAIL_OPEN=(
     "kanban_lifecycle.sh:board bookkeeping, cannot refuse"
     "release_due_nudge.sh:nudge only"
     "quota_gap_rescue.sh:rescue notice only"
-    # The five Stop hooks left this list in #1169: they announce once, never silently fail open.
     "push_pr_head_guard.sh:PostToolUse, push already ran; exit 2 is a notice, not a refusal"
 )
 
@@ -147,7 +179,11 @@ run_without_lib() {
     local d
     d="$(mktemp -d)"
     cp "$HOOKS/$1" "$d/"
-    run --separate-stderr bash -c 'echo "{}" | bash "$1"' _ "$d/$1"
+    if [ "${2:-}" = nojq ]; then
+        run --separate-stderr env PATH="$NOJQ" "$NOJQ/bash" -c 'echo "{}" | "$NOJQ/bash" "$1"' _ "$d/$1"
+    else
+        run --separate-stderr bash -c 'echo "{}" | bash "$1"' _ "$d/$1"
+    fi
     rm -rf "$d"
 }
 
