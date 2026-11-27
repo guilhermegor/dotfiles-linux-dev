@@ -84,7 +84,13 @@
 
 set -u
 
-command -v jq >/dev/null 2>&1 || exit 0
+# No jq: announce once per session, never block (#1169; exit 2 would loop, see lib/jq_missing_notice.sh).
+if ! command -v jq >/dev/null 2>&1; then
+	# shellcheck source=lib/jq_missing_notice.sh
+	source "${BASH_SOURCE[0]%/*}/lib/jq_missing_notice.sh" 2>/dev/null || exit 0
+	jq_missing_announce open_review_threads_nudge.sh
+	exit $?
+fi
 command -v gh >/dev/null 2>&1 || exit 0
 
 ROSTER_FILE='.review-bots.yaml'

@@ -20,7 +20,13 @@
 set -u
 
 GIT=/usr/bin/git
-command -v jq >/dev/null 2>&1 || exit 0
+# No jq: announce once per session, never block (#1169; exit 2 would loop, see lib/jq_missing_notice.sh).
+if ! command -v jq >/dev/null 2>&1; then
+	# shellcheck source=lib/jq_missing_notice.sh
+	source "${BASH_SOURCE[0]%/*}/lib/jq_missing_notice.sh" 2>/dev/null || exit 0
+	jq_missing_announce uncommitted_worktree_guard.sh
+	exit $?
+fi
 
 # shellcheck source=lib/dispatch_claims.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/dispatch_claims.sh"

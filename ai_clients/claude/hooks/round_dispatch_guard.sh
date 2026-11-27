@@ -44,8 +44,13 @@
 # gets disabled, same rule as every sibling Stop hook here.
 set -u
 
-# Stop hook: its stop_hook_active loop-break needs jq, so failing closed would refuse every stop forever (#1164).
-command -v jq >/dev/null 2>&1 || exit 0
+# No jq: announce once per session, never block (#1169; exit 2 would loop, see lib/jq_missing_notice.sh).
+if ! command -v jq >/dev/null 2>&1; then
+	# shellcheck source=lib/jq_missing_notice.sh
+	source "${BASH_SOURCE[0]%/*}/lib/jq_missing_notice.sh" 2>/dev/null || exit 0
+	jq_missing_announce round_dispatch_guard.sh
+	exit $?
+fi
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/stop_budget.sh
