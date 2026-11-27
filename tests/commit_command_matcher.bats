@@ -408,7 +408,8 @@ _sees_no_verify() {
 
 # --- #1158: four more ways to hide a commit --------------------------------------------------
 # Each shape was run in real bash with `git` stubbed as a function that prints its argv: every one
-# of them commits. _strip_sees_commit reads the stripped text the way the inline-message guards do.
+# of them commits. The $'..' and $".." delimiter shapes were checked against GNU bash 5.2.21.
+# _strip_sees_commit reads the stripped text the way the inline-message guards do.
 
 _strip_sees_commit() {
     run bash -c 'source "$1"
@@ -438,6 +439,12 @@ _has_commit() {
 @test "GAP5: an escape inside an ANSI-C delimiter cannot be read, so the input is left unstripped" {
     run _strip $'cat <<$\'E\\x41\'\nbody\nEA\necho after'
     [ "$output" = $'cat <<$\'E\\x41\'\nbody\nEA\necho after' ]
+}
+
+@test "GAP5: an escaped quote inside an ANSI-C delimiter fails closed, the commit stays visible" {
+    run _strip $'cat <<$\'a\\\'b\'\nbody\nab\ngit commit -m x'
+    [ "$output" = $'cat <<$\'a\\\'b\'\nbody\nab\ngit commit -m x' ]
+    _strip_sees_commit $'cat <<$\'a\\\'b\'\nbody\nab\ngit commit -m x'
 }
 
 @test "GAP6: a continuation after a heredoc opener (cat <<EOF \\<NL>&& git commit)" {
@@ -477,13 +484,16 @@ _has_commit() {
              '2>&1 git commit -m x' '>&2 git commit -m x' '<<<word git commit -m x' \
              '<<E git commit -m x' '&>f git commit -m x' '{fd}>f git commit -m x' \
              '>f 2>&1 rtk git commit -m x' '2> f < g /usr/bin/git -C d commit -m x'; do
+        echo "case: $c"
         _has_commit "$c"
     done
 }
 
 @test "GAP8: redirections before the command word reach the split-mode readers too" {
     local c
-    for c in '>&2 git commit -m x' '2>&1 git commit -m x' '&>f git commit -m x' '>f git commit -m x'; do
+    for c in '>&2 git commit -m x' '2>&1 git commit -m x' '&>f git commit -m x' '>f git commit -m x' \
+             '>|f git commit -m x' '2>| f git commit -m x'; do
+        echo "case: $c"
         _strip_sees_commit "$c"
     done
 }
@@ -501,6 +511,7 @@ _has_commit() {
 @test "GAP8: a redirection before a non-git command word is still not a commit" {
     local c
     for c in '>/dev/null echo git commit' 'git status >/dev/null' '>f cat git commit' '2>&1 echo "git commit"'; do
+        echo "case: $c"
         run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" "$c"
         [ "$status" -ne 0 ]
     done
