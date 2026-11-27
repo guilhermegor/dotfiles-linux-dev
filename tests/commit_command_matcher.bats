@@ -541,6 +541,15 @@ _source_found() {
     _source_found $'>|f git commit -F - <<\'EOF\'\nmsg\nEOF' stdin
 }
 
+@test "GAP8: a quoted word that looks like a redirection does not hide the real commit after it" {
+    _strip_sees_commit "'>f git' commit --no-verify -m x; >|f git commit --no-verify -m x"
+}
+
+@test "GAP8: a commit found by the >| re-reading keeps its message text as written" {
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "msg=${COMMIT_MESSAGE_SETS[0]}"' _ "$MATCHER" ">|f git commit -m 'x >| y'"
+    [[ "$output" == *"msg=x >| y"* ]]
+}
+
 @test "GAP8: a redirection before a non-git command word is still not a commit" {
     local c
     for c in '>/dev/null echo git commit' 'git status >/dev/null' '>f cat git commit' '2>&1 echo "git commit"'; do
