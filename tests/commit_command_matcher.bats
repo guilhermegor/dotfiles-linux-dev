@@ -555,11 +555,31 @@ _source_found() {
     _source_found $'2>&1 git commit -F - >|e <<\'EOF\'\nmsg\nEOF' stdin
 }
 
-@test "GAP8: clobber mode is not visible inside a pass-2 callback" {
+# split-mode commit count: how many simple commands the inline-message readers would see
+_split_commits() {
     run bash -c 'source "$1"
-        cb() { echo "clobber=${_CCM_CLOBBER:-unset}"; }
-        _for_each_command ">|f git commit -m x" cb' _ "$MATCHER"
-    [[ "$output" != *"clobber=1"* ]]
+        seen() { _words_invoke_commit && echo SEEN; return 0; }
+        _for_each_command "$(printf "%s" "$2" | _strip_heredoc_bodies)" seen' _ "$MATCHER" "$1"
+}
+
+@test "GAP8: a quoted > before a real pipe is no clobber redirect, both commits stay visible" {
+    _split_commits "git commit -m 'a>'|git commit --no-verify -m b"
+    [ "$output" = $'SEEN\nSEEN' ]
+}
+
+@test "GAP8: an escaped > before a real pipe is no clobber redirect" {
+    _split_commits 'git commit -m a\>|git commit --no-verify -m b'
+    [ "$output" = $'SEEN\nSEEN' ]
+}
+
+@test "GAP8: a >|f commit after a pipe that follows a quoted or escaped > is seen by the split reader" {
+    local c
+    for c in "echo 'a>'|>|f git commit --no-verify -m x" 'echo "a>"|>|f git commit --no-verify -m x' \
+             'echo a\>|>|f git commit --no-verify -m x'; do
+        echo "case: $c"
+        _split_commits "$c"
+        [ "$output" = SEEN ]
+    done
 }
 
 _cd_dir_of() {
@@ -572,10 +592,10 @@ _cd_dir_of() {
 }
 
 @test "GAP8: a cd with >| before a commit never reports a wrong directory" {
-    # a cd carrying a redirection is not a lone `cd <path>`: unknown (ok=0) is the safe answer,
-    # exactly what master gives; ok=1 is only acceptable with the right directory
+    # a cd carrying a redirection is not a lone `cd <path>`: unknown (ok=0) is the answer, exactly
+    # what master gives
     _cd_dir_of 'cd /a 2>|e && git commit -m x'
-    [[ "$output" == *"ok=0"* || "$output" == *"ok=1 dir=/a"* ]]
+    [[ "$output" == *"ok=0 dir="* ]]
 }
 
 @test "GAP8: two >| in one command are still one commit" {
