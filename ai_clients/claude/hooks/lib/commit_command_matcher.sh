@@ -130,6 +130,27 @@ _tokenize_segment() {
     return 0
 }
 
+# _skip_redirections
+# Sets `_REDIR_NEXT` to the index in `_CMD_WORDS` of the first word that is not a leading redirection
+# (#1158): `[n]>f`, `[n]>>f`, `<f`, `[n]>&m`, `&>f`, `<<tag`, `<<<word`, `<>f`, `{fd}>f`, each also in
+# the separated form (`> f`). A word that is an operator alone eats the next word as its target.
+# Over-reading only: a word that merely looks like a redirection is skipped. The split-mode
+# tokenizer cuts `>&2` at its `&` (and `2>&1`, `&>f`), so a bare fd word (`2`, `1-`, `-`) at the
+# start is the tail of such a cut and is skipped too.
+_REDIR_RE='^([0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\}|&)?(>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)(.*)$'
+_skip_redirections() {
+    local i=0 w
+    while w="${_CMD_WORDS[i]:-}"; [[ -n "$w" ]]; do
+        if [[ "$w" =~ $_REDIR_RE ]]; then
+            [[ -n "${BASH_REMATCH[3]}" ]] || i=$((i + 1))
+        elif [[ ! "$w" =~ ^([0-9]+-?|-)$ ]]; then
+            break
+        fi
+        i=$((i + 1))
+    done
+    _REDIR_NEXT=$i
+}
+
 # _words_invoke_commit
 # Return 0 if the global `_CMD_WORDS` (ONE simple command's words) is a `git commit` invocation: an
 # optional `rtk` / `rtk proxy` prefix, the git binary (bare or an absolute path), any run of global
@@ -138,6 +159,10 @@ _tokenize_segment() {
 _words_invoke_commit() {
     local -a words=("${_CMD_WORDS[@]:-}")
     local i=0 dir=''
+
+    # Redirections may come BEFORE the command word (`>/dev/null git commit`, #1158).
+    _skip_redirections
+    i=$_REDIR_NEXT
 
     # `rtk` / `rtk proxy` prefix (RTK.md's proxy and its raw escape hatch).
     if [[ "${words[i]:-}" && "${words[i]##*/}" == "rtk" ]]; then
@@ -192,12 +217,15 @@ _join_continuations() {
 # Two readings, a hit on EITHER counts: the text as written, and the text with every `\<NL>`
 # joined. Over-reading is the safe direction for a guard (see _join_continuations).
 command_has_git_commit() {
-    local command="$1" segment reading
+    local command="$1" segment reading joined
+    joined="$(printf '%s' "$command" | _join_continuations)"
 
     # Cleared per call so a previous match's directory can never leak into a later one.
     # shellcheck disable=SC2034  # read by the hooks that source this file, invisible to shellcheck
     COMMIT_COMMAND_GIT_DIR=""
-    for reading in "$command" "$(printf '%s' "$command" | _join_continuations)"; do
+    # The last two readings turn the clobber redirect `>|` into `>` (#1158): the `|` of `>|f git
+    # commit` is no pipe, but the split below cannot tell. Added to the first two, never instead.
+    for reading in "$command" "$joined" "${command//>|/>}" "${joined//>|/>}"; do
         while IFS= read -r segment; do
             _segment_invokes_commit "$segment" && return 0
         done <<< "$(printf '%s' "$reading" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
@@ -304,7 +332,18 @@ _strip_heredoc_bodies() {
             while (k <= n) {
                 ch = substr(s, k, 1)
                 if (ch ~ /[ \t<>|&;()]/) break
+                # A backslash that ends the line is a continuation: the delimiter goes on in the next
+                # line (#1158), so it cannot be read from this one. Fail the whole input closed.
+                if (ch == "\\" && k == n) { bad = 1; break }
                 if (ch == "\\") { t = t substr(s, k + 1, 1); k += 2; continue }
+                # $".." is a plain quoted word; $'..' is ANSI-C quoting (#1158). An escape in it
+                # (\x41, \n, \101) is decoded by bash, and decoding is not done here: fail closed.
+                if (ch == "$" && substr(s, k + 1, 1) == "\"") { k++; continue }
+                if (ch == "$" && substr(s, k + 1, 1) == "\047") {
+                    e = index(substr(s, k + 2), "\047")
+                    if (!e || index(substr(s, k + 2, e - 1), "\\")) { bad = 1; break }
+                    t = t substr(s, k + 2, e - 1); k += e + 2; continue
+                }
                 if (ch == "\047") {
                     e = index(substr(s, k + 1), ch)
                     if (!e) { bad = 1; break }
@@ -384,7 +423,9 @@ _strip_heredoc_bodies() {
                 i++
             }
         }
-        { out[++m] = $0; if (nt > 0) { pending = 1; ci = 1 } }
+        # An odd run of backslashes ends an opener line (#1158): bash joins the next line to it, so the
+        # body does not start where this scan thinks. Cannot be read here: fail the input closed.
+        { out[++m] = $0; if (nt > 0) { pending = 1; ci = 1; if ($0 ~ /(^|[^\\])(\\\\)*\\$/) bad = 1 } }
         END { if (q != "" || depth > 0 || bad || pending) for (k = 1; k <= NR; k++) print raw[k]; else for (k = 1; k <= m; k++) print out[k] }
     ' "${1:--}"
 }

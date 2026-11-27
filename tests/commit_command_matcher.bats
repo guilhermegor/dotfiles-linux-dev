@@ -493,6 +493,11 @@ _has_commit() {
     _strip_sees_commit $'<<$\'E\' <<"E" \\\ngit commit -m x\nbody\nE\nbody\nE'
 }
 
+@test "GAP8: clobber redirection >| before the command word" {
+    _has_commit '>|f git commit -m x'
+    _has_commit '2>| f git commit -m x'
+}
+
 @test "GAP8: a redirection before a non-git command word is still not a commit" {
     local c
     for c in '>/dev/null echo git commit' 'git status >/dev/null' '>f cat git commit' '2>&1 echo "git commit"'; do
