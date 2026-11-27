@@ -204,6 +204,38 @@ _record_msg() {
     _MA_VAL+=("$2")
 }
 
+# Inner shell text (dotfiles-linux-dev#1150): the string argument of `sh -c`, `bash -c` (also
+# `-lc` and any option cluster holding `c`), and the joined arguments of `eval`, is itself a
+# command line. It is never evaluated: _queue_inner_shell only records it, and
+# _scan_inner_texts scans each recorded text with the same scanner, _GB_MAX_DEPTH levels deep.
+_GB_MAX_DEPTH=3
+_GB_DEPTH=0
+_GB_INNER=()
+_GB_INNER_D=()
+
+# _queue_inner_shell: record the inner text of every shell wrapper in the words of this command.
+_queue_inner_shell() {
+    local n="${#_CMD_WORDS[@]}" i j w
+    for ((i = 0; i < n; i++)); do
+        w="${_CMD_WORDS[i]}"
+        case "${w##*/}" in
+            eval)
+                _GB_INNER+=("${_CMD_WORDS[*]:i+1}")
+                _GB_INNER_D+=("$((_GB_DEPTH + 1))") ;;
+            sh | bash | zsh | dash | ksh)
+                for ((j = i + 1; j < n; j++)); do
+                    [[ "${_CMD_WORDS[j]}" == -* && "${_CMD_WORDS[j]}" != -- ]] || break
+                    if [[ "${_CMD_WORDS[j]}" == -*c* &&"${_CMD_WORDS[j]}" != --* ]]; then
+                        ((j + 1 < n)) || break
+                        _GB_INNER+=("${_CMD_WORDS[j + 1]}")
+                        _GB_INNER_D+=("$((_GB_DEPTH + 1))")
+                        break
+                    fi
+                done ;;
+        esac
+    done
+}
+
 # _scan_words: callback for _for_each_command, run on the words of ONE simple command. Words come
 # from the shared tokenizer, so quotes are already removed (`"--no-verify"` is `--no-verify`) and
 # a quoted commit message stays one word that can never equal a flag. THE single option parse of
@@ -216,6 +248,7 @@ _scan_words() {
     _VO_SHORT=''
     _MA_KIND=()
     _MA_VAL=()
+    _queue_inner_shell
     _bind_openers
     for ((i = 0; i < ${#_CMD_WORDS[@]}; i++)); do
         w="${_CMD_WORDS[i]}"
@@ -450,25 +483,19 @@ _scan_commit_message() {
     return 0
 }
 
-main() {
-    local payload command
+# _mentions_git TEXT: TEXT holds `git` as a whole word.
+_mentions_git() {
+    printf '%s' "$1" | grep -qE '(^|[^[:alnum:]_])git([^[:alnum:]_]|$)'
+}
 
-    payload="$(cat)"
-    [[ "$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)" == "Bash" ]] || exit 0
-    command="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
-    [[ -n "$command" ]] || exit 0
-    _GB_CWD="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
+# _scan_text TEXT: the full scan of one command line (the outer command, or an inner shell text).
+_scan_text() {
+    _GB_RAW="$1"
     _GB_CMD_SEQ=0
     _GB_HD_BOUND=0
     _GB_BIND_BAD=0
     _GB_TOK_REDIR=0
     _GB_STDIN_SEEN=0
-
-    # A `bash|sh <file>.sh` command runs its commits out of sight: append the script's text.
-    command="$(commit_expand_script "$command")"
-    _GB_RAW="$command"
-    _GB_DIR="$_GB_CWD"
-    _GB_DIR_OK=1
     mapfile -t _GB_HD_ORD < <(_hd_scan ords)
     _for_each_command "$(_hd_scan skel)" _scan_words
     # The scanner (bash-faithful quoting) and the tokenizer (shared, no ANSI-C or comment rules)
@@ -482,9 +509,60 @@ main() {
     # command into a different number of commands, or a quote is left open, and the text mentions
     # git, refuse rather than trust a scan that may have missed it.
     if [[ "$(_hd_scan chunks)" != "$_GB_CMD_SEQ" || "$(_hd_scan flags)" == *openquote* ]] \
-        && printf '%s' "$_GB_RAW" | grep -qE '(^|[^[:alnum:]_])git([^[:alnum:]_]|$)'; then
+        && _mentions_git "$_GB_RAW"; then
         block_desync
     fi
+}
+
+block_inner() {
+    {
+        echo "BLOCKED: cannot read the shell text this command runs (sh -c, bash -c, eval): $1"
+        echo
+        echo "The guard reads the inner text statically and never evaluates it. This one mentions git"
+        echo "but $2, so a hidden bypass token (--no-verify, SKIP=, GATE_CHANGE_OK=) cannot be ruled"
+        echo "out. Bypassing a gate is OWNER-ONLY. Write the git command out literally, or the owner"
+        echo "runs it with the '!' prefix, which skips this hook:"
+        echo
+        echo "  ! <command>"
+    } >&2
+    exit 2
+}
+
+# _scan_inner_texts: scan every recorded inner shell text (the queue grows while it is read, so
+# nested wrappers are reached). FAIL CLOSED: an inner text that mentions git and carries an
+# expansion ($x, $(...), backticks) cannot be unquoted statically, and one past the depth bound
+# is not read at all.
+# ponytail: any `$` or backtick in a git-mentioning inner text refuses, even a harmless
+# "$msg"; relax only if that shows up as a real nuisance.
+_scan_inner_texts() {
+    local k=0 inner
+    while ((k < ${#_GB_INNER[@]})); do
+        inner="${_GB_INNER[k]}"
+        _GB_DEPTH="${_GB_INNER_D[k]}"
+        k=$((k + 1))
+        if _mentions_git "$inner"; then
+            ((_GB_DEPTH <= _GB_MAX_DEPTH)) || block_inner "$inner" "is nested more than $_GB_MAX_DEPTH shells deep"
+            [[ "$inner" != *[\$\`]* ]] || block_inner "$inner" "carries a shell expansion"
+        fi
+        _scan_text "$inner"
+    done
+}
+
+main() {
+    local payload command
+
+    payload="$(cat)"
+    [[ "$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)" == "Bash" ]] || exit 0
+    command="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
+    [[ -n "$command" ]] || exit 0
+    _GB_CWD="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
+
+    # A `bash|sh <file>.sh` command runs its commits out of sight: append the script's text.
+    command="$(commit_expand_script "$command")"
+    _GB_DIR="$_GB_CWD"
+    _GB_DIR_OK=1
+    _scan_text "$command"
+    _scan_inner_texts
     exit 0
 }
 

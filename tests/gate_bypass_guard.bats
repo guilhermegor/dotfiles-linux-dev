@@ -612,7 +612,11 @@ assert_desync_refused() {
 }
 
 @test "fails closed on shells nested past the depth bound" {
-    assert_refused "bash -c \"bash -c \\\"bash -c \\\\\\\"bash -c 'git status'\\\\\\\"\\\"\""
+    assert_refused 'eval eval eval eval git status'
+}
+
+@test "allows a clean git command nested within the depth bound" {
+    assert_allowed 'eval eval eval git status'
 }
 
 @test "allows bash -c 'git status'" {
