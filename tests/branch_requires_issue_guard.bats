@@ -64,6 +64,20 @@ CMD
     [ "$status" -eq 2 ]
 }
 
+@test "blocks git checkout -b after a quoted '<<FAKE' that is not a heredoc (#1154)" {
+    export CLAUDE_ISSUE_TRACKER=github
+    run run_guard "printf '%s\n' '<<FAKE'
+git checkout -b scratch/poke-at-it"
+    [ "$status" -eq 2 ]
+}
+
+@test "blocks git switch -c after a quoted '<<FAKE' that is not a heredoc (#1154)" {
+    export CLAUDE_ISSUE_TRACKER=github
+    run run_guard "printf '%s\n' '<<FAKE'
+git switch -c wip"
+    [ "$status" -eq 2 ]
+}
+
 @test "blocks a real git switch -c with no issue ref" {
     export CLAUDE_ISSUE_TRACKER=github
     run run_guard "git switch -c wip"
