@@ -405,3 +405,98 @@ _sees_no_verify() {
     run _strip $'cat <<A <<B\na\nA\nb\nB\necho after'
     [ "$output" = $'cat <<A <<B\necho after' ]
 }
+
+# --- #1158: four more ways to hide a commit --------------------------------------------------
+# Each shape was run in real bash with `git` stubbed as a function that prints its argv: every one
+# of them commits. _strip_sees_commit reads the stripped text the way the inline-message guards do.
+
+_strip_sees_commit() {
+    run bash -c 'source "$1"
+        seen() { _words_invoke_commit && echo SEEN; return 0; }
+        _for_each_command "$(printf "%s" "$2" | _strip_heredoc_bodies)" seen' _ "$MATCHER" "$1"
+    [[ "$output" == *SEEN* ]]
+}
+
+_has_commit() {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" "$1"
+    [ "$status" -eq 0 ]
+}
+
+@test "GAP5: ANSI-C heredoc delimiter <<\$'EOF' does not swallow the commit after its terminator" {
+    _strip_sees_commit $'cat <<$\'EOF\'\nbody\nEOF\ngit commit -m x\n$EOF'
+}
+
+@test "GAP5: locale-quoted heredoc delimiter <<\$\"EOF\" does not swallow the commit" {
+    _strip_sees_commit $'cat <<$"EOF"\nbody\nEOF\ngit commit -m x\n$EOF'
+}
+
+@test "GAP5: ANSI-C delimiter plain strip drops the body" {
+    run _strip $'cat <<$\'EOF\'\nbody\nEOF\necho after'
+    [ "$output" = $'cat <<$\'EOF\'\necho after' ]
+}
+
+@test "GAP5: an escape inside an ANSI-C delimiter cannot be read, so the input is left unstripped" {
+    run _strip $'cat <<$\'E\\x41\'\nbody\nEA\necho after'
+    [ "$output" = $'cat <<$\'E\\x41\'\nbody\nEA\necho after' ]
+}
+
+@test "GAP6: a continuation after a heredoc opener (cat <<EOF \\<NL>&& git commit)" {
+    _strip_sees_commit $'cat <<EOF \\\n&& git commit -m x\nbody\nEOF'
+}
+
+@test "GAP6: a continuation after a heredoc opener leaves the input unstripped" {
+    run _strip $'cat <<EOF \\\n&& echo a\nbody\nEOF\necho after'
+    [ "$output" = $'cat <<EOF \\\n&& echo a\nbody\nEOF\necho after' ]
+}
+
+@test "GAP6: an even backslash run after an opener is no continuation, body still stripped" {
+    run _strip $'cat <<EOF \\\\\nbody\nEOF\necho after'
+    [ "$output" = $'cat <<EOF \\\\\necho after' ]
+}
+
+@test "GAP7: a continuation inside the delimiter word (<<EO\\<NL>F)" {
+    _strip_sees_commit $'cat <<EO\\\nF\nbody\nEOF\ngit commit -m x\nEO'
+}
+
+@test "GAP7: a continuation right after << leaves the input unstripped" {
+    run _strip $'cat <<\\\nEOF\nbody\nEOF\necho after'
+    [ "$output" = $'cat <<\\\nEOF\nbody\nEOF\necho after' ]
+}
+
+@test "GAP8: output redirection before the command word (>/dev/null git commit)" {
+    _has_commit '>/dev/null git commit -m x'
+}
+
+@test "GAP8: separated redirection before the command word (> /dev/null git commit)" {
+    _has_commit '> /dev/null git commit -m x'
+}
+
+@test "GAP8: fd, append, input, dup and herestring redirections before the command word" {
+    local c
+    for c in '2>/dev/null git commit -m x' '>>f git commit -m x' '<f git commit -m x' \
+             '2>&1 git commit -m x' '>&2 git commit -m x' '<<<word git commit -m x' \
+             '<<E git commit -m x' '&>f git commit -m x' '{fd}>f git commit -m x' \
+             '>f 2>&1 rtk git commit -m x' '2> f < g /usr/bin/git -C d commit -m x'; do
+        _has_commit "$c"
+    done
+}
+
+@test "GAP8: redirections before the command word reach the split-mode readers too" {
+    local c
+    for c in '>&2 git commit -m x' '2>&1 git commit -m x' '&>f git commit -m x' '>f git commit -m x'; do
+        _strip_sees_commit "$c"
+    done
+}
+
+@test "GAP8: <<\$'E' <<\"E\" \\<NL>git commit, once the lines are joined" {
+    _has_commit $'<<$\'E\' <<"E" \\\ngit commit -m x\nbody\nE\nbody\nE'
+    _strip_sees_commit $'<<$\'E\' <<"E" \\\ngit commit -m x\nbody\nE\nbody\nE'
+}
+
+@test "GAP8: a redirection before a non-git command word is still not a commit" {
+    local c
+    for c in '>/dev/null echo git commit' 'git status >/dev/null' '>f cat git commit' '2>&1 echo "git commit"'; do
+        run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" "$c"
+        [ "$status" -ne 0 ]
+    done
+}
