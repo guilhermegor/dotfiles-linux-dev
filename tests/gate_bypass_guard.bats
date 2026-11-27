@@ -472,6 +472,43 @@ assert_stdin_refused() {
     assert_refused 'git commit --trailer "-m" -m "gate-change-ok: y"'
 }
 
+# --- round 5: quote-aware heredoc openers ------------------------------------------------------
+
+@test "a quoted <<FAKE is not an opener and does not swallow the real heredoc commit" {
+    cmd="$(printf '%s\n' "printf '%s\n' '<<FAKE'" \
+        "git commit --allow-empty -F- <<'MSG'" 'feat: example' '' 'gate-change-ok: reason' 'MSG')"
+    assert_refused "$cmd"
+}
+
+@test "double-quoted and escaped << are not openers either" {
+    cmd="$(printf '%s\n' 'echo "<<FAKE" \<\<ALSO' \
+        "git commit -F- <<'MSG'" 'feat: example' '' 'gate-change-ok: reason' 'MSG')"
+    assert_refused "$cmd"
+}
+
+@test "a clean heredoc commit still passes next to a quoted <<" {
+    cmd="$(printf '%s\n' "printf '%s\n' '<<FAKE'" \
+        "git commit -F- <<'MSG'" 'feat: example' 'MSG')"
+    assert_allowed "$cmd"
+}
+
+@test "a quoted pipe or redirect character does not refuse a heredoc commit" {
+    cmd="$(printf '%s\n' "grep -E 'a|b' x > /dev/null; git commit -F- <<'MSG'" 'feat: fine' 'MSG')"
+    assert_allowed "$cmd"
+}
+
+@test "a quoted << word on the commit line does not confuse the binding" {
+    cmd="$(printf '%s\n' "git commit -F- -m '<<x' <<'MSG'" 'feat: fine' 'MSG')"
+    assert_allowed "$cmd"
+    cmd="$(printf '%s\n' "git commit -F- -m '<<x' <<'MSG'" 'feat: x' '' 'gate-change-ok: y' 'MSG')"
+    assert_refused "$cmd"
+}
+
+@test "a heredoc on a later line binds to its own command across newlines and ;" {
+    cmd="$(printf '%s\n' "cat <<'A'; echo x" 'gate-change-ok: in A' 'A' "git commit -F- <<'B'" 'feat: fine' 'B')"
+    assert_allowed "$cmd"
+}
+
 @test "allows non-Bash tools and empty commands" {
     run bash -c "jq -nc '{tool_name:\"Read\",tool_input:{file_path:\"x\"}}' | '$GUARD'"
     [ "$status" -eq 0 ]

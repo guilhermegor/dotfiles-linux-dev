@@ -174,16 +174,27 @@ _cluster_parse() {
     return 0
 }
 
-# _count_openers: heredoc openers (`<<TAG`, not the here-string `<<<`) among the words of the
-# current command; advances the global sequence _GB_HD_SEQ and sets _CMD_HD_FIRST/_CMD_HD_LAST to
-# the range this command owns. A heredoc belongs to the simple command whose words hold its opener.
-_count_openers() {
-    local w
-    _CMD_HD_FIRST=$_GB_HD_SEQ
-    for w in "${_CMD_WORDS[@]}"; do
-        [[ "$w" == *'<<'* && "$w" != *'<<<'* ]] && _GB_HD_SEQ=$((_GB_HD_SEQ + 1))
+# _bind_openers: sets _CMD_HD_FIRST/_CMD_HD_LAST to the heredocs (numbered in opener order) that
+# the current simple command opens. The quote-aware scanner reports each opener's command ordinal
+# (_GB_HD_ORD); this callback's own ordinal comes from the tokenizer. The tokenizer drops quotes,
+# so it cannot tell `'<<FAKE'` from a real opener and is NOT used to find them. A bound command
+# must hold a word containing `<<`, else the two views drifted: _GB_BIND_BAD makes main() refuse.
+_bind_openers() {
+    local k seq=$_GB_CMD_SEQ w has=0
+    _GB_CMD_SEQ=$((seq + 1))
+    _CMD_HD_FIRST=0
+    _CMD_HD_LAST=-1
+    for ((k = 0; k < ${#_GB_HD_ORD[@]}; k++)); do
+        [[ "${_GB_HD_ORD[k]}" == "$seq" ]] || continue
+        ((_CMD_HD_LAST < 0)) && _CMD_HD_FIRST=$k
+        _CMD_HD_LAST=$k
+        _GB_HD_BOUND=$((_GB_HD_BOUND + 1))
     done
-    _CMD_HD_LAST=$((_GB_HD_SEQ - 1))
+    ((_CMD_HD_LAST >= 0)) || return 0
+    for w in "${_CMD_WORDS[@]}"; do
+        [[ "$w" == *'<<'* ]] && has=1
+    done
+    ((has)) || _GB_BIND_BAD=1
 }
 
 # _record_msg KIND VALUE: remember one message source (m = inline message, f = -F file) of the
@@ -205,7 +216,7 @@ _scan_words() {
     _VO_SHORT=''
     _MA_KIND=()
     _MA_VAL=()
-    _count_openers
+    _bind_openers
     for ((i = 0; i < ${#_CMD_WORDS[@]}; i++)); do
         w="${_CMD_WORDS[i]}"
         # `-c core.hooksPath=/dev/null` disables every hook without any --no-verify; it is the
@@ -287,52 +298,101 @@ block_stdin() {
     exit 2
 }
 
+# The raw-text pass over the command: ONE quote-aware scanner, never a regex over the string.
+# It tracks single quotes, double quotes (with backslash escapes), backslash escapes and `#`
+# comments across lines, and only outside quotes does it see the heredoc openers (`<<TAG`,
+# `<<-TAG`, `<<'TAG'`), the here-string `<<<`, `<(`, a bare `<` and a single `|`. A quoted
+# `'<<FAKE'` is therefore not an opener, which the shared _strip_heredoc_bodies (a plain awk
+# regex used by other guards too) gets wrong. Modes:
+#   skel    the command with the heredoc BODY lines removed (openers stay), for tokenizing
+#   bodies  every heredoc body in opener order, each ended by a \036 byte
+#   ords    per opener, the ordinal of the simple command it belongs to, counted with the
+#           tokenizer's own rule (every unquoted ; & | and newline starts a new command)
+#   flags   which of pipe herestr procsub redirect occur outside quotes
+read -r -d '' _HD_AWK <<'AWK'
+BEGIN { sq = "'"; dq = "\""; q = ""; n = 0; total = 0; cmd = 0; pend = 0 }
+function scan(line,    i, c, j, c2, k, tag, rest, len) {
+    len = length(line)
+    for (i = 1; i <= len; i++) {
+        c = substr(line, i, 1)
+        if (q != "") {
+            if (c == q) q = ""
+            else if (q == dq && c == "\\") i++
+            continue
+        }
+        if (c == "\\") { i++; continue }
+        if (c == sq || c == dq) { q = c; continue }
+        if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[ \t;&|(]/)) return
+        if (c == ";" || c == "&") { cmd++; continue }
+        if (c == "|") { if (substr(line, i + 1, 1) == "|") { i++; cmd += 2 } else { pipe = 1; cmd++ } continue }
+        if (c != "<") continue
+        if (substr(line, i, 3) == "<<<") { herestr = 1; i += 2; continue }
+        if (substr(line, i, 2) == "<<") {
+            j = i + 2
+            if (substr(line, j, 1) == "-") j++
+            while (substr(line, j, 1) ~ /[ \t]/) j++
+            c2 = substr(line, j, 1)
+            if (c2 == sq || c2 == dq) {
+                k = index(substr(line, j + 1), c2); tag = substr(line, j + 1, k - 1); i = j + k
+            } else {
+                rest = substr(line, j); tag = ""
+                if (match(rest, /^[^ \t'"<>|&;()]+/)) { tag = substr(rest, 1, RLENGTH); i = j + RLENGTH - 1 } else i = j - 1
+            }
+            n++; total++; tags[n] = tag
+            if (mode == "ords") print cmd
+            continue
+        }
+        if (substr(line, i + 1, 1) == "(") procsub = 1; else redirect = 1
+    }
+}
+{
+    if (n > 0) {
+        t = $0; sub(/^\t+/, "", t)
+        if (t == tags[1]) { if (mode == "bodies") printf "\036"; for (i = 1; i < n; i++) tags[i] = tags[i + 1]; n-- }
+        else if (mode == "bodies") print
+        next
+    }
+    if (mode == "skel") print
+    if (pend) cmd++
+    pend = 1
+    scan($0)
+}
+END {
+    if (mode == "bodies") for (; n > 0; n--) printf "\036"
+    if (mode == "flags") print (pipe ? "pipe " : "") (herestr ? "herestr " : "") (procsub ? "procsub " : "") (redirect ? "redirect" : "")
+}
+AWK
+
+# _hd_scan MODE: run the scanner above over the raw command.
+_hd_scan() {
+    printf '%s\n' "$_GB_RAW" | awk -v mode="$1" "$_HD_AWK"
+}
+
 # _stdin_has_gate_line FIRST LAST: the commit being scanned reads its message from stdin
 # (recognised by the one option parse, so every spelling counts), and its own heredocs are
 # numbers FIRST..LAST of the command. FAIL CLOSED: the only accepted source is a plain `<<TAG` /
 # `<<-TAG` heredoc opened by THAT command's words. A here-string, a pipeline, `< file`, process
-# substitution anywhere in the command (checked on the text with quotes blanked, so `grep 'a|b'`
-# does not count), or no heredoc of its own is refused via block_stdin: a plain-text scan of a
+# substitution anywhere in the command (judged by the quote-aware scanner, so `grep 'a|b'` does
+# not count), or no heredoc of its own is refused via block_stdin: a plain-text scan of a
 # pipeline upstream cannot see a marker built by printf escapes, base64, sed or cat. Heredocs of
-# other commands, on the same line or not, are never read.
+# other commands, on the same line or not, are never read. main() cross-checks the scanner's
+# opener count against the tokenizer's and refuses on a disagreement.
 _stdin_has_gate_line() {
-    local first="$1" last="$2" flat rest k
+    local first="$1" last="$2" flags k
     local -a bodies
-    flat="$(printf '%s' "$_GB_RAW" | _strip_heredoc_bodies | sed -E -z "s/\"[^\"]*\"|'[^']*'//g")"
-    flat="${flat//||/ }"
-    [[ "$flat" == *'<<<'* ]] && block_stdin "here-string"
-    [[ "$flat" == *'|'* ]] && block_stdin "pipeline"
-    [[ "$flat" == *'<('* ]] && block_stdin "process substitution"
-    rest="$(printf '%s' "$flat" | sed -E 's/<<-?//g')"
-    [[ "$rest" == *'<'* ]] && block_stdin "redirect"
+    _GB_STDIN_SEEN=1
+    flags="$(_hd_scan flags)"
+    [[ "$flags" == *herestr* ]] && block_stdin "here-string"
+    [[ "$flags" == *pipe* ]] && block_stdin "pipeline"
+    [[ "$flags" == *procsub* ]] && block_stdin "process substitution"
+    [[ "$flags" == *redirect* ]] && block_stdin "redirect"
     ((last >= first)) || block_stdin "no heredoc attached to this commit"
-    mapfile -d $'\036' -t bodies < <(_heredoc_bodies)
+    mapfile -d $'\036' -t bodies < <(_hd_scan bodies)
     ((last < ${#bodies[@]})) || block_stdin "cannot match the heredoc to this commit"
     for ((k = first; k <= last; k++)); do
         _msg_has_gate_line "${bodies[k]}" && return 0
     done
     return 1
-}
-
-# _heredoc_bodies: the body of every heredoc of the raw command, in opener order, each ended by a
-# \036 byte (an unterminated one is ended at EOF), so body number N belongs to opener number N.
-_heredoc_bodies() {
-    printf '%s\n' "$_GB_RAW" | awk '
-        n > 0 {
-            t = $0; sub(/^\t+/, "", t)
-            if (t == tags[1]) { printf "\036"; for (i = 1; i < n; i++) tags[i] = tags[i + 1]; n-- }
-            else print
-            next
-        }
-        {
-            line = $0; gsub(/<<</, "   ", line)
-            while (match(line, /<<-?[ \t]*(\047[^\047]*\047|"[^"]*"|[^ \t\047"<>|&;()]+)/)) {
-                tag = substr(line, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", tag); gsub(/[\047"]/, "", tag)
-                n++; tags[n] = tag
-                line = substr(line, RSTART + RLENGTH)
-            }
-        }
-        END { if (n > 0) printf "\036" }'
 }
 
 # _scan_commit_message: the message sources of THIS commit, as recorded by the single option parse
@@ -366,14 +426,23 @@ main() {
     command="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
     [[ -n "$command" ]] || exit 0
     _GB_CWD="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
-    _GB_RAW="$command"
-    _GB_HD_SEQ=0
+    _GB_CMD_SEQ=0
+    _GB_HD_BOUND=0
+    _GB_BIND_BAD=0
+    _GB_STDIN_SEEN=0
 
     # A `bash|sh <file>.sh` command runs its commits out of sight: append the script's text.
     command="$(commit_expand_script "$command")"
+    _GB_RAW="$command"
     _GB_DIR="$_GB_CWD"
     _GB_DIR_OK=1
-    _for_each_command "$(printf '%s' "$command" | _strip_heredoc_bodies)" _scan_words
+    mapfile -t _GB_HD_ORD < <(_hd_scan ords)
+    _for_each_command "$(_hd_scan skel)" _scan_words
+    # The scanner and the tokenizer split the command independently. If a commit read stdin and
+    # they disagree about where a heredoc belongs, it could not be bound, so refuse.
+    if ((_GB_STDIN_SEEN)) && { ((_GB_BIND_BAD)) || ((_GB_HD_BOUND != ${#_GB_HD_ORD[@]})); }; then
+        block_stdin "the raw scan and the tokenizer disagree on where the heredocs belong"
+    fi
     exit 0
 }
 
