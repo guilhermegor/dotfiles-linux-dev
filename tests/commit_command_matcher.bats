@@ -359,6 +359,21 @@ _sees_no_verify() {
     _sees_no_verify $'cat <<E"\\\\OF"\nE\nE\\OF\ngit commit --no-verify -m x\nE\\\\OF'
 }
 
+@test "GAP1: \$'\\'' (escaped apostrophe only) before a # comment ending in a backslash" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo $\'\\\'\' # c \\\ngit commit -m x'
+    [ "$status" -eq 0 ]
+}
+
+@test "GAP1: a quote inside a nested \$(..) before a # comment ending in a backslash" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo "$(echo \'"\')" # c \\\ngit commit -m x'
+    [ "$status" -eq 0 ]
+}
+
+@test "GAP1: an apostrophe in a heredoc body does not hide a later # comment continuation" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'cat <<E\nit\'s\nE\necho a # c \\\ngit commit -m x'
+    [ "$status" -eq 0 ]
+}
+
 @test "GAP1: a # inside quotes does not stop a real continuation" {
     run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo "a # b" && git \\\n commit -m x'
     [ "$status" -eq 0 ]
