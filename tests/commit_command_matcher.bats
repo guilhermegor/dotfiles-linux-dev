@@ -220,3 +220,38 @@ _strip() {
     run bash -c "source '$MATCHER' && command_has_git_commit \$'echo \"oops\ngit commit -m x'"
     [ "$status" -eq 0 ]
 }
+
+# Walks the whole multi-line command through the split-mode tokenizer (the path commit_inline_messages
+# uses) and succeeds when some simple command starts with `git`. A trailing lone quote makes the
+# quote count odd, so the pre-fix tokenizer ended balanced and absorbed the commit into one word.
+_has_commit() {
+    run bash -c 'source "$1"
+        seen() { [[ "${_CMD_WORDS[0]:-}" == git ]] && echo GIT; return 0; }
+        _for_each_command "$2" seen' _ "$MATCHER" "$1"
+    [[ "$output" == *GIT* ]]
+}
+
+@test "TOKENIZER: an escaped quote inside double quotes does not end the string" {
+    _has_commit $'printf \'%s\\n\' "literal \\""\ngit commit --allow-empty -F- <<\'MSG\'\nt\nMSG\necho "'
+}
+
+@test "TOKENIZER: \"a \\\\\" b\" keeps the escaped backslash and closes on the next quote" {
+    _has_commit $'echo "a \\\\" b\ngit commit -m x\necho "'
+}
+
+@test "TOKENIZER: an escaped dollar inside double quotes is literal and the string still closes" {
+    _has_commit $'echo "cost \\$5"\ngit commit -m x\necho "'
+}
+
+@test "TOKENIZER: a backslash outside quotes escapes the next char" {
+    _has_commit $'echo \\"\ngit commit -m x\necho "'
+}
+
+@test "TOKENIZER: an escaped quote inside \$'..' does not end it" {
+    _has_commit $'echo $\'it\\\'s\'\ngit commit -m x\necho \''
+}
+
+@test "TOKENIZER: a git commit inside an escaped-quote string is still only an argument" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo "say \\"git commit -m x\\""'
+    [ "$status" -eq 1 ]
+}

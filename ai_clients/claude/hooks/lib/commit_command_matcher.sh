@@ -87,10 +87,23 @@ _tokenize_segment() {
 
     for ((i = 0; i < ${#segment}; i++)); do
         char="${segment:i:1}"
-        if [[ -n "$quote" ]]; then
-            if [[ "$char" == "$quote" ]]; then quote=''; else current+="$char"; fi
+        if [[ "$quote" == A ]]; then
+            # $'..': a backslash escapes the next char, only an unescaped ' closes
+            if [[ "$char" == "\\" ]]; then i=$((i + 1)); current+="${segment:i:1}"
+            elif [[ "$char" == "'" ]]; then quote=''
+            else current+="$char"; fi
+        elif [[ -n "$quote" ]]; then
+            if [[ "$char" == "$quote" ]]; then quote=''
+            elif [[ "$char" == "\\" && "$quote" == '"' && "${segment:i+1:1}" == [\\\"\$\`] ]]; then
+                i=$((i + 1)); current+="${segment:i:1}"   # POSIX: \ " $ ` are escapable in "..."
+            else current+="$char"; fi
+        elif [[ "$char" == "\\" ]]; then
+            started=1
+            i=$((i + 1))
+            [[ "${segment:i:1}" == $'\n' ]] || current+="${segment:i:1}"
         elif [[ "$char" == "'" || "$char" == '"' ]]; then
             quote="$char"
+            if [[ "$char" == "'" && "$current" == *'$' ]]; then quote=A; current="${current%?}"; fi
             qpos=$i qcur="$current" qn=${#_SEGMENT_WORDS[@]}
             started=1
         elif [[ "$char" == '#' ]] && ((!started)); then
