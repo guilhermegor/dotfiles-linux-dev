@@ -157,6 +157,12 @@ git push"
     [ "$status" -eq 2 ]
 }
 
+@test "blocks git push after a here-string, which is not a heredoc (#1157)" {
+    run run_guard "cat <<<word
+git push"
+    [ "$status" -eq 2 ]
+}
+
 # --- fail-open: states the guard cannot resolve to a protected branch --------------------------
 
 @test "ignores non-Bash tools" {

@@ -17,31 +17,13 @@ set -u
 # jq parses the hook payload; without it we cannot inspect the command, so fail open.
 command -v jq >/dev/null 2>&1 || exit 0
 
+# shellcheck source=lib/commit_command_matcher.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh"
+
 # ponytail: two literal names cover every user repo today (memory: main/master protected
 # everywhere). Make this a .git-config / env list only if a repo ever protects a differently-named
 # default branch.
 PROTECTED_BRANCHES='^(master|main)$'
-
-# Drop heredoc bodies from a command string. `grep`'s `^` anchors to ANY line start, and a heredoc
-# injects lines that are line-starts but not commands — so a `git push` written inside an issue/PR
-# body (`gh issue create --body "$(cat <<EOF ... EOF)"`) used to trip the verb match. The opener
-# line and everything outside the heredoc is kept; only the body + terminator are removed.
-strip_heredoc_bodies() {
-    local line delim="" trimmed in_body=0
-    # `|| [[ -n "$line" ]]` so a final line with no trailing newline is not dropped.
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        if (( in_body )); then
-            trimmed="${line#"${line%%[!$'\t']*}"}"      # ltrim tabs (a `<<-` terminator may indent)
-            [[ "$trimmed" == "$delim" ]] && in_body=0    # terminator -> body ends; drop this line too
-            continue
-        fi
-        if [[ "$line" =~ \<\<-?[[:space:]]*[\"\'\\]?([[:alnum:]_]+) ]]; then
-            delim="${BASH_REMATCH[1]}"
-            in_body=1
-        fi
-        printf '%s\n' "$line"
-    done
-}
 
 # Parse ONE statement as a `git commit`/`git push` invocation (optionally rtk-prefixed) AND
 # resolve which repo it actually targets — the root-cause fix for issue #97, folded into a single
@@ -134,7 +116,7 @@ main() {
     [[ -n "$command" ]] || exit 0
 
     # A `git push`/`git commit` inside a heredoc body is prose, not a command — strip bodies first.
-    command="$(printf '%s\n' "$command" | strip_heredoc_bodies)"
+    command="$(printf '%s\n' "$command" | _strip_heredoc_bodies)"
 
     # Join `\`-newline shell line continuations BEFORE splitting into lines/statements (issue #141):
     # a `rtk git push origin \`<newline>`--delete <ref>` is ONE logical statement, but the per-line
