@@ -90,6 +90,7 @@ install_hooks() {
     copy_hook_file "commit_title_length_guard.sh" "$hooks_dir"
     copy_hook_file "commit_body_wrap.sh" "$hooks_dir"
     copy_hook_file "commit_secret_guard.sh" "$hooks_dir"
+    copy_hook_file "gate_bypass_guard.sh" "$hooks_dir"
     copy_hook_file "protected_branch_guard.sh" "$hooks_dir"
     copy_hook_file "branch_requires_issue_guard.sh" "$hooks_dir"
     copy_hook_file "release_dispatch_guard.sh" "$hooks_dir"
