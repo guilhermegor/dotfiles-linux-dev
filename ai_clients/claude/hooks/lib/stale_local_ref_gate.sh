@@ -30,7 +30,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 fi
 
 # shellcheck source=commit_command_matcher.sh
-source "$(dirname "${BASH_SOURCE[0]}")/commit_command_matcher.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/commit_command_matcher.sh" || { echo "BLOCKED: cannot source lib/commit_command_matcher.sh (missing or unreadable) - guard fails closed (#1160)" >&2; exit 2; }
 
 _stale_segment_commands() {
 	# One shell command segment per line, so the regexes below anchor to a

@@ -39,7 +39,7 @@ set -u
 command -v jq >/dev/null 2>&1 || exit 0
 
 # shellcheck source=lib/commit_command_matcher.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh" || { echo "BLOCKED: cannot source lib/commit_command_matcher.sh (missing or unreadable) - guard fails closed (#1160)" >&2; exit 2; }
 
 # Prefixing the command with this makes the guard stand aside, for a genuine throwaway branch:
 #   ALLOW_UNTRACKED_BRANCH=1 git checkout -b scratch/poke-at-it
