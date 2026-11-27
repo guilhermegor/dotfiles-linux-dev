@@ -29,25 +29,8 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 	exit 1
 fi
 
-_stale_strip_heredoc_bodies() {
-	# Drop heredoc bodies so a git verb written inside one (an issue/PR body)
-	# is not read as a command. Copy of the helper in
-	# branch_requires_issue_guard.sh — hooks are intentionally self-contained;
-	# keep the two in sync.
-	local line delim="" trimmed in_body=0
-	while IFS= read -r line || [[ -n "$line" ]]; do
-		if ((in_body)); then
-			trimmed="${line#"${line%%[!$'\t']*}"}"
-			[[ "$trimmed" == "$delim" ]] && in_body=0
-			continue
-		fi
-		if [[ "$line" =~ \<\<-?[[:space:]]*[\"\'\\]?([[:alnum:]_]+) ]]; then
-			delim="${BASH_REMATCH[1]}"
-			in_body=1
-		fi
-		printf '%s\n' "$line"
-	done
-}
+# shellcheck source=commit_command_matcher.sh
+source "$(dirname "${BASH_SOURCE[0]}")/commit_command_matcher.sh"
 
 _stale_segment_commands() {
 	# One shell command segment per line, so the regexes below anchor to a
@@ -66,7 +49,7 @@ _stale_segment_commands() {
 # <path> <ref>` is not recognised and fails open, the safe miss).
 stale_ref_target() {
 	local cmd seg
-	cmd="$(printf '%s\n' "$1" | _stale_strip_heredoc_bodies)"
+	cmd="$(printf '%s\n' "$1" | _strip_heredoc_bodies)"
 
 	while IFS= read -r seg || [[ -n "$seg" ]]; do
 		seg="${seg#"${seg%%[![:space:]]*}"}"

@@ -212,6 +212,20 @@ run_hook() {
     [ "$output" = "feature" ]
 }
 
+@test "extract: a quoted '<<FAKE' is not a heredoc, the worktree add after it is still read (#1149)" {
+    run_extract "echo '<<FAKE'
+git worktree add /tmp/wt feature"
+    [ "$status" -eq 0 ]
+    [ "$output" = "feature" ]
+}
+
+@test "extract: a real heredoc body is still not read as a command (#1149)" {
+    run_extract "cat <<EOF
+git checkout feature
+EOF"
+    [ "$status" -eq 1 ]
+}
+
 # --- the hook: PreToolUse contract, block/allow by exit code ----------------------------------
 
 @test "hook: blocks a stale checkout, names the origin-qualified form" {
