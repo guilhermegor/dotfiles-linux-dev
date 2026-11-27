@@ -509,6 +509,42 @@ assert_stdin_refused() {
     assert_allowed "$cmd"
 }
 
+# --- round 6: ANSI-C quoting and the scanner/tokenizer backstop --------------------------------
+
+assert_desync_refused() {
+    run run_guard "$1"
+    [ "$status" -eq 2 ]
+}
+
+@test "ANSI-C \$'...' with an escaped quote does not desync the scanner" {
+    cmd="$(printf '%s\n' "echo \$'it\\'s <<FAKE'" "git commit -F- <<'MSG'" 'feat: x' '' 'gate-change-ok: y' 'MSG')"
+    assert_desync_refused "$cmd"
+}
+
+@test "an escaped quote inside ANSI-C quoting hides no real heredoc" {
+    cmd="$(printf '%s\n' "echo \$'it\\'s'" "git commit -F- <<'MSG'" 'feat: x' '' 'gate-change-ok: y' 'MSG')"
+    assert_desync_refused "$cmd"
+}
+
+@test "\$\"...\" is quoted like a double-quoted string" {
+    cmd="$(printf '%s\n' 'echo $"a <<FAKE"' "git commit -F- <<'MSG'" 'feat: fine' 'MSG')"
+    assert_allowed "$cmd"
+    cmd="$(printf '%s\n' 'echo $"a <<FAKE"' "git commit -F- <<'MSG'" 'feat: x' '' 'gate-change-ok: y' 'MSG')"
+    assert_refused "$cmd"
+}
+
+@test "an unterminated quote hiding a bypass flag is refused" {
+    assert_desync_refused "$(printf '%s\n' "echo 'unterminated" 'git commit --no-verify -m x')"
+}
+
+@test "an apostrophe in a comment cannot hide the next command from the tokenizer" {
+    assert_desync_refused "$(printf '%s\n' "# don't look" 'git commit --no-verify -m x')"
+}
+
+@test "a comment with a semicolon or pipe does not make the views disagree" {
+    assert_allowed 'git commit -m x # fine; ok | still fine'
+}
+
 @test "allows non-Bash tools and empty commands" {
     run bash -c "jq -nc '{tool_name:\"Read\",tool_input:{file_path:\"x\"}}' | '$GUARD'"
     [ "$status" -eq 0 ]

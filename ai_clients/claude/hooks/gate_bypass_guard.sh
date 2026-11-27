@@ -219,6 +219,7 @@ _scan_words() {
     _bind_openers
     for ((i = 0; i < ${#_CMD_WORDS[@]}; i++)); do
         w="${_CMD_WORDS[i]}"
+        [[ "$w" == '|'* || ( "$w" == '<'* && "$w" != '<<'* ) ]] && _GB_TOK_REDIR=1
         # `-c core.hooksPath=/dev/null` disables every hook without any --no-verify; it is the
         # VALUE of `-c`, so it is checked before values are skipped.
         [[ "${w,,}" == *hookspath=* ]] && block "core.hooksPath override"
@@ -285,6 +286,20 @@ _scan_words() {
     return 0
 }
 
+block_desync() {
+    {
+        echo "BLOCKED: this command contains quoting the guard cannot read reliably, so it cannot"
+        echo "rule out a hidden git commit with a bypass token (--no-verify, SKIP=, gate-change-ok)."
+        echo
+        echo "Remove the unusual quoting (a \$'...' string with an escaped quote, an apostrophe in a"
+        echo "# comment, an unterminated quote) or split the command, then re-run it. Bypassing a"
+        echo "gate is OWNER-ONLY: the owner runs it with the '!' prefix, which skips this hook:"
+        echo
+        echo "  ! <command>"
+    } >&2
+    exit 2
+}
+
 block_stdin() {
     {
         echo "BLOCKED: cannot read the commit message this git commit takes from stdin: $1"
@@ -308,21 +323,35 @@ block_stdin() {
 #   bodies  every heredoc body in opener order, each ended by a \036 byte
 #   ords    per opener, the ordinal of the simple command it belongs to, counted with the
 #           tokenizer's own rule (every unquoted ; & | and newline starts a new command)
-#   flags   which of pipe herestr procsub redirect occur outside quotes
+#   chunks  how many simple commands the tokenizer must find (same rule, trailing blanks ignored)
+#   flags   which of pipe herestr procsub redirect occur outside quotes, plus openquote when a
+#           quote is still open at end of input
+# `$'...'` (ANSI-C: backslash escapes, only an unescaped ' ends it) and `$"..."` are understood.
 read -r -d '' _HD_AWK <<'AWK'
-BEGIN { sq = "'"; dq = "\""; q = ""; n = 0; total = 0; cmd = 0; pend = 0 }
-function scan(line,    i, c, j, c2, k, tag, rest, len) {
+BEGIN { sq = "'"; dq = "\""; q = ""; n = 0; total = 0; cmd = 0; pend = 0; endcmd = 0 }
+function scan(line,    i, c, nx, j, c2, k, tag, rest, len) {
     len = length(line)
     for (i = 1; i <= len; i++) {
         c = substr(line, i, 1)
         if (q != "") {
-            if (c == q) q = ""
+            if (q == "A") { if (c == "\\") i++; else if (c == sq) q = "" }
+            else if (c == q) q = ""
             else if (q == dq && c == "\\") i++
             continue
         }
+        if (c == "$") {
+            nx = substr(line, i + 1, 1)
+            if (nx == sq) { q = "A"; i++; continue }
+            if (nx == dq) { q = dq; i++; continue }
+        }
         if (c == "\\") { i++; continue }
         if (c == sq || c == dq) { q = c; continue }
-        if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[ \t;&|(]/)) return
+        if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[ \t;&|(]/)) {
+            # A comment holds no openers, but the tokenizer still splits on its ; & | : keep the
+            # ordinals comparable.
+            for (j = i + 1; j <= len; j++) if (substr(line, j, 1) ~ /[;&|]/) cmd++
+            return
+        }
         if (c == ";" || c == "&") { cmd++; continue }
         if (c == "|") { if (substr(line, i + 1, 1) == "|") { i++; cmd += 2 } else { pipe = 1; cmd++ } continue }
         if (c != "<") continue
@@ -356,10 +385,12 @@ function scan(line,    i, c, j, c2, k, tag, rest, len) {
     if (pend) cmd++
     pend = 1
     scan($0)
+    if ($0 != "") endcmd = cmd
 }
 END {
+    if (mode == "chunks") print endcmd + 1
     if (mode == "bodies") for (; n > 0; n--) printf "\036"
-    if (mode == "flags") print (pipe ? "pipe " : "") (herestr ? "herestr " : "") (procsub ? "procsub " : "") (redirect ? "redirect" : "")
+    if (mode == "flags") print (pipe ? "pipe " : "") (herestr ? "herestr " : "") (procsub ? "procsub " : "") (redirect ? "redirect " : "") (q != "" ? "openquote" : "")
 }
 AWK
 
@@ -386,6 +417,7 @@ _stdin_has_gate_line() {
     [[ "$flags" == *pipe* ]] && block_stdin "pipeline"
     [[ "$flags" == *procsub* ]] && block_stdin "process substitution"
     [[ "$flags" == *redirect* ]] && block_stdin "redirect"
+    [[ "$flags" == *openquote* ]] && block_stdin "a quote is left open at the end of the command"
     ((last >= first)) || block_stdin "no heredoc attached to this commit"
     mapfile -d $'\036' -t bodies < <(_hd_scan bodies)
     ((last < ${#bodies[@]})) || block_stdin "cannot match the heredoc to this commit"
@@ -429,6 +461,7 @@ main() {
     _GB_CMD_SEQ=0
     _GB_HD_BOUND=0
     _GB_BIND_BAD=0
+    _GB_TOK_REDIR=0
     _GB_STDIN_SEEN=0
 
     # A `bash|sh <file>.sh` command runs its commits out of sight: append the script's text.
@@ -438,10 +471,19 @@ main() {
     _GB_DIR_OK=1
     mapfile -t _GB_HD_ORD < <(_hd_scan ords)
     _for_each_command "$(_hd_scan skel)" _scan_words
-    # The scanner and the tokenizer split the command independently. If a commit read stdin and
-    # they disagree about where a heredoc belongs, it could not be bound, so refuse.
-    if ((_GB_STDIN_SEEN)) && { ((_GB_BIND_BAD)) || ((_GB_HD_BOUND != ${#_GB_HD_ORD[@]})); }; then
+    # The scanner (bash-faithful quoting) and the tokenizer (shared, no ANSI-C or comment rules)
+    # split the command independently. If a commit read stdin and they disagree about where a
+    # heredoc belongs, or the tokenizer saw a redirect/pipe word the scanner did not, refuse.
+    if ((_GB_STDIN_SEEN)) && { ((_GB_BIND_BAD)) || ((_GB_TOK_REDIR)) || ((_GB_HD_BOUND != ${#_GB_HD_ORD[@]})); }; then
         block_stdin "the raw scan and the tokenizer disagree on where the heredocs belong"
+    fi
+    # Backstop for everything else: a quote the tokenizer misreads (`$'it\\'s'`, an apostrophe in a
+    # comment) can hide a whole `git commit --no-verify` from it. When the two views split the
+    # command into a different number of commands, or a quote is left open, and the text mentions
+    # git, refuse rather than trust a scan that may have missed it.
+    if [[ "$(_hd_scan chunks)" != "$_GB_CMD_SEQ" || "$(_hd_scan flags)" == *openquote* ]] \
+        && printf '%s' "$_GB_RAW" | grep -qE '(^|[^[:alnum:]_])git([^[:alnum:]_]|$)'; then
+        block_desync
     fi
     exit 0
 }
