@@ -562,6 +562,34 @@ _source_found() {
     [[ "$output" != *"clobber=1"* ]]
 }
 
+_cd_dir_of() {
+    run bash -c 'source "$1"; commit_cd_dir "$2"; echo "ok=$COMMIT_CD_OK dir=$COMMIT_CD_DIR"' _ "$MATCHER" "$1"
+}
+
+@test "GAP8: a cd after a >| commit does not change the directory the commit ran in" {
+    _cd_dir_of 'cd /b; >|f git commit -m x; cd /c'
+    [[ "$output" == *"ok=1 dir=/b"* ]]
+}
+
+@test "GAP8: a cd before a commit with >| in the same segment is still seen" {
+    _cd_dir_of 'cd /a 2>|e && git commit -m x'
+    [[ "$output" == *"ok=1 dir=/a"* ]]
+}
+
+@test "GAP8: two >| in one command are still one commit" {
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "sets=${#COMMIT_MESSAGE_SETS[@]}"' _ "$MATCHER" '>|a git commit -m x >|git commit'
+    [[ "$output" == *"sets=1"* ]]
+}
+
+@test "GAP8: two >| in one -F - commit still give COMMIT_SOURCE_FOUND=1" {
+    _source_found $'>|a git commit -F - >|git commit <<\'EOF\'\nmsg\nEOF' stdin
+}
+
+@test "GAP8: a literal \\x1e byte in the input does not make a commit fire twice" {
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "sets=${#COMMIT_MESSAGE_SETS[@]}"' _ "$MATCHER" $'git -c $\'x=\x1e\' commit -m m; echo >|f'
+    [[ "$output" == *"sets=1"* ]]
+}
+
 @test "GAP8: a quoted word that looks like a redirection does not hide the real commit after it" {
     _strip_sees_commit "'>f git' commit --no-verify -m x; >|f git commit --no-verify -m x"
 }
