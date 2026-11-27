@@ -343,7 +343,8 @@ _sees_no_verify() {
 }
 
 @test "GAP4: two heredocs on one line strip both bodies" {
-    _sees_no_verify $'cat <<A <<B\na\nA\n\'\nB\ngit commit --no-verify -m x\necho \''
+    # B's body holds `cat <<Z`: unstripped, it opened a heredoc that swallowed the commit
+    _sees_no_verify $'cat <<A <<B\na\nA\ncat <<Z\nB\ngit commit --no-verify -m x'
 }
 
 @test "GAP4: two heredocs on one line, plain strip drops both bodies" {

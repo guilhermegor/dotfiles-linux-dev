@@ -173,6 +173,15 @@ _segment_invokes_commit() {
     _words_invoke_commit
 }
 
+# _join_continuations
+# stdin -> stdout with each `\<NL>` line continuation removed (#1152): bash joins the lines, so
+# `git \<NL> commit` is one command. Only an ODD run of backslashes before the newline continues
+# the line; an even run is escaped backslashes and the newline stays a separator.
+# ponytail: quote-blind, so a `\<NL>` inside single quotes is joined too (over-read only).
+_join_continuations() {
+    sed -zE ':a; s/(^|[^\\])((\\\\)*)\\\n/\1\2/; ta'
+}
+
 # command_has_git_commit COMMAND
 # Return 0 if any segment of COMMAND (split on &&, ||, ; and |) is a git-commit invocation;
 # return 1 otherwise. On a match, COMMIT_COMMAND_GIT_DIR holds that invocation's `-C` directory
@@ -185,7 +194,7 @@ command_has_git_commit() {
     COMMIT_COMMAND_GIT_DIR=""
     while IFS= read -r segment; do
         _segment_invokes_commit "$segment" && return 0
-    done <<< "$(printf '%s' "$command" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
+    done <<< "$(printf '%s' "$command" | _join_continuations | sed -E 's/(&&|\|\||;|\|)/\n/g')"
 
     return 1
 }
@@ -281,8 +290,30 @@ _strip_heredoc_bodies() {
             q = ""; pd = 1; ar = (substr($0, i + 2, 1) == "(")
         }
         function pop() { q = sq[depth]; pd = spd[depth]; ar = sar[depth]; depth-- }
+        # Delimiter word with bash quote removal (#1152): <<"E"OF and <<E"OF" both mean EOF. An
+        # unterminated quote cannot be read confidently: dbad fails the whole input closed.
+        function delim(s,   n, k, ch, t, e) {
+            n = length(s); k = 1; t = ""
+            while (k <= n) {
+                ch = substr(s, k, 1)
+                if (ch ~ /[ \t<>|&;()]/) break
+                if (ch == "\\") { t = t substr(s, k + 1, 1); k += 2; continue }
+                if (ch == "\047" || ch == "\"") {
+                    e = index(substr(s, k + 1), ch)
+                    if (!e) { bad = 1; break }
+                    t = t substr(s, k + 1, e - 1); k += e + 1; continue
+                }
+                t = t ch; k++
+            }
+            dlen = k - 1
+            return t
+        }
         { raw[NR] = $0 }
-        tag != "" { t = $0; sub(/^\t+/, "", t); if (t == tag) tag = ""; next }
+        pending {
+            t = $0; sub(/^\t+/, "", t)
+            if (t == tags[ci] && ++ci > nt) { pending = 0; nt = 0 }
+            next
+        }
         {
             n = length($0); i = 1
             bw = 1   # bw: the previous char was an unescaped, unquoted word boundary
@@ -301,6 +332,20 @@ _strip_heredoc_bodies() {
                     i++; continue
                 }
                 if (c == "$" && substr($0, i + 1, 1) == "(") { push(i); i += 2; continue }
+                # Bare ((..)) arithmetic command (#1152): its << is a shift. Skip to the matching ))
+                # on this line; none found means the shape is unreadable, so fail closed.
+                # ponytail: quote-blind paren count; a subshell spelled ((cmd) | x) is skipped too
+                # (over-read only, its heredoc body stays visible).
+                if (c == "(" && pb && substr($0, i + 1, 1) == "(") {
+                    j = i + 2; dp = 2
+                    while (j <= n && dp > 0) {
+                        cj = substr($0, j, 1)
+                        if (cj == "(") dp++; else if (cj == ")") dp--
+                        j++
+                    }
+                    if (dp > 0) bad = 1
+                    i = j; continue
+                }
                 if (depth > 0 && c == "(") pd++
                 if (depth > 0 && c == ")") { pd--; if (pd == 0) pop(); i++; continue }
                 if (c ~ /[ \t;&|(]/) bw = 1
@@ -313,21 +358,17 @@ _strip_heredoc_bodies() {
                 if (c == "<" && ar) { i++; continue }
                 if (c == "<" && substr($0, i, 3) == "<<<") { i += 3; continue }
                 if (c == "<" && substr($0, i, 2) == "<<") {
-                    rest = substr($0, i + 2); sub(/^-?[ \t]*/, "", rest)
-                    d = substr(rest, 1, 1)
-                    if (d == "\047" || d == "\"") {
-                        rest = substr(rest, 2); e = index(rest, d)
-                        if (e) tag = substr(rest, 1, e - 1)
-                    } else if (match(rest, /^[^ \t\047"<>|&;()]+/)) {
-                        tag = substr(rest, 1, RLENGTH); gsub(/\\/, "", tag)   # <<\EOF quotes the delimiter
-                    }
-                    break
+                    rest = substr($0, i + 2); match(rest, /^-?[ \t]*/); plen = RLENGTH
+                    tg = delim(substr(rest, plen + 1))
+                    if (tg != "") tags[++nt] = tg
+                    i += 2 + plen + dlen   # several heredocs may share one line (#1152)
+                    continue
                 }
                 i++
             }
         }
-        { out[++m] = $0 }
-        END { if (q != "" || depth > 0) for (k = 1; k <= NR; k++) print raw[k]; else for (k = 1; k <= m; k++) print out[k] }
+        { out[++m] = $0; if (nt > 0) { pending = 1; ci = 1 } }
+        END { if (q != "" || depth > 0 || bad) for (k = 1; k <= NR; k++) print raw[k]; else for (k = 1; k <= m; k++) print out[k] }
     ' "${1:--}"
 }
 
