@@ -645,8 +645,41 @@ sweep_cached() {
 	return "$rc"
 }
 
+# sweep_begin HEADER
+# Prints an item's header, then returns non-zero once SWEEP_WALL_CLOCK_BUDGET seconds (default 120)
+# have passed since main() started, so the caller skips the item and the report still ships whole
+# (dotfiles-linux-dev#1144: a sweep killed at 300s emitted nothing, losing every finished item).
+# 120s: settings.json sets no SubagentStop timeout and a measured sweep was killed at 300s, so 120s
+# leaves room for the item already in flight to finish and for emit. Only stops STARTING items; an
+# item still running when the harness sends TERM is covered by sweep_interrupted below.
+sweep_started=$SECONDS # file scope so sweep_begin is safe under `set -u` outside main(); main() resets it
+sweep_begin() {
+	echo "$1"
+	[ "$((SECONDS - sweep_started))" -lt "${SWEEP_WALL_CLOCK_BUDGET:-120}" ] && return 0
+	echo "    UNKNOWN — wall-clock budget spent"
+	return 1
+}
+
+# sweep_interrupted
+# TERM/INT trap: stop the item loop and emit what the items finished so far wrote to $SWEEP_BUF.
+# SIGKILL cannot be trapped; `timeout` and a hook timeout both send TERM first, so this covers them.
+# shellcheck disable=SC2329 # invoked via trap
+sweep_interrupted() {
+	pkill -TERM -P "$SWEEP_PID" 2>/dev/null
+	kill -TERM "$SWEEP_PID" 2>/dev/null
+	emit "$(cat "$SWEEP_BUF")
+── interrupted (signal) — the remaining items did not finish: UNKNOWN"
+	rm -f "$SWEEP_BUF"
+	exit 0
+}
+
 main() {
 	local payload cwd repo owner name db roster_file report agent_type
+	sweep_started=$SECONDS # before the fetch and gate, so preflight time counts (#1144)
+	if [[ ! "${SWEEP_WALL_CLOCK_BUDGET:-120}" =~ ^[0-9]+$ ]]; then
+		echo "subagent_stop_sweep: SWEEP_WALL_CLOCK_BUDGET='$SWEEP_WALL_CLOCK_BUDGET' is not a number, using 120" >&2
+		SWEEP_WALL_CLOCK_BUDGET=120
+	fi
 	if [ ! -t 0 ]; then payload="$(cat)"; else payload=""; fi
 
 	# Gate on agent type FIRST, before any git/gh call — a silenced stop should cost nothing
@@ -682,36 +715,37 @@ $(sweep_stale_cards_gated "$cwd")"
 		exit 1
 	fi
 
-	report="$(
+	SWEEP_BUF="$(mktemp)"
+	trap sweep_interrupted TERM INT
+	{
 		echo "── sweep $(date -u '+%H:%M UTC') — $repo ──"
-		echo "[1] worktree residue"
-		sweep_worktrees "$cwd"
-		echo "[2] review-thread gate (called, not re-derived)"
-		sweep_cached "$repo:review-gate:$roster_file" sweep_review_gate "$owner" "$name" "$repo" "$roster_file"
-		echo "[3] branch pushed without PR"
-		sweep_orphan_branches "$cwd" "$repo" "$owner" "$db"
-		echo "[4] PR without auto-merge armed"
-		sweep_no_automerge "$repo"
-		echo "[5] PR behind base ($db)"
-		sweep_behind_base "$cwd" "$repo" "$db"
-		echo "[6] PR-unclaimed issues (narrower than dispatch_plan.py — see its own [d]/[x])"
-		free="$(free_dispatch_surface "$repo")"
-		format_free_surface_report "$free"
-		echo "[7] kanban reconcile, every discovered board (open PRs -> In review)"
-		sweep_kanban_boards in_review "$cwd" "$repo"
-		echo "[8] roadmap boards (discovered at runtime, lib/roadmap_unblock.sh)"
-		sweep_roadmap_boards
-		echo "[9] kanban reconcile, every discovered board (closed issues -> Done, No Status -> placed)"
-		sweep_kanban_boards closed "$cwd" "$repo"
-		echo "[9b] closed issues whose card is not in Done (REST only, runs while GraphQL is down)"
-		kanban_stale_cards_rest "$cwd"
-		echo "[10] issue hygiene (surface block + milestone, report only)"
-		sweep_issue_hygiene "$repo"
-		echo "[11] kanban reconcile, every discovered board (closed-unmerged PR -> Ready; idle In progress, report only)"
-		sweep_kanban_boards stale "$cwd" "$repo"
-		echo "[12] kanban reconcile, every discovered board (open issues with no card -> added with derived column)"
-		sweep_kanban_boards offboard "$cwd" "$repo"
-	)"
+		sweep_begin "[1] worktree residue" && sweep_worktrees "$cwd"
+		sweep_begin "[2] review-thread gate (called, not re-derived)" &&
+			sweep_cached "$repo:review-gate:$roster_file" sweep_review_gate "$owner" "$name" "$repo" "$roster_file"
+		sweep_begin "[3] branch pushed without PR" && sweep_orphan_branches "$cwd" "$repo" "$owner" "$db"
+		sweep_begin "[4] PR without auto-merge armed" && sweep_no_automerge "$repo"
+		sweep_begin "[5] PR behind base ($db)" && sweep_behind_base "$cwd" "$repo" "$db"
+		sweep_begin "[6] PR-unclaimed issues (narrower than dispatch_plan.py — see its own [d]/[x])" && {
+			free="$(free_dispatch_surface "$repo")"
+			format_free_surface_report "$free"
+		}
+		sweep_begin "[7] kanban reconcile, every discovered board (open PRs -> In review)" &&
+			sweep_kanban_boards in_review "$cwd" "$repo"
+		sweep_begin "[8] roadmap boards (discovered at runtime, lib/roadmap_unblock.sh)" && sweep_roadmap_boards
+		sweep_begin "[9] kanban reconcile, every discovered board (closed issues -> Done, No Status -> placed)" &&
+			sweep_kanban_boards closed "$cwd" "$repo"
+		sweep_begin "[9b] closed issues whose card is not in Done (REST only, runs while GraphQL is down)" && kanban_stale_cards_rest "$cwd"
+		sweep_begin "[10] issue hygiene (surface block + milestone, report only)" && sweep_issue_hygiene "$repo"
+		sweep_begin "[11] kanban reconcile, every discovered board (closed-unmerged PR -> Ready; idle In progress, report only)" &&
+			sweep_kanban_boards stale "$cwd" "$repo"
+		sweep_begin "[12] kanban reconcile, every discovered board (open issues with no card -> added with derived column)" &&
+			sweep_kanban_boards offboard "$cwd" "$repo"
+	} >"$SWEEP_BUF" &
+	SWEEP_PID=$!
+	wait "$SWEEP_PID"
+	trap - TERM INT
+	report="$(cat "$SWEEP_BUF")"
+	rm -f "$SWEEP_BUF"
 
 	emit "$report"
 	exit 0
