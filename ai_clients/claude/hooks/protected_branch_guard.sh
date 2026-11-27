@@ -18,7 +18,7 @@ set -u
 command -v jq >/dev/null 2>&1 || exit 0
 
 # shellcheck source=lib/commit_command_matcher.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh" || { echo "BLOCKED: cannot source lib/commit_command_matcher.sh (missing or unreadable) - guard fails closed (#1160)" >&2; exit 2; }
 
 # ponytail: two literal names cover every user repo today (memory: main/master protected
 # everywhere). Make this a .git-config / env list only if a repo ever protects a differently-named
