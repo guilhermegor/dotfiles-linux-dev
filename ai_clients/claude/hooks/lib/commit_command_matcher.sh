@@ -108,6 +108,8 @@ _tokenize_segment() {
             started=1
         elif [[ "$char" == '#' ]] && ((!started)); then
             while ((i + 1 < ${#segment})) && [[ "${segment:i+1:1}" != $'\n' ]]; do i=$((i + 1)); done
+        elif [[ "${_CCM_CLOBBER:-}" == 1 && "$char" == '|' && "$current" == *'>' ]]; then
+            current+="$char"   # `>|` clobber redirect (#1158), set only by _for_each_command's pass 2
         elif [[ -n "$split" && ( "$char" == [\;\&\|] || "$char" == $'\n' ) ]]; then
             ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
             _SEGMENT_WORDS+=("$_BOUNDARY")
@@ -134,9 +136,10 @@ _tokenize_segment() {
 # Sets `_CCM_REDIR_NEXT` to the index in `_CMD_WORDS` of the first word that is not a leading redirection
 # (#1158): `[n]>f`, `[n]>>f`, `<f`, `[n]>&m`, `&>f`, `<<tag`, `<<<word`, `<>f`, `{fd}>f`, each also in
 # the separated form (`> f`). A word that is an operator alone eats the next word as its target.
-# Over-reading only: a word that merely looks like a redirection is skipped. The split-mode
-# tokenizer cuts `>&2` at its `&` (and `2>&1`, `&>f`), so a bare fd word (`2`, `1-`, `-`) at the
-# start is the tail of such a cut and is skipped too.
+# Over-reading only: a word that merely looks like a redirection is skipped. In split mode the
+# tokenizer cuts `>&2` at its `&` (and `2>&1`, `&>f`), so a bare fd word (`2`, `1-`, `-`) opening a
+# command is the tail of such a cut and is skipped too; the sed-split reading never cuts there,
+# where the same skip is a harmless extra over-read.
 _CCM_REDIR_RE='^([0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\}|&)?(>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)(.*)$'
 _skip_redirections() {
     local i=0 w
@@ -251,15 +254,17 @@ _MSG_SEP=$'\x1f'
 # Tokenize COMMAND once with the quote-aware split mode and call CALLBACK with `_CMD_WORDS` set to
 # each simple command in turn. Quoted `;`/`&`/`|` never split, and nothing is evaluated.
 _for_each_command() {
-    _CCM_SEEN=()
-    _CCM_PASS=1
+    # Dynamic scope: the pass function reads these, and a callback that calls back in gets its own.
+    local _CCM_PASS=1
+    local -a _CCM_SEEN=()
     _for_each_command_pass "$1" "$2"
-    # A command with `>|` gets a second reading with `>|` read as `>` (#1158): the `|` of
-    # `>|f git commit` is no pipe, but the split cannot tell. Only commands the first reading did
-    # not already produce reach the callback, so nothing is called twice.
+    # A command with `>|` gets a second reading in which that `|` is no boundary (#1158): the `|`
+    # of `>|f git commit` is a clobber redirect, but the first reading cuts there. The words the
+    # callback sees are the original ones, never a rewritten text. Only commands the first reading
+    # did not already produce reach the callback, so nothing is called twice.
     if [[ "$1" == *'>|'* ]]; then
         _CCM_PASS=2
-        _for_each_command_pass "${1//>|/>}" "$2"
+        _CCM_CLOBBER=1 _for_each_command_pass "$1" "$2"
     fi
 }
 
@@ -271,18 +276,19 @@ _for_each_command_pass() {
     all=("${_SEGMENT_WORDS[@]:-}")
     for w in "${all[@]}" "$_BOUNDARY"; do
         if [[ "$w" == "$_BOUNDARY" ]]; then
-            key="${_CMD_WORDS[*]}"
+            # %q keeps word boundaries and quoting: `'>f git' commit` is not `>f git commit`
+            printf -v key '%q ' ${_CMD_WORDS[@]+"${_CMD_WORDS[@]}"}
             if ((_CCM_PASS == 1)); then
-                _CCM_SEEN+=("${key//>|/>}")
+                _CCM_SEEN+=("$key")
                 "$cb"
             else
-                # The rewrite only matters for a command that OPENS with a redirection (`>|f git
-                # commit`); a command already starting with its own word was fully read in pass 1,
-                # and re-firing it would count one commit twice. Same-text twins are dropped too.
+                # The re-reading only matters for a command that OPENS with a redirection (`>|f git
+                # commit`); one starting with its own word was fully read in pass 1, and re-firing
+                # it would count one commit twice. Same-text twins are dropped too.
                 _CCM_REDIR_NEXT=0
                 ((${#_CMD_WORDS[@]})) && _skip_redirections
                 dup=$((_CCM_REDIR_NEXT == 0))
-                for seen in "${_CCM_SEEN[@]}"; do [[ "$seen" == "$key" ]] && dup=1; done
+                for seen in ${_CCM_SEEN[@]+"${_CCM_SEEN[@]}"}; do [[ "$seen" == "$key" ]] && dup=1; done
                 ((dup)) || "$cb"
             fi
             _CMD_WORDS=()
