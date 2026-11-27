@@ -273,10 +273,15 @@ _for_each_command_pass() {
         if [[ "$w" == "$_BOUNDARY" ]]; then
             key="${_CMD_WORDS[*]}"
             if ((_CCM_PASS == 1)); then
-                _CCM_SEEN+=("$key")
+                _CCM_SEEN+=("${key//>|/>}")
                 "$cb"
             else
-                dup=0
+                # The rewrite only matters for a command that OPENS with a redirection (`>|f git
+                # commit`); a command already starting with its own word was fully read in pass 1,
+                # and re-firing it would count one commit twice. Same-text twins are dropped too.
+                _CCM_REDIR_NEXT=0
+                ((${#_CMD_WORDS[@]})) && _skip_redirections
+                dup=$((_CCM_REDIR_NEXT == 0))
                 for seen in "${_CCM_SEEN[@]}"; do [[ "$seen" == "$key" ]] && dup=1; done
                 ((dup)) || "$cb"
             fi
