@@ -422,6 +422,56 @@ assert_stdin_refused() {
     assert_allowed 'git commit -m x -- --no-verify'
 }
 
+# --- round 4: heredoc binding, one option parse, cd option words --------------------------------
+
+@test "a heredoc of an unrelated command on the -F- line does not feed the commit" {
+    cmd="$(printf '%s\n' "cat <<'PATTERN' && git commit -F- <<'MSG'" \
+        'gate-change-ok: pattern' 'PATTERN' 'feat: fine' 'MSG')"
+    assert_allowed "$cmd"
+}
+
+@test "the commit's own heredoc is still read when another heredoc shares its line" {
+    cmd="$(printf '%s\n' "cat <<'PATTERN' && git commit -F- <<'MSG'" \
+        'plain' 'PATTERN' 'feat: x' '' 'gate-change-ok: y' 'MSG')"
+    assert_refused "$cmd"
+}
+
+@test "an abbreviated --fil - pipeline commit is not masked by an earlier -F- heredoc commit" {
+    cmd="$(printf '%s\n' "git commit -F- <<'A'" 'feat: a' 'A' \
+        "printf 'x' | git commit --fil -")"
+    assert_stdin_refused "$cmd"
+}
+
+@test "every stdin spelling reads the heredoc body" {
+    for spelling in '-F -' '-F-' '--file -' '--file=-' '--fil -' '-aF -'; do
+        cmd="$(printf '%s\n' "git commit $spelling <<'M'" 'feat: x' '' 'gate-change-ok: y' 'M')"
+        assert_refused "$cmd"
+    done
+}
+
+@test "every stdin spelling allows a clean heredoc" {
+    for spelling in '-F -' '-F-' '--file -' '--file=-' '--fil -' '-aF -'; do
+        cmd="$(printf '%s\n' "git commit $spelling <<'M'" 'feat: fine' 'M')"
+        assert_allowed "$cmd"
+    done
+}
+
+@test "fails closed on a relative -F after cd with option words" {
+    mkdir sub
+    printf 'chore: x\n\ngate-change-ok: because\n' > sub/msg.txt
+    printf 'feat: decoy\n' > msg.txt
+    assert_unresolved 'cd -P sub && git commit -F msg.txt'
+    assert_unresolved 'cd -L sub && git commit -F msg.txt'
+    assert_unresolved 'cd -- sub && git commit -F msg.txt'
+    assert_unresolved 'cd -e sub && git commit -F msg.txt'
+}
+
+@test "an option value that looks like a message flag is not parsed as one" {
+    assert_allowed 'git commit --author "-F" -m "feat: x"'
+    assert_allowed 'git commit --trailer "-m" -m "feat: x"'
+    assert_refused 'git commit --trailer "-m" -m "gate-change-ok: y"'
+}
+
 @test "allows non-Bash tools and empty commands" {
     run bash -c "jq -nc '{tool_name:\"Read\",tool_input:{file_path:\"x\"}}' | '$GUARD'"
     [ "$status" -eq 0 ]

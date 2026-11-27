@@ -94,8 +94,9 @@ _note_cd() {
     fi
     [[ "$first" == cd ]] || return 0
     target="${_CMD_WORDS[1]:-}"
-    [[ "$target" == -- ]] && target="${_CMD_WORDS[2]:-}"
-    if [[ "$first" != cd || -z "$target" || "$target" == - ]] || _has_expansion "$target"; then
+    # Only `cd <one literal dir>` is understood: any option word (-P -L -e -@ -- -) or extra
+    # argument makes the directory unknown.
+    if [[ -z "$target" || ${#_CMD_WORDS[@]} -ne 2 || "$target" == -* ]] || _has_expansion "$target"; then
         _GB_DIR_OK=0
     elif [[ "$target" == /* ]]; then
         _GB_DIR="$target"
@@ -153,31 +154,58 @@ _set_value_options() {
     esac
 }
 
-# _cluster_takes_next SUBCOMMAND WORD: WORD is a short-option cluster (`-am`, `-nm`). Walk its
-# letters like git: the first value-taking letter ends the walk, and the NEXT word is its value
-# only when that letter is last (`-mx` carries its own value). On commit, a cluster holding `n`
-# is --no-verify and is refused.
-_cluster_takes_next() {
+# _cluster_parse SUBCOMMAND WORD: WORD is a short-option cluster (`-am`, `-nm`, `-mx`). Walks the
+# letters like git: sets _CL_LETTER to the first value-taking letter ('' when none) and
+# _CL_ATTACHED to the rest of the word after it (its own value, `-mx`). On commit, a cluster
+# holding `n` before that letter is --no-verify and is refused.
+_cluster_parse() {
     local sub="$1" letters="${2#-}" i ch
+    _CL_LETTER=''
+    _CL_ATTACHED=''
     for ((i = 0; i < ${#letters}; i++)); do
         ch="${letters:i:1}"
         [[ "$sub" == commit && "$ch" == n ]] && block "git commit -n (short for --no-verify)"
         if [[ "$_VO_SHORT" == *"$ch"* ]]; then
-            ((i == ${#letters} - 1))
-            return
+            _CL_LETTER="$ch"
+            _CL_ATTACHED="${letters:i+1}"
+            return 0
         fi
     done
-    return 1
+    return 0
+}
+
+# _count_openers: heredoc openers (`<<TAG`, not the here-string `<<<`) among the words of the
+# current command; advances the global sequence _GB_HD_SEQ and sets _CMD_HD_FIRST/_CMD_HD_LAST to
+# the range this command owns. A heredoc belongs to the simple command whose words hold its opener.
+_count_openers() {
+    local w
+    _CMD_HD_FIRST=$_GB_HD_SEQ
+    for w in "${_CMD_WORDS[@]}"; do
+        [[ "$w" == *'<<'* && "$w" != *'<<<'* ]] && _GB_HD_SEQ=$((_GB_HD_SEQ + 1))
+    done
+    _CMD_HD_LAST=$((_GB_HD_SEQ - 1))
+}
+
+# _record_msg KIND VALUE: remember one message source (m = inline message, f = -F file) of the
+# current commit. Filled by the ONE option parse in _scan_words, read by _scan_commit_message.
+_record_msg() {
+    _MA_KIND+=("$1")
+    _MA_VAL+=("$2")
 }
 
 # _scan_words: callback for _for_each_command, run on the words of ONE simple command. Words come
 # from the shared tokenizer, so quotes are already removed (`"--no-verify"` is `--no-verify`) and
-# a quoted commit message stays one word that can never equal a flag. The value of a value-taking
-# option is skipped, and parsing stops at `--` (what follows are pathspecs).
+# a quoted commit message stays one word that can never equal a flag. THE single option parse of
+# the guard: it skips the values of value-taking options, stops at `--` (pathspecs follow), flags
+# bypass options, and records every message source of a commit (-m/--message, -F/--file, in every
+# spelling git accepts: abbreviations, clusters, attached values).
 _scan_words() {
-    local i w name c git_at=-1 sub="" skip_at=-1 value_next=0 sub_at=-1 gitdir=''
+    local i w name c kind nextw git_at=-1 sub="" skip_at=-1 value_next=0 sub_at=-1 gitdir=''
     _VO_LONG=''
     _VO_SHORT=''
+    _MA_KIND=()
+    _MA_VAL=()
+    _count_openers
     for ((i = 0; i < ${#_CMD_WORDS[@]}; i++)); do
         w="${_CMD_WORDS[i]}"
         # `-c core.hooksPath=/dev/null` disables every hook without any --no-verify; it is the
@@ -208,13 +236,30 @@ _scan_words() {
             continue
         fi
         [[ "$w" == -- ]] && break
+        nextw="${_CMD_WORDS[i + 1]:-}"
+        kind=''
         if [[ "$w" == --* ]]; then
             name="${w%%=*}"
             # git accepts any unambiguous abbreviation; `--no-veri` is the shortest unique one.
             [[ "--no-verify" == "$name"* && ${#name} -ge 9 ]] && block "--no-verify on git $sub"
-            [[ "$w" != *=* && "$_VO_LONG" == *" $w "* ]] && value_next=1
-        elif [[ "$w" =~ ^-[a-zA-Z]+$ ]] && _cluster_takes_next "$sub" "$w"; then
-            value_next=1
+            if [[ "--message" == "$name"* && ${#name} -ge 3 ]]; then kind=m
+            elif [[ "--file" == "$name"* && ${#name} -ge 5 ]]; then kind=f
+            fi
+            if [[ -n "$kind" ]]; then
+                if [[ "$w" == *=* ]]; then _record_msg "$kind" "${w#*=}"; else _record_msg "$kind" "$nextw"; value_next=1; fi
+            elif [[ "$w" != *=* && "$_VO_LONG" == *" $w "* ]]; then
+                value_next=1
+            fi
+        elif [[ "$w" == -[a-zA-Z]* ]]; then
+            _cluster_parse "$sub" "$w"
+            [[ "$_CL_LETTER" == m ]] && kind=m
+            [[ "$_CL_LETTER" == F ]] && kind=f
+            if [[ -n "$_CL_ATTACHED" ]]; then
+                [[ -n "$kind" ]] && _record_msg "$kind" "$_CL_ATTACHED"
+            elif [[ -n "$_CL_LETTER" ]]; then
+                [[ -n "$kind" ]] && _record_msg "$kind" "$nextw"
+                value_next=1
+            fi
         fi
     done
     _GB_SUB_AT=-1
@@ -223,15 +268,11 @@ _scan_words() {
     # Located here, not by the shared matcher, so `env X=1 git commit`, `command git commit` and
     # `sudo git commit` are scanned too.
     if [[ "$sub" == commit ]]; then
-        _COMMIT_ARGS_FROM=$((sub_at + 1))
         COMMIT_COMMAND_GIT_DIR="$gitdir"
         _scan_commit_message
     fi
     return 0
 }
-
-_STDIN_FLAG_RE='(^|[[:space:]])(-F[[:space:]]*-|--file([[:space:]]+|=)-)([[:space:]]|$)'
-_STDIN_OPENER_RE='<<-?[[:space:]]*[\x27"]?[^[:space:]\x27"<>|&;()]+[\x27"]?'
 
 block_stdin() {
     {
@@ -246,84 +287,65 @@ block_stdin() {
     exit 2
 }
 
-# _stdin_has_gate_line: some `-F -` commit of the command reads a gate-change-ok: line from stdin.
-# FAIL CLOSED: the only accepted source is a plain `<<TAG` / `<<-TAG` heredoc on the same command
-# as the flag. Anything else (here-string `<<<`, a pipeline, `< file`, process substitution, no
-# identifiable source) is refused via block_stdin: a plain-text scan of a pipeline upstream cannot
-# see a marker built by printf escapes, base64, sed or cat. Every `-F -` command is judged
-# (each piece of the command split on && ; ||), and the bodies of ALL heredocs attached to such a
-# command are scanned, so a marker in the second of two commits is not missed. Unrelated heredocs
-# (attached to a command without `-F -`) are not read.
+# _stdin_has_gate_line FIRST LAST: the commit being scanned reads its message from stdin
+# (recognised by the one option parse, so every spelling counts), and its own heredocs are
+# numbers FIRST..LAST of the command. FAIL CLOSED: the only accepted source is a plain `<<TAG` /
+# `<<-TAG` heredoc opened by THAT command's words. A here-string, a pipeline, `< file`, process
+# substitution anywhere in the command (checked on the text with quotes blanked, so `grep 'a|b'`
+# does not count), or no heredoc of its own is refused via block_stdin: a plain-text scan of a
+# pipeline upstream cannot see a marker built by printf escapes, base64, sed or cat. Heredocs of
+# other commands, on the same line or not, are never read.
 _stdin_has_gate_line() {
-    local skel piece opener rest bodies
-    skel="$(printf '%s' "$_GB_RAW" | _strip_heredoc_bodies)"
-    bodies=0
-    while IFS= read -r piece; do
-        [[ -n "$piece" ]] || continue
-        bodies=1
-        [[ "$piece" == *'<<<'* ]] && block_stdin "here-string"
-        [[ "$piece" == *'|'* ]] && block_stdin "pipeline"
-        opener="$(printf '%s' "$piece" | grep -oE -- "$(printf '%b' "$_STDIN_OPENER_RE")" | head -n1)"
-        [[ -n "$opener" ]] || block_stdin "no heredoc attached to this commit"
-        rest="${piece//"$opener"/}"
-        [[ "$rest" == *'<'* ]] && block_stdin "redirect or process substitution"
-    done < <(printf '%s\n' "$skel" | sed -E 's/(&&|\|\||;)/\n/g' | grep -E -- "$_STDIN_FLAG_RE")
-    ((bodies)) || block_stdin "no identifiable source"
-    _msg_has_gate_line "$(_flagged_heredoc_bodies)"
+    local first="$1" last="$2" flat rest k
+    local -a bodies
+    flat="$(printf '%s' "$_GB_RAW" | _strip_heredoc_bodies | sed -E -z "s/\"[^\"]*\"|'[^']*'//g")"
+    flat="${flat//||/ }"
+    [[ "$flat" == *'<<<'* ]] && block_stdin "here-string"
+    [[ "$flat" == *'|'* ]] && block_stdin "pipeline"
+    [[ "$flat" == *'<('* ]] && block_stdin "process substitution"
+    rest="$(printf '%s' "$flat" | sed -E 's/<<-?//g')"
+    [[ "$rest" == *'<'* ]] && block_stdin "redirect"
+    ((last >= first)) || block_stdin "no heredoc attached to this commit"
+    mapfile -d $'\036' -t bodies < <(_heredoc_bodies)
+    ((last < ${#bodies[@]})) || block_stdin "cannot match the heredoc to this commit"
+    for ((k = first; k <= last; k++)); do
+        _msg_has_gate_line "${bodies[k]}" && return 0
+    done
+    return 1
 }
 
-# _flagged_heredoc_bodies: the bodies of every heredoc opened on a line that carries a `-F -` flag.
-# Heredocs queue in order, so several openers on one line, or heredocs on following lines, each
-# get their own body; a body belongs to the flag only if its opener line carried the flag.
-_flagged_heredoc_bodies() {
+# _heredoc_bodies: the body of every heredoc of the raw command, in opener order, each ended by a
+# \036 byte (an unterminated one is ended at EOF), so body number N belongs to opener number N.
+_heredoc_bodies() {
     printf '%s\n' "$_GB_RAW" | awk '
         n > 0 {
             t = $0; sub(/^\t+/, "", t)
-            if (t == tags[1]) { for (i = 1; i < n; i++) { tags[i] = tags[i + 1]; caps[i] = caps[i + 1] } n-- }
-            else if (caps[1]) print
+            if (t == tags[1]) { printf "\036"; for (i = 1; i < n; i++) tags[i] = tags[i + 1]; n-- }
+            else print
             next
         }
         {
             line = $0; gsub(/<<</, "   ", line)
-            flag = (line ~ /(^|[ \t])(-F[ \t]*-|--file([ \t]+|=)-)([ \t]|$)/)
             while (match(line, /<<-?[ \t]*(\047[^\047]*\047|"[^"]*"|[^ \t\047"<>|&;()]+)/)) {
                 tag = substr(line, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", tag); gsub(/[\047"]/, "", tag)
-                n++; tags[n] = tag; caps[n] = flag
+                n++; tags[n] = tag
                 line = substr(line, RSTART + RLENGTH)
             }
-        }'
+        }
+        END { if (n > 0) printf "\036" }'
 }
 
-# _scan_commit_message: the message of THIS commit (global _CMD_WORDS), from -m values and from a
-# -F/--file file, is free of a `gate-change-ok:` line. git takes any unambiguous abbreviation of a
-# long option, so `--fil` and `--mess` are read as --file and --message.
+# _scan_commit_message: the message sources of THIS commit, as recorded by the single option parse
+# in _scan_words (_MA_KIND/_MA_VAL), are free of a `gate-change-ok:` line.
 _scan_commit_message() {
-    local i w v kind name
-    for ((i = _COMMIT_ARGS_FROM; i < ${#_CMD_WORDS[@]}; i++)); do
-        w="${_CMD_WORDS[i]}"
-        [[ "$w" == -- ]] && break
-        v=''
-        kind=''
-        if [[ "$w" == --* ]]; then
-            name="${w%%=*}"
-            if [[ "--message" == "$name"* && ${#name} -ge 3 ]]; then kind=m
-            elif [[ "--file" == "$name"* && ${#name} -ge 5 ]]; then kind=f
-            fi
-            if [[ "$w" == *=* ]]; then v="${w#*=}"; else v="${_CMD_WORDS[i + 1]:-}"; fi
-        else
-            case "$w" in
-                -m | -[a-zA-Z]*m) kind=m; v="${_CMD_WORDS[i + 1]:-}" ;;
-                -F | -[a-zA-Z]*F) kind=f; v="${_CMD_WORDS[i + 1]:-}" ;;
-                -m?*) kind=m; v="${w#-m}" ;;
-                -F?*) kind=f; v="${w#-F}" ;;
-            esac
-        fi
-        if [[ "$kind" == m ]] && _msg_has_gate_line "$v"; then
-            block "gate-change-ok: line in a commit message"
-        fi
-        [[ "$kind" == f ]] || continue
-        if [[ "$v" == - ]]; then
-            _stdin_has_gate_line && block "gate-change-ok: line in a commit message"
+    local k kind v
+    for ((k = 0; k < ${#_MA_KIND[@]}; k++)); do
+        kind="${_MA_KIND[k]}"
+        v="${_MA_VAL[k]}"
+        if [[ "$kind" == m ]]; then
+            _msg_has_gate_line "$v" && block "gate-change-ok: line in a commit message"
+        elif [[ "$v" == - ]]; then
+            _stdin_has_gate_line "$_CMD_HD_FIRST" "$_CMD_HD_LAST" && block "gate-change-ok: line in a commit message"
         elif [[ "$v" == /* ]]; then
             _file_has_gate_line "$v" && block "gate-change-ok: line in commit message file $v"
         else
@@ -345,6 +367,7 @@ main() {
     [[ -n "$command" ]] || exit 0
     _GB_CWD="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
     _GB_RAW="$command"
+    _GB_HD_SEQ=0
 
     # A `bash|sh <file>.sh` command runs its commits out of sight: append the script's text.
     command="$(commit_expand_script "$command")"
