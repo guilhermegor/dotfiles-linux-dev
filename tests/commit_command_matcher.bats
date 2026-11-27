@@ -418,7 +418,7 @@ _strip_sees_commit() {
     [[ "$output" == *SEEN* ]]
 }
 
-_has_commit() {
+_matcher_has_commit() {
     run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" "$1"
     [ "$status" -eq 0 ]
 }
@@ -471,11 +471,11 @@ _has_commit() {
 }
 
 @test "GAP8: output redirection before the command word (>/dev/null git commit)" {
-    _has_commit '>/dev/null git commit -m x'
+    _matcher_has_commit '>/dev/null git commit -m x'
 }
 
 @test "GAP8: separated redirection before the command word (> /dev/null git commit)" {
-    _has_commit '> /dev/null git commit -m x'
+    _matcher_has_commit '> /dev/null git commit -m x'
 }
 
 @test "GAP8: fd, append, input, dup and herestring redirections before the command word" {
@@ -485,7 +485,7 @@ _has_commit() {
              '<<E git commit -m x' '&>f git commit -m x' '{fd}>f git commit -m x' \
              '>f 2>&1 rtk git commit -m x' '2> f < g /usr/bin/git -C d commit -m x'; do
         echo "case: $c"
-        _has_commit "$c"
+        _matcher_has_commit "$c"
     done
 }
 
@@ -499,13 +499,13 @@ _has_commit() {
 }
 
 @test "GAP8: <<\$'E' <<\"E\" \\<NL>git commit, once the lines are joined" {
-    _has_commit $'<<$\'E\' <<"E" \\\ngit commit -m x\nbody\nE\nbody\nE'
+    _matcher_has_commit $'<<$\'E\' <<"E" \\\ngit commit -m x\nbody\nE\nbody\nE'
     _strip_sees_commit $'<<$\'E\' <<"E" \\\ngit commit -m x\nbody\nE\nbody\nE'
 }
 
 @test "GAP8: clobber redirection >| before the command word" {
-    _has_commit '>|f git commit -m x'
-    _has_commit '2>| f git commit -m x'
+    _matcher_has_commit '>|f git commit -m x'
+    _matcher_has_commit '2>| f git commit -m x'
 }
 
 # The >| re-reading must never make a commit appear twice: callbacks that count commits would
