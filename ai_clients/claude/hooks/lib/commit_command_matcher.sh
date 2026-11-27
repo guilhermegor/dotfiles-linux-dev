@@ -109,7 +109,9 @@ _tokenize_segment() {
         elif [[ "$char" == '#' ]] && ((!started)); then
             while ((i + 1 < ${#segment})) && [[ "${segment:i+1:1}" != $'\n' ]]; do i=$((i + 1)); done
         elif [[ "${_CCM_CLOBBER:-}" == 1 && "$char" == '|' && "$current" == *'>' ]]; then
-            current+="$char"   # `>|` clobber redirect (#1158), set only by _for_each_command's pass 2
+            # `>|` clobber redirect (#1158), only for _for_each_command's pass 2. \x1e marks the
+            # merge so the pass can tell which commands pass 1 cut in two; it strips it again.
+            current+=$'\x1e'"$char"
         elif [[ -n "$split" && ( "$char" == [\;\&\|] || "$char" == $'\n' ) ]]; then
             ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
             _SEGMENT_WORDS+=("$_BOUNDARY")
@@ -228,6 +230,8 @@ command_has_git_commit() {
     COMMIT_COMMAND_GIT_DIR=""
     # The last two readings turn the clobber redirect `>|` into `>` (#1158): the `|` of `>|f git
     # commit` is no pipe, but the split below cannot tell. Added to the first two, never instead.
+    # readings 3 and 4 also rewrite `>|` inside quotes: fine for this yes/no answer, never reuse
+    # them for message extraction.
     local -a readings=("$command" "$joined")
     if [[ "$command" == *'>|'* || "$joined" == *'>|'* ]]; then
         readings+=("${command//>|/>}" "${joined//>|/>}")
@@ -254,47 +258,51 @@ _MSG_SEP=$'\x1f'
 # Tokenize COMMAND once with the quote-aware split mode and call CALLBACK with `_CMD_WORDS` set to
 # each simple command in turn. Quoted `;`/`&`/`|` never split, and nothing is evaluated.
 _for_each_command() {
-    # Dynamic scope: the pass function reads these, and a callback that calls back in gets its own.
+    # Dynamic scope: the pass function reads this, and a callback that calls back in gets its own.
     local _CCM_PASS=1
-    local -a _CCM_SEEN=()
     _for_each_command_pass "$1" "$2"
     # A command with `>|` gets a second reading in which that `|` is no boundary (#1158): the `|`
-    # of `>|f git commit` is a clobber redirect, but the first reading cuts there. The words the
-    # callback sees are the original ones, never a rewritten text. Only commands the first reading
-    # did not already produce reach the callback, so nothing is called twice.
+    # of `>|f git commit` is a clobber redirect, but the first reading cuts there. The callback
+    # gets the original words. Pass 2 fires only a command that merged across such a cut, and
+    # not when the first piece pass 1 cut off was already a commit (`>o git commit -m x 2>|e`).
     if [[ "$1" == *'>|'* ]]; then
         _CCM_PASS=2
-        _CCM_CLOBBER=1 _for_each_command_pass "$1" "$2"
+        _for_each_command_pass "$1" "$2"
     fi
 }
 
 _for_each_command_pass() {
-    local w cb="$2" key seen dup
-    local -a all
+    local w cb="$2" i merged saved_dir
+    local -a all prefix clean
     _CMD_WORDS=()
-    _tokenize_segment "$1" split
+    _CCM_CLOBBER=$((_CCM_PASS == 2)) _tokenize_segment "$1" split
     all=("${_SEGMENT_WORDS[@]:-}")
     for w in "${all[@]}" "$_BOUNDARY"; do
-        if [[ "$w" == "$_BOUNDARY" ]]; then
-            # %q keeps word boundaries and quoting: `'>f git' commit` is not `>f git commit`
-            printf -v key '%q ' ${_CMD_WORDS[@]+"${_CMD_WORDS[@]}"}
-            if ((_CCM_PASS == 1)); then
-                _CCM_SEEN+=("$key")
-                "$cb"
-            else
-                # The re-reading only matters for a command that OPENS with a redirection (`>|f git
-                # commit`); one starting with its own word was fully read in pass 1, and re-firing
-                # it would count one commit twice. Same-text twins are dropped too.
-                _CCM_REDIR_NEXT=0
-                ((${#_CMD_WORDS[@]})) && _skip_redirections
-                dup=$((_CCM_REDIR_NEXT == 0))
-                for seen in ${_CCM_SEEN[@]+"${_CCM_SEEN[@]}"}; do [[ "$seen" == "$key" ]] && dup=1; done
-                ((dup)) || "$cb"
-            fi
-            _CMD_WORDS=()
-        else
+        if [[ "$w" != "$_BOUNDARY" ]]; then
             _CMD_WORDS+=("$w")
+            continue
         fi
+        if ((_CCM_PASS == 1)); then
+            "$cb"
+        else
+            merged=0 prefix=() clean=()
+            for ((i = 0; i < ${#_CMD_WORDS[@]}; i++)); do
+                if ((!merged)) && [[ "${_CMD_WORDS[i]}" == *$'\x1e'* ]]; then
+                    merged=1
+                    prefix=("${clean[@]}" "${_CMD_WORDS[i]%%$'\x1e'*}")
+                fi
+                clean+=("${_CMD_WORDS[i]//$'\x1e'/}")
+            done
+            if ((merged)); then
+                saved_dir="$COMMIT_COMMAND_GIT_DIR"
+                _CMD_WORDS=("${prefix[@]}")
+                if _words_invoke_commit; then merged=0; fi
+                COMMIT_COMMAND_GIT_DIR="$saved_dir"
+                _CMD_WORDS=("${clean[@]}")
+                ((merged)) && "$cb"
+            fi
+        fi
+        _CMD_WORDS=()
     done
 }
 
