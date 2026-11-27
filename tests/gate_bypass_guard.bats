@@ -121,6 +121,57 @@ assert_allowed() {
     assert_allowed 'git commit -m "docs: the gate-change-ok: line is owner-only"'
 }
 
+# --- CodeRabbit review of #1145 ------------------------------------------------------------
+
+@test "refuses a quoted --no-verify option argument" {
+    assert_refused 'git push "--no-verify" origin HEAD'
+    assert_refused "git commit '--no-verify' -m x"
+}
+
+@test "refuses --no-verify after repeated whitespace" {
+    assert_refused 'git  push --no-verify origin HEAD'
+    assert_refused 'git commit   -m x  --no-verify'
+    assert_refused "$(printf 'git\tpush\t--no-verify')"
+}
+
+@test "allows a gate-change-ok: pattern in grep chained before an ordinary commit" {
+    assert_allowed "grep -n 'gate-change-ok:' policy.txt && git commit -m 'docs: update policy'"
+}
+
+@test "refuses the commit's -F file even when an earlier command has a -F" {
+    printf 'chore: x\n\ngate-change-ok: because\n' > bypass.txt
+    assert_refused 'grep -F needle README.md && git commit -F bypass.txt'
+}
+
+@test "refuses a quoted -F filename containing spaces" {
+    printf 'chore: x\n\ngate-change-ok: because\n' > 'commit message.txt'
+    assert_refused 'git commit -F "commit message.txt"'
+}
+
+@test "refuses --file= and -Fpath spellings" {
+    printf 'chore: x\n\ngate-change-ok: because\n' > msg.txt
+    assert_refused 'git commit --file=msg.txt'
+    assert_refused 'git commit -Fmsg.txt'
+}
+
+@test "resolves the -F file from the commit's cd directory" {
+    mkdir sub
+    printf 'chore: x\n\ngate-change-ok: because\n' > sub/msg.txt
+    assert_refused "cd $TEST_TMP/sub && git commit -F msg.txt"
+}
+
+@test "resolves the -F file from the commit's git -C directory" {
+    mkdir sub
+    printf 'chore: x\n\ngate-change-ok: because\n' > sub/msg.txt
+    assert_refused 'git -C sub commit -F msg.txt'
+}
+
+@test "refuses the bypass line in the second of two commits" {
+    printf 'chore: x\n\ngate-change-ok: because\n' > bad.txt
+    printf 'feat: fine\n' > ok.txt
+    assert_refused 'git commit -F ok.txt && git commit -F bad.txt'
+}
+
 @test "allows non-Bash tools and empty commands" {
     run bash -c "jq -nc '{tool_name:\"Read\",tool_input:{file_path:\"x\"}}' | '$GUARD'"
     [ "$status" -eq 0 ]

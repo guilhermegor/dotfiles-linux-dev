@@ -18,11 +18,12 @@
 # Hook I/O contract (same as commit_title_length_guard.sh): silent on stdout, speaks only through
 # exit code + stderr (2 = block). Fails OPEN when it cannot parse (no jq, unreadable -F file).
 #
-# ponytail: a regex scan of the raw command string, not a shell parse. Quoted runs are blanked
-# before the token scan so a quoted commit message or grep pattern mentioning `--no-verify` does
-# not trip it; an unbalanced quote or a token built by shell expansion can still slip through.
-# Upgrade to real argv parsing only if that ever produces a real miss. `git commit -n` (the short
-# spelling of --no-verify) is not covered — the issue names the long flag only.
+# ponytail: the shared quote-aware tokenizer of lib/commit_command_matcher.sh, not a full shell
+# parse. Each simple command is judged on its own words, so a quoted message or grep pattern
+# mentioning `--no-verify` is one word and never trips it, while a quoted flag is seen. A token
+# built by shell expansion or a `cd` that is not one absolute literal path can still slip through.
+# Upgrade to a real shell parser only if that ever produces a real miss. `git commit -n` (the
+# short spelling of --no-verify) is not covered — the issue names the long flag only.
 
 set -u
 
@@ -45,46 +46,95 @@ block() {
     exit 2
 }
 
+# _msg_has_gate_line TEXT: a `gate-change-ok:` at the start of any line of TEXT.
+_msg_has_gate_line() {
+    printf '%s\n' "$1" | grep -qiE '^[[:space:]]*gate-change-ok:'
+}
+
+# _file_has_gate_line FILE: FILE is a readable message file holding such a line.
+_file_has_gate_line() {
+    [[ -f "$1" && -r "$1" ]] && grep -qiE '^[[:space:]]*gate-change-ok:' "$1"
+}
+
+# _commit_file_path FILE: FILE as the commit would resolve it, from its own `git -C` directory
+# and a preceding absolute `cd`, falling back to the payload cwd.
+_commit_file_path() {
+    local f="$1" d="$COMMIT_COMMAND_GIT_DIR" base="${COMMIT_CD_DIR:-$_GB_CWD}"
+    [[ "$f" == /* ]] && { printf '%s' "$f"; return; }
+    [[ -z "$d" ]] && d="$base"
+    [[ "$d" == /* || -z "$base" ]] || d="$base/$d"
+    printf '%s/%s' "$d" "$f"
+}
+
+# _scan_words: callback for _for_each_command, run on the words of ONE simple command. Words come
+# from the shared tokenizer, so quotes are already removed (`"--no-verify"` is `--no-verify`) and
+# a quoted commit message stays one word that can never equal a flag.
+_scan_words() {
+    local i w git_at=-1 sub="" skip_at=-1
+    for ((i = 0; i < ${#_CMD_WORDS[@]}; i++)); do
+        w="${_CMD_WORDS[i]}"
+        [[ "$w" == GATE_CHANGE_OK=* ]] && block "GATE_CHANGE_OK="
+        [[ "$w" == SKIP=* && $skip_at -lt 0 ]] && skip_at=$i
+        if ((git_at < 0)) && [[ "$w" == git || "$w" == */git ]]; then
+            git_at=$i
+            ((skip_at >= 0)) && block "SKIP= before git"
+        elif ((git_at >= 0)); then
+            case "$w" in
+                commit | push | merge) [[ -z "$sub" ]] && sub="$w" ;;
+                --no-verify) [[ -n "$sub" ]] && block "--no-verify on git $sub" ;;
+            esac
+        fi
+    done
+    ((git_at >= 0)) && [[ "$sub" == commit ]] && _words_invoke_commit && _scan_commit_message
+    return 0
+}
+
+# _scan_commit_message: the message of THIS commit (global _CMD_WORDS), from -m values and from a
+# -F/--file file, is free of a `gate-change-ok:` line.
+_scan_commit_message() {
+    local i w v kind
+    for ((i = _COMMIT_ARGS_FROM; i < ${#_CMD_WORDS[@]}; i++)); do
+        w="${_CMD_WORDS[i]}"
+        v=''
+        kind=''
+        case "$w" in
+            -m | --message) kind=m; v="${_CMD_WORDS[i + 1]:-}" ;;
+            -[a-zA-Z]*m) kind=m; v="${_CMD_WORDS[i + 1]:-}" ;;
+            --message=*) kind=m; v="${w#--message=}" ;;
+            -m?*) kind=m; v="${w#-m}" ;;
+            -F | --file) kind=f; v="${_CMD_WORDS[i + 1]:-}" ;;
+            --file=*) kind=f; v="${w#--file=}" ;;
+            -F?*) kind=f; v="${w#-F}" ;;
+        esac
+        if [[ "$kind" == m ]] && _msg_has_gate_line "$v"; then
+            block "gate-change-ok: line in a commit message"
+        fi
+        [[ "$kind" == f ]] || continue
+        if [[ "$v" == - ]]; then
+            # `-F -`: the heredoc body was stripped from the parse; scan the raw command.
+            _msg_has_gate_line "$_GB_RAW" && block "gate-change-ok: line in a commit message"
+        elif [[ -n "$v" && "$v" != *'$'* && "$v" != *'`'* ]]; then
+            v="$(_commit_file_path "$v")"
+            _file_has_gate_line "$v" && block "gate-change-ok: line in commit message file $v"
+        fi
+    done
+    return 0
+}
+
 main() {
-    local payload command cwd stripped seg file
+    local payload command
 
     payload="$(cat)"
     [[ "$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)" == "Bash" ]] || exit 0
     command="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)"
     [[ -n "$command" ]] || exit 0
-    cwd="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
+    _GB_CWD="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null)"
+    _GB_RAW="$command"
 
-    # Blank quoted runs (one alternation, so the leftmost opener wins) before token scanning.
-    stripped="$(printf '%s' "$command" | sed -E -z "s/\"[^\"]*\"|'[^']*'//g")"
-
-    if printf '%s' "$stripped" | grep -qE '(^|[[:space:];&|(])(export[[:space:]]+)?GATE_CHANGE_OK='; then
-        block "GATE_CHANGE_OK="
-    fi
-
-    # Per simple command: SKIP=... before git, and --no-verify on commit/push/merge.
-    while IFS= read -r seg; do
-        if printf '%s' "$seg" | grep -qE '(^|[[:space:]])SKIP=[^[:space:]]*[[:space:]]+([^[:space:]=]+=[^[:space:]]*[[:space:]]+)*(rtk[[:space:]]+(proxy[[:space:]]+)?)?([^[:space:]]*/)?git([[:space:]]|$)'; then
-            block "SKIP= before git"
-        fi
-        if printf '%s' "$seg" | grep -qE '(^|[[:space:]/])git[[:space:]]([^[:space:]]+[[:space:]]+)*(commit|push|merge)[[:space:]]([^[:space:]]+[[:space:]]+)*--no-verify([[:space:]=]|$)'; then
-            block "--no-verify on git commit/push/merge"
-        fi
-    done < <(printf '%s\n' "$stripped" | sed -E 's/(&&|\|\||;|\||\n)/\n/g')
-
-    # gate-change-ok: only matters inside a commit message.
-    command_has_git_commit "$command" || exit 0
-    if printf '%s' "$command" | grep -qiE "(^|[\"'[:space:]])gate-change-ok:" \
-        && printf '%s\n' "$command" | grep -qiE "(^|[\"'])[[:space:]]*gate-change-ok:|^[[:space:]]*gate-change-ok:"; then
-        block "gate-change-ok: line in a commit message"
-    fi
-    file="$(printf '%s' "$command" | grep -oE -- '(^|[[:space:]])(-F[[:space:]]*|--file[=[:space:]]+)[^[:space:]|&;]+' | head -n1 \
-        | sed -E 's/^[[:space:]]*(-F[[:space:]]*|--file[=[:space:]]+)//; s/^["'"'"']//; s/["'"'"']$//')"
-    if [[ -n "$file" && "$file" != - && "$file" != *'$'* && "$file" != *'`'* ]]; then
-        [[ "$file" == /* || -z "$cwd" ]] || file="$cwd/$file"
-        if [[ -f "$file" && -r "$file" ]] && grep -qiE '^[[:space:]]*gate-change-ok:' "$file"; then
-            block "gate-change-ok: line in commit message file $file"
-        fi
-    fi
+    # A `bash|sh <file>.sh` command runs its commits out of sight: append the script's text.
+    command="$(commit_expand_script "$command")"
+    commit_cd_dir "$command"
+    _for_each_command "$(printf '%s' "$command" | _strip_heredoc_bodies)" _scan_words
     exit 0
 }
 
