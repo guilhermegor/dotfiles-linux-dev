@@ -838,10 +838,10 @@ STUB
 }
 
 @test "main() wires item [8] into the report (main needs a live origin, so pin the wiring)" {
-    run grep -c 'echo "\[8\] roadmap boards' "$SWEEP_SRC"
+    run grep -c 'sweep_begin "\[8\] roadmap boards' "$SWEEP_SRC"
     [ "$output" = "1" ]
-    run awk '/echo "\[8\] roadmap boards/{getline; print}' "$SWEEP_SRC"
-    [[ "$output" == *"sweep_roadmap_boards"* ]]
+    run awk '/sweep_begin "\[8\] roadmap boards/{print}' "$SWEEP_SRC"
+    [[ "$output" == *"&& sweep_roadmap_boards" ]]
 }
 
 # --- dotfiles-linux-dev#887: items [7]/[9]/[11] reconcile every declared board ----------------------
@@ -1041,4 +1041,76 @@ counting_section() { echo x >> "$CALLS"; echo "section output ${1:-ok}"; }
     # The mutating reconcilers must never replay a cached report (they move cards, add items).
     run grep -E 'sweep_cached .*(sweep_kanban_boards|sweep_roadmap_boards)' "$SWEEP_SRC"
     [ "$status" -ne 0 ]
+}
+
+@test "main(): a spent wall-clock budget emits the finished items and marks the rest UNKNOWN (#1144)" {
+    # Every network-touching seam is stubbed; item [1] is the slow one.
+    gh_budget_gate() { return 0; }
+    repo_slug() { echo o/r; }
+    default_branch() { echo main; }
+    sweep_worktrees() { sleep 4; echo "worktrees done"; }
+    sweep_review_gate() { echo "gate should not run"; }
+    sweep_orphan_branches() { echo "orphans should not run"; }
+    no_real_gh
+    export SWEEP_WALL_CLOCK_BUDGET=3 SWEEP_CACHE_TTL=0
+    run main <<<"{\"cwd\":\"$REPO\"}"
+    [ "$status" -eq 0 ]
+    ctx="$(jq -r '.hookSpecificOutput.additionalContext' <<<"$output")"
+    [[ "$ctx" == *"worktrees done"* ]]
+    [[ "$ctx" == *"[2] review-thread gate"*$'\n'"    UNKNOWN — wall-clock budget spent"* ]]
+    [[ "$ctx" == *"[12] kanban reconcile"*$'\n'"    UNKNOWN — wall-clock budget spent"* ]]
+    [[ "$ctx" != *"should not run"* ]]
+}
+
+@test "main(): preflight time counts against the wall-clock budget (#1144)" {
+    gh_budget_gate() { sleep 4; return 0; }
+    repo_slug() { echo o/r; }
+    default_branch() { echo main; }
+    sweep_worktrees() { echo "worktrees should not run"; }
+    no_real_gh
+    export SWEEP_WALL_CLOCK_BUDGET=3 SWEEP_CACHE_TTL=0
+    run main <<<"{\"cwd\":\"$REPO\"}"
+    [ "$status" -eq 0 ]
+    ctx="$(jq -r '.hookSpecificOutput.additionalContext' <<<"$output")"
+    [[ "$ctx" == *"[1] worktree residue"*$'\n'"    UNKNOWN — wall-clock budget spent"* ]]
+    [[ "$ctx" != *"should not run"* ]]
+}
+
+# A gh that always fails: anything a test forgot to stub degrades to UNKNOWN, never a live call.
+no_real_gh() {
+    printf '#!/bin/sh\nexit 1\n' > "$BIN/gh"
+    chmod +x "$BIN/gh"
+}
+
+@test "main(): TERM mid-item emits the items finished so far (#1144)" {
+    no_real_gh
+    gh_budget_gate() { return 0; }
+    repo_slug() { echo o/r; }
+    default_branch() { echo main; }
+    sweep_worktrees() { echo "worktrees done"; }
+    sweep_review_gate() { sleep 30; }
+    export SWEEP_CACHE_TTL=0
+    ( main <<<"{\"cwd\":\"$REPO\"}" > "$REPO/out.json" ) &
+    pid=$!
+    sleep 2
+    kill -TERM "$pid"
+    wait "$pid"
+    ctx="$(jq -r '.hookSpecificOutput.additionalContext' "$REPO/out.json")"
+    [[ "$ctx" == *"worktrees done"* ]]
+    [[ "$ctx" == *"[2] review-thread gate"* ]]
+    [[ "$ctx" == *"interrupted"* ]]
+}
+
+@test "main(): a non-numeric SWEEP_WALL_CLOCK_BUDGET falls back to the default with a note" {
+    no_real_gh
+    gh_budget_gate() { return 0; }
+    repo_slug() { echo o/r; }
+    default_branch() { echo main; }
+    sweep_worktrees() { echo "worktrees done"; }
+    sweep_review_gate() { :; }
+    export SWEEP_WALL_CLOCK_BUDGET=abc SWEEP_CACHE_TTL=0
+    run --separate-stderr main <<<"{\"cwd\":\"$REPO\"}"
+    [ "$status" -eq 0 ]
+    [[ "$stderr" == *"SWEEP_WALL_CLOCK_BUDGET"* ]]
+    [[ "$output" == *"worktrees done"* ]]
 }
