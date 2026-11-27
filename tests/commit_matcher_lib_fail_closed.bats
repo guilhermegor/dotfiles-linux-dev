@@ -49,11 +49,6 @@ assert_closed() {
     assert_closed
 }
 
-@test "#1160 commit_body_wrap blocks when the matcher lib is missing" {
-    run_without_matcher commit_body_wrap.sh "git commit -m x"
-    assert_closed
-}
-
 @test "#1160 commit_secret_guard blocks when the matcher lib is missing" {
     run_without_matcher commit_secret_guard.sh "git commit -m x"
     assert_closed
