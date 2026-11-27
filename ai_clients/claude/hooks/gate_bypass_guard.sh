@@ -347,9 +347,7 @@ function scan(line,    i, c, nx, j, c2, k, tag, rest, len) {
         if (c == "\\") { i++; continue }
         if (c == sq || c == dq) { q = c; continue }
         if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[ \t;&|(]/)) {
-            # A comment holds no openers, but the tokenizer still splits on its ; & | : keep the
-            # ordinals comparable.
-            for (j = i + 1; j <= len; j++) if (substr(line, j, 1) ~ /[;&|]/) cmd++
+            # A comment holds no openers and, like the shared tokenizer, no command boundaries.
             return
         }
         if (c == ";" || c == "&") { cmd++; continue }
