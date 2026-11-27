@@ -345,6 +345,20 @@ _sees_no_verify() {
     [ "$status" -eq 0 ]
 }
 
+@test "GAP1: an escaped apostrophe inside \$'..' before a # comment ending in a backslash" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo $\'it\\\'s\' # note \\\ngit commit -m x'
+    [ "$status" -eq 0 ]
+}
+
+@test "GAP1: a quote inside \$(..) before a # comment ending in a backslash" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo "$(printf \'"\')" # note \\\ngit commit -m x'
+    [ "$status" -eq 0 ]
+}
+
+@test "GAP2: a backslash inside a double-quoted heredoc delimiter part (<<E\"\\\\OF\")" {
+    _sees_no_verify $'cat <<E"\\\\OF"\nE\nE\\OF\ngit commit --no-verify -m x\nE\\\\OF'
+}
+
 @test "GAP1: a # inside quotes does not stop a real continuation" {
     run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo "a # b" && git \\\n commit -m x'
     [ "$status" -eq 0 ]

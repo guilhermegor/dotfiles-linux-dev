@@ -177,50 +177,31 @@ _segment_invokes_commit() {
 # stdin -> stdout with each `\<NL>` line continuation removed (#1152): bash joins the lines, so
 # `git \<NL> commit` is one command. Only an ODD run of backslashes before the newline continues
 # the line; an even run is escaped backslashes and the newline stays a separator.
-# A trailing `\` inside an unquoted `#` comment (same word-boundary rule as _strip_heredoc_bodies)
-# is comment text, so the newline stays a separator and the next line is its own command.
-# ponytail: quotes tracked per line only, so a `\<NL>` inside a multi-line quote is joined too
-# (over-read only).
+# ponytail: deliberately quote- and comment-blind. A real lexer here (tried: a comment/quote
+# tracker) desynced on $'..', $(..) and multi-line quotes, each hiding a commit. The caller instead
+# takes the UNION of this reading and the unjoined one, so the join can never hide what the
+# unjoined text shows.
 _join_continuations() {
-    awk '
-        # q (the open quote, if any) is global: it carries across physical lines.
-        function comment(s,   i, n, c, pb) {
-            n = length(s); pb = (q == "")
-            for (i = 1; i <= n; i++) {
-                c = substr(s, i, 1)
-                if (q == "\047") { if (c == q) q = ""; pb = 0; continue }
-                if (c == "\\") { i++; pb = 0; continue }
-                if (q != "") { if (c == q) q = ""; pb = 0; continue }
-                if (c == "#" && pb) return 1
-                if (c == "\047" || c == "\"") q = c
-                pb = (c ~ /[ \t;&|()]/)
-            }
-            return 0
-        }
-        {
-            buf = buf $0
-            cm = comment($0)   # always scan, so the quote state stays current
-            match(buf, /\\+$/)
-            if (RLENGTH % 2 == 1 && !cm) { buf = substr(buf, 1, length(buf) - 1); next }
-            print buf; buf = ""
-        }
-        END { if (buf != "") print buf }
-    '
+    sed -zE ':a; s/(^|[^\\])((\\\\)*)\\\n/\1\2/; ta'
 }
 
 # command_has_git_commit COMMAND
 # Return 0 if any segment of COMMAND (split on &&, ||, ; and |) is a git-commit invocation;
 # return 1 otherwise. On a match, COMMIT_COMMAND_GIT_DIR holds that invocation's `-C` directory
 # (empty when it has none).
+# Two readings, a hit on EITHER counts: the text as written, and the text with every `\<NL>`
+# joined. Over-reading is the safe direction for a guard (see _join_continuations).
 command_has_git_commit() {
-    local command="$1" segment
+    local command="$1" segment reading
 
     # Cleared per call so a previous match's directory can never leak into a later one.
     # shellcheck disable=SC2034  # read by the hooks that source this file, invisible to shellcheck
     COMMIT_COMMAND_GIT_DIR=""
-    while IFS= read -r segment; do
-        _segment_invokes_commit "$segment" && return 0
-    done <<< "$(printf '%s' "$command" | _join_continuations | sed -E 's/(&&|\|\||;|\|)/\n/g')"
+    for reading in "$command" "$(printf '%s' "$command" | _join_continuations)"; do
+        while IFS= read -r segment; do
+            _segment_invokes_commit "$segment" && return 0
+        done <<< "$(printf '%s' "$reading" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
+    done
 
     return 1
 }
@@ -318,16 +299,26 @@ _strip_heredoc_bodies() {
         function pop() { q = sq[depth]; pd = spd[depth]; ar = sar[depth]; depth-- }
         # Delimiter word with bash quote removal (#1152): <<"E"OF and <<E"OF" both mean EOF. An
         # unterminated quote cannot be read confidently: dbad fails the whole input closed.
-        function delim(s,   n, k, ch, t, e) {
+        function delim(s,   n, k, ch, t, e, m, cm, nx) {
             n = length(s); k = 1; t = ""
             while (k <= n) {
                 ch = substr(s, k, 1)
                 if (ch ~ /[ \t<>|&;()]/) break
                 if (ch == "\\") { t = t substr(s, k + 1, 1); k += 2; continue }
-                if (ch == "\047" || ch == "\"") {
+                if (ch == "\047") {
                     e = index(substr(s, k + 1), ch)
                     if (!e) { bad = 1; break }
                     t = t substr(s, k + 1, e - 1); k += e + 1; continue
+                }
+                if (ch == "\"") {   # inside "..": \ before \ " $ ` drops the backslash, else literal
+                    m = k + 1
+                    while (m <= n && substr(s, m, 1) != "\"") {
+                        cm = substr(s, m, 1); nx = substr(s, m + 1, 1)
+                        if (cm == "\\" && (nx == "\\" || nx == "\"" || nx == "$" || nx == "`")) { t = t nx; m += 2 }
+                        else { t = t cm; m++ }
+                    }
+                    if (m > n) { bad = 1; break }
+                    k = m + 1; continue
                 }
                 t = t ch; k++
             }
