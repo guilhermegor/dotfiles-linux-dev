@@ -237,14 +237,39 @@ commit_cd_dir() {
 # Print FILE (or stdin) without the lines between a `<<TAG` opener and its closing TAG (opener line
 # kept). The delimiter is any run of characters git/the shell would accept, digits-only included.
 _strip_heredoc_bodies() {
+    # Quote-aware (#1147): a `<<` inside '..', "..", $'..', $"..", after a backslash or in a #comment
+    # is not an opener. Quote state carries across lines. Fail closed: an unterminated quote hides
+    # every later `<<`, so nothing more is stripped and the guards read MORE text, never less.
     awk '
         tag != "" { t = $0; sub(/^\t+/, "", t); if (t == tag) tag = ""; next }
-        { line = $0; gsub(/<<</, "   ", line) }
-        match(line, /<<-?[ \t]*(\047[^\047]*\047|"[^"]*")/) {
-            tag = substr(line, RSTART, RLENGTH); sub(/^<<-?[ \t]*./, "", tag); sub(/.$/, "", tag)
-        }
-        tag == "" && match(line, /<<-?[ \t]*[^ \t\047"<>|&;()]+/) {
-            tag = substr(line, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", tag)
+        {
+            n = length($0); i = 1
+            while (i <= n) {
+                c = substr($0, i, 1)
+                if (q == "\047") { if (c == "\047") q = ""; i++; continue }
+                if (q != "") {
+                    if (c == "\\") i++
+                    else if (c == q) q = ""
+                    i++; continue
+                }
+                if (c == "\\") { i += 2; continue }
+                if (c == "\047" || c == "\"") { q = c; i++; continue }
+                if (c == "$" && substr($0, i + 1, 1) ~ /[\047"]/) {
+                    q = substr($0, i + 1, 1); i += 2; continue
+                }
+                if (c == "#" && (i == 1 || substr($0, i - 1, 1) ~ /[ \t;&|(]/)) break
+                if (c == "<" && substr($0, i, 3) == "<<<") { i += 3; continue }
+                if (c == "<" && substr($0, i, 2) == "<<") {
+                    rest = substr($0, i + 2); sub(/^-?[ \t]*/, "", rest)
+                    d = substr(rest, 1, 1)
+                    if (d == "\047" || d == "\"") {
+                        rest = substr(rest, 2); e = index(rest, d)
+                        if (e) tag = substr(rest, 1, e - 1)
+                    } else if (match(rest, /^[^ \t\047"<>|&;()]+/)) tag = substr(rest, 1, RLENGTH)
+                    break
+                }
+                i++
+            }
         }
         { print }
     ' "${1:--}"

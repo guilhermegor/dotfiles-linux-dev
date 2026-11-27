@@ -159,3 +159,37 @@ setup() {
     run bash -c "source '$MATCHER' && command_has_git_commit 'git -C \$(touch $marker) commit -m x' || true"
     [ ! -e "$marker" ]
 }
+
+# --- #1147: _strip_heredoc_bodies is quote-aware ----------------------------------------------
+
+_strip() {
+    bash -c "source '$MATCHER' && printf '%s\n' \"\$1\" | _strip_heredoc_bodies" _ "$1"
+}
+
+@test "STRIP: plain heredoc body is dropped, opener and later lines kept" {
+    run _strip $'cat <<EOF\nbody\nEOF\necho after'
+    [ "$output" = $'cat <<EOF\necho after' ]
+}
+
+@test "STRIP: single-quoted <<FAKE decoy does not swallow a real heredoc" {
+    run _strip $'printf \'%s\\n\' \'<<FAKE\'\ngit commit -F- <<\'MSG\'\nsecret body\nMSG\necho after'
+    [ "$output" = $'printf \'%s\\n\' \'<<FAKE\'\ngit commit -F- <<\'MSG\'\necho after' ]
+}
+
+@test "STRIP: double-quoted, escaped and ANSI-C <<FAKE decoys are not openers" {
+    local d
+    for d in '"<<FAKE"' '\<<FAKE' "\$'<<FAKE'" '$"<<FAKE"'; do
+        run _strip "echo $d"$'\nkept line\nFAKE'
+        [ "$output" = "echo $d"$'\nkept line\nFAKE' ]
+    done
+}
+
+@test "STRIP: <<FAKE in a comment is not an opener" {
+    run _strip $'echo hi # <<FAKE\nkept'
+    [ "$output" = $'echo hi # <<FAKE\nkept' ]
+}
+
+@test "STRIP: a quote opened on one line hides <<FAKE on the next" {
+    run _strip $'echo "a\n<<FAKE" b\nkept'
+    [ "$output" = $'echo "a\n<<FAKE" b\nkept' ]
+}
