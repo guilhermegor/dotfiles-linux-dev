@@ -541,6 +541,18 @@ assert_desync_refused() {
     assert_desync_refused "$(printf '%s\n' "# don't look" 'git commit --no-verify -m x')"
 }
 
+@test "an escaped quote inside double quotes cannot make the tokenizer absorb the commit" {
+    cmd="$(printf '%s\n' "printf '%s\n' \"literal \\\"\"" \
+        "git commit --allow-empty -F- <<'MSG'" 'feat: example' '' 'gate-change-ok: reason' 'MSG')"
+    assert_desync_refused "$cmd"
+}
+
+@test "the same escaped-quote shape with a clean message is refused too, not allowed" {
+    cmd="$(printf '%s\n' "printf '%s\n' \"literal \\\"\"" \
+        "git commit --allow-empty -F- <<'MSG'" 'feat: example' 'MSG')"
+    assert_desync_refused "$cmd"
+}
+
 @test "a comment with a semicolon or pipe does not make the views disagree" {
     assert_allowed 'git commit -m x # fine; ok | still fine'
 }
