@@ -42,7 +42,6 @@ assert_closed() {
 @test "#1162 pr_template_guard blocks without jq"                { run_nojq pr_template_guard.sh; assert_closed; }
 @test "#1162 primary_checkout_subagent_guard blocks without jq"  { run_nojq primary_checkout_subagent_guard.sh; assert_closed; }
 
-# Copy one hook to a temp dir WITHOUT its lib/ and run it on an empty payload.
 # #1164: the remaining blocking guards.
 @test "#1164 protected_branch_guard blocks without jq"          { run_nojq protected_branch_guard.sh; assert_closed; }
 @test "#1164 gate_bypass_guard blocks without jq"               { run_nojq gate_bypass_guard.sh; assert_closed; }
@@ -80,16 +79,45 @@ ADVISORY_FAIL_OPEN=(
     "round_dispatch_guard.sh:Stop hook; loop-break needs jq, closed would refuse every stop"
 )
 
-@test "#1164 fail-open jq check only in advisory-allowlisted hooks" {
-    local f name bad=""
-    for f in "$HOOKS"/*.sh; do
-        name="$(basename "$f")"
-        grep -Eq 'command -v jq[^|]*\|\| *exit 0' "$f" || continue
-        printf '%s\n' "${ADVISORY_FAIL_OPEN[@]}" | grep -q "^$name:" || bad="$bad $name"
+# A jq-presence probe (command -v / hash / type / which) whose failure branch is `exit`/`return`
+# with no non-zero code (bare, or 0), as `|| exit 0` or `then exit 0`. A fail-closed line has
+# `|| { ...; exit 2; }` and an `exit 1` is explicit, so neither matches.
+FAIL_OPEN_JQ='(command -v|hash|type|which) jq[^#]*(\|\||then) *(exit|return)( 0)?[ ;]*(;|fi|$)'
+
+# Hooks that fail open on a missing jq, as bare file names, from hooks/ and hooks/lib/.
+fail_open_hooks() {
+    local f
+    for f in "$HOOKS"/*.sh "$HOOKS"/lib/*.sh; do
+        if grep -Eq "$FAIL_OPEN_JQ" "$f"; then printf '%s\n' "${f#"$HOOKS"/}"; fi
     done
+}
+
+# Scope: guarantees every jq-presence probe in hooks/ and hooks/lib/ is either fail-closed or
+# allowlisted. A hook with no probe at all (it just pipes through jq) is not covered here.
+@test "#1164 every fail-open jq probe is on the advisory allowlist" {
+    local name entry listed bad=""
+    while IFS= read -r name; do
+        listed=""
+        for entry in "${ADVISORY_FAIL_OPEN[@]}"; do
+            [[ "$entry" == "$name:"* ]] && listed=1
+        done
+        [ -n "$listed" ] || bad="$bad $name"
+    done < <(fail_open_hooks)
     [ -z "$bad" ] || { echo "fail-open on missing jq, not allowlisted:$bad" >&2; return 1; }
 }
 
+@test "#1164 every allowlisted hook still exists and still fails open" {
+    local entry name stale=""
+    local open
+    open="$(fail_open_hooks)"
+    for entry in "${ADVISORY_FAIL_OPEN[@]}"; do
+        name="${entry%%:*}"
+        printf '%s\n' "$open" | grep -qxF "$name" || stale="$stale $name"
+    done
+    [ -z "$stale" ] || { echo "allowlisted but missing or no longer fail-open:$stale" >&2; return 1; }
+}
+
+# Copy one hook to a temp dir WITHOUT its lib/ and run it on an empty payload.
 run_without_lib() {
     local d
     d="$(mktemp -d)"
