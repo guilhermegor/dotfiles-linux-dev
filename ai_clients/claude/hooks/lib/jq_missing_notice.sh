@@ -11,9 +11,12 @@
 # starts has a fresh parent), so the notice then repeats on every stop. Noisier, never silent.
 # One notice per hook is intended: each names a different guard that is off.
 #
-# The marker lives in $XDG_RUNTIME_DIR (per-user, 0700), else $TMPDIR or /tmp with $UID in the name,
-# and is created with noclobber (O_EXCL), so the create is the test: atomic, and a pre-planted
-# symlink is never followed or truncated.
+# The marker is a DIRECTORY made with mkdir, in $XDG_RUNTIME_DIR (per-user, 0700), else $TMPDIR or
+# /tmp with $UID in the name. mkdir is atomic (the create is the test), opens nothing, and fails on
+# any existing path, so a planted symlink or FIFO can neither be followed nor hang the hook. A
+# failed mkdir counts as "already announced" only when the path is a real directory (not a
+# symlink); anything else was planted or the directory is unwritable, so it announces. Markers are
+# empty directories on a tmpfs and are not cleaned up.
 #
 # Usage (before any jq use):  jq_missing_announce <hook-name>   # payload on stdin
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
@@ -28,9 +31,8 @@ jq_missing_announce() {
 	dir="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"
 	marker="$dir/${hook}.nojq.${sid:-ppid$PPID}.announced"
 	[ -n "${XDG_RUNTIME_DIR:-}" ] || marker="${marker%.announced}.uid${UID:-0}.announced"
-	if ! (set -C; : >"$marker") 2>/dev/null; then
-		# Exists (or is a planted symlink): already announced. Unwritable dir: announce every time.
-		{ [ -e "$marker" ] || [ -L "$marker" ]; } && return 0
+	if ! mkdir "$marker" 2>/dev/null && [ -d "$marker" ] && [ ! -L "$marker" ]; then
+		return 0
 	fi
 	{
 		echo "$hook: jq not found, so this Stop hook is OFF this session (it was a silent no-op before)."

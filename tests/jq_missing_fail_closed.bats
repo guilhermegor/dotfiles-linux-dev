@@ -13,7 +13,7 @@ HOOKS="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks"
 setup_file() {
     NOJQ="$(mktemp -d)"
     local t p
-    for t in bash dirname cat sed grep git tr head tail cut sort env mktemp rm basename readlink; do
+    for t in bash dirname cat sed grep git tr head tail cut sort env mktemp rm basename readlink mkdir; do
         p="$(command -v "$t")" && ln -s "$p" "$NOJQ/$t"
     done
     export NOJQ
@@ -93,7 +93,8 @@ stop_hook_announces_once() {
     done
 }
 
-# The marker is created with noclobber, so a pre-planted symlink is neither followed nor truncated.
+# The marker is a directory made with mkdir: atomic, opens nothing, fails on any existing path. A
+# planted symlink or FIFO is not a genuine marker, so it announces; it is never followed or opened.
 @test "#1169 marker is symlink-safe and lives under XDG_RUNTIME_DIR" {
     local rt victim
     rt="$BATS_TEST_TMPDIR/rt"; victim="$BATS_TEST_TMPDIR/victim"
@@ -101,12 +102,21 @@ stop_hook_announces_once() {
     ln -s "$victim" "$rt/uncommitted_worktree_guard.nojq.s-1.announced"
     run --separate-stderr env PATH="$NOJQ" XDG_RUNTIME_DIR="$rt" "$NOJQ/bash" -c \
         'echo "{\"session_id\":\"s-1\"}" | "$NOJQ/bash" "$1"' _ "$HOOKS/uncommitted_worktree_guard.sh"
-    [ "$status" -eq 0 ]
+    assert_announced uncommitted_worktree_guard.sh
     [ "$(cat "$victim")" = keep ]
     run --separate-stderr env PATH="$NOJQ" XDG_RUNTIME_DIR="$rt" "$NOJQ/bash" -c \
         'echo "{\"session_id\":\"s-2\"}" | "$NOJQ/bash" "$1"' _ "$HOOKS/uncommitted_worktree_guard.sh"
     assert_announced uncommitted_worktree_guard.sh
-    [ -e "$rt/uncommitted_worktree_guard.nojq.s-2.announced" ]
+    [ -d "$rt/uncommitted_worktree_guard.nojq.s-2.announced" ]
+}
+
+@test "#1169 a FIFO planted at the marker path never hangs the hook" {
+    local rt
+    rt="$BATS_TEST_TMPDIR/rt"; mkdir "$rt"
+    mkfifo "$rt/uncommitted_worktree_guard.nojq.s-1.announced"
+    run --separate-stderr timeout 10 env PATH="$NOJQ" XDG_RUNTIME_DIR="$rt" "$NOJQ/bash" -c \
+        'echo "{\"session_id\":\"s-1\"}" | "$NOJQ/bash" "$1"' _ "$HOOKS/uncommitted_worktree_guard.sh"
+    assert_announced uncommitted_worktree_guard.sh
 }
 
 # A hook copied without lib/ must not go back to a silent exit 0.

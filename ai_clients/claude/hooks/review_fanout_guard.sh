@@ -77,9 +77,10 @@
 # head of the merge queue as dispatchable and excludes the rest by name — a review of any
 # other PR is voided by the merge ahead of it. Decided in the planner; this hook only says so.
 #
-# Fails OPEN on everything it cannot resolve (no jq, no gh, no python3, no repo, no
+# Fails OPEN on everything it cannot resolve (no gh, no python3, no repo, no
 # transcript, a session that never ran the loop) — a guard that blocks on unrelated sessions
-# gets disabled, same rule as every sibling Stop hook here.
+# gets disabled, same rule as every sibling Stop hook here. No jq is said out loud once per
+# session instead (lib/jq_missing_notice.sh, #1169).
 set -u
 
 GIT=/usr/bin/git

@@ -39,9 +39,10 @@
 # is the exact defect dotfiles-linux-dev#433 is about — a gate reporting its own
 # blindness as OK.
 #
-# Fails OPEN on everything else it cannot resolve (no jq, no transcript, a
-# session that never ran the loop) — a guard that blocks on unrelated sessions
-# gets disabled, same rule as every sibling Stop hook here.
+# Fails OPEN on everything else it cannot resolve (no transcript, a session that
+# never ran the loop) — a guard that blocks on unrelated sessions gets disabled,
+# same rule as every sibling Stop hook here. No jq is the one case that is said
+# out loud: one notice per session, then quiet (lib/jq_missing_notice.sh, #1169).
 set -u
 
 # No jq: announce once per session, never block (#1169; exit 2 would loop, see lib/jq_missing_notice.sh).
