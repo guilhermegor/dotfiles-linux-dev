@@ -541,6 +541,27 @@ _source_found() {
     _source_found $'>|f git commit -F - <<\'EOF\'\nmsg\nEOF' stdin
 }
 
+@test "GAP8: a leading redirection plus a later >| or 2>&1 is still one commit" {
+    local c
+    for c in '>o git commit -m x 2>|e' '2>&1 git commit -m x >|e' '>|f git commit -m x 2>|e'; do
+        echo "case: $c"
+        run bash -c 'source "$1"; commit_inline_messages "$2"; echo "sets=${#COMMIT_MESSAGE_SETS[@]}"' _ "$MATCHER" "$c"
+        [[ "$output" == *"sets=1"* ]]
+    done
+}
+
+@test "GAP8: a leading redirection plus a later >| gives COMMIT_SOURCE_FOUND=1" {
+    _source_found $'>o git commit -F - 2>|e <<\'EOF\'\nmsg\nEOF' stdin
+    _source_found $'2>&1 git commit -F - >|e <<\'EOF\'\nmsg\nEOF' stdin
+}
+
+@test "GAP8: clobber mode is not visible inside a pass-2 callback" {
+    run bash -c 'source "$1"
+        cb() { echo "clobber=${_CCM_CLOBBER:-unset}"; }
+        _for_each_command ">|f git commit -m x" cb' _ "$MATCHER"
+    [[ "$output" != *"clobber=1"* ]]
+}
+
 @test "GAP8: a quoted word that looks like a redirection does not hide the real commit after it" {
     _strip_sees_commit "'>f git' commit --no-verify -m x; >|f git commit --no-verify -m x"
 }
