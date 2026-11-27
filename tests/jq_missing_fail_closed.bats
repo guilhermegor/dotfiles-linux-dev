@@ -6,6 +6,8 @@
 #
 # PATH is a directory of symlinks to bash + common coreutils, deliberately without jq.
 
+bats_require_minimum_version 1.5.0
+
 HOOKS="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks"
 
 setup_file() {
@@ -22,12 +24,12 @@ teardown_file() {
 }
 
 run_nojq() {
-    run env PATH="$NOJQ" "$NOJQ/bash" -c 'echo "{}" | "$NOJQ/bash" "$1"' _ "$HOOKS/$1"
+    run --separate-stderr env PATH="$NOJQ" "$NOJQ/bash" -c 'echo "{}" | "$NOJQ/bash" "$1"' _ "$HOOKS/$1"
 }
 
 assert_closed() {
     [ "$status" -eq 2 ]
-    [[ "$output" == *"jq not found"* ]]
+    [[ "$stderr" == *"jq not found"* ]]
 }
 
 @test "#1162 branch_requires_issue_guard blocks without jq"      { run_nojq branch_requires_issue_guard.sh; assert_closed; }
