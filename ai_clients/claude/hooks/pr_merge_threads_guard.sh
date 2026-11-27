@@ -56,9 +56,10 @@
 set -u
 _gb_dir="${BASH_SOURCE[0]%/*}" # no slash (sourced by bare filename): the dir is cwd
 [[ "$_gb_dir" == "${BASH_SOURCE[0]}" ]] && _gb_dir=.
-source "$_gb_dir/lib/gh_budget.sh"
+source "$_gb_dir/lib/gh_budget.sh" || { echo "BLOCKED: cannot source lib/gh_budget.sh (missing or unreadable) - guard fails closed (#1160)" >&2; exit 2; }
 
-command -v jq >/dev/null 2>&1 || exit 0
+command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162). Install jq from a terminal outside this session (e.g. sudo apt install jq)." >&2; exit 2; }
+# Without gh, the `gh pr merge` this guards cannot run either, so fail-open is intended here.
 command -v gh >/dev/null 2>&1 || exit 0
 
 # Prefixing the command makes the guard stand aside, for the rare deliberate case. Covers BOTH

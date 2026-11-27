@@ -18,7 +18,7 @@
 # Escape hatch: prefix the command with ALLOW_PRIMARY_CHECKOUT_MOVE=1.
 set -u
 
-command -v jq >/dev/null 2>&1 || exit 0
+command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162). Install jq from a terminal outside this session (e.g. sudo apt install jq)." >&2; exit 2; }
 
 ESCAPE_HATCH='ALLOW_PRIMARY_CHECKOUT_MOVE=1'
 # `/` in the boundary class admits an absolute executable (`/usr/bin/git`); group 3 is the -C path.

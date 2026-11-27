@@ -67,7 +67,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/gh_body_guard_common.sh
-source "$SCRIPT_DIR/lib/gh_body_guard_common.sh"
+source "$SCRIPT_DIR/lib/gh_body_guard_common.sh" || { echo "BLOCKED: cannot source lib/gh_body_guard_common.sh (missing or unreadable) - guard fails closed (#1160)" >&2; exit 2; }
 # A missing helper (partial deploy) must not read as "every body is compliant": without
 # evaluate_template nothing is checked. This runs on EVERY Bash call, so only a matched issue
 # write is refused (below), never unrelated commands.
@@ -75,8 +75,8 @@ SPEC_LIB_OK=1
 # shellcheck source=lib/issue_spec_complete.sh
 source "$SCRIPT_DIR/lib/issue_spec_complete.sh" 2>/dev/null || SPEC_LIB_OK=0
 
-# Fail open if jq (used to parse the hook payload) is unavailable.
-command -v jq >/dev/null 2>&1 || exit 0
+# Fail CLOSED if jq (used to parse the hook payload) is unavailable (#1162).
+command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162). Install jq from a terminal outside this session (e.g. sudo apt install jq)." >&2; exit 2; }
 
 main() {
     local payload tool command root body_source labels body_path body_base=""

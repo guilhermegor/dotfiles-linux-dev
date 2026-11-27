@@ -18,13 +18,13 @@
 
 set -u
 
-# jq parses the hook payload; without it we cannot inspect the command, so fail open.
+# This hook is a REWRITER, not a gate: it never blocks. Without jq (or the matcher lib) the message is simply not wrapped, which is the safe direction, so it stays fail-open (#1162).
 command -v jq >/dev/null 2>&1 || exit 0
 
 # Shared with commit_title_length_guard.sh and commit_secret_guard.sh (dotfiles-linux-dev#324) — one
 # `git commit` detection regex, not three that can drift apart.
 # shellcheck source=lib/commit_command_matcher.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh" || { echo "BLOCKED: cannot source lib/commit_command_matcher.sh (missing or unreadable) - guard fails closed (#1160)" >&2; exit 2; }
+source "$(dirname "${BASH_SOURCE[0]}")/lib/commit_command_matcher.sh" || exit 0
 
 # 72, not the repo's gitlint setting: 72 is safe under both the git convention (72) and gitlint's
 # default (80), so the hook never has to read each repo's .gitlint to pick a target.
