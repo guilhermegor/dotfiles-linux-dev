@@ -56,14 +56,56 @@ _file_has_gate_line() {
     [[ -f "$1" && -r "$1" ]] && grep -qiE '^[[:space:]]*gate-change-ok:' "$1"
 }
 
-# _commit_file_path FILE: FILE as the commit would resolve it, from its own `git -C` directory
-# and a preceding absolute `cd`, falling back to the payload cwd.
+# _has_expansion WORD: WORD carries shell expansion or a glob, so its real value is unknowable here.
+_has_expansion() {
+    [[ "$1" == *[\$\`~*?\[]* ]]
+}
+
+# _note_cd: for a `cd` simple command (global _CMD_WORDS), move the tracked directory the way the
+# shell will: a literal absolute path replaces it, a literal relative path is appended to it.
+# `cd` with no argument, `cd -`, pushd/popd or an expanded path make it unknown until the next
+# literal absolute `cd`.
+_note_cd() {
+    local first="${_CMD_WORDS[0]:-}" target
+    [[ "$first" == cd || "$first" == pushd || "$first" == popd ]] || return 0
+    target="${_CMD_WORDS[1]:-}"
+    [[ "$target" == -- ]] && target="${_CMD_WORDS[2]:-}"
+    if [[ "$first" != cd || -z "$target" || "$target" == - ]] || _has_expansion "$target"; then
+        _GB_DIR_OK=0
+    elif [[ "$target" == /* ]]; then
+        _GB_DIR="$target"
+        _GB_DIR_OK=1
+    elif ((_GB_DIR_OK)) && [[ -n "$_GB_DIR" ]]; then
+        _GB_DIR="$_GB_DIR/$target"
+    else
+        _GB_DIR_OK=0
+    fi
+}
+
+# _commit_file_path FILE: sets _GB_FILE to FILE as this commit resolves it: an absolute path as is,
+# a relative one from the tracked directory plus the commit's own `git -C`. Returns 1 when that
+# directory cannot be known, so the caller fails closed.
 _commit_file_path() {
-    local f="$1" d="$COMMIT_COMMAND_GIT_DIR" base="${COMMIT_CD_DIR:-$_GB_CWD}"
-    [[ "$f" == /* ]] && { printf '%s' "$f"; return; }
-    [[ -z "$d" ]] && d="$base"
-    [[ "$d" == /* || -z "$base" ]] || d="$base/$d"
-    printf '%s/%s' "$d" "$f"
+    local f="$1" d="$_GB_DIR" c="$COMMIT_COMMAND_GIT_DIR"
+    _GB_FILE="$f"
+    [[ "$f" == /* ]] && return 0
+    ((_GB_DIR_OK)) && [[ -n "$d" ]] || return 1
+    if [[ -n "$c" ]]; then
+        _has_expansion "$c" && return 1
+        if [[ "$c" == /* ]]; then d="$c"; else d="$d/$c"; fi
+    fi
+    _GB_FILE="$d/$f"
+}
+
+block_unresolved() {
+    {
+        echo "BLOCKED: cannot tell which commit message file this git commit reads: $1"
+        echo
+        echo "The guard must read the file to check it for a gate-change-ok: line, and the path is"
+        echo "relative to a directory (cd, pushd, git -C) it cannot resolve statically. Pass an"
+        echo "absolute -F path, which never depends on the directory, and re-run the SAME commit."
+    } >&2
+    exit 2
 }
 
 # _scan_words: callback for _for_each_command, run on the words of ONE simple command. Words come
@@ -71,6 +113,7 @@ _commit_file_path() {
 # a quoted commit message stays one word that can never equal a flag.
 _scan_words() {
     local i w git_at=-1 sub="" skip_at=-1
+    _note_cd
     for ((i = 0; i < ${#_CMD_WORDS[@]}; i++)); do
         w="${_CMD_WORDS[i]}"
         [[ "$w" == GATE_CHANGE_OK=* ]] && block "GATE_CHANGE_OK="
@@ -113,9 +156,13 @@ _scan_commit_message() {
         if [[ "$v" == - ]]; then
             # `-F -`: the heredoc body was stripped from the parse; scan the raw command.
             _msg_has_gate_line "$_GB_RAW" && block "gate-change-ok: line in a commit message"
-        elif [[ -n "$v" && "$v" != *'$'* && "$v" != *'`'* ]]; then
-            v="$(_commit_file_path "$v")"
+        elif [[ "$v" == /* ]]; then
             _file_has_gate_line "$v" && block "gate-change-ok: line in commit message file $v"
+        else
+            _has_expansion "$v" && block_unresolved "$v"
+            _commit_file_path "$v" || block_unresolved "$v"
+            [[ -f "$_GB_FILE" && -r "$_GB_FILE" ]] || block_unresolved "$v ($_GB_FILE is not a readable file)"
+            _file_has_gate_line "$_GB_FILE" && block "gate-change-ok: line in commit message file $_GB_FILE"
         fi
     done
     return 0
@@ -133,7 +180,8 @@ main() {
 
     # A `bash|sh <file>.sh` command runs its commits out of sight: append the script's text.
     command="$(commit_expand_script "$command")"
-    commit_cd_dir "$command"
+    _GB_DIR="$_GB_CWD"
+    _GB_DIR_OK=1
     _for_each_command "$(printf '%s' "$command" | _strip_heredoc_bodies)" _scan_words
     exit 0
 }

@@ -172,6 +172,63 @@ assert_allowed() {
     assert_refused 'git commit -F ok.txt && git commit -F bad.txt'
 }
 
+# --- relative -F resolution: apply every literal cd in order, otherwise fail closed ----------
+
+@test "refuses a relative -F bypass file after a relative cd" {
+    mkdir sub
+    printf 'chore: x\n\ngate-change-ok: because\n' > sub/msg.txt
+    assert_refused 'cd sub && git commit -F msg.txt'
+}
+
+@test "applies two chained cds in order" {
+    mkdir -p a/b
+    printf 'chore: x\n\ngate-change-ok: because\n' > a/b/msg.txt
+    assert_refused 'cd a && cd b && git commit -F msg.txt'
+}
+
+@test "allows a relative -F ordinary file after chained cds" {
+    mkdir -p a/b
+    printf 'feat: fine\n' > a/b/msg.txt
+    assert_allowed 'cd a && cd b && git commit -F msg.txt'
+}
+
+@test "fails closed on a relative -F after a cd with shell expansion" {
+    printf 'feat: fine\n' > msg.txt
+    run run_guard 'cd "$X" && git commit -F msg.txt'
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"absolute -F path"* ]]
+}
+
+@test "fails closed on a relative -F after pushd or cd -" {
+    printf 'feat: fine\n' > msg.txt
+    run run_guard 'pushd sub && git commit -F msg.txt'
+    [ "$status" -eq 2 ]
+    run run_guard 'cd - && git commit -F msg.txt'
+    [ "$status" -eq 2 ]
+}
+
+@test "fails closed on a relative -F that does not resolve to a readable file" {
+    run run_guard 'git commit -F missing.txt'
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"absolute -F path"* ]]
+}
+
+@test "checks an absolute -F path even after a cd with shell expansion" {
+    printf 'chore: x\n\ngate-change-ok: because\n' > "$TEST_TMP/abs.txt"
+    assert_refused "cd \"\$X\" && git commit -F $TEST_TMP/abs.txt"
+}
+
+@test "allows an absolute ordinary -F path after a cd with shell expansion" {
+    printf 'feat: fine\n' > "$TEST_TMP/abs.txt"
+    assert_allowed "cd \"\$X\" && git commit -F $TEST_TMP/abs.txt"
+}
+
+@test "fails closed on a relative -F with an expanded git -C" {
+    printf 'feat: fine\n' > msg.txt
+    run run_guard 'git -C "$D" commit -F msg.txt'
+    [ "$status" -eq 2 ]
+}
+
 @test "allows non-Bash tools and empty commands" {
     run bash -c "jq -nc '{tool_name:\"Read\",tool_input:{file_path:\"x\"}}' | '$GUARD'"
     [ "$status" -eq 0 ]
