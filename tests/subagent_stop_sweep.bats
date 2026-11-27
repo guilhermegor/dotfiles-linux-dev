@@ -1060,3 +1060,15 @@ counting_section() { echo x >> "$CALLS"; echo "section output ${1:-ok}"; }
     [[ "$ctx" == *"[12] kanban reconcile"*$'\n'"    UNKNOWN — wall-clock budget spent"* ]]
     [[ "$ctx" != *"should not run"* ]]
 }
+
+@test "main(): preflight time counts against the wall-clock budget (#1144)" {
+    gh_budget_gate() { sleep 2; return 0; }
+    repo_slug() { echo o/r; }
+    default_branch() { echo main; }
+    sweep_worktrees() { echo "worktrees should not run"; }
+    export SWEEP_WALL_CLOCK_BUDGET=1 SWEEP_CACHE_TTL=0
+    run main <<<"{\"cwd\":\"$REPO\"}"
+    ctx="$(jq -r '.hookSpecificOutput.additionalContext' <<<"$output")"
+    [[ "$ctx" == *"[1] worktree residue"*$'\n'"    UNKNOWN — wall-clock budget spent"* ]]
+    [[ "$ctx" != *"should not run"* ]]
+}

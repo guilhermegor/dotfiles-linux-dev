@@ -660,6 +660,7 @@ sweep_begin() {
 
 main() {
 	local payload cwd repo owner name db roster_file report agent_type
+	sweep_started=$SECONDS # before the fetch and gate, so preflight time counts (#1144)
 	if [ ! -t 0 ]; then payload="$(cat)"; else payload=""; fi
 
 	# Gate on agent type FIRST, before any git/gh call — a silenced stop should cost nothing
@@ -695,7 +696,6 @@ $(sweep_stale_cards_gated "$cwd")"
 		exit 1
 	fi
 
-	sweep_started=$SECONDS
 	report="$(
 		echo "── sweep $(date -u '+%H:%M UTC') — $repo ──"
 		sweep_begin "[1] worktree residue" && sweep_worktrees "$cwd"
