@@ -82,12 +82,13 @@ _BOUNDARY=$'\x1f'
 # over-read, never under-read). The shell itself would reject such a command anyway.
 _tokenize_segment() {
     local segment="$1" split="${2:-}" char quote='' current='' started=0 i
-    local qpos=0 qcur='' qn=0 prefix_words=() was soft_keep=() sidx
+    local qpos=0 qcur='' qn=0 prefix_words=() gt=0 prev_gt soft_keep=() sidx
     _SEGMENT_WORDS=()
     _SEGMENT_SOFT=()
 
     for ((i = 0; i < ${#segment}; i++)); do
         char="${segment:i:1}"
+        prev_gt=$gt gt=0   # gt: this char is an unquoted, unescaped `>` (set in the last branch)
         if [[ "$quote" == A ]]; then
             # $'..': a backslash escapes the next char, only an unescaped ' closes
             if [[ "$char" == "\\" ]]; then i=$((i + 1)); current+="${segment:i:1}"
@@ -110,18 +111,19 @@ _tokenize_segment() {
         elif [[ "$char" == '#' ]] && ((!started)); then
             while ((i + 1 < ${#segment})) && [[ "${segment:i+1:1}" != $'\n' ]]; do i=$((i + 1)); done
         elif [[ -n "$split" && ( "$char" == [\;\&\|] || "$char" == $'\n' ) ]]; then
-            was="$current"
             ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
-            # A `|` right after `>` is the clobber redirect `>|`, not a pipe (#1158). It still cuts
-            # here, as it always did; where it cut is kept out of band (word index of the boundary)
-            # so _for_each_command can put the command back together.
-            [[ "$char" == '|' && "$was" == *'>' ]] && _SEGMENT_SOFT+=("${#_SEGMENT_WORDS[@]}")
+            # A `|` right after an unquoted, unescaped `>` is the clobber redirect `>|`, not a pipe
+            # (#1158). It still cuts here, as it always did; where it cut is kept out of band (word
+            # index of the boundary) so _for_each_command can put the command back together. The
+            # flag, not the word text: a quoted `'a>'|x` is a real pipe.
+            [[ "$char" == '|' ]] && ((prev_gt)) && _SEGMENT_SOFT+=("${#_SEGMENT_WORDS[@]}")
             _SEGMENT_WORDS+=("$_BOUNDARY")
         elif [[ "$char" == [[:space:]] ]]; then
             ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
         else
             current+="$char"
             started=1
+            [[ "$char" == '>' ]] && gt=1
         fi
     done
 
@@ -373,7 +375,8 @@ _strip_heredoc_bodies() {
     # is not an opener. Quote state carries across lines. $'..' is its own state ("A"): there a
     # backslash escapes the next char, so `\'` does not close it. Fail closed: a quote still open at
     # end of input means the scan cannot be trusted (a desync may have invented an opener), so the
-    # WHOLE input is printed unstripped and the guards read MORE text, never less.
+    # WHOLE input is printed unstripped and the guards read MORE text, never less. The accepted
+    # cost: a legitimate heredoc body read as commands can over-block (#1158's fail-closed cases).
     # $(..) (#1148 review): inside it quoting restarts at the top level, so `"$(cat <<EOF` still
     # opens a heredoc; push/pop save the enclosing quote state and the paren depth. `$((..))` is
     # arithmetic (ar): its `<<` is a shift, never an opener. An unbalanced `$(` fails closed too.
