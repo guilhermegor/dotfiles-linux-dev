@@ -508,6 +508,39 @@ _has_commit() {
     _has_commit '2>| f git commit -m x'
 }
 
+# The >| re-reading must never make a commit appear twice: callbacks that count commits would
+# read the second one as another commit (COMMIT_SOURCE_FOUND fell to 0, messages doubled).
+_source_found() {
+    run bash -c 'source "$1"; commit_source_dir "$2" "$3"; echo "found=$COMMIT_SOURCE_FOUND"' _ "$MATCHER" "$1" "$2"
+    [[ "$output" == *"found=1"* ]]
+}
+
+@test "GAP8: >| after a stdin commit does not double it (2>|)" {
+    _source_found $'git commit -F - 2>|/tmp/err <<\'EOF\'\nmsg\nEOF' stdin
+}
+
+@test "GAP8: >| after a stdin commit does not double it (>|)" {
+    _source_found $'git commit -F - >|/tmp/o <<\'EOF\'\nmsg\nEOF' stdin
+}
+
+@test "GAP8: >| inside a commit's own message does not double it" {
+    _source_found "git commit -F msg.txt -m 'a >| b'" file
+}
+
+@test "GAP8: >| inside a commit's message gives one message set, not two" {
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "sets=${#COMMIT_MESSAGE_SETS[@]}"' _ "$MATCHER" "git commit -m 'a >| b'"
+    [[ "$output" == *"sets=1"* ]]
+}
+
+@test "GAP8: >| inside a commit's message does not make a later cd read as a cd before it" {
+    run bash -c 'source "$1"; commit_cd_dir "$2"; echo "ok=$COMMIT_CD_OK"' _ "$MATCHER" "git commit -m 'a >| b'; cd /x"
+    [[ "$output" == *"ok=1"* ]]
+}
+
+@test "GAP8: a commit found only by the >| re-reading still counts for the source reader" {
+    _source_found $'>|f git commit -F - <<\'EOF\'\nmsg\nEOF' stdin
+}
+
 @test "GAP8: a redirection before a non-git command word is still not a commit" {
     local c
     for c in '>/dev/null echo git commit' 'git status >/dev/null' '>f cat git commit' '2>&1 echo "git commit"'; do
