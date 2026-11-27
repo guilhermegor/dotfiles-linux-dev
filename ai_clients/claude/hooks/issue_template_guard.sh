@@ -67,7 +67,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/gh_body_guard_common.sh
-source "$SCRIPT_DIR/lib/gh_body_guard_common.sh"
+source "$SCRIPT_DIR/lib/gh_body_guard_common.sh" || { echo "BLOCKED: cannot source lib/gh_body_guard_common.sh (missing or unreadable) - guard fails closed (#1160)" >&2; exit 2; }
 # A missing helper (partial deploy) must not read as "every body is compliant": without
 # evaluate_template nothing is checked. This runs on EVERY Bash call, so only a matched issue
 # write is refused (below), never unrelated commands.

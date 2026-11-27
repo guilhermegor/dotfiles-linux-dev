@@ -42,6 +42,7 @@ assert_closed() {
 @test "#1162 pr_template_guard blocks without jq"                { run_nojq pr_template_guard.sh; assert_closed; }
 @test "#1162 primary_checkout_subagent_guard blocks without jq"  { run_nojq primary_checkout_subagent_guard.sh; assert_closed; }
 
+# Copy one hook to a temp dir WITHOUT its lib/ and run it on an empty payload.
 # #1164: the remaining blocking guards.
 @test "#1164 protected_branch_guard blocks without jq"          { run_nojq protected_branch_guard.sh; assert_closed; }
 @test "#1164 gate_bypass_guard blocks without jq"               { run_nojq gate_bypass_guard.sh; assert_closed; }
@@ -79,12 +80,40 @@ ADVISORY_FAIL_OPEN=(
     [ -z "$bad" ] || { echo "fail-open on missing jq, not allowlisted:$bad" >&2; return 1; }
 }
 
-@test "#1160 pr_merge_threads_guard blocks when lib/gh_budget.sh is missing" {
+run_without_lib() {
     local d
     d="$(mktemp -d)"
-    cp "$HOOKS/pr_merge_threads_guard.sh" "$d/"
-    run bash -c 'echo "{}" | bash "$1"' _ "$d/pr_merge_threads_guard.sh"
+    cp "$HOOKS/$1" "$d/"
+    run --separate-stderr bash -c 'echo "{}" | bash "$1"' _ "$d/$1"
     rm -rf "$d"
+}
+
+@test "#1160 pr_merge_threads_guard blocks when lib/gh_budget.sh is missing" {
+    run_without_lib pr_merge_threads_guard.sh
     [ "$status" -eq 2 ]
-    [[ "$output" == *gh_budget.sh* ]]
+    [[ "$stderr" == *"BLOCKED: cannot source lib/gh_budget.sh"* ]]
+}
+
+@test "#1160 pr_template_guard blocks when lib/gh_body_guard_common.sh is missing" {
+    run_without_lib pr_template_guard.sh
+    [ "$status" -eq 2 ]
+    [[ "$stderr" == *"BLOCKED: cannot source lib/gh_body_guard_common.sh"* ]]
+}
+
+@test "#1160 issue_template_guard blocks when lib/gh_body_guard_common.sh is missing" {
+    run_without_lib issue_template_guard.sh
+    [ "$status" -eq 2 ]
+    [[ "$stderr" == *"BLOCKED: cannot source lib/gh_body_guard_common.sh"* ]]
+}
+
+# commit_body_wrap is a REWRITER, never a gate: without jq or its matcher lib it must let the
+# commit through unwrapped (exit 0), never block every commit.
+@test "#1162 commit_body_wrap stays fail-open without jq" {
+    run_nojq commit_body_wrap.sh
+    [ "$status" -eq 0 ]
+}
+
+@test "#1160 commit_body_wrap stays fail-open without its matcher lib" {
+    run_without_lib commit_body_wrap.sh
+    [ "$status" -eq 0 ]
 }
