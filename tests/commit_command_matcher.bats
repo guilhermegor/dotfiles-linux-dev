@@ -194,6 +194,31 @@ _strip() {
     [ "$output" = $'echo "a\n<<FAKE" b\nkept' ]
 }
 
+@test "STRIP: a heredoc inside \$(..) inside double quotes is stripped (#1148 review)" {
+    run _strip $'git commit -m "$(cat <<\'EOF\'\nfix: x "quoted" --no-verify\nEOF\n)"\necho after'
+    [ "$output" = $'git commit -m "$(cat <<\'EOF\'\n)"\necho after' ]
+}
+
+@test "STRIP: a backslash-quoted delimiter loses the backslash (#1148 review)" {
+    run _strip $'cat <<\\EOF\nbody\nEOF\necho after'
+    [ "$output" = $'cat <<\\EOF\necho after' ]
+}
+
+@test "STRIP: << inside \$((..)) arithmetic is not an opener (#1148 review)" {
+    run _strip $'echo $((1<<2))\nkept\ngit commit -m x'
+    [ "$output" = $'echo $((1<<2))\nkept\ngit commit -m x' ]
+}
+
+@test "STRIP: << inside \$((..)) in double quotes is not an opener either" {
+    run _strip $'echo "$((1<<2))"\nkept'
+    [ "$output" = $'echo "$((1<<2))"\nkept' ]
+}
+
+@test "STRIP: an unbalanced \$( fails closed and prints the whole input" {
+    run _strip $'echo $(cat\ncat <<EOF\nbody\nEOF'
+    [ "$output" = $'echo $(cat\ncat <<EOF\nbody\nEOF' ]
+}
+
 @test "STRIP: an escaped quote inside \$'..' does not close it early" {
     run _strip $'echo $\'it\\\'s <<FAKE\'\ngit commit -F- <<\'MSG\'\nbody\nMSG\necho after'
     [ "$output" = $'echo $\'it\\\'s <<FAKE\'\ngit commit -F- <<\'MSG\'\necho after' ]

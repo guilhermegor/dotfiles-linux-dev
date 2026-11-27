@@ -272,7 +272,15 @@ _strip_heredoc_bodies() {
     # backslash escapes the next char, so `\'` does not close it. Fail closed: a quote still open at
     # end of input means the scan cannot be trusted (a desync may have invented an opener), so the
     # WHOLE input is printed unstripped and the guards read MORE text, never less.
+    # $(..) (#1148 review): inside it quoting restarts at the top level, so `"$(cat <<EOF` still
+    # opens a heredoc; push/pop save the enclosing quote state and the paren depth. `$((..))` is
+    # arithmetic (ar): its `<<` is a shift, never an opener. An unbalanced `$(` fails closed too.
     awk '
+        function push(i) {
+            depth++; sq[depth] = q; spd[depth] = pd; sar[depth] = ar
+            q = ""; pd = 1; ar = (substr($0, i + 2, 1) == "(")
+        }
+        function pop() { q = sq[depth]; pd = spd[depth]; ar = sar[depth]; depth-- }
         { raw[NR] = $0 }
         tag != "" { t = $0; sub(/^\t+/, "", t); if (t == tag) tag = ""; next }
         {
@@ -289,8 +297,12 @@ _strip_heredoc_bodies() {
                 if (q != "") {
                     if (c == "\\") i++
                     else if (c == q) q = ""
+                    else if (c == "$" && substr($0, i + 1, 1) == "(") { push(i); i++ }
                     i++; continue
                 }
+                if (c == "$" && substr($0, i + 1, 1) == "(") { push(i); i += 2; continue }
+                if (depth > 0 && c == "(") pd++
+                if (depth > 0 && c == ")") { pd--; if (pd == 0) pop(); i++; continue }
                 if (c ~ /[ \t;&|(]/) bw = 1
                 if (c == "\\") { i += 2; continue }
                 if (c == "\047" || c == "\"") { q = c; i++; continue }
@@ -298,6 +310,7 @@ _strip_heredoc_bodies() {
                     q = substr($0, i + 1, 1); if (q == "\047") q = "A"; i += 2; continue
                 }
                 if (c == "#" && pb) break
+                if (c == "<" && ar) { i++; continue }
                 if (c == "<" && substr($0, i, 3) == "<<<") { i += 3; continue }
                 if (c == "<" && substr($0, i, 2) == "<<") {
                     rest = substr($0, i + 2); sub(/^-?[ \t]*/, "", rest)
@@ -305,14 +318,16 @@ _strip_heredoc_bodies() {
                     if (d == "\047" || d == "\"") {
                         rest = substr(rest, 2); e = index(rest, d)
                         if (e) tag = substr(rest, 1, e - 1)
-                    } else if (match(rest, /^[^ \t\047"<>|&;()]+/)) tag = substr(rest, 1, RLENGTH)
+                    } else if (match(rest, /^[^ \t\047"<>|&;()]+/)) {
+                        tag = substr(rest, 1, RLENGTH); gsub(/\\/, "", tag)   # <<\EOF quotes the delimiter
+                    }
                     break
                 }
                 i++
             }
         }
         { out[++m] = $0 }
-        END { if (q != "") for (k = 1; k <= NR; k++) print raw[k]; else for (k = 1; k <= m; k++) print out[k] }
+        END { if (q != "" || depth > 0) for (k = 1; k <= NR; k++) print raw[k]; else for (k = 1; k <= m; k++) print out[k] }
     ' "${1:--}"
 }
 
