@@ -27,7 +27,7 @@
 
 set -u
 
-command -v jq >/dev/null 2>&1 || exit 0
+command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162)" >&2; exit 2; }
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 QWEN_DIR="$HOME/.qwen"

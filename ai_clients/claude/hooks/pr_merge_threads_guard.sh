@@ -58,7 +58,7 @@ _gb_dir="${BASH_SOURCE[0]%/*}" # no slash (sourced by bare filename): the dir is
 [[ "$_gb_dir" == "${BASH_SOURCE[0]}" ]] && _gb_dir=.
 source "$_gb_dir/lib/gh_budget.sh"
 
-command -v jq >/dev/null 2>&1 || exit 0
+command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162)" >&2; exit 2; }
 command -v gh >/dev/null 2>&1 || exit 0
 
 # Prefixing the command makes the guard stand aside, for the rare deliberate case. Covers BOTH

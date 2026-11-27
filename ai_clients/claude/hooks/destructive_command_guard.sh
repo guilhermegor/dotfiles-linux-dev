@@ -15,8 +15,8 @@
 
 set -u
 
-# jq parses the hook payload; without it we cannot inspect the command, so fail open.
-command -v jq >/dev/null 2>&1 || exit 0
+# jq parses the hook payload; without it we cannot inspect the command, so fail CLOSED (#1162).
+command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162)" >&2; exit 2; }
 
 # Optional strip of an `rtk` / `rtk proxy` prefix so the patterns below match either form. RTK
 # rewrites at execution time, but the model is told to write `rtk git ...` explicitly, so both

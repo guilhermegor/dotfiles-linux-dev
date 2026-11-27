@@ -17,8 +17,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/gh_body_guard_common.sh
 source "$SCRIPT_DIR/lib/gh_body_guard_common.sh"
 
-# Fail open if jq (used to parse the hook payload) is unavailable.
-command -v jq >/dev/null 2>&1 || exit 0
+# Fail CLOSED if jq (used to parse the hook payload) is unavailable (#1162).
+command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162)" >&2; exit 2; }
 
 main() {
     local payload tool command template body_source header line
