@@ -193,3 +193,30 @@ _strip() {
     run _strip $'echo "a\n<<FAKE" b\nkept'
     [ "$output" = $'echo "a\n<<FAKE" b\nkept' ]
 }
+
+@test "STRIP: an escaped quote inside \$'..' does not close it early" {
+    run _strip $'echo $\'it\\\'s <<FAKE\'\ngit commit -F- <<\'MSG\'\nbody\nMSG\necho after'
+    [ "$output" = $'echo $\'it\\\'s <<FAKE\'\ngit commit -F- <<\'MSG\'\necho after' ]
+}
+
+@test "STRIP: a quote still open at end of input prints the whole input unstripped" {
+    run _strip $'cat <<EOF\nbody\nEOF\necho "unterminated'
+    [ "$output" = $'cat <<EOF\nbody\nEOF\necho "unterminated' ]
+}
+
+# --- #1147: the tokenizer skips comments and fails closed on an open quote --------------------
+
+@test "TOKENIZER: an apostrophe in a # comment does not swallow the next command" {
+    run bash -c "source '$MATCHER' && command_has_git_commit \$'# don\\'t look\ngit commit -m x'"
+    [ "$status" -eq 0 ]
+}
+
+@test "TOKENIZER: a plain apostrophe comment line before a commit is seen" {
+    run bash -c "source '$MATCHER' && command_has_git_commit \$'echo hi # it\\'s\ngit commit -m x'"
+    [ "$status" -eq 0 ]
+}
+
+@test "TOKENIZER: an unterminated quote does not hide a later commit" {
+    run bash -c "source '$MATCHER' && command_has_git_commit \$'echo \"oops\ngit commit -m x'"
+    [ "$status" -eq 0 ]
+}

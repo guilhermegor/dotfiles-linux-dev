@@ -74,8 +74,15 @@ COMMIT_COMMAND_GIT_DIR=""
 # script body) can be tokenized in one pass with quoted bodies kept intact (#961). Without it the
 # behaviour is unchanged: callers pre-split on operators and those characters never reach here.
 _BOUNDARY=$'\x1f'
+#
+# Comments and open quotes (#1147). An UNQUOTED `#` at a word start is a comment to end of line, so
+# an apostrophe in `# don't` no longer opens a quote that swallows the next command. A quote still
+# open at end of input is a FAIL-CLOSED case: the opening quote is treated as a literal character
+# and the rest is tokenized again, so every command after it stays visible to the guards (they
+# over-read, never under-read). The shell itself would reject such a command anyway.
 _tokenize_segment() {
     local segment="$1" split="${2:-}" char quote='' current='' started=0 i
+    local qpos=0 qcur='' qn=0 prefix_words=()
     _SEGMENT_WORDS=()
 
     for ((i = 0; i < ${#segment}; i++)); do
@@ -84,7 +91,10 @@ _tokenize_segment() {
             if [[ "$char" == "$quote" ]]; then quote=''; else current+="$char"; fi
         elif [[ "$char" == "'" || "$char" == '"' ]]; then
             quote="$char"
+            qpos=$i qcur="$current" qn=${#_SEGMENT_WORDS[@]}
             started=1
+        elif [[ "$char" == '#' ]] && ((!started)); then
+            while ((i + 1 < ${#segment})) && [[ "${segment:i+1:1}" != $'\n' ]]; do i=$((i + 1)); done
         elif [[ -n "$split" && ( "$char" == [\;\&\|] || "$char" == $'\n' ) ]]; then
             ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
             _SEGMENT_WORDS+=("$_BOUNDARY")
@@ -95,6 +105,13 @@ _tokenize_segment() {
             started=1
         fi
     done
+
+    if [[ -n "$quote" ]]; then
+        prefix_words=("${_SEGMENT_WORDS[@]:0:qn}")
+        _tokenize_segment "$qcur${segment:qpos+1}" "$split"
+        _SEGMENT_WORDS=("${prefix_words[@]}" "${_SEGMENT_WORDS[@]}")
+        return 0
+    fi
 
     ((started)) && _SEGMENT_WORDS+=("$current")
     return 0
@@ -238,15 +255,23 @@ commit_cd_dir() {
 # kept). The delimiter is any run of characters git/the shell would accept, digits-only included.
 _strip_heredoc_bodies() {
     # Quote-aware (#1147): a `<<` inside '..', "..", $'..', $"..", after a backslash or in a #comment
-    # is not an opener. Quote state carries across lines. Fail closed: an unterminated quote hides
-    # every later `<<`, so nothing more is stripped and the guards read MORE text, never less.
+    # is not an opener. Quote state carries across lines. $'..' is its own state ("A"): there a
+    # backslash escapes the next char, so `\'` does not close it. Fail closed: a quote still open at
+    # end of input means the scan cannot be trusted (a desync may have invented an opener), so the
+    # WHOLE input is printed unstripped and the guards read MORE text, never less.
     awk '
+        { raw[NR] = $0 }
         tag != "" { t = $0; sub(/^\t+/, "", t); if (t == tag) tag = ""; next }
         {
             n = length($0); i = 1
             while (i <= n) {
                 c = substr($0, i, 1)
                 if (q == "\047") { if (c == "\047") q = ""; i++; continue }
+                if (q == "A") {
+                    if (c == "\\") i++
+                    else if (c == "\047") q = ""
+                    i++; continue
+                }
                 if (q != "") {
                     if (c == "\\") i++
                     else if (c == q) q = ""
@@ -255,7 +280,7 @@ _strip_heredoc_bodies() {
                 if (c == "\\") { i += 2; continue }
                 if (c == "\047" || c == "\"") { q = c; i++; continue }
                 if (c == "$" && substr($0, i + 1, 1) ~ /[\047"]/) {
-                    q = substr($0, i + 1, 1); i += 2; continue
+                    q = substr($0, i + 1, 1); if (q == "\047") q = "A"; i += 2; continue
                 }
                 if (c == "#" && (i == 1 || substr($0, i - 1, 1) ~ /[ \t;&|(]/)) break
                 if (c == "<" && substr($0, i, 3) == "<<<") { i += 3; continue }
@@ -271,7 +296,8 @@ _strip_heredoc_bodies() {
                 i++
             }
         }
-        { print }
+        { out[++m] = $0 }
+        END { if (q != "") for (k = 1; k <= NR; k++) print raw[k]; else for (k = 1; k <= m; k++) print out[k] }
     ' "${1:--}"
 }
 
