@@ -30,7 +30,7 @@
 # read (see gate_stale_local_ref's `unreadable`/`no_remote` states).
 set -u
 
-command -v jq >/dev/null 2>&1 || exit 0
+command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162). Install jq from a terminal outside this session (e.g. sudo apt install jq)." >&2; exit 2; }
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/stale_local_ref_gate.sh

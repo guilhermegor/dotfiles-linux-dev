@@ -113,7 +113,7 @@ main() {
 
 	payload="$(cat)"
 	# jq parses the payload AND extracts the body, so it must be present before either.
-	command -v jq >/dev/null 2>&1 || exit 0
+	command -v jq >/dev/null 2>&1 || { echo "BLOCKED: jq not found in PATH - guard fails closed (#1162). Install jq from a terminal outside this session (e.g. sudo apt install jq)." >&2; exit 2; }
 	tool="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
 	[[ "$tool" == "Bash" ]] || exit 0
 
