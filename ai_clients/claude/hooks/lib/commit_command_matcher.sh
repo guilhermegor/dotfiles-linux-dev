@@ -177,9 +177,33 @@ _segment_invokes_commit() {
 # stdin -> stdout with each `\<NL>` line continuation removed (#1152): bash joins the lines, so
 # `git \<NL> commit` is one command. Only an ODD run of backslashes before the newline continues
 # the line; an even run is escaped backslashes and the newline stays a separator.
-# ponytail: quote-blind, so a `\<NL>` inside single quotes is joined too (over-read only).
+# A trailing `\` inside an unquoted `#` comment (same word-boundary rule as _strip_heredoc_bodies)
+# is comment text, so the newline stays a separator and the next line is its own command.
+# ponytail: quotes tracked per line only, so a `\<NL>` inside a multi-line quote is joined too
+# (over-read only).
 _join_continuations() {
-    sed -zE ':a; s/(^|[^\\])((\\\\)*)\\\n/\1\2/; ta'
+    awk '
+        function comment(s,   i, n, c, q, pb) {
+            n = length(s); q = ""; pb = 1
+            for (i = 1; i <= n; i++) {
+                c = substr(s, i, 1)
+                if (q == "\047") { if (c == q) q = ""; pb = 0; continue }
+                if (c == "\\") { i++; pb = 0; continue }
+                if (q != "") { if (c == q) q = ""; pb = 0; continue }
+                if (c == "#" && pb) return 1
+                if (c == "\047" || c == "\"") q = c
+                pb = (c ~ /[ \t;&|(]/)
+            }
+            return 0
+        }
+        {
+            buf = buf $0
+            match(buf, /\\+$/)
+            if (RLENGTH % 2 == 1 && !comment(buf)) { buf = substr(buf, 1, length(buf) - 1); next }
+            print buf; buf = ""
+        }
+        END { if (buf != "") print buf }
+    '
 }
 
 # command_has_git_commit COMMAND

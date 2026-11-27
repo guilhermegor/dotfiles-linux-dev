@@ -325,6 +325,16 @@ _sees_no_verify() {
     [ "$status" -eq 0 ]
 }
 
+@test "GAP1: a backslash ending a #comment is comment text, not a continuation" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo hi # note \\\ngit commit --no-verify -m x'
+    [ "$status" -eq 0 ]
+}
+
+@test "GAP1: a # inside quotes does not stop a real continuation" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo "a # b" && git \\\n commit -m x'
+    [ "$status" -eq 0 ]
+}
+
 @test "GAP2: partially quoted heredoc delimiter <<\"E\"OF" {
     _sees_no_verify $'cat <<"E"OF\nbody\nEOF\ngit commit --no-verify -m x'
 }
