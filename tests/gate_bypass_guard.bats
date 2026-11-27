@@ -547,10 +547,10 @@ assert_desync_refused() {
     assert_desync_refused "$cmd"
 }
 
-@test "the same escaped-quote shape with a clean message is refused too, not allowed" {
+@test "the same escaped-quote shape with a clean message is allowed now the tokenizer reads the escape" {
     cmd="$(printf '%s\n' "printf '%s\n' \"literal \\\"\"" \
         "git commit --allow-empty -F- <<'MSG'" 'feat: example' 'MSG')"
-    assert_desync_refused "$cmd"
+    assert_allowed "$cmd"
 }
 
 @test "a comment with a semicolon or pipe does not make the views disagree" {

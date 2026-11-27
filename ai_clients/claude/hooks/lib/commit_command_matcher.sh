@@ -74,17 +74,40 @@ COMMIT_COMMAND_GIT_DIR=""
 # script body) can be tokenized in one pass with quoted bodies kept intact (#961). Without it the
 # behaviour is unchanged: callers pre-split on operators and those characters never reach here.
 _BOUNDARY=$'\x1f'
+#
+# Comments and open quotes (#1147). An UNQUOTED `#` at a word start is a comment to end of line, so
+# an apostrophe in `# don't` no longer opens a quote that swallows the next command. A quote still
+# open at end of input is a FAIL-CLOSED case: the opening quote is treated as a literal character
+# and the rest is tokenized again, so every command after it stays visible to the guards (they
+# over-read, never under-read). The shell itself would reject such a command anyway.
 _tokenize_segment() {
     local segment="$1" split="${2:-}" char quote='' current='' started=0 i
+    local qpos=0 qcur='' qn=0 prefix_words=()
     _SEGMENT_WORDS=()
 
     for ((i = 0; i < ${#segment}; i++)); do
         char="${segment:i:1}"
-        if [[ -n "$quote" ]]; then
-            if [[ "$char" == "$quote" ]]; then quote=''; else current+="$char"; fi
+        if [[ "$quote" == A ]]; then
+            # $'..': a backslash escapes the next char, only an unescaped ' closes
+            if [[ "$char" == "\\" ]]; then i=$((i + 1)); current+="${segment:i:1}"
+            elif [[ "$char" == "'" ]]; then quote=''
+            else current+="$char"; fi
+        elif [[ -n "$quote" ]]; then
+            if [[ "$char" == "$quote" ]]; then quote=''
+            elif [[ "$char" == "\\" && "$quote" == '"' && "${segment:i+1:1}" == [\\\"\$\`] ]]; then
+                i=$((i + 1)); current+="${segment:i:1}"   # POSIX: \ " $ ` are escapable in "..."
+            else current+="$char"; fi
+        elif [[ "$char" == "\\" ]]; then
+            started=1
+            i=$((i + 1))
+            [[ "${segment:i:1}" == $'\n' ]] || current+="${segment:i:1}"
         elif [[ "$char" == "'" || "$char" == '"' ]]; then
             quote="$char"
+            if [[ "$char" == "'" && "$current" == *'$' ]]; then quote=A; current="${current%?}"; fi
+            qpos=$i qcur="$current" qn=${#_SEGMENT_WORDS[@]}
             started=1
+        elif [[ "$char" == '#' ]] && ((!started)); then
+            while ((i + 1 < ${#segment})) && [[ "${segment:i+1:1}" != $'\n' ]]; do i=$((i + 1)); done
         elif [[ -n "$split" && ( "$char" == [\;\&\|] || "$char" == $'\n' ) ]]; then
             ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
             _SEGMENT_WORDS+=("$_BOUNDARY")
@@ -95,6 +118,13 @@ _tokenize_segment() {
             started=1
         fi
     done
+
+    if [[ -n "$quote" ]]; then
+        prefix_words=("${_SEGMENT_WORDS[@]:0:qn}")
+        _tokenize_segment "$qcur${segment:qpos+1}" "$split"
+        _SEGMENT_WORDS=("${prefix_words[@]}" "${_SEGMENT_WORDS[@]}")
+        return 0
+    fi
 
     ((started)) && _SEGMENT_WORDS+=("$current")
     return 0
@@ -237,16 +267,67 @@ commit_cd_dir() {
 # Print FILE (or stdin) without the lines between a `<<TAG` opener and its closing TAG (opener line
 # kept). The delimiter is any run of characters git/the shell would accept, digits-only included.
 _strip_heredoc_bodies() {
+    # Quote-aware (#1147): a `<<` inside '..', "..", $'..', $"..", after a backslash or in a #comment
+    # is not an opener. Quote state carries across lines. $'..' is its own state ("A"): there a
+    # backslash escapes the next char, so `\'` does not close it. Fail closed: a quote still open at
+    # end of input means the scan cannot be trusted (a desync may have invented an opener), so the
+    # WHOLE input is printed unstripped and the guards read MORE text, never less.
+    # $(..) (#1148 review): inside it quoting restarts at the top level, so `"$(cat <<EOF` still
+    # opens a heredoc; push/pop save the enclosing quote state and the paren depth. `$((..))` is
+    # arithmetic (ar): its `<<` is a shift, never an opener. An unbalanced `$(` fails closed too.
     awk '
+        function push(i) {
+            depth++; sq[depth] = q; spd[depth] = pd; sar[depth] = ar
+            q = ""; pd = 1; ar = (substr($0, i + 2, 1) == "(")
+        }
+        function pop() { q = sq[depth]; pd = spd[depth]; ar = sar[depth]; depth-- }
+        { raw[NR] = $0 }
         tag != "" { t = $0; sub(/^\t+/, "", t); if (t == tag) tag = ""; next }
-        { line = $0; gsub(/<<</, "   ", line) }
-        match(line, /<<-?[ \t]*(\047[^\047]*\047|"[^"]*")/) {
-            tag = substr(line, RSTART, RLENGTH); sub(/^<<-?[ \t]*./, "", tag); sub(/.$/, "", tag)
+        {
+            n = length($0); i = 1
+            bw = 1   # bw: the previous char was an unescaped, unquoted word boundary
+            while (i <= n) {
+                c = substr($0, i, 1); pb = bw; bw = 0
+                if (q == "\047") { if (c == "\047") q = ""; i++; continue }
+                if (q == "A") {
+                    if (c == "\\") i++
+                    else if (c == "\047") q = ""
+                    i++; continue
+                }
+                if (q != "") {
+                    if (c == "\\") i++
+                    else if (c == q) q = ""
+                    else if (c == "$" && substr($0, i + 1, 1) == "(") { push(i); i++ }
+                    i++; continue
+                }
+                if (c == "$" && substr($0, i + 1, 1) == "(") { push(i); i += 2; continue }
+                if (depth > 0 && c == "(") pd++
+                if (depth > 0 && c == ")") { pd--; if (pd == 0) pop(); i++; continue }
+                if (c ~ /[ \t;&|(]/) bw = 1
+                if (c == "\\") { i += 2; continue }
+                if (c == "\047" || c == "\"") { q = c; i++; continue }
+                if (c == "$" && substr($0, i + 1, 1) ~ /[\047"]/) {
+                    q = substr($0, i + 1, 1); if (q == "\047") q = "A"; i += 2; continue
+                }
+                if (c == "#" && pb) break
+                if (c == "<" && ar) { i++; continue }
+                if (c == "<" && substr($0, i, 3) == "<<<") { i += 3; continue }
+                if (c == "<" && substr($0, i, 2) == "<<") {
+                    rest = substr($0, i + 2); sub(/^-?[ \t]*/, "", rest)
+                    d = substr(rest, 1, 1)
+                    if (d == "\047" || d == "\"") {
+                        rest = substr(rest, 2); e = index(rest, d)
+                        if (e) tag = substr(rest, 1, e - 1)
+                    } else if (match(rest, /^[^ \t\047"<>|&;()]+/)) {
+                        tag = substr(rest, 1, RLENGTH); gsub(/\\/, "", tag)   # <<\EOF quotes the delimiter
+                    }
+                    break
+                }
+                i++
+            }
         }
-        tag == "" && match(line, /<<-?[ \t]*[^ \t\047"<>|&;()]+/) {
-            tag = substr(line, RSTART, RLENGTH); sub(/^<<-?[ \t]*/, "", tag)
-        }
-        { print }
+        { out[++m] = $0 }
+        END { if (q != "" || depth > 0) for (k = 1; k <= NR; k++) print raw[k]; else for (k = 1; k <= m; k++) print out[k] }
     ' "${1:--}"
 }
 

@@ -159,3 +159,148 @@ setup() {
     run bash -c "source '$MATCHER' && command_has_git_commit 'git -C \$(touch $marker) commit -m x' || true"
     [ ! -e "$marker" ]
 }
+
+# --- #1147: _strip_heredoc_bodies is quote-aware ----------------------------------------------
+
+_strip() {
+    bash -c "source '$MATCHER' && printf '%s\n' \"\$1\" | _strip_heredoc_bodies" _ "$1"
+}
+
+@test "STRIP: plain heredoc body is dropped, opener and later lines kept" {
+    run _strip $'cat <<EOF\nbody\nEOF\necho after'
+    [ "$output" = $'cat <<EOF\necho after' ]
+}
+
+@test "STRIP: single-quoted <<FAKE decoy does not swallow a real heredoc" {
+    run _strip $'printf \'%s\\n\' \'<<FAKE\'\ngit commit -F- <<\'MSG\'\nsecret body\nMSG\necho after'
+    [ "$output" = $'printf \'%s\\n\' \'<<FAKE\'\ngit commit -F- <<\'MSG\'\necho after' ]
+}
+
+@test "STRIP: double-quoted, escaped and ANSI-C <<FAKE decoys are not openers" {
+    local d
+    for d in '"<<FAKE"' '\<<FAKE' "\$'<<FAKE'" '$"<<FAKE"'; do
+        run _strip "echo $d"$'\nkept line\nFAKE'
+        [ "$output" = "echo $d"$'\nkept line\nFAKE' ]
+    done
+}
+
+@test "STRIP: <<FAKE in a comment is not an opener" {
+    run _strip $'echo hi # <<FAKE\nkept'
+    [ "$output" = $'echo hi # <<FAKE\nkept' ]
+}
+
+@test "STRIP: a quote opened on one line hides <<FAKE on the next" {
+    run _strip $'echo "a\n<<FAKE" b\nkept'
+    [ "$output" = $'echo "a\n<<FAKE" b\nkept' ]
+}
+
+@test "STRIP: a heredoc inside \$(..) inside double quotes is stripped (#1148 review)" {
+    run _strip $'git commit -m "$(cat <<\'EOF\'\nfix: x "quoted" --no-verify\nEOF\n)"\necho after'
+    [ "$output" = $'git commit -m "$(cat <<\'EOF\'\n)"\necho after' ]
+}
+
+@test "STRIP: a backslash-quoted delimiter loses the backslash (#1148 review)" {
+    run _strip $'cat <<\\EOF\nbody\nEOF\necho after'
+    [ "$output" = $'cat <<\\EOF\necho after' ]
+}
+
+@test "STRIP: << inside \$((..)) arithmetic is not an opener (#1148 review)" {
+    run _strip $'echo $((1<<2))\nkept\ngit commit -m x'
+    [ "$output" = $'echo $((1<<2))\nkept\ngit commit -m x' ]
+}
+
+@test "STRIP: << inside \$((..)) in double quotes is not an opener either" {
+    run _strip $'echo "$((1<<2))"\nkept'
+    [ "$output" = $'echo "$((1<<2))"\nkept' ]
+}
+
+@test "STRIP: \$( inside single quotes is literal and a later real heredoc is still stripped" {
+    run _strip $'echo \'$(\' ; git commit -F- <<\'MSG\'\nbody\nMSG\necho after'
+    [ "$output" = $'echo \'$(\' ; git commit -F- <<\'MSG\'\necho after' ]
+}
+
+@test "STRIP: \$( inside \$'..' is literal and a later real heredoc is still stripped" {
+    run _strip $'echo $\'$(\' ; git commit -F- <<\'MSG\'\nbody\nMSG\necho after'
+    [ "$output" = $'echo $\'$(\' ; git commit -F- <<\'MSG\'\necho after' ]
+}
+
+@test "STRIP: a backslash is literal in single quotes, so 'a\\' ends there" {
+    run _strip $'echo \'a\\\' ; git commit -F- <<\'MSG\'\nbody\nMSG\necho after'
+    [ "$output" = $'echo \'a\\\' ; git commit -F- <<\'MSG\'\necho after' ]
+}
+
+@test "STRIP: an unbalanced \$( fails closed and prints the whole input" {
+    run _strip $'echo $(cat\ncat <<EOF\nbody\nEOF'
+    [ "$output" = $'echo $(cat\ncat <<EOF\nbody\nEOF' ]
+}
+
+@test "STRIP: an escaped quote inside \$'..' does not close it early" {
+    run _strip $'echo $\'it\\\'s <<FAKE\'\ngit commit -F- <<\'MSG\'\nbody\nMSG\necho after'
+    [ "$output" = $'echo $\'it\\\'s <<FAKE\'\ngit commit -F- <<\'MSG\'\necho after' ]
+}
+
+@test "STRIP: a quote still open at end of input prints the whole input unstripped" {
+    run _strip $'cat <<EOF\nbody\nEOF\necho "unterminated'
+    [ "$output" = $'cat <<EOF\nbody\nEOF\necho "unterminated' ]
+}
+
+# --- #1147: the tokenizer skips comments and fails closed on an open quote --------------------
+
+@test "TOKENIZER: an apostrophe in a # comment does not swallow the next command" {
+    run bash -c "source '$MATCHER' && command_has_git_commit \$'# don\\'t look\ngit commit -m x'"
+    [ "$status" -eq 0 ]
+}
+
+@test "TOKENIZER: a plain apostrophe comment line before a commit is seen" {
+    run bash -c "source '$MATCHER' && command_has_git_commit \$'echo hi # it\\'s\ngit commit -m x'"
+    [ "$status" -eq 0 ]
+}
+
+@test "TOKENIZER: an unterminated quote does not hide a later commit" {
+    run bash -c "source '$MATCHER' && command_has_git_commit \$'echo \"oops\ngit commit -m x'"
+    [ "$status" -eq 0 ]
+}
+
+# Walks the whole multi-line command through the split-mode tokenizer (the path commit_inline_messages
+# uses) and succeeds when some simple command starts with `git`. A trailing lone quote makes the
+# quote count odd, so the pre-fix tokenizer ended balanced and absorbed the commit into one word.
+_has_commit() {
+    run bash -c 'source "$1"
+        seen() { [[ "${_CMD_WORDS[0]:-}" == git ]] && echo GIT; return 0; }
+        _for_each_command "$2" seen' _ "$MATCHER" "$1"
+    [[ "$output" == *GIT* ]]
+}
+
+@test "TOKENIZER: an escaped quote inside double quotes does not end the string" {
+    _has_commit $'printf \'%s\\n\' "literal \\""\ngit commit --allow-empty -F- <<\'MSG\'\nt\nMSG\necho "'
+}
+
+@test "TOKENIZER: \"a \\\\\" b\" keeps the escaped backslash and closes on the next quote" {
+    _has_commit $'echo "a \\\\" b\ngit commit -m x\necho "'
+}
+
+@test "TOKENIZER: an escaped dollar inside double quotes is literal and the string still closes" {
+    _has_commit $'echo "cost \\$5"\ngit commit -m x\necho "'
+}
+
+@test "TOKENIZER: a backslash outside quotes escapes the next char" {
+    _has_commit $'echo \\"\ngit commit -m x\necho "'
+}
+
+@test "TOKENIZER: an escaped quote inside \$'..' does not end it" {
+    _has_commit $'echo $\'it\\\'s\'\ngit commit -m x\necho \''
+}
+
+@test "TOKENIZER: a # inside a string with escaped quotes is not a comment (#1148 review)" {
+    _has_commit $'echo "a \\" # \\" b"; git commit -m x'
+}
+
+@test "STRIP: an escaped space before # keeps it a word char, so a later <<EOF still opens (#1148 review)" {
+    run _strip $'echo a\\ #b <<EOF\nbody\nEOF\necho after'
+    [ "$output" = $'echo a\\ #b <<EOF\necho after' ]
+}
+
+@test "TOKENIZER: a git commit inside an escaped-quote string is still only an argument" {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" $'echo "say \\"git commit -m x\\""'
+    [ "$status" -eq 1 ]
+}
