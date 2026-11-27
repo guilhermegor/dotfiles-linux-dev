@@ -646,7 +646,7 @@ assert_desync_refused() {
 }
 
 @test "fails closed on an inner command whose quoted word tokenizes to git with an expansion" {
-    assert_refused 'bash -c "g\"\"it commit $flags -m x"'
+    assert_refused "bash -c 'g\"\"it commit \$flags -m x'"
 }
 
 @test "allows bash -c 'git status'" {

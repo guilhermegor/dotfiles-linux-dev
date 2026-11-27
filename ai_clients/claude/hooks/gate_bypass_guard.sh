@@ -212,26 +212,58 @@ _GB_MAX_DEPTH=3
 _GB_DEPTH=0
 _GB_INNER=()
 _GB_INNER_D=()
+_GB_INNER_DIR=()
+_GB_INNER_DIR_OK=()
 
-# _queue_inner_shell: record the inner text of every shell wrapper in the words of this command.
+# _queue_inner TEXT: record inner text TEXT with the directory state of THIS point in the command,
+# so a later `cd` of the outer command cannot change which files the inner commit is judged on.
+_queue_inner() {
+    _GB_INNER+=("$1")
+    _GB_INNER_D+=("$((_GB_DEPTH + 1))")
+    _GB_INNER_DIR+=("$_GB_DIR")
+    _GB_INNER_DIR_OK+=("$_GB_DIR_OK")
+}
+
+# _shell_c_operand AT: sets _GB_OPERAND to the -c command string of a shell whose options start at
+# word AT, or '' when it has none. Walks the options like bash: a cluster holding `c` marks -c;
+# `o`/`O` (also `+o`) and --rcfile/--init-file take the NEXT word as a value, so
+# `bash -o pipefail -c '...'` and `bash -co pipefail '...'` are read. The first plain word ends
+# the options (a script name: `bash script.sh -c git` has no inner command).
+_shell_c_operand() {
+    local n="${#_CMD_WORDS[@]}" j w need=0 seen_c=0
+    _GB_OPERAND=''
+    for ((j = $1; j < n; j++)); do
+        w="${_CMD_WORDS[j]}"
+        if ((need > 0)); then need=$((need - 1)); continue; fi
+        if [[ "$w" == --rcfile || "$w" == --init-file ]]; then need=1; continue; fi
+        if [[ "$w" == -- || "$w" == --* ]]; then continue; fi
+        if [[ "$w" == [-+]?* ]]; then
+            [[ "$w" == -*c* ]] && seen_c=1
+            [[ "$w" == [-+]*[oO]* ]] && need=1
+            continue
+        fi
+        ((seen_c)) && _GB_OPERAND="$w"
+        return 0
+    done
+}
+
+# _queue_inner_shell: record the inner text of the FIRST shell wrapper in the words of this
+# command. Only the first: a later `eval`/`sh -c` word is an argument of the first, whose text is
+# scanned in turn, so queueing each one repeats work exponentially (`eval eval eval ...`).
 _queue_inner_shell() {
-    local n="${#_CMD_WORDS[@]}" i j w
+    local n="${#_CMD_WORDS[@]}" i w
     for ((i = 0; i < n; i++)); do
         w="${_CMD_WORDS[i]}"
         case "${w##*/}" in
             eval)
-                _GB_INNER+=("${_CMD_WORDS[*]:i+1}")
-                _GB_INNER_D+=("$((_GB_DEPTH + 1))") ;;
+                _queue_inner "${_CMD_WORDS[*]:i+1}"
+                return 0 ;;
             sh | bash | zsh | dash | ksh)
-                for ((j = i + 1; j < n; j++)); do
-                    [[ "${_CMD_WORDS[j]}" == -* && "${_CMD_WORDS[j]}" != -- ]] || break
-                    if [[ "${_CMD_WORDS[j]}" == -*c* &&"${_CMD_WORDS[j]}" != --* ]]; then
-                        ((j + 1 < n)) || break
-                        _GB_INNER+=("${_CMD_WORDS[j + 1]}")
-                        _GB_INNER_D+=("$((_GB_DEPTH + 1))")
-                        break
-                    fi
-                done ;;
+                _shell_c_operand $((i + 1))
+                if [[ -n "$_GB_OPERAND" ]]; then
+                    _queue_inner "$_GB_OPERAND"
+                    return 0
+                fi ;;
         esac
     done
 }
@@ -483,9 +515,16 @@ _scan_commit_message() {
     return 0
 }
 
-# _mentions_git TEXT: TEXT holds `git` as a whole word.
+# _mentions_git TEXT: TEXT holds `git`, as a whole word in the raw text OR as a word the shared
+# tokenizer reads (it removes quotes, so `g""it` is `git` there and invisible to a raw regex).
 _mentions_git() {
-    printf '%s' "$1" | grep -qE '(^|[^[:alnum:]_])git([^[:alnum:]_]|$)'
+    local w
+    printf '%s' "$1" | grep -qE '(^|[^[:alnum:]_])git([^[:alnum:]_]|$)' && return 0
+    _tokenize_segment "$1" split
+    for w in "${_SEGMENT_WORDS[@]:-}"; do
+        [[ "$w" == git || "$w" == */git ]] && return 0
+    done
+    return 1
 }
 
 # _scan_text TEXT: the full scan of one command line (the outer command, or an inner shell text).
@@ -509,7 +548,7 @@ _scan_text() {
     # command into a different number of commands, or a quote is left open, and the text mentions
     # git, refuse rather than trust a scan that may have missed it.
     if [[ "$(_hd_scan chunks)" != "$_GB_CMD_SEQ" || "$(_hd_scan flags)" == *openquote* ]] \
-        && _mentions_git "$_GB_RAW"; then
+        && _mentions_git "$_GB_RAW"; then # same raw+tokenized view as the expansion refusal
         block_desync
     fi
 }
@@ -539,10 +578,16 @@ _scan_inner_texts() {
     while ((k < ${#_GB_INNER[@]})); do
         inner="${_GB_INNER[k]}"
         _GB_DEPTH="${_GB_INNER_D[k]}"
+        # Each entry is judged in the directory state it was queued with; its own `cd`s change
+        # only that copy, since the next entry restores its own.
+        _GB_DIR="${_GB_INNER_DIR[k]}"
+        _GB_DIR_OK="${_GB_INNER_DIR_OK[k]}"
         k=$((k + 1))
         if _mentions_git "$inner"; then
             ((_GB_DEPTH <= _GB_MAX_DEPTH)) || block_inner "$inner" "is nested more than $_GB_MAX_DEPTH shells deep"
             [[ "$inner" != *[\$\`]* ]] || block_inner "$inner" "carries a shell expansion"
+        elif ((_GB_DEPTH > _GB_MAX_DEPTH)); then
+            continue # no git here and too deep to read: skipping bounds the work of a harmless chain
         fi
         _scan_text "$inner"
     done
