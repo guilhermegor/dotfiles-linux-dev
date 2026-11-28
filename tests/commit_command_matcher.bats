@@ -1217,3 +1217,50 @@ sudo -R /j git -C /r commit -m x|chroot
 git -C /abs commit -m x|
 CASES
 }
+
+@test "#1175: an unquoted expansion in an env/sudo argument (option or NAME=value) is unresolved" {
+    # measured: `env FOO=$X git` and `env --chdir=$X git` both word-split ($X may carry GIT_DIR=..),
+    # while a shell prefix `FOO=$X git` does not
+    _dir_cases <<'CASES'
+env --chdir=$X git -C /safe commit -m x||1
+env FOO=$X git -C /safe commit -m x||1
+env A=1 B=$X git -C /safe commit -m x||1
+sudo FOO=$X git -C /safe commit -m x||1
+FOO=$X git -C /safe commit -m x|/safe|0
+FOO=$X env A=1 git -C /safe commit -m x|/safe|0
+env FOO="$X" git -C /safe commit -m x|/safe|0
+CASES
+}
+
+@test "#1175: an env -S value with escapes or \${VAR} the tokenizer does not model is unresolved" {
+    # GNU env turns \_ inside double quotes into a space, so the split value names another directory
+    _dir_cases <<'CASES'
+env -C '/tmp/repo name' -S '-C "/tmp/repo\_name"' git commit -m x||1
+env -S '-C /tmp/a\_b' git commit -m x||1
+env -S '-C ${D}' git commit -m x||1
+env -S '-C /tmp/target' git commit -m x|/tmp/target|0
+CASES
+}
+
+@test "#1175: the env -S retry keeps the raw reading's prefix-expansion state" {
+    _dir_cases <<'CASES'
+env -S -C$X git -C /safe commit -m x||1
+env -S '-C /tmp/t' $X git -C /safe commit -m x||1
+CASES
+}
+
+@test "#1175: an unresolved commit's relative -F is not found, absolute -F and resolved dirs are" {
+    local c want
+    while IFS='|' read -r c want; do
+        echo "case: $c"
+        run bash -c 'source "$1"; commit_source_dir "$2" file; echo "found=$COMMIT_SOURCE_FOUND dir=[$COMMIT_SOURCE_DIR]"' _ "$MATCHER" "$c"
+        [[ "$output" == *"$want"* ]]
+    done <<'CASES'
+git --git-dir=/t/.git -C /t commit -F msg|found=0
+git -C "$X" commit -F msg|found=0
+sudo -R /j git -C /r commit -F msg|found=0
+git --git-dir=/t/.git commit -F /abs/msg|found=1
+git -C /t commit -F msg|found=1 dir=[/t]
+git commit -F msg|found=1 dir=[]
+CASES
+}

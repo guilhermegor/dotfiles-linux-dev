@@ -200,6 +200,24 @@ $LONG_BODY'"
     [ "$output" -eq 0 ]
 }
 
+@test "#1175: a relative -F of a commit whose target is unresolved is not rewritten in the cwd" {
+    mkdir "$TEST_TMP/cwd" "$TEST_TMP/target"
+    printf 'subject\n\n%s\n' "$LONG_BODY" > "$TEST_TMP/cwd/msg.txt"
+    before="$(cat "$TEST_TMP/cwd/msg.txt")"
+    cd "$TEST_TMP/cwd"
+    run run_guard "git --git-dir=$TEST_TMP/target/.git -C $TEST_TMP/target commit -F msg.txt"
+    [ "$status" -eq 0 ]
+    [ "$before" = "$(cat "$TEST_TMP/cwd/msg.txt")" ]
+}
+
+@test "#1175: an absolute -F is still reflowed when the target is unresolved" {
+    write_long_body
+    run run_guard "git --git-dir=/nowhere/.git commit -F $MSG_FILE"
+    [ "$status" -eq 0 ]
+    run grep -c '.\{73,\}' "$MSG_FILE"
+    [ "$output" -eq 0 ]
+}
+
 @test "#961: a git commit -m example inside a heredoc in a command is data, not a commit" {
     run run_guard "cat <<'123'
 git commit -m 'feat: x' -m '$LONG_BODY'
