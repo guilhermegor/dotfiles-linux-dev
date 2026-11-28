@@ -638,3 +638,79 @@ _cd_dir_of() {
         [ "$status" -ne 0 ]
     done
 }
+
+# --- #1168: a continuation inside an UNQUOTED heredoc body joins into the delimiter ---------------
+# Each shape was run in GNU bash 5.2.21 with `git` stubbed as a function. A trailing `EOF` line
+# makes the later `git commit` stripped on master (without one the heredoc runs to end of input and
+# the stripper already fails closed).
+
+# both readers: the text as written (command_has_git_commit) and the stripped split reader
+_both_readers_see_commit() {
+    _matcher_has_commit "$1"
+    _strip_sees_commit "$1"
+}
+
+# the stripped split reader, no assertion: the caller checks $output
+_split_run() {
+    run bash -c 'source "$1"
+        seen() { _words_invoke_commit && echo SEEN; return 0; }
+        _for_each_command "$(printf "%s" "$2" | _strip_heredoc_bodies)" seen' _ "$MATCHER" "$1"
+}
+
+@test "GAP9: EO\\<NL>F in an unquoted body ends the heredoc, the next line commits" {
+    _both_readers_see_commit $'cat <<EOF\nx\nEO\\\nF\ngit commit --no-verify -m x\nEOF'
+}
+
+@test "GAP9: the same join with <<- and a tab-indented body" {
+    _both_readers_see_commit $'cat <<-EOF\n\tx\n\tEO\\\nF\ngit commit --no-verify -m x\nEOF'
+}
+
+@test "GAP9: a join across three lines (EO\\<NL>\\<NL>F)" {
+    _both_readers_see_commit $'cat <<EOF\nx\nEO\\\n\\\nF\ngit commit --no-verify -m x\nEOF'
+}
+
+@test "GAP9: <<- with the joined delimiter split after the tab" {
+    _both_readers_see_commit $'cat <<-EOF\n\tx\n\tE\\\nOF\ngit commit --no-verify -m x\nEOF'
+}
+
+@test "GAP9: an even backslash run does not join, so the commit stays in the body" {
+    _split_run $'cat <<EOF\nx\nEO\\\\\nF\ngit commit --no-verify -m x\nEOF'
+    [[ "$output" != *SEEN* ]]
+}
+
+@test "GAP9: <<- with tabs leaves EO<TAB>F after the join: no delimiter, body stays stripped" {
+    _split_run $'cat <<-EOF\n\tx\n\tEO\\\n\tF\ngit commit --no-verify -m x\nEOF'
+    [[ "$output" != *SEEN* ]]
+}
+
+@test "GAP9: quoted delimiters do not join, the body (commit included) stays stripped" {
+    local d
+    for d in "'EOF'" '"EOF"' '\EOF'; do
+        echo "delim: $d"
+        _split_run $'cat <<'"$d"$'\nx\nEO\\\nF\ngit commit --no-verify -m x\nEOF'
+        [[ "$output" != *SEEN* ]]
+    done
+}
+
+@test "GAP9: a quoted heredoc with a trailing backslash line still ends at its own delimiter" {
+    _both_readers_see_commit $'cat <<\'EOF\'\nx\\\nEOF\ngit commit --no-verify -m x'
+}
+
+@test "GAP9: an unquoted body whose continuation does not form the delimiter stays stripped" {
+    _split_run $'cat <<EOF\nline \\\nmore\nEOF\ngit commit --no-verify -m x'
+    [[ "$output" == *SEEN* ]]
+    _split_run $'cat <<EOF\nline \\\nmore\nEOF'
+    [[ "$output" != *SEEN* ]]
+}
+
+@test "GAP9: opener-line comment ending in a backslash (bash: no join, commit after the body)" {
+    _both_readers_see_commit $'cat <<EOF # C:\\\nx\nEOF\ngit commit --no-verify -m x'
+}
+
+@test "GAP9: <\\<NL><EOF joins into an opener, the commit after its body is seen" {
+    _both_readers_see_commit $'cat <\\\n<EOF\nx\nEOF\ngit commit --no-verify -m x'
+}
+
+@test "GAP9: <\\<NL>EOF is a plain redirect from a file, the next line commits" {
+    _both_readers_see_commit $'cat <\\\nEOF\ngit commit --no-verify -m x'
+}
