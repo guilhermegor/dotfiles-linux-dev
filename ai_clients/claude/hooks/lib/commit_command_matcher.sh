@@ -83,14 +83,14 @@ _BOUNDARY=$'\x1f'
 _tokenize_segment() {
     local segment="$1" split="${2:-}" nosub="${3:-}" char quote='' current='' started=0 i
     local qpos=0 qcur='' qn=0 prefix_words=() gt=0 prev_gt lt=0 prev_lt soft_keep=() sidx
-    local qlead=0 prefix_ql=() curq=0 sd=0 sbt=0 spos=0 scur="" sn=0 rtext rn amp
+    local qlead=0 prefix_ql=() curq=0 sd=0 sbt=0 spos=0 scur="" sn=0 rtext rn amp amq=0 prev_amq
     _SEGMENT_WORDS=()
     _SEGMENT_SOFT=()
     _SEGMENT_QLEAD=()
 
     for ((i = 0; i < ${#segment}; i++)); do
         char="${segment:i:1}"
-        prev_gt=$gt gt=0 prev_lt=$lt lt=0  # gt: this char is an unquoted, unescaped `>` (set in the last branch)
+        prev_amq=$amq amq=0 prev_gt=$gt gt=0 prev_lt=$lt lt=0  # gt: this char is an unquoted, unescaped `>` (set in the last branch)
         if [[ "$quote" == A ]]; then
             # $'..': a backslash escapes the next char, only an unescaped ' closes
             if [[ "$char" == "\\" ]]; then i=$((i + 1)); current+="${segment:i:1}"
@@ -118,7 +118,7 @@ _tokenize_segment() {
              && { ((prev_gt || prev_lt)) || [[ "${segment:i+1:1}" == '>' ]]; }; then
             # `>&2`, `<&3` and `&>f` are redirections, not a background `&` (#1166): keep the word whole
             current+="$char"
-            started=1
+            started=1 amq=1
         elif [[ -n "$split" && ( "$char" == [\;\&\|] || "$char" == $'\n' ) ]]; then
             ((started)) && { _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$qlead"); current=''; started=0; qlead=0; curq=0; }
             sd=0 sbt=0   # a boundary ends any `$(` tracking: what follows is a command again
@@ -135,7 +135,7 @@ _tokenize_segment() {
             # it is an unquoted fd prefix (`2>f`, `{fd}>f`). A quoted empty word (`-C ''>f`) is a word of
             # its own, hence `started`, not a non-empty `current`. A trailing `&` belongs to `&>f`.
             amp=''
-            if [[ "$char" == '>' && "$current" == *'&' ]]; then current="${current%&}"; amp='&'; fi
+            if [[ "$char" == '>' ]] && ((prev_amq)); then current="${current%&}"; amp='&'; fi
             if [[ -n "$current" ]] || ((curq)) || [[ -z "$amp" ]]; then
                 _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$qlead")
             fi
@@ -149,6 +149,7 @@ _tokenize_segment() {
             started=1
             [[ "$char" == '>' ]] && gt=1
             [[ "$char" == '<' ]] && lt=1
+            [[ "$char" == '&' ]] && amq=1
             # `$(..)` / backticks in an assignment value (`FOO=$(a b) git commit`, #1173): their blanks
             # do not split the word. Only boundaries still cut inside, so a `;` in there stays a
             # command boundary exactly as before. Unbalanced at the end: fail closed, see below.
@@ -207,13 +208,16 @@ _redir_len() {
 # Reserved words (and the `(` / `{` / `!` openers) that may stand in front of a command (#1173).
 _CCM_RESERVED=' ! if then do else elif while until { ( '
 
-# _note_wrapper_value WRAPPER OPTION VALUE INDEX
+# _note_wrapper_value WRAPPER OPTION VALUE INDEX OPTION_INDEX
 # What a wrapper option's value means for the commit that follows: a directory it moves into
 # (`env -C`, `sudo -D` / `-R`) or a command line it re-splits (`env -S`).
+# A relative directory resolves against the one an earlier wrapper set; an absolute one replaces it.
+# `-S` also records the index of its option word, so the re-split can replace both option and value.
 _note_wrapper_value() {
     case "$1:$2" in
-        env:-C | env:--chdir | sudo:-D | sudo:--chdir | sudo:-R | sudo:--chroot) _CCM_WDIR="$3" ;;
-        env:-S | env:--split-string) _CCM_SPLIT_IDX=$4 _CCM_SPLIT_VAL="$3" ;;
+        env:-C | env:--chdir | sudo:-D | sudo:--chdir | sudo:-R | sudo:--chroot)
+            if [[ "$3" != /* && -n "$_CCM_WDIR" ]]; then _CCM_WDIR="${_CCM_WDIR%/}/$3"; else _CCM_WDIR="$3"; fi ;;
+        env:-S | env:--split-string) _CCM_SPLIT_IDX=$4 _CCM_SPLIT_VAL="$3" _CCM_SPLIT_OPT=$5 ;;
     esac
 }
 
@@ -226,7 +230,7 @@ _scan_wrapper_option() {
     _CCM_PENDING=0
     if [[ "$w" == --* ]]; then
         name="${w%%=*}"
-        if [[ "$w" == *=* ]]; then _note_wrapper_value "$wrap" "$name" "${w#*=}" "$idx"
+        if [[ "$w" == *=* ]]; then _note_wrapper_value "$wrap" "$name" "${w#*=}" "$idx" "$idx"
         elif [[ "$vals" == *" $name "* ]]; then _CCM_PENDING=1 _CCM_POPT="$name"; fi
         return 0
     fi
@@ -235,7 +239,7 @@ _scan_wrapper_option() {
         ch="${rest:0:1}"
         rest="${rest:1}"
         [[ "$vals" == *" -$ch "* ]] || continue
-        if [[ -n "$rest" ]]; then _note_wrapper_value "$wrap" "-$ch" "$rest" "$idx"
+        if [[ -n "$rest" ]]; then _note_wrapper_value "$wrap" "-$ch" "$rest" "$idx" "$idx"
         else _CCM_PENDING=1 _CCM_POPT="-$ch"; fi
         return 0
     done
@@ -251,16 +255,16 @@ _scan_wrapper_option() {
 # With `_CCM_LAZY=1` a wrapper's option never takes the next word as its value: `sudo -h git commit`
 # (`-h` is also "help") reads both ways, see _words_invoke_commit.
 # Also sets `_CCM_WDIR` (the directory `env -C` / `sudo -D` moves into), `_CCM_GIT_ENV_DIR` (from
-# `GIT_WORK_TREE=` / `GIT_DIR=`) and `_CCM_SPLIT_IDX` / `_CCM_SPLIT_VAL` (an `env -S` value, else -1).
+# `GIT_DIR=`) and `_CCM_SPLIT_IDX` / `_CCM_SPLIT_VAL` (an `env -S` value, else -1).
 _skip_prefix() {
-    local i=$1 w vals wrap='' pending=0 popt='' npos=0 rest git_dir='' work_tree=''
-    _CCM_QUERY=0 _CCM_WDIR='' _CCM_GIT_ENV_DIR='' _CCM_SPLIT_IDX=-1 _CCM_SPLIT_VAL=''
+    local i=$1 w vals wrap='' pending=0 popt='' npos=0 rest git_dir=''
+    _CCM_QUERY=0 _CCM_WDIR='' _CCM_GIT_ENV_DIR='' _CCM_SPLIT_IDX=-1 _CCM_SPLIT_VAL='' _CCM_SPLIT_OPT=-1
     while w="${_CMD_WORDS[i]:-}"; [[ -n "$w" ]]; do
         # A redirection never ends a wrapper's option list: `env > f -u X git commit` (#1172)
         if _redir_len "$i"; then i=$((i + _CCM_RLEN)); continue; fi
         if ((pending)); then
             pending=0
-            _note_wrapper_value "$wrap" "$popt" "$w" "$i"
+            _note_wrapper_value "$wrap" "$popt" "$w" "$i" "$((i - 1))"
             i=$((i + 1))
             continue
         fi
@@ -276,7 +280,6 @@ _skip_prefix() {
         wrap=''
         if [[ "$w" =~ $_CCM_ASSIGN_RE || "$w" =~ ^([0-9]+-?|-)$ ]]; then
             [[ "$w" == GIT_DIR=* ]] && git_dir="${w#*=}"
-            [[ "$w" == GIT_WORK_TREE=* ]] && work_tree="${w#*=}"
             i=$((i + 1))
             continue
         fi
@@ -295,7 +298,7 @@ _skip_prefix() {
             time) vals=' -f -o --format --output ' ;;
             exec) vals=' -a ' ;;
             timeout) vals=' -s -k --signal --kill-after ' npos=1 ;;
-            xargs) vals=' -a -d -E -I -L -n -P -s --arg-file --delimiter --max-args --max-lines --max-procs --max-chars --process-slot-var --replace --eof ' ;;
+            xargs) vals=' -a -d -E -I -L -n -P -s --arg-file --delimiter --max-args --max-procs --max-chars --process-slot-var ' ;;
             stdbuf) vals=' -i -o -e --input --output --error ' ;;
             taskset | chrt) vals='' npos=1 ;;   # the CPU mask / the priority
             flock) vals=' -w -E --timeout --conflict-exit-code ' npos=1 ;;   # the lock file
@@ -307,7 +310,7 @@ _skip_prefix() {
         i=$((i + 1))
     done
     _CCM_NEXT=$i
-    _CCM_GIT_ENV_DIR="${work_tree:-$git_dir}"
+    _CCM_GIT_ENV_DIR="$git_dir"
 }
 
 # _words_invoke_commit
@@ -319,23 +322,35 @@ _skip_prefix() {
 # Read up to three ways, a hit on any one counts (#1173): as written, with no wrapper option taking a
 # value (`sudo -h git commit`: `-h` may be "help"), and with an `env -S` value re-split into words.
 _words_invoke_commit() {
-    local lazy split_idx=-1 split_val='' k
-    local -a saved_w saved_q tail_w tail_q
+    local lazy split_idx=-1 split_val='' split_opt=-1 k
+    local -a saved_w saved_q head_w head_q tail_w tail_q new_w new_q seg_w seg_q seg_s
     for lazy in 0 1; do
         _CCM_LAZY=$lazy
         if _words_invoke_commit_once; then _CCM_LAZY=0; return 0; fi
-        if ((!lazy)); then split_idx=$_CCM_SPLIT_IDX split_val="$_CCM_SPLIT_VAL"; fi
+        if ((!lazy)); then split_idx=$_CCM_SPLIT_IDX split_val="$_CCM_SPLIT_VAL" split_opt=$_CCM_SPLIT_OPT; fi
     done
     _CCM_LAZY=0
-    ((split_idx >= 0)) || return 1
+    ((split_idx >= 0 && split_opt >= 0)) || return 1
     saved_w=(${_CMD_WORDS[@]+"${_CMD_WORDS[@]}"})
     saved_q=(${_CMD_QLEAD[@]+"${_CMD_QLEAD[@]}"})
+    head_w=("${_CMD_WORDS[@]:0:split_opt}")
+    head_q=("${_CMD_QLEAD[@]:0:split_opt}")
     tail_w=("${_CMD_WORDS[@]:split_idx+1}")
     tail_q=("${_CMD_QLEAD[@]:split_idx+1}")
+    # The nested tokenize must leave the caller's arrays alone: _for_each_command is still reading
+    # _SEGMENT_QLEAD / _SEGMENT_SOFT for the words after this command (#1174).
+    seg_w=(${_SEGMENT_WORDS[@]+"${_SEGMENT_WORDS[@]}"})
+    seg_q=(${_SEGMENT_QLEAD[@]+"${_SEGMENT_QLEAD[@]}"})
+    seg_s=(${_SEGMENT_SOFT[@]+"${_SEGMENT_SOFT[@]}"})
     _tokenize_segment "$split_val"
+    new_w=(${head_w[@]+"${head_w[@]}"} ${_SEGMENT_WORDS[@]+"${_SEGMENT_WORDS[@]}"} ${tail_w[@]+"${tail_w[@]}"})
+    new_q=(${head_q[@]+"${head_q[@]}"} ${_SEGMENT_QLEAD[@]+"${_SEGMENT_QLEAD[@]}"} ${tail_q[@]+"${tail_q[@]}"})
     k=${#_SEGMENT_WORDS[@]}
-    _CMD_WORDS=(${_SEGMENT_WORDS[@]+"${_SEGMENT_WORDS[@]}"} ${tail_w[@]+"${tail_w[@]}"})
-    _CMD_QLEAD=(${_SEGMENT_QLEAD[@]+"${_SEGMENT_QLEAD[@]}"} ${tail_q[@]+"${tail_q[@]}"})
+    _SEGMENT_WORDS=(${seg_w[@]+"${seg_w[@]}"})
+    _SEGMENT_QLEAD=(${seg_q[@]+"${seg_q[@]}"})
+    _SEGMENT_SOFT=(${seg_s[@]+"${seg_s[@]}"})
+    _CMD_WORDS=(${new_w[@]+"${new_w[@]}"})
+    _CMD_QLEAD=(${new_q[@]+"${new_q[@]}"})
     ((k)) && _words_invoke_commit && return 0
     _CMD_WORDS=(${saved_w[@]+"${saved_w[@]}"})
     _CMD_QLEAD=(${saved_q[@]+"${saved_q[@]}"})
@@ -384,7 +399,7 @@ _words_invoke_commit_once() {
     [[ "${words[i]:-}" == commit || "${words[i]:-}" =~ ^commit\)+$ ]] || return 1
 
     # The directory the commit lands in: `git -C` (under an `env -C` / `sudo -D` move when relative),
-    # else that move itself, else `GIT_WORK_TREE=` / `GIT_DIR=` (#1173).
+    # else that move itself, else `GIT_DIR=` (#1173; `GIT_WORK_TREE=` never selects the repository).
     if [[ -n "$dir" && "$dir" != /* && -n "$_CCM_WDIR" ]]; then dir="${_CCM_WDIR%/}/$dir"
     elif [[ -z "$dir" ]]; then dir="${_CCM_WDIR:-$_CCM_GIT_ENV_DIR}"; fi
     COMMIT_COMMAND_GIT_DIR="$dir"
