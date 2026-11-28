@@ -254,11 +254,12 @@ _scan_wrapper_option() {
 # skipped too, the tail of a `2>&1` that was cut at its `&`. Over-reading only.
 # With `_CCM_LAZY=1` a wrapper's option never takes the next word as its value: `sudo -h git commit`
 # (`-h` is also "help") reads both ways, see _words_invoke_commit.
-# Also sets `_CCM_WDIR` (the directory `env -C` / `sudo -D` moves into), `_CCM_GIT_ENV_DIR` (from
-# `GIT_DIR=`) and `_CCM_SPLIT_IDX` / `_CCM_SPLIT_VAL` (an `env -S` value, else -1).
+# Also sets `_CCM_WDIR` (the directory `env -C` / `sudo -D` moves into) and `_CCM_SPLIT_IDX` /
+# `_CCM_SPLIT_VAL` (an `env -S` value, else -1). `GIT_DIR=` / `GIT_WORK_TREE=` publish no directory:
+# a GIT_DIR value is no directory to `git -C` into (it fails in a git dir), see #1175.
 _skip_prefix() {
-    local i=$1 w vals wrap='' pending=0 popt='' npos=0 rest git_dir=''
-    _CCM_QUERY=0 _CCM_WDIR='' _CCM_GIT_ENV_DIR='' _CCM_SPLIT_IDX=-1 _CCM_SPLIT_VAL='' _CCM_SPLIT_OPT=-1
+    local i=$1 w vals wrap='' pending=0 popt='' npos=0 rest
+    _CCM_QUERY=0 _CCM_WDIR='' _CCM_SPLIT_IDX=-1 _CCM_SPLIT_VAL='' _CCM_SPLIT_OPT=-1
     while w="${_CMD_WORDS[i]:-}"; [[ -n "$w" ]]; do
         # A redirection never ends a wrapper's option list: `env > f -u X git commit` (#1172)
         if _redir_len "$i"; then i=$((i + _CCM_RLEN)); continue; fi
@@ -279,7 +280,6 @@ _skip_prefix() {
         if ((npos > 0)); then npos=$((npos - 1)); i=$((i + 1)); continue; fi   # timeout's duration
         wrap=''
         if [[ "$w" =~ $_CCM_ASSIGN_RE || "$w" =~ ^([0-9]+-?|-)$ ]]; then
-            [[ "$w" == GIT_DIR=* ]] && git_dir="${w#*=}"
             i=$((i + 1))
             continue
         fi
@@ -310,7 +310,6 @@ _skip_prefix() {
         i=$((i + 1))
     done
     _CCM_NEXT=$i
-    _CCM_GIT_ENV_DIR="$git_dir"
 }
 
 # _words_invoke_commit
@@ -399,9 +398,9 @@ _words_invoke_commit_once() {
     [[ "${words[i]:-}" == commit || "${words[i]:-}" =~ ^commit\)+$ ]] || return 1
 
     # The directory the commit lands in: `git -C` (under an `env -C` / `sudo -D` move when relative),
-    # else that move itself, else `GIT_DIR=` (#1173; `GIT_WORK_TREE=` never selects the repository).
+    # else that move itself (`GIT_DIR=` / `GIT_WORK_TREE=` publish nothing, see #1175).
     if [[ -n "$dir" && "$dir" != /* && -n "$_CCM_WDIR" ]]; then dir="${_CCM_WDIR%/}/$dir"
-    elif [[ -z "$dir" ]]; then dir="${_CCM_WDIR:-$_CCM_GIT_ENV_DIR}"; fi
+    elif [[ -z "$dir" ]]; then dir="$_CCM_WDIR"; fi
     COMMIT_COMMAND_GIT_DIR="$dir"
     _COMMIT_ARGS_FROM=$((i + 1))
     return 0
