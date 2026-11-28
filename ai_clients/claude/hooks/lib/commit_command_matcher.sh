@@ -82,7 +82,7 @@ _BOUNDARY=$'\x1f'
 # over-read, never under-read). The shell itself would reject such a command anyway.
 _tokenize_segment() {
     local segment="$1" split="${2:-}" char quote='' current='' started=0 i
-    local qpos=0 qcur='' qn=0 prefix_words=() gt=0 prev_gt lt=0 prev_ltsoft_keep=() sidx
+    local qpos=0 qcur='' qn=0 prefix_words=() gt=0 prev_gt lt=0 prev_lt soft_keep=() sidx
     _SEGMENT_WORDS=()
     _SEGMENT_SOFT=()
 

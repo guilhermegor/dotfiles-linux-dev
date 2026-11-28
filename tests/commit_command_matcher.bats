@@ -791,6 +791,18 @@ _inline_sets() {
     [[ "$output" == *"dir=/tmp/r"* ]]
 }
 
+@test "GAP10: the tokenizer leaks no globals and carries no _SEGMENT_SOFT between calls" {
+    run bash -c 'source "$1"
+        _tokenize_segment "cat a>|b; echo '"'"'open" split
+        [[ " ${_SEGMENT_SOFT[*]} " == *" 2 "* ]] || { echo "first call lost its own cut"; exit 1; }
+        _tokenize_segment "echo '"'"'open" split
+        echo "second=${#_SEGMENT_SOFT[@]}"
+        for v in soft_keep prev_lt prev_gt lt gt; do declare -p "$v" 2>/dev/null && echo "leak $v"; done
+        exit 0' _ "$MATCHER"
+    [[ "$output" == *"second=0"* ]]
+    [[ "$output" != *leak* ]]
+}
+
 @test "GAP10: obvious non-commits stay misses" {
     local c
     for c in 'echo git commit' "FOO='git commit' true" 'env | grep commit' 'sudo -u x git status' \
