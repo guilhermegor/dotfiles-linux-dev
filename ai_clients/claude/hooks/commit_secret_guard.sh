@@ -144,14 +144,27 @@ scan_added_lines() {
 }
 
 block_unresolved() {
+    local bypass="If the staged content is already checked, run the commit yourself outside this guard: type it in the prompt with a leading '! '."
     {
         echo "BLOCKED: cannot tell which repository this git commit targets, so its staged changes"
         echo "cannot be scanned for secrets: $1"
         echo
-        echo "The target comes from an expansion (\$VAR, \$(...), a glob), an absolute GIT_DIR /"
-        echo "--git-dir, or a sudo chroot, none of which can be resolved without running the command."
-        echo "Write the repository path literally (git -C /absolute/path commit ...) and re-run the"
-        echo "SAME commit."
+        case "${COMMIT_COMMAND_GIT_DIR_REASON:-}" in
+            gitdir)
+                echo "Cause: GIT_DIR / --git-dir names the repository, and git resolves it before any -C,"
+                echo "so the scan cannot follow it from here (a relative value depends on git's own cwd)."
+                echo "A literal -C does not replace it. $bypass"
+                ;;
+            chroot)
+                echo "Cause: sudo -R / --chroot runs git inside a jail whose paths are not the host's,"
+                echo "so the repository cannot be located from here. $bypass"
+                ;;
+            *)
+                echo "Cause: an expansion (\$VAR, \$(...), a glob) in the target path cannot be resolved"
+                echo "without running the command. Write the repository path literally"
+                echo "(git -C /absolute/path commit ...) and re-run the SAME commit. $bypass"
+                ;;
+        esac
     } >&2
     exit 2
 }
