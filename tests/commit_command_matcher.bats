@@ -912,6 +912,7 @@ _both_see_each() {
         'taskset 0x1 git commit -m x' 'taskset -c 0-3 git commit -m x' 'chrt -f 10 git commit -m x' \
         'chrt --reset-on-fork -r 5 git commit -m x' 'flock /tmp/l git commit -m x' \
         'flock -w 5 /tmp/l git commit -m x' 'strace -o /tmp/t git commit -m x' \
+        'strace -c -U name git commit -m x' \
         'timeout 10 sudo -u x nice -n 3 git commit -m x'
 }
 
@@ -975,6 +976,27 @@ sudo -D /tmp/p env -C child git -C sub commit -m x|/tmp/p/child/sub
 env -C /tmp/r git -C sub commit -m x|/tmp/r/sub
 env -C /tmp/r git -C /abs commit -m x|/abs
 git -C /abs commit -m x|/abs
+CASES
+}
+
+@test "GAP11: a directory the shell would expand is never published as literal text" {
+    # `git -C '$PWD'` fails in the secret guard, which then skips its scan: publish no dir
+    # (scan the cwd) unless the text is literal; a leading `~` / `~/` is $HOME.
+    local c want
+    while IFS='|' read -r c want; do
+        echo "case: $c"
+        run bash -c 'source "$1"; command_has_git_commit "$2" && echo "dir=[$COMMIT_COMMAND_GIT_DIR]"' _ "$MATCHER" "$c"
+        [[ "$output" == *"dir=[${want//@HOME@/$HOME}]"* ]]
+    done <<'CASES'
+env -C "$PWD" git commit -m x|
+git -C "$PWD" commit -m x|
+git -C "${PWD}/sub" commit -m x|
+env -C /tmp/r git -C "$SUB" commit -m x|
+sudo -D `pwd` git commit -m x|
+git -C ~user/r commit -m x|
+git -C ~/r commit -m x|@HOME@/r
+env -C ~ git commit -m x|@HOME@
+git -C '/tmp/a b' commit -m x|/tmp/a b
 CASES
 }
 
