@@ -77,14 +77,23 @@
 # head of the merge queue as dispatchable and excludes the rest by name — a review of any
 # other PR is voided by the merge ahead of it. Decided in the planner; this hook only says so.
 #
-# Fails OPEN on everything it cannot resolve (no jq, no gh, no python3, no repo, no
+# Fails OPEN on everything it cannot resolve (no gh, no python3, no repo, no
 # transcript, a session that never ran the loop) — a guard that blocks on unrelated sessions
-# gets disabled, same rule as every sibling Stop hook here.
+# gets disabled, same rule as every sibling Stop hook here. No jq is said out loud once per
+# session instead (lib/jq_missing_notice.sh, #1169).
 set -u
 
 GIT=/usr/bin/git
-# Stop hook: its stop_hook_active loop-break needs jq, so failing closed would refuse every stop forever (#1164).
-command -v jq >/dev/null 2>&1 || exit 0
+# No jq: announce once per session, never block (#1169; exit 2 would loop, see lib/jq_missing_notice.sh).
+if ! command -v jq >/dev/null 2>&1; then
+	# shellcheck source=lib/jq_missing_notice.sh
+	source "$(dirname "${BASH_SOURCE[0]}")/lib/jq_missing_notice.sh" 2>/dev/null || {
+		echo "review_fanout_guard: jq not found and lib/jq_missing_notice.sh is not deployed; this Stop hook is OFF (run make ai_clients)." >&2
+		exit 1
+	}
+	jq_missing_announce review_fanout_guard.sh
+	exit $?
+fi
 command -v gh >/dev/null 2>&1 || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 

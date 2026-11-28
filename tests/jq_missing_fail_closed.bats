@@ -13,7 +13,7 @@ HOOKS="$(cd "$BATS_TEST_DIRNAME/.." && pwd)/ai_clients/claude/hooks"
 setup_file() {
     NOJQ="$(mktemp -d)"
     local t p
-    for t in bash dirname cat sed grep git tr head tail cut sort env mktemp rm basename readlink; do
+    for t in bash dirname cat sed grep git tr head tail cut sort env mktemp rm basename readlink mkdir; do
         p="$(command -v "$t")" && ln -s "$p" "$NOJQ/$t"
     done
     export NOJQ
@@ -49,18 +49,90 @@ assert_closed() {
 @test "#1164 release_dispatch_guard blocks without jq"          { run_nojq release_dispatch_guard.sh; assert_closed; }
 @test "#1164 gh_prose_language_guard blocks without jq"         { run_nojq gh_prose_language_guard.sh; assert_closed; }
 
-# Stop hooks read stop_hook_active through jq to break their own loop; closed would refuse every stop forever.
-assert_open() {
-    [ "$status" -eq 0 ]
+# Stop hooks cannot fail closed without jq (stop_hook_active, their loop-break, is read through jq, so
+# exit 2 would refuse every stop forever, #1164). They announce once per session instead (#1169):
+# exit 1 surfaces stderr without blocking, every later stop exits 0. The once-per-session marker is
+# keyed on session_id read with sed (no jq), falling back to the parent PID.
+run_nojq_stop() {
+    run --separate-stderr env PATH="$NOJQ" XDG_RUNTIME_DIR="$BATS_TEST_TMPDIR" "$NOJQ/bash" -c \
+        'echo "{\"session_id\":\"s-$2\"}" | "$NOJQ/bash" "$1"' _ "$HOOKS/$1" "${2:-1}"
 }
-@test "#1164 dispatch_free_surface_guard stays fail-open without jq" { run_nojq dispatch_free_surface_guard.sh; assert_open; }
-@test "#1164 review_fanout_guard stays fail-open without jq"         { run_nojq review_fanout_guard.sh; assert_open; }
-@test "#1164 round_dispatch_guard stays fail-open without jq"        { run_nojq round_dispatch_guard.sh; assert_open; }
-@test "#1164 uncommitted_worktree_guard stays fail-open without jq"  { run_nojq uncommitted_worktree_guard.sh; assert_open; }
-@test "#1164 open_review_threads_nudge stays fail-open without jq"   { run_nojq open_review_threads_nudge.sh; assert_open; }
+
+assert_announced() {
+    [ "$status" -eq 1 ]
+    [[ "$stderr" == *"${1%.sh}"* ]]
+    [[ "$stderr" == *"jq"* ]]
+    [[ "$stderr" == *"apt install jq"* ]]
+}
+
+assert_quiet() {
+    [ "$status" -eq 0 ]
+    [ -z "$stderr" ]
+}
+
+stop_hook_announces_once() {
+    run_nojq_stop "$1"; assert_announced "$1"
+    run_nojq_stop "$1"; assert_quiet
+    run_nojq_stop "$1" 2; assert_announced "$1"
+}
+
+@test "#1169 dispatch_free_surface_guard announces once without jq" { stop_hook_announces_once dispatch_free_surface_guard.sh; }
+@test "#1169 review_fanout_guard announces once without jq"         { stop_hook_announces_once review_fanout_guard.sh; }
+@test "#1169 round_dispatch_guard announces once without jq"        { stop_hook_announces_once round_dispatch_guard.sh; }
+@test "#1169 uncommitted_worktree_guard announces once without jq"  { stop_hook_announces_once uncommitted_worktree_guard.sh; }
+@test "#1169 open_review_threads_nudge announces once without jq"   { stop_hook_announces_once open_review_threads_nudge.sh; }
+
+# Without a session_id the marker falls back to $PPID, which is per-spawn, not per-session (every
+# `run` gets a fresh parent): the notice then repeats on every stop. Noisier, never silent.
+@test "#1169 unreadable session_id still announces, with text, and never blocks" {
+    local i
+    for i in 1 2; do
+        run --separate-stderr env PATH="$NOJQ" XDG_RUNTIME_DIR="$BATS_TEST_TMPDIR" "$NOJQ/bash" -c \
+            'echo "{}" | "$NOJQ/bash" "$1"' _ "$HOOKS/uncommitted_worktree_guard.sh"
+        assert_announced uncommitted_worktree_guard.sh
+    done
+}
+
+# The marker is a directory made with mkdir: atomic, opens nothing, fails on any existing path. A
+# planted symlink or FIFO is not a genuine marker, so it announces; it is never followed or opened.
+@test "#1169 marker is symlink-safe and lives under XDG_RUNTIME_DIR" {
+    local rt victim
+    rt="$BATS_TEST_TMPDIR/rt"; victim="$BATS_TEST_TMPDIR/victim"
+    mkdir "$rt"; echo keep >"$victim"
+    ln -s "$victim" "$rt/uncommitted_worktree_guard.nojq.s-1.announced"
+    run --separate-stderr env PATH="$NOJQ" XDG_RUNTIME_DIR="$rt" "$NOJQ/bash" -c \
+        'echo "{\"session_id\":\"s-1\"}" | "$NOJQ/bash" "$1"' _ "$HOOKS/uncommitted_worktree_guard.sh"
+    assert_announced uncommitted_worktree_guard.sh
+    [ "$(cat "$victim")" = keep ]
+    run --separate-stderr env PATH="$NOJQ" XDG_RUNTIME_DIR="$rt" "$NOJQ/bash" -c \
+        'echo "{\"session_id\":\"s-2\"}" | "$NOJQ/bash" "$1"' _ "$HOOKS/uncommitted_worktree_guard.sh"
+    assert_announced uncommitted_worktree_guard.sh
+    [ -d "$rt/uncommitted_worktree_guard.nojq.s-2.announced" ]
+}
+
+@test "#1169 a FIFO planted at the marker path never hangs the hook" {
+    local rt
+    rt="$BATS_TEST_TMPDIR/rt"; mkdir "$rt"
+    mkfifo "$rt/uncommitted_worktree_guard.nojq.s-1.announced"
+    run --separate-stderr timeout 10 env PATH="$NOJQ" XDG_RUNTIME_DIR="$rt" "$NOJQ/bash" -c \
+        'echo "{\"session_id\":\"s-1\"}" | "$NOJQ/bash" "$1"' _ "$HOOKS/uncommitted_worktree_guard.sh"
+    assert_announced uncommitted_worktree_guard.sh
+}
+
+# A hook copied without lib/ must not go back to a silent exit 0.
+@test "#1169 missing notice lib announces instead of failing open silently" {
+    local f
+    for f in dispatch_free_surface_guard review_fanout_guard round_dispatch_guard \
+             uncommitted_worktree_guard open_review_threads_nudge; do
+        run_without_lib "$f.sh" nojq
+        [ "$status" -eq 1 ]
+        [[ "$stderr" == *"$f"*"jq_missing_notice.sh"* ]]
+    done
+}
 
 # Meta-test: a hook carrying `command -v jq ... || exit 0` fails OPEN. That is only acceptable
 # for a hook that cannot refuse, so each one must be listed here with its reason.
+# The five Stop hooks left this list in #1169: they announce once per session, never fail open silently.
 ADVISORY_FAIL_OPEN=(
     "commit_body_wrap.sh:rewriter; reflows the message in place"
     "agent_branch_push_guard.sh:PostToolUse pusher, never blocks"
@@ -72,11 +144,6 @@ ADVISORY_FAIL_OPEN=(
     "release_due_nudge.sh:nudge only"
     "quota_gap_rescue.sh:rescue notice only"
     "push_pr_head_guard.sh:PostToolUse, push already ran; exit 2 is a notice, not a refusal"
-    "uncommitted_worktree_guard.sh:Stop hook; stop_hook_active unreadable without jq, exit 2 would loop"
-    "open_review_threads_nudge.sh:Stop hook; same stop_hook_active loop risk without jq"
-    "dispatch_free_surface_guard.sh:Stop hook; loop-break needs jq, closed would refuse every stop"
-    "review_fanout_guard.sh:Stop hook; loop-break needs jq, closed would refuse every stop"
-    "round_dispatch_guard.sh:Stop hook; loop-break needs jq, closed would refuse every stop"
 )
 
 # A jq-presence probe (command -v / hash / type / which) whose failure branch is `exit`/`return`
@@ -122,7 +189,11 @@ run_without_lib() {
     local d
     d="$(mktemp -d)"
     cp "$HOOKS/$1" "$d/"
-    run --separate-stderr bash -c 'echo "{}" | bash "$1"' _ "$d/$1"
+    if [ "${2:-}" = nojq ]; then
+        run --separate-stderr env PATH="$NOJQ" "$NOJQ/bash" -c 'echo "{}" | "$NOJQ/bash" "$1"' _ "$d/$1"
+    else
+        run --separate-stderr bash -c 'echo "{}" | bash "$1"' _ "$d/$1"
+    fi
     rm -rf "$d"
 }
 

@@ -39,13 +39,22 @@
 # is the exact defect dotfiles-linux-dev#433 is about — a gate reporting its own
 # blindness as OK.
 #
-# Fails OPEN on everything else it cannot resolve (no jq, no transcript, a
-# session that never ran the loop) — a guard that blocks on unrelated sessions
-# gets disabled, same rule as every sibling Stop hook here.
+# Fails OPEN on everything else it cannot resolve (no transcript, a session that
+# never ran the loop) — a guard that blocks on unrelated sessions gets disabled,
+# same rule as every sibling Stop hook here. No jq is the one case that is said
+# out loud: one notice per session, then quiet (lib/jq_missing_notice.sh, #1169).
 set -u
 
-# Stop hook: its stop_hook_active loop-break needs jq, so failing closed would refuse every stop forever (#1164).
-command -v jq >/dev/null 2>&1 || exit 0
+# No jq: announce once per session, never block (#1169; exit 2 would loop, see lib/jq_missing_notice.sh).
+if ! command -v jq >/dev/null 2>&1; then
+	# shellcheck source=lib/jq_missing_notice.sh
+	source "$(dirname "${BASH_SOURCE[0]}")/lib/jq_missing_notice.sh" 2>/dev/null || {
+		echo "round_dispatch_guard: jq not found and lib/jq_missing_notice.sh is not deployed; this Stop hook is OFF (run make ai_clients)." >&2
+		exit 1
+	}
+	jq_missing_announce round_dispatch_guard.sh
+	exit $?
+fi
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/stop_budget.sh
