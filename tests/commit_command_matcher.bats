@@ -738,3 +738,67 @@ _inline_sets() {
     _inline_sets "$c"
     [[ "$output" == *"sets=0"* ]]
 }
+
+# --- #1166: assignments, wrapper words and mid-command redirections before the subcommand -------
+# Every shape runs a commit in bash; both readers (command_has_git_commit and the split-mode
+# _for_each_command + _words_invoke_commit) must see each one.
+
+@test "GAP10: leading NAME=value assignments, quoted values included" {
+    local c
+    for c in 'FOO=1 git commit -m x' 'GIT_DIR=. git commit -m x' "FOO='a b' git commit -m x" \
+             'FOO="a b" BAR=2 git commit -m x' 'A+=x git commit -m x' 'FOO= git commit -m x'; do
+        echo "case: $c"
+        _both_readers_see_commit "$c"
+    done
+}
+
+@test "GAP10: wrapper words with their own options" {
+    local c
+    for c in 'env FOO=1 git commit -m x' 'env -i git commit -m x' 'env -u X git commit -m x' \
+             'env -i -u X FOO=1 git commit -m x' '/usr/bin/env FOO=1 git commit -m x' \
+             'command git commit -m x' 'command -p git commit -m x' 'builtin git commit -m x' \
+             'exec git commit -m x' 'exec -c git commit -m x' 'time git commit -m x' \
+             'time -p git commit -m x' 'nohup git commit -m x' 'sudo git commit -m x' \
+             'sudo -E git commit -m x' 'sudo -u root git commit -m x' 'sudo -n -H git commit -m x' \
+             'nice git commit -m x' 'nice -n 5 git commit -m x' 'nice -5 git commit -m x' \
+             'ionice -c 3 git commit -m x' 'ionice -c2 -n 7 git commit -m x' \
+             'sudo env FOO=1 nice -n 1 rtk git commit -m x' 'FOO=1 sudo -u x git -C d commit -m x'; do
+        echo "case: $c"
+        _both_readers_see_commit "$c"
+    done
+}
+
+@test "GAP10: redirections after the command word and mixed with assignments" {
+    local c
+    for c in 'git 2>/dev/null commit -m x' 'git -C d >f commit -m x' 'rtk >f git commit -m x' \
+             'FOO=1 >f git commit -m x' '>f GIT_DIR=x git commit -m x' 'rtk proxy >f git commit -m x' \
+             'git > f commit -m x' 'git -c k=v 2>f -C d commit -m x' 'env FOO=1 >f git commit -m x' \
+             'sudo >f git commit -m x' 'git --git-dir=d <f commit -m x'; do
+        echo "case: $c"
+        _both_readers_see_commit "$c"
+    done
+}
+
+@test "GAP10: a commit after |& is seen by both readers" {
+    _both_readers_see_commit 'git status |& git commit -m x'
+    _both_readers_see_commit 'FOO=1 git status |& sudo git commit -m x'
+}
+
+@test "GAP10: -C directory is still captured through wrappers and redirections" {
+    run bash -c 'source "$1"; command_has_git_commit "$2"; echo "dir=$COMMIT_COMMAND_GIT_DIR"' \
+        _ "$MATCHER" 'FOO=1 sudo git >f -C /tmp/r commit -m x'
+    [[ "$output" == *"dir=/tmp/r"* ]]
+}
+
+@test "GAP10: obvious non-commits stay misses" {
+    local c
+    for c in 'echo git commit' "FOO='git commit' true" 'env | grep commit' 'sudo -u x git status' \
+             'env FOO=1 git status' 'command -v git commit' 'nice -n 1 echo git commit' \
+             'FOO=1 echo git commit' 'git 2>f status'; do
+        echo "case: $c"
+        run bash -c 'source "$1"; command_has_git_commit "$2"' _ "$MATCHER" "$c"
+        [ "$status" -ne 0 ]
+        _split_run "$c"
+        [[ "$output" != *SEEN* ]]
+    done
+}
