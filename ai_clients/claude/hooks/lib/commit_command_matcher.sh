@@ -141,45 +141,73 @@ _tokenize_segment() {
     return 0
 }
 
-# _skip_redirections
-# Sets `_CCM_REDIR_NEXT` to the index in `_CMD_WORDS` of the first word that is not a leading redirection
-# (#1158): `[n]>f`, `[n]>>f`, `<f`, `[n]>&m`, `&>f`, `<<tag`, `<<<word`, `<>f`, `{fd}>f`, each also in
-# the separated form (`> f`). A word that is an operator alone eats the next word as its target.
-# Over-reading only: a word that merely looks like a redirection is skipped. In split mode the
-# tokenizer cuts `>&2` at its `&` (and `2>&1`, `&>f`), so a bare fd word (`2`, `1-`, `-`) opening a
-# command is the tail of such a cut and is skipped too; the sed-split reading never cuts there,
-# where the same skip is a harmless extra over-read.
+# _redir_len I
+# Sets `_CCM_RLEN` to how many words the redirection at `_CMD_WORDS[I]` takes: 1 for `>f` / `2>&1`,
+# 2 for a bare operator that eats the next word as its target (`> f`); returns 1 (RLEN 0) when the
+# word is no redirection. Over-reading only: a word that merely looks like one counts.
 _CCM_REDIR_RE='^([0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\}|&)?(>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)(.*)$'
-_skip_redirections() {
-    local i=0 w
+_CCM_ASSIGN_RE='^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?='
+_redir_len() {
+    local w="${_CMD_WORDS[$1]:-}"
+    _CCM_RLEN=0
+    [[ -n "$w" && "$w" =~ $_CCM_REDIR_RE ]] || return 1
+    if [[ -n "${BASH_REMATCH[3]}" ]]; then _CCM_RLEN=1; else _CCM_RLEN=2; fi
+}
+
+# _skip_prefix I
+# Sets `_CCM_NEXT` to the index in `_CMD_WORDS`, from I on, of the command word that follows every
+# leading redirection (#1158), `NAME=value` assignment and wrapper word with its own options
+# (`env -u X`, `command`, `builtin`, `exec`, `time -p`, `nohup`, `sudo -u x`, `nice -n N`,
+# `ionice -c N`), in any order (#1166). `git` and `rtk` are never skipped, so this only adds hits.
+# In split mode the tokenizer cuts `>&2` at its `&`, so a bare fd word (`2`, `1-`, `-`) is skipped
+# too: the tail of such a cut. Over-reading only.
+_skip_prefix() {
+    local i=$1 w vals
     while w="${_CMD_WORDS[i]:-}"; [[ -n "$w" ]]; do
-        if [[ "$w" =~ $_CCM_REDIR_RE ]]; then
-            [[ -n "${BASH_REMATCH[3]}" ]] || i=$((i + 1))
-        elif [[ ! "$w" =~ ^([0-9]+-?|-)$ ]]; then
-            break
-        fi
+        if _redir_len "$i"; then i=$((i + _CCM_RLEN)); continue; fi
+        if [[ "$w" =~ $_CCM_ASSIGN_RE || "$w" =~ ^([0-9]+-?|-)$ ]]; then i=$((i + 1)); continue; fi
+        case "${w##*/}" in
+            env) vals=' -u -C -S --unset --chdir --split-string ' ;;
+            sudo) vals=' -u -g -h -p -C -D -R -r -T -t -U ' ;;
+            nice) vals=' -n --adjustment ' ;;
+            ionice) vals=' -c -n -p -P -u --class --classdata --pid --pgid --uid ' ;;
+            time) vals=' -f -o --format --output ' ;;
+            exec) vals=' -a ' ;;
+            command | builtin | nohup) vals='' ;;
+            *) break ;;
+        esac
         i=$((i + 1))
+        while w="${_CMD_WORDS[i]:-}"; [[ "$w" == -* ]]; do
+            # `command -v git commit` runs no commit: only -p / -- are skipped after `command`
+            [[ "${_CMD_WORDS[i - 1]##*/}" == command && "$w" != -p && "$w" != -- ]] && break
+            [[ "$vals" == *" $w "* ]] && i=$((i + 1))
+            i=$((i + 1))
+        done
     done
-    _CCM_REDIR_NEXT=$i
+    _CCM_NEXT=$i
 }
 
 # _words_invoke_commit
-# Return 0 if the global `_CMD_WORDS` (ONE simple command's words) is a `git commit` invocation: an
-# optional `rtk` / `rtk proxy` prefix, the git binary (bare or an absolute path), any run of global
-# flags, then the literal subcommand `commit`. On a match, sets COMMIT_COMMAND_GIT_DIR and
-# `_COMMIT_ARGS_FROM` (the index of the first word after `commit`).
+# Return 0 if the global `_CMD_WORDS` (ONE simple command's words) is a `git commit` invocation: any
+# leading redirections, assignments and wrapper words (_skip_prefix), an optional `rtk` / `rtk
+# proxy` prefix, the git binary (bare or an absolute path), any run of global flags, then the
+# literal subcommand `commit`, with redirections allowed between all of these (#1166). On a match,
+# sets COMMIT_COMMAND_GIT_DIR and `_COMMIT_ARGS_FROM` (the index of the first word after `commit`).
 _words_invoke_commit() {
     local -a words=("${_CMD_WORDS[@]:-}")
     local i=0 dir=''
 
-    # Redirections may come BEFORE the command word (`>/dev/null git commit`, #1158).
-    _skip_redirections
-    i=$_CCM_REDIR_NEXT
+    _skip_prefix 0
+    i=$_CCM_NEXT
 
     # `rtk` / `rtk proxy` prefix (RTK.md's proxy and its raw escape hatch).
     if [[ "${words[i]:-}" && "${words[i]##*/}" == "rtk" ]]; then
         i=$((i + 1))
-        [[ "${words[i]:-}" == "proxy" ]] && i=$((i + 1))
+        while _redir_len "$i"; do i=$((i + _CCM_RLEN)); done
+        if [[ "${words[i]:-}" == "proxy" ]]; then
+            i=$((i + 1))
+            while _redir_len "$i"; do i=$((i + _CCM_RLEN)); done
+        fi
     fi
 
     # The binary itself: `git` or any path ending in `/git`.
@@ -188,7 +216,9 @@ _words_invoke_commit() {
 
     # Global flags sit between the binary and the subcommand. `-C` is captured rather than merely
     # skipped, because it changes WHICH repository the commit lands in.
-    while [[ "${words[i]:-}" == -* ]]; do
+    while :; do
+        while _redir_len "$i"; do i=$((i + _CCM_RLEN)); done
+        [[ "${words[i]:-}" == -* ]] || break
         [[ "${words[i]}" == "-C" ]] && dir="${words[i + 1]:-}"
         [[ "$_GIT_VALUE_FLAGS" == *" ${words[i]} "* ]] && i=$((i + 1))
         i=$((i + 1))
@@ -246,7 +276,7 @@ command_has_git_commit() {
     for reading in "${readings[@]}"; do
         while IFS= read -r segment; do
             _segment_invokes_commit "$segment" && return 0
-        done <<< "$(printf '%s' "$reading" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
+        done <<< "$(printf '%s' "$reading" | sed -E 's/(&&|\|\||\|&|;|\|)/\n/g')"
     done
 
     # Last reading, only for a command with `>|`: the quote-aware split reader, which knows a
