@@ -803,6 +803,50 @@ _inline_sets() {
     [[ "$output" != *leak* ]]
 }
 
+@test "GAP10: redirections between a wrapper and its options keep the option state" {
+    local c
+    for c in 'env > /dev/null -u X git commit -m x' 'env -u > f X git commit -m x' \
+             'sudo >f -u root git commit -m x' 'sudo -u >f root git commit -m x' \
+             'nice 2>/dev/null -n 5 git commit -m x' 'time >f -p git commit -m x' \
+             'ionice <in -c 3 git commit -m x' 'env -i >f FOO=1 git commit -m x' \
+             'command >f -p git commit -m x'; do
+        echo "case: $c"
+        _both_readers_see_commit "$c"
+    done
+}
+
+@test "GAP10: command -v / -V only looks git up, no commit runs" {
+    local c
+    for c in 'command -v git commit -m x' 'command -p -v git commit -m x' 'command -V git commit' \
+             'command -pv git commit' 'command >f -v git commit -m x'; do
+        echo "case: $c"
+        run bash -c 'source "$1"; command_has_git_commit "$2"' _ "$MATCHER" "$c"
+        [ "$status" -ne 0 ]
+        _split_run "$c"
+        [[ "$output" != *SEEN* ]]
+    done
+    _both_readers_see_commit 'command -p git commit -m x'
+}
+
+@test "GAP10: redirections between a git value option and its value" {
+    local c
+    for c in 'git -C > /dev/null /tmp commit -m x' 'git -c >f k=v commit -m x' \
+             'git --git-dir >f .git commit -m x' 'git --work-tree 2>/dev/null d commit -m x'; do
+        echo "case: $c"
+        _both_readers_see_commit "$c"
+    done
+}
+
+@test "GAP10: git -C value is the directory, not the redirection, through every reader" {
+    local c='git -C > /dev/null /tmp commit -F msg'
+    run bash -c 'source "$1"; command_has_git_commit "$2"; echo "dir=$COMMIT_COMMAND_GIT_DIR"' _ "$MATCHER" "$c"
+    [[ "$output" == *"dir=/tmp"* ]]
+    run bash -c 'source "$1"; commit_source_dir "$2" file; echo "found=$COMMIT_SOURCE_FOUND dir=$COMMIT_SOURCE_DIR"' _ "$MATCHER" "$c"
+    [[ "$output" == *"found=1 dir=/tmp"* ]]
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "dirs=${COMMIT_MESSAGE_DIRS[*]}"' _ "$MATCHER" 'git -C > /dev/null /tmp commit -m x'
+    [[ "$output" == *"dirs=/tmp"* ]]
+}
+
 @test "GAP10: obvious non-commits stay misses" {
     local c
     for c in 'echo git commit' "FOO='git commit' true" 'env | grep commit' 'sudo -u x git status' \
