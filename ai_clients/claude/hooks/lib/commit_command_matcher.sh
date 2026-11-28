@@ -168,9 +168,20 @@ _redir_len() {
 # In split mode the tokenizer cuts `>&2` at its `&`, so a bare fd word (`2`, `1-`, `-`) is skipped
 # too: the tail of such a cut. Over-reading only.
 _skip_prefix() {
-    local i=$1 w vals
+    local i=$1 w vals wrap='' pending=0
+    _CCM_QUERY=0
     while w="${_CMD_WORDS[i]:-}"; [[ -n "$w" ]]; do
+        # A redirection never ends a wrapper's option list: `env > f -u X git commit` (#1172)
         if _redir_len "$i"; then i=$((i + _CCM_RLEN)); continue; fi
+        if ((pending)); then pending=0; i=$((i + 1)); continue; fi
+        if [[ -n "$wrap" && "$w" == -* ]]; then
+            # `command -v` / `-V` only looks the name up, wherever it sits in the option list
+            [[ "$wrap" == command && "$w" != -- && "$w" == *[vV]* ]] && _CCM_QUERY=1
+            [[ "$vals" == *" $w "* ]] && pending=1
+            i=$((i + 1))
+            continue
+        fi
+        wrap=''
         if [[ "$w" =~ $_CCM_ASSIGN_RE || "$w" =~ ^([0-9]+-?|-)$ ]]; then i=$((i + 1)); continue; fi
         case "${w##*/}" in
             env) vals=' -u -C -S --unset --chdir --split-string ' ;;
@@ -182,13 +193,8 @@ _skip_prefix() {
             command | builtin | nohup) vals='' ;;
             *) break ;;
         esac
+        wrap="${w##*/}"
         i=$((i + 1))
-        while w="${_CMD_WORDS[i]:-}"; [[ "$w" == -* ]]; do
-            # `command -v git commit` runs no commit: only -p / -- are skipped after `command`
-            [[ "${_CMD_WORDS[i - 1]##*/}" == command && "$w" != -p && "$w" != -- ]] && break
-            [[ "$vals" == *" $w "* ]] && i=$((i + 1))
-            i=$((i + 1))
-        done
     done
     _CCM_NEXT=$i
 }
@@ -201,9 +207,10 @@ _skip_prefix() {
 # sets COMMIT_COMMAND_GIT_DIR and `_COMMIT_ARGS_FROM` (the index of the first word after `commit`).
 _words_invoke_commit() {
     local -a words=("${_CMD_WORDS[@]:-}")
-    local i=0 dir=''
+    local i=0 dir='' flag
 
     _skip_prefix 0
+    ((_CCM_QUERY)) && return 1   # `command -v git commit` only looks git up
     i=$_CCM_NEXT
 
     # `rtk` / `rtk proxy` prefix (RTK.md's proxy and its raw escape hatch).
@@ -225,9 +232,14 @@ _words_invoke_commit() {
     while :; do
         while _redir_len "$i"; do i=$((i + _CCM_RLEN)); done
         [[ "${words[i]:-}" == -* ]] || break
-        [[ "${words[i]}" == "-C" ]] && dir="${words[i + 1]:-}"
-        [[ "$_GIT_VALUE_FLAGS" == *" ${words[i]} "* ]] && i=$((i + 1))
+        flag="${words[i]}"
         i=$((i + 1))
+        if [[ "$_GIT_VALUE_FLAGS" == *" $flag "* ]]; then
+            # a redirection may sit between the option and its value: `git -C > f /tmp commit`
+            while _redir_len "$i"; do i=$((i + _CCM_RLEN)); done
+            [[ "$flag" == "-C" ]] && dir="${words[i]:-}"
+            i=$((i + 1))
+        fi
     done
 
     [[ "${words[i]:-}" == "commit" ]] || return 1
