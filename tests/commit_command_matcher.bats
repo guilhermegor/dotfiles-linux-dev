@@ -50,7 +50,8 @@ setup() {
 
 @test "MATCH: chained after a single pipe" {
     run bash -c "source '$MATCHER' && command_has_git_commit 'echo x | xargs -I{} git commit -m {}'"
-    [ "$status" -eq 1 ]  # 'xargs -I{} git commit' — segment starts with xargs, not git/rtk: correctly no match
+    # xargs runs its command line (#1173): bash commits here, so the old "no match" expectation was wrong
+    [ "$status" -eq 0 ]
 }
 
 # --- the house-style spellings: absolute path + global flags ------------------------------------
@@ -794,7 +795,7 @@ _inline_sets() {
 @test "GAP10: the tokenizer leaks no globals and carries no _SEGMENT_SOFT between calls" {
     run bash -c 'source "$1"
         _tokenize_segment "cat a>|b; echo '"'"'open" split
-        [[ " ${_SEGMENT_SOFT[*]} " == *" 2 "* ]] || { echo "first call lost its own cut"; exit 1; }
+        [[ " ${_SEGMENT_SOFT[*]} " == *" 3 "* ]] || { echo "first call lost its own cut"; exit 1; }
         _tokenize_segment "echo '"'"'open" split
         echo "second=${#_SEGMENT_SOFT[@]}"
         for v in soft_keep prev_lt prev_gt lt gt; do declare -p "$v" 2>/dev/null && echo "leak $v"; done
@@ -924,7 +925,7 @@ _both_see_each() {
 @test "GAP11: env -S / --split-string re-split the value as a command" {
     _both_see_each "env -S 'git commit -m x'" "env --split-string='git commit -m x'" \
         "env --split-string 'git commit -m x'" "env -S'git commit -m x'" "env -iS 'git commit -m x'" \
-        "env FOO=1 -S 'git commit -m x'" "env -S 'env -S \"git commit -m x\"'" "env -S 'FOO=1 git commit'"
+        "env -S 'env -S \"git commit -m x\"'" "env -S 'FOO=1 git commit'"
 }
 
 @test "GAP11: a redirect glued to the word before it" {
@@ -969,7 +970,14 @@ CASES
 }
 
 @test "GAP11: an unbalanced \$( stays fail-closed, later commands remain visible" {
-    _both_see_each 'FOO=$(a b git commit -m x' 'FOO=$(a b; git commit -m x'
+    _both_see_each 'FOO=$(a b; git commit -m x' 'echo `a b; git commit -m x'
+    run bash -c 'source "$1"; _tokenize_segment "$2"; printf "<%s>" "${_SEGMENT_WORDS[@]}"' _ "$MATCHER" 'FOO=$(a b c'
+    [ "$output" = '<FOO=$(a><b><c>' ]
+}
+
+@test "GAP11: words after an env -S value keep their blanks (the message reaches the guards)" {
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "n=${#COMMIT_MESSAGE_SETS[@]} m=${COMMIT_MESSAGE_SETS[0]}"' _ "$MATCHER" "env -S 'git commit' -m 'a  b *'"
+    [ "$output" = "n=1 m=a  b *" ]
 }
 
 @test "GAP11: new prefixes are still misses when no git commit follows" {
