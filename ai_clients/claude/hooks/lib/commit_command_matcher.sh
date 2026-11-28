@@ -443,7 +443,8 @@ _strip_heredoc_bodies() {
         pending {
             buf = buf $0
             if (!tq[ci] && buf ~ /(^|[^\\])(\\\\)*\\$/) { sub(/\\$/, "", buf); next }
-            t = buf; buf = ""; sub(/^\t+/, "", t)
+            t = buf; buf = ""
+            if (td[ci]) sub(/^\t+/, "", t)   # leading tabs go only for <<-, never for a plain <<
             if (t == tags[ci] && ++ci > nt) { pending = 0; nt = 0 }
             next
         }
@@ -493,7 +494,7 @@ _strip_heredoc_bodies() {
                 if (c == "<" && substr($0, i, 2) == "<<") {
                     rest = substr($0, i + 2); match(rest, /^-?[ \t]*/); plen = RLENGTH
                     tg = delim(substr(rest, plen + 1))
-                    if (tg != "") { tags[++nt] = tg; tq[nt] = dqf }
+                    if (tg != "") { tags[++nt] = tg; tq[nt] = dqf; td[nt] = (substr(rest, 1, 1) == "-") }
                     i += 2 + plen + dlen   # several heredocs may share one line (#1152)
                     continue
                 }
