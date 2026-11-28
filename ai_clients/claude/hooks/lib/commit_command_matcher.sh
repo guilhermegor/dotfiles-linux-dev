@@ -267,19 +267,19 @@ _ccm_note_gitdir() {
 
 # _note_wrapper_value WRAPPER OPTION VALUE INDEX OPTION_INDEX
 # What a wrapper option's value means for the commit that follows: a directory it moves into
-# (`env -C`, `sudo -D`) or a command line it re-splits (`env -S`). `sudo -R` is a chroot root, kept
-# apart: it is no directory to scan from the host (see _words_invoke_commit_once for how it composes).
+# (`env -C`, `sudo -D`) or a command line it re-splits (`env -S`). `sudo -R` is a chroot: it only marks
+# the commit's directory as not nameable from the host (see _words_invoke_commit_once).
 # A relative directory resolves against the one an earlier wrapper set; an absolute one replaces it.
 # `-S` also records the index of its option word, so the re-split can replace both option and value.
 _note_wrapper_value() {
     case "$1:$2" in
         env:-C | env:--chdir | sudo:-D | sudo:--chdir)
             _ccm_dir_word "$3" "$4"
-            _ccm_step "$_CCM_WDIR" "$_CCM_WDIR_BAD"
+            # one invocation keeps its LAST value (GNU env, measured), so step from where THIS wrapper
+            # started, never from its own earlier -C; only a later wrapper composes
+            _ccm_step "$_CCM_WBASE" "$_CCM_WBASE_BAD"
             _CCM_WDIR="$_CCM_STEP" _CCM_WDIR_BAD=$_CCM_STEPBAD ;;
-        sudo:-R | sudo:--chroot)
-            _ccm_dir_word "$3" "$4"
-            _CCM_CHROOT="$_CCM_DIRW" _CCM_CHROOT_BAD=$_CCM_DIRBAD ;;
+        sudo:-R | sudo:--chroot) _CCM_CHROOT=1 ;;
         env:-S | env:--split-string) _CCM_SPLIT_IDX=$4 _CCM_SPLIT_VAL="$3" _CCM_SPLIT_OPT=$5 ;;
     esac
 }
@@ -324,7 +324,7 @@ _scan_wrapper_option() {
 _skip_prefix() {
     local i=$1 w vals wrap='' pending=0 popt='' popt_i=-1 npos=0 rest
     _CCM_QUERY=0 _CCM_WDIR='' _CCM_WDIR_BAD=0 _CCM_SPLIT_IDX=-1 _CCM_SPLIT_VAL='' _CCM_SPLIT_OPT=-1
-    _CCM_GITDIR_ABS=0 _CCM_CHROOT='' _CCM_CHROOT_BAD=0
+    _CCM_GITDIR_ABS=0 _CCM_CHROOT=0 _CCM_WBASE='' _CCM_WBASE_BAD=0
     # Bounded by the array, not by an empty word: an option's value may be '' (`env -S ''`)
     while ((i < ${#_CMD_WORDS[@]})); do
         w="${_CMD_WORDS[i]}"
@@ -377,6 +377,7 @@ _skip_prefix() {
             *) break ;;
         esac
         wrap="${w##*/}"
+        _CCM_WBASE="$_CCM_WDIR" _CCM_WBASE_BAD=$_CCM_WDIR_BAD
         i=$((i + 1))
     done
     _CCM_NEXT=$i
@@ -500,13 +501,9 @@ _words_invoke_commit_once() {
     _CCM_DIRW="$dir" _CCM_DIRBAD=$dir_bad
     _ccm_step "$_CCM_WDIR" "$_CCM_WDIR_BAD"
     dir="$_CCM_STEP" dir_bad=$_CCM_STEPBAD
-    # A sudo chroot: only an absolute `git -C` is known to sit in the jail, at <root><dir> on the host.
-    # The jail's cwd is invisible from here, so anything else is not nameable.
-    if [[ -n "$_CCM_CHROOT" ]]; then
-        if [[ "$_CCM_CHROOT" == /* && "$dir" == /* && "$_CCM_CHROOT_BAD" == 0 && "$dir_bad" == 0 ]]; then
-            dir="${_CCM_CHROOT%/}$dir"
-        else dir='' unres=1; fi
-    fi
+    # A sudo chroot: a path inside the jail is not a host path. `..` and absolute symlinks in it make
+    # any join of <root> and <dir> a guess, and its cwd is invisible from here: not nameable.
+    ((_CCM_CHROOT)) && dir='' unres=1
     # The words are unexpanded: `-C "$PWD"` would reach the secret guard as `git -C '$PWD'`, fail,
     # and skip the scan. A word the shell would expand publishes no dir, and says so through
     # COMMIT_COMMAND_GIT_DIR_UNRESOLVED, so a guard can fail closed instead of scanning the cwd.

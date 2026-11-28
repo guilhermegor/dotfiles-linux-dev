@@ -79,6 +79,13 @@ main() {
     # matcher; see its header for the four shapes the old inline regex missed.
     command_has_git_commit "$command" || exit 0
 
+    # The matcher could not name the repository this commit targets (an expansion in `-C`, an
+    # absolute GIT_DIR, a sudo chroot). Scanning the cwd would check some OTHER repository, or
+    # nothing when the cwd is no repo: fail closed instead (#1175).
+    if [[ "${COMMIT_COMMAND_GIT_DIR_UNRESOLVED:-0}" == 1 ]]; then
+        block_unresolved "$command"
+    fi
+
     scan_git rev-parse --show-toplevel >/dev/null 2>&1 || exit 0
 
     # `git commit -a`/`--all` also commits tracked-but-unstaged changes, which are not in
@@ -134,6 +141,19 @@ scan_added_lines() {
                 ;;
         esac
     done <<< "$1"
+}
+
+block_unresolved() {
+    {
+        echo "BLOCKED: cannot tell which repository this git commit targets, so its staged changes"
+        echo "cannot be scanned for secrets: $1"
+        echo
+        echo "The target comes from an expansion (\$VAR, \$(...), a glob), an absolute GIT_DIR /"
+        echo "--git-dir, or a sudo chroot, none of which can be resolved without running the command."
+        echo "Write the repository path literally (git -C /absolute/path commit ...) and re-run the"
+        echo "SAME commit."
+    } >&2
+    exit 2
 }
 
 block() {
