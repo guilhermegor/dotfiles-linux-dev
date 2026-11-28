@@ -307,7 +307,7 @@ _skip_prefix() {
             stdbuf) vals=' -i -o -e --input --output --error ' ;;
             taskset | chrt) vals='' npos=1 ;;   # the CPU mask / the priority
             flock) vals=' -w -E --timeout --conflict-exit-code ' npos=1 ;;   # the lock file
-            strace) vals=' -o -e -p -P -s -u -E -a -b -S -X -O -I --output --trace --attach --string-limit --user --env --signal --abbrev --status --inject --fault ' ;;
+            strace) vals=' -o -e -p -P -s -u -E -a -b -S -U -X -O -I --output --trace --attach --string-limit --user --env --signal --abbrev --status --inject --fault ' ;;
             setsid | command | builtin | nohup) vals='' ;;
             *) break ;;
         esac
@@ -406,6 +406,12 @@ _words_invoke_commit_once() {
     # else that move itself (`GIT_DIR=` / `GIT_WORK_TREE=` publish nothing, see #1175).
     if [[ -n "$dir" && "$dir" != /* && -n "$_CCM_WDIR" ]]; then dir="${_CCM_WDIR%/}/$dir"
     elif [[ -z "$dir" ]]; then dir="$_CCM_WDIR"; fi
+    # The words are unexpanded: `-C "$PWD"` would reach the secret guard as `git -C '$PWD'`, fail,
+    # and skip the scan. Only `~` / `~/` is resolved; any other text the shell would expand
+    # publishes no dir, so the guard scans the cwd.
+    # ponytail: `git -C "$OTHER"` then scans the cwd, not $OTHER; resolving it is #1175.
+    case "$dir" in \~) dir="$HOME" ;; \~/*) dir="$HOME/${dir#\~/}" ;; esac
+    [[ "$dir" == *[\$\`]* || "$dir" == \~* ]] && dir=''
     COMMIT_COMMAND_GIT_DIR="$dir"
     _COMMIT_ARGS_FROM=$((i + 1))
     return 0
