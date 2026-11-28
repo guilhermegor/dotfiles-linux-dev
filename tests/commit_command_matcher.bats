@@ -50,7 +50,8 @@ setup() {
 
 @test "MATCH: chained after a single pipe" {
     run bash -c "source '$MATCHER' && command_has_git_commit 'echo x | xargs -I{} git commit -m {}'"
-    [ "$status" -eq 1 ]  # 'xargs -I{} git commit' — segment starts with xargs, not git/rtk: correctly no match
+    # xargs runs its command line (#1173): bash commits here, so the old "no match" expectation was wrong
+    [ "$status" -eq 0 ]
 }
 
 # --- the house-style spellings: absolute path + global flags ------------------------------------
@@ -794,7 +795,7 @@ _inline_sets() {
 @test "GAP10: the tokenizer leaks no globals and carries no _SEGMENT_SOFT between calls" {
     run bash -c 'source "$1"
         _tokenize_segment "cat a>|b; echo '"'"'open" split
-        [[ " ${_SEGMENT_SOFT[*]} " == *" 2 "* ]] || { echo "first call lost its own cut"; exit 1; }
+        [[ " ${_SEGMENT_SOFT[*]} " == *" 3 "* ]] || { echo "first call lost its own cut"; exit 1; }
         _tokenize_segment "echo '"'"'open" split
         echo "second=${#_SEGMENT_SOFT[@]}"
         for v in soft_keep prev_lt prev_gt lt gt; do declare -p "$v" 2>/dev/null && echo "leak $v"; done
@@ -874,6 +875,197 @@ _inline_sets() {
     for c in 'echo git commit' "FOO='git commit' true" 'env | grep commit' 'sudo -u x git status' \
              'env FOO=1 git status' 'command -v git commit' 'nice -n 1 echo git commit' \
              'FOO=1 echo git commit' 'git 2>f status'; do
+        echo "case: $c"
+        run bash -c 'source "$1"; command_has_git_commit "$2"' _ "$MATCHER" "$c"
+        [ "$status" -ne 0 ]
+        _split_run "$c"
+        [[ "$output" != *SEEN* ]]
+    done
+}
+
+# --- #1173: reserved words, more wrappers, glued redirects, dir through wrappers -----------------
+# Every shape below makes bash run `git commit` (or, for sudo/doas, would if the wrapper ran).
+
+_both_see_each() {
+    local c
+    for c in "$@"; do
+        echo "case: $c"
+        _matcher_has_commit "$c"
+        _split_run "$c"
+        [[ "$output" == *SEEN* ]]
+    done
+}
+
+@test "GAP11: reserved words in command position" {
+    _both_see_each '! git commit -m x' 'if git commit -m x; then :; fi' '{ git commit -m x; }' \
+        'while git commit -m x; do :; done' 'until git commit -m x; do :; done' \
+        'if :; then git commit -m x; fi' 'if :; then :; else git commit -m x; fi' \
+        'if :; then :; elif git commit -m x; then :; fi' 'for i in 1; do git commit -m x; done' \
+        '( git commit -m x )' '(git commit -m x)' '! rtk git commit -m x' 'if ! git commit -m x; then :; fi'
+}
+
+@test "GAP11: wrappers with their options and positionals" {
+    _both_see_each 'timeout 10 git commit -m x' 'timeout -s KILL 10 git commit -m x' \
+        'timeout --signal=KILL --foreground 10s git commit -m x' 'echo x | xargs git commit -m' \
+        'xargs -n 1 -I {} git commit -m {}' 'doas -u root git commit -m x' 'stdbuf -oL git commit -m x' \
+        'stdbuf -o L git commit -m x' 'setsid git commit -m x' 'setsid -w git commit -m x' \
+        'taskset 0x1 git commit -m x' 'taskset -c 0-3 git commit -m x' 'chrt -f 10 git commit -m x' \
+        'chrt --reset-on-fork -r 5 git commit -m x' 'flock /tmp/l git commit -m x' \
+        'flock -w 5 /tmp/l git commit -m x' 'strace -o /tmp/t git commit -m x' \
+        'strace -c -U name git commit -m x' \
+        'timeout 10 sudo -u x nice -n 3 git commit -m x'
+}
+
+@test "GAP11: sudo long options, both spellings, and bundled short options" {
+    _both_see_each 'sudo --user root git commit -m x' 'sudo --user=root git commit -m x' \
+        'sudo -h git commit -m x' 'sudo -Eu root git commit -m x' 'sudo -uroot git commit -m x' \
+        'sudo --prompt p --group g git commit -m x' 'env -iu X git commit -m x' \
+        'env -i -u X git commit -m x' 'sudo -EH -u root -g g git commit -m x' 'nice -n5 git commit -m x'
+}
+
+@test "GAP11: env -S / --split-string re-split the value as a command" {
+    _both_see_each "env -S 'git commit -m x'" "env --split-string='git commit -m x'" \
+        "env --split-string 'git commit -m x'" "env -S'git commit -m x'" "env -iS 'git commit -m x'" \
+        "env -S 'env -S \"git commit -m x\"'" "env -S 'FOO=1 git commit'"
+}
+
+@test "GAP11: env -S takes an empty value, and its value may follow a spaced redirect" {
+    # GNU env ignores an empty split string and runs the rest (#1174 review)
+    _both_see_each "env -S '' git commit -m x" "env -u X -S '' git commit -m x" \
+        "env -S > /dev/null 'git commit -m x'" "env -S 2> /dev/null 'git commit -m x'" \
+        "env -u X -S > /dev/null 'git commit -m x'"
+}
+
+@test "GAP11: a redirect glued to the word before it" {
+    _both_see_each 'git>/dev/null commit -m x' 'env>/dev/null git commit -m x' 'env>f git commit -m x' \
+        "git -C ''>/dev/null commit -m x" 'git commit>/dev/null -m x' 'git<f commit -m x' \
+        'git 2>/dev/null commit -m x' 'git -C /tmp>/dev/null commit -m x' 'sudo>f git commit -m x'
+}
+
+@test "GAP11: a glued redirect does not become the -C directory, and fd prefixes stay whole" {
+    run bash -c 'source "$1"; command_has_git_commit "$2"; echo "dir=[$COMMIT_COMMAND_GIT_DIR]"' _ "$MATCHER" "git -C ''>/dev/null commit -m x"
+    [[ "$output" == *"dir=[]"* ]]
+    run bash -c 'source "$1"; _tokenize_segment "$2"; printf "<%s>" "${_SEGMENT_WORDS[@]}"' _ "$MATCHER" "git 2>f 10>g {fd}>h commit '2'>i a>j"
+    [ "$output" = "<git><2>f><10>g><{fd}>h><commit><2><>i><a><>j>" ]
+}
+
+@test "GAP11: -C directory is followed through env, sudo and GIT_DIR / GIT_WORK_TREE" {
+    local c want
+    while IFS='|' read -r c want; do
+        echo "case: $c"
+        run bash -c 'source "$1"; command_has_git_commit "$2" && echo "dir=[$COMMIT_COMMAND_GIT_DIR]"' _ "$MATCHER" "$c"
+        [[ "$output" == *"dir=[$want]"* ]]
+    done <<'CASES'
+env -C /tmp/r git commit -m x|/tmp/r
+env --chdir /tmp/r git commit -m x|/tmp/r
+env --chdir=/tmp/r git commit -m x|/tmp/r
+env -C/tmp/r git commit -m x|/tmp/r
+sudo -D /tmp/r git commit -m x|/tmp/r
+sudo -R /tmp/r git commit -m x|
+sudo --chroot=/tmp/r git commit -m x|
+sudo -R /tmp/jail git -C /repo commit -m x|/repo
+sudo --chdir=/tmp/r git commit -m x|/tmp/r
+GIT_DIR=/tmp/r/.git git commit -m x|
+env GIT_DIR=/tmp/r/.git git commit -m x|
+GIT_DIR=/tmp/a/.git GIT_WORK_TREE=/tmp/w git commit -m x|
+GIT_WORK_TREE=/tmp/w git commit -m x|
+env -C /tmp/target -S 'git commit -m x'|/tmp/target
+env -C /tmp/p env -C child git commit -m x|/tmp/p/child
+env -C /tmp/p env -C /abs git commit -m x|/abs
+sudo -D /tmp/p env -C child git -C sub commit -m x|/tmp/p/child/sub
+env -C /tmp/r git -C sub commit -m x|/tmp/r/sub
+env -C /tmp/r git -C /abs commit -m x|/abs
+git -C /abs commit -m x|/abs
+CASES
+}
+
+@test "GAP11: a directory the shell would expand is never published as literal text" {
+    # `git -C '$PWD'` fails in the secret guard, which then skips its scan: publish no dir
+    # (scan the cwd) unless the text is literal; a leading `~` / `~/` is $HOME.
+    local c want
+    while IFS='|' read -r c want; do
+        echo "case: $c"
+        run bash -c 'source "$1"; command_has_git_commit "$2" && echo "dir=[$COMMIT_COMMAND_GIT_DIR]"' _ "$MATCHER" "$c"
+        [[ "$output" == *"dir=[${want//@HOME@/$HOME}]"* ]]
+    done <<'CASES'
+env -C "$PWD" git commit -m x|
+git -C "$PWD" commit -m x|
+git -C "${PWD}/sub" commit -m x|
+env -C /tmp/r git -C "$SUB" commit -m x|
+sudo -D `pwd` git commit -m x|
+git -C ~user/r commit -m x|
+env -C /tmp/target* git commit -m x|
+git -C /tmp/r? commit -m x|
+sudo -D /tmp/[ab] git commit -m x|
+git -C ~/r commit -m x|@HOME@/r
+env -C /tmp git -C ~/r commit -m x|@HOME@/r
+env -C /tmp env -C ~/x git commit -m x|@HOME@/x
+env -C ~ git -C sub commit -m x|@HOME@/sub
+env -C /tmp git -C ~u/r commit -m x|
+env -C "$X" git -C /abs commit -m x|/abs
+env -C ~ git commit -m x|@HOME@
+git -C '/tmp/a b' commit -m x|/tmp/a b
+CASES
+}
+
+@test "GAP11: FOO=\$(a b) and backtick assignments before the command" {
+    _both_see_each 'FOO=$(a b) git commit -m x' 'FOO=$(a $(b c) d) git commit -m x' 'FOO=$((1 + 2)) git commit -m x' \
+        'FOO=`a b` git commit -m x' 'A=1 FOO=$(a "b c") git commit -m x'
+}
+
+@test "GAP11: an unbalanced \$( stays fail-closed, later commands remain visible" {
+    _both_see_each 'FOO=$(a b; git commit -m x' 'echo `a b; git commit -m x'
+    run bash -c 'source "$1"; _tokenize_segment "$2"; printf "<%s>" "${_SEGMENT_WORDS[@]}"' _ "$MATCHER" 'FOO=$(a b c'
+    [ "$output" = '<FOO=$(a><b><c>' ]
+}
+
+@test "GAP11: words after an env -S value keep their blanks (the message reaches the guards)" {
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "n=${#COMMIT_MESSAGE_SETS[@]} m=${COMMIT_MESSAGE_SETS[0]}"' _ "$MATCHER" "env -S 'git commit' -m 'a  b *'"
+    [ "$output" = "n=1 m=a  b *" ]
+}
+
+@test "GAP11: a backslash at the end of a # comment line does not continue it" {
+    _both_see_each $'echo x # note \\\ngit commit -m x' $'# note \\\ngit commit -m x' \
+        $'true # c \\\n\\\ngit commit -m x'
+}
+
+@test "GAP11 review: env -S keeps the enclosing env words, so its options still apply" {
+    _both_see_each "env -S '-u HOME git commit -m x'" "env -u HOME -S 'git commit -m x'" \
+        "env -i -S 'git commit -m x' -- ignored"
+}
+
+@test "GAP11 review: an env -S before a later quoted-> command leaves that command readable" {
+    local c="env -S 'git status'; git -C '>d' commit -m x"
+    _split_run "$c"
+    [[ "$output" == *SEEN* ]]
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "n=${#COMMIT_MESSAGE_SETS[@]} m=${COMMIT_MESSAGE_SETS[0]} d=${COMMIT_MESSAGE_DIRS[0]}"' _ "$MATCHER" "$c"
+    [ "$output" = "n=1 m=x d=>d" ]
+}
+
+@test "GAP11 review: xargs options with an optional argument take no separate value" {
+    _both_see_each "printf 'x\\n' | env -u HOME xargs --replace git commit -m '{}'" \
+        'xargs --eof git commit -m x' 'xargs --max-lines git commit -m x' 'xargs -i git commit -m x' \
+        'xargs -e git commit -m x' 'xargs -l git commit -m x' 'xargs --replace=R git commit -m x' \
+        'xargs -I R git commit -m x' 'xargs -E EOF git commit -m x'
+}
+
+@test "GAP11 review: only an unquoted, unescaped & joins a glued >" {
+    local c m
+    for c in "git commit -m 'a&'>/dev/null" 'git commit -m a\&>/dev/null' 'git commit -m "a&">/dev/null'; do
+        run bash -c 'source "$1"; commit_inline_messages "$2"; echo "m=${COMMIT_MESSAGE_SETS[0]}"' _ "$MATCHER" "$c"
+        echo "case: $c -> $output"
+        [ "$output" = "m=a&" ]
+    done
+    run bash -c 'source "$1"; _tokenize_segment "$2"; printf "<%s>" "${_SEGMENT_WORDS[@]}"' _ "$MATCHER" 'git commit &>f -m x'
+    [ "$output" = "<git><commit><&>f><-m><x>" ]
+}
+
+@test "GAP11: new prefixes are still misses when no git commit follows" {
+    local c
+    for c in '! git status' 'if git status; then :; fi' 'timeout 10 git status' 'echo x | xargs git status' \
+             'sudo --user root git status' 'env -S "git status"' 'git>/dev/null status' \
+             'env -C /tmp git status' 'flock /tmp/l git log' 'echo commit' 'if true; then echo git commit; fi' \
+             'FOO=$(a b) git status' 'chrt 10 echo git commit'; do
         echo "case: $c"
         run bash -c 'source "$1"; command_has_git_commit "$2"' _ "$MATCHER" "$c"
         [ "$status" -ne 0 ]
