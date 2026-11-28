@@ -963,7 +963,6 @@ env -C/tmp/r git commit -m x|/tmp/r
 sudo -D /tmp/r git commit -m x|/tmp/r
 sudo -R /tmp/r git commit -m x|
 sudo --chroot=/tmp/r git commit -m x|
-sudo -R /tmp/jail git -C /repo commit -m x|/repo
 sudo --chdir=/tmp/r git commit -m x|/tmp/r
 GIT_DIR=/tmp/r/.git git commit -m x|
 env GIT_DIR=/tmp/r/.git git commit -m x|
@@ -1072,4 +1071,102 @@ CASES
         _split_run "$c"
         [[ "$output" != *SEEN* ]]
     done
+}
+
+# --- #1175: which directory the commit lands in --------------------------------------------------
+# Oracle: bash with a git stub that records its cwd and GIT_DIR (shapes and output in the PR).
+# Each row is `command|published dir|unresolved flag`. An empty dir with flag 0 means "the cwd";
+# an empty dir with flag 1 means "somewhere the matcher cannot name", which a guard must not
+# answer by scanning the cwd as if it were known.
+
+_dir_cases() {
+    local c want unres
+    while IFS='|' read -r c want unres; do
+        echo "case: $c"
+        run env HOME=/home/t bash -c 'source "$1"; command_has_git_commit "$2" && echo "dir=[$COMMIT_COMMAND_GIT_DIR] unres=[$COMMIT_COMMAND_GIT_DIR_UNRESOLVED]"' _ "$MATCHER" "$c"
+        [[ "$output" == *"dir=[${want//@HOME@//home/t}] unres=[$unres]"* ]]
+    done
+}
+
+@test "#1175: an absolute GIT_DIR or --git-dir wins over -C and over a wrapper cwd" {
+    _dir_cases <<'CASES'
+GIT_DIR=/tmp/a/.git git -C /tmp/b commit -m x||1
+env -C /tmp/b GIT_DIR=/tmp/a/.git git commit -m x||1
+env GIT_DIR=/tmp/a/.git git -C /tmp/b commit -m x||1
+GIT_DIR=~/x git -C /tmp/b commit -m x||1
+GIT_DIR=$X/.git git -C /tmp/b commit -m x||1
+git --git-dir=/tmp/a/.git -C /tmp/b commit -m x||1
+git --git-dir /tmp/a/.git -C /tmp/b commit -m x||1
+GIT_DIR=rel/.git git -C /tmp/b commit -m x|/tmp/b|0
+GIT_DIR=/tmp/a/.git GIT_DIR=rel git -C /tmp/b commit -m x|/tmp/b|0
+git --git-dir=rel -C /tmp/b commit -m x|/tmp/b|0
+CASES
+}
+
+@test "#1175: repeated git -C compose like cd, and an absolute one replaces" {
+    _dir_cases <<'CASES'
+git -C /tmp/a -C b commit -m x|/tmp/a/b|0
+git -C /tmp/a -C /tmp/b commit -m x|/tmp/b|0
+git -C a -C b commit -m x|a/b|0
+env -C /tmp/p git -C a -C b commit -m x|/tmp/p/a/b|0
+git -C /tmp/a -C "$X" commit -m x||1
+CASES
+}
+
+@test "#1175: an env -S value is read as options, and its directory wins over the raw reading" {
+    _dir_cases <<'CASES'
+env -S '-C /tmp/target' git commit -m x|/tmp/target|0
+env -S '-C /tmp/p' git -C sub commit -m x|/tmp/p/sub|0
+env -S '-C ~/b' git commit -m x|~/b|0
+env -S x git commit -m x||0
+env -C /tmp/target -S 'git commit -m x'|/tmp/target|0
+CASES
+}
+
+@test "#1175: quote state decides what is literal: a quoted ~ stays, an unquoted ~ is HOME" {
+    _dir_cases <<'CASES'
+git -C ~/r commit -m x|@HOME@/r|0
+git -C ~ commit -m x|@HOME@|0
+git -C '~/r' commit -m x|~/r|0
+git -C "~/r" commit -m x|~/r|0
+git -C '~' commit -m x|~|0
+git -C ~"/r" commit -m x|~/r|0
+git -C ~/'r s' commit -m x|@HOME@/r s|0
+git -C ~user/r commit -m x||1
+env -C '~' git commit -m x|~|0
+env -C /tmp/p env -C '~/x' git commit -m x|/tmp/p/~/x|0
+env -C /tmp/p git -C ~/x commit -m x|@HOME@/x|0
+CASES
+}
+
+@test "#1175: a single-quoted \$ is literal, any other expansion is unresolved" {
+    _dir_cases <<'CASES'
+git -C '$OTHER' commit -m x|$OTHER|0
+git -C "$OTHER" commit -m x||1
+git -C $OTHER commit -m x||1
+git -C "${OTHER}/sub" commit -m x||1
+git -C `pwd` commit -m x||1
+git -C '/tmp/a?b' commit -m x|/tmp/a?b|0
+git -C /tmp/a?b commit -m x||1
+git -C "/tmp/a b" commit -m x|/tmp/a b|0
+git -C /tmp/'a*b' commit -m x|/tmp/a*b|0
+git -C /tmp/a\$b commit -m x|/tmp/a$b|0
+env -C "$X" git -C /abs commit -m x|/abs|0
+CASES
+}
+
+@test "#1175: a sudo chroot is composed with an absolute git -C, otherwise unresolved" {
+    # was pinned as `/repo`: inside the jail that is <root>/repo on the host
+    _dir_cases <<'CASES'
+sudo -R /tmp/jail git -C /repo commit -m x|/tmp/jail/repo|0
+sudo --chroot=/tmp/jail git -C /repo commit -m x|/tmp/jail/repo|0
+sudo -R /tmp/jail git commit -m x||1
+sudo -R /tmp/jail git -C rel commit -m x||1
+sudo -R "$J" git -C /repo commit -m x||1
+CASES
+}
+
+@test "#1175: sudo -c / -a and doas -a take a value, so the command behind them is seen" {
+    _both_see_each 'sudo -c class git commit -m x' 'sudo -a type git commit -m x' \
+        'doas -a style git commit -m x' 'sudo -u root -c class git commit -m x'
 }
