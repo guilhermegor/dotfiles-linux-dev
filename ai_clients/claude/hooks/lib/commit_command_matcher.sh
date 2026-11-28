@@ -324,7 +324,7 @@ _scan_wrapper_option() {
 # `GIT_DIR=` is set: it is no directory to `git -C` into, and it beats every `-C`, #1175) and
 # `_CCM_SPLIT_IDX` / `_CCM_SPLIT_VAL` (an `env -S` value, else -1). `GIT_WORK_TREE=` publishes nothing.
 _skip_prefix() {
-    local i=$1 w vals wrap='' pending=0 popt='' popt_i=-1 npos=0 rest
+    local i=$1 w vals wrap='' wseen=0 pending=0 popt='' popt_i=-1 npos=0 rest
     _CCM_QUERY=0 _CCM_WDIR='' _CCM_WDIR_BAD=0 _CCM_SPLIT_IDX=-1 _CCM_SPLIT_VAL='' _CCM_SPLIT_OPT=-1
     _CCM_PFX_EXP=0 _CCM_GITDIR_ABS=0 _CCM_CHROOT=0 _CCM_WBASE='' _CCM_WBASE_BAD=0
     # Bounded by the array, not by an empty word: an option's value may be '' (`env -S ''`)
@@ -341,10 +341,13 @@ _skip_prefix() {
             continue
         fi
         [[ -n "$w" ]] || break   # an empty command name runs nothing
-        # `env $X git`: word splitting may inject options, so it is read as one and skipped
-        if [[ -n "$wrap" && "$w" != -* && ! "$w" =~ $_CCM_ASSIGN_RE ]] && (("${_CMD_QLEAD[i]:-0}" & 8)); then
-            _CCM_PFX_EXP=1 i=$((i + 1))
-            continue
+        # Once a wrapper has started, every word up to the command is one of ITS arguments (options,
+        # `NAME=value` operands, operands), and an unquoted expansion in it word-splits: `env FOO=$X git`
+        # (measured) may inject `GIT_DIR=..`. A shell prefix `FOO=$X env ..` does not split, hence
+        # `wseen`. Such a word that is no option or assignment is also read as one and skipped.
+        if ((wseen)) && (("${_CMD_QLEAD[i]:-0}" & 8)); then
+            _CCM_PFX_EXP=1
+            if [[ -n "$wrap" && "$w" != -* && ! "$w" =~ $_CCM_ASSIGN_RE ]]; then i=$((i + 1)); continue; fi
         fi
         if [[ -n "$wrap" && "$w" == -* ]]; then
             # `command -v` / `-V` only looks the name up, wherever it sits in the option list
@@ -384,7 +387,7 @@ _skip_prefix() {
             setsid | command | builtin | nohup) vals='' ;;
             *) break ;;
         esac
-        wrap="${w##*/}"
+        wrap="${w##*/}" wseen=1
         _CCM_WBASE="$_CCM_WDIR" _CCM_WBASE_BAD=$_CCM_WDIR_BAD
         i=$((i + 1))
     done
@@ -400,7 +403,7 @@ _skip_prefix() {
 # Read up to three ways, a hit on any one counts (#1173): as written, with no wrapper option taking a
 # value (`sudo -h git commit`: `-h` may be "help"), and with an `env -S` value re-split into words.
 _words_invoke_commit() {
-    local lazy split_idx=-1 split_val='' split_opt=-1 raw_dir raw_unres raw_from
+    local lazy split_idx=-1 split_val='' split_opt=-1 split_pfx=0 raw_dir raw_unres raw_from
     for lazy in 0 1; do
         _CCM_LAZY=$lazy
         if _words_invoke_commit_once; then
@@ -409,25 +412,28 @@ _words_invoke_commit() {
             # hit, the expanded one knows the directory (#1175). The raw hit stays the fallback.
             if ((!lazy && _CCM_SPLIT_IDX >= 0 && _CCM_SPLIT_OPT >= 0)); then
                 raw_dir="$COMMIT_COMMAND_GIT_DIR" raw_unres="$COMMIT_COMMAND_GIT_DIR_UNRESOLVED" raw_from=$_COMMIT_ARGS_FROM
-                _ccm_try_split "$_CCM_SPLIT_IDX" "$_CCM_SPLIT_VAL" "$_CCM_SPLIT_OPT" && return 0
+                _ccm_try_split "$_CCM_SPLIT_IDX" "$_CCM_SPLIT_VAL" "$_CCM_SPLIT_OPT" "$_CCM_PFX_EXP" && return 0
                 COMMIT_COMMAND_GIT_DIR="$raw_dir" COMMIT_COMMAND_GIT_DIR_UNRESOLVED="$raw_unres" _COMMIT_ARGS_FROM=$raw_from
             fi
             return 0
         fi
-        if ((!lazy)); then split_idx=$_CCM_SPLIT_IDX split_val="$_CCM_SPLIT_VAL" split_opt=$_CCM_SPLIT_OPT; fi
+        if ((!lazy)); then split_idx=$_CCM_SPLIT_IDX split_val="$_CCM_SPLIT_VAL" split_opt=$_CCM_SPLIT_OPT split_pfx=$_CCM_PFX_EXP; fi
     done
     _CCM_LAZY=0
     ((split_idx >= 0 && split_opt >= 0)) || return 1
-    _ccm_try_split "$split_idx" "$split_val" "$split_opt"
+    _ccm_try_split "$split_idx" "$split_val" "$split_opt" "$split_pfx"
 }
 
-# _ccm_try_split IDX VALUE OPT_IDX
+# _ccm_try_split IDX VALUE OPT_IDX OUTER_PFX_EXP
+# The retry resets the prefix state, so OUTER_PFX_EXP (an unquoted expansion the raw reading saw in
+# its prefix) is carried over: the result stays unresolved. So does a VALUE holding a backslash or
+# `${`: GNU env -S gives `\_`, `\c`, `\$` and `${VAR}` meanings the tokenizer does not model.
 # Re-read `_CMD_WORDS` with the `env -S` option word (OPT_IDX) and its value (IDX) replaced by VALUE
 # split into words. Return 0 when that reading is a `git commit` (the words stay replaced, so the
 # callers read the message arguments from them); on a miss the words are restored and 1 is returned.
 # env splits but does not expand: `~` and globs in VALUE are text, so the tilde bit is dropped.
 _ccm_try_split() {
-    local split_idx=$1 split_val="$2" split_opt=$3 k
+    local split_idx=$1 split_val="$2" split_opt=$3 outer_pfx=${4:-0} k
     local -a saved_w saved_q head_w head_q tail_w tail_q new_w new_q seg_w seg_q seg_s
     saved_w=(${_CMD_WORDS[@]+"${_CMD_WORDS[@]}"})
     saved_q=(${_CMD_QLEAD[@]+"${_CMD_QLEAD[@]}"})
@@ -450,7 +456,13 @@ _ccm_try_split() {
     _SEGMENT_SOFT=(${seg_s[@]+"${seg_s[@]}"})
     _CMD_WORDS=(${new_w[@]+"${new_w[@]}"})
     _CMD_QLEAD=(${new_q[@]+"${new_q[@]}"})
-    ((k)) && _words_invoke_commit && return 0
+    if ((k)) && _words_invoke_commit; then
+        if ((!COMMIT_COMMAND_GIT_DIR_UNRESOLVED)) \
+            && { ((outer_pfx)) || [[ "$split_val" == *'\'* || "$split_val" == *'${'* ]]; }; then
+            COMMIT_COMMAND_GIT_DIR='' COMMIT_COMMAND_GIT_DIR_UNRESOLVED=1 COMMIT_COMMAND_GIT_DIR_REASON=expansion
+        fi
+        return 0
+    fi
     _CMD_WORDS=(${saved_w[@]+"${saved_w[@]}"})
     _CMD_QLEAD=(${saved_q[@]+"${saved_q[@]}"})
     return 1
@@ -915,6 +927,11 @@ commit_source_dir() {
                 *) continue ;;
             esac
             if [[ ( "$_SRC_MODE" == stdin && "$v" == "-" ) || ( "$_SRC_MODE" == file && "$v" != "-" ) ]]; then
+                # A relative -F of a commit whose directory is unknown (GIT_DIR, chroot, an expansion in
+                # -C) resolves somewhere we cannot name: not found, so no hook touches ./msg (#1175).
+                if [[ "$_SRC_MODE" == file && "$v" != /* && "$COMMIT_COMMAND_GIT_DIR_UNRESOLVED" == 1 ]]; then
+                    return 0
+                fi
                 # A second matching commit makes the association with the heredoc ambiguous: fail open.
                 if ((_SRC_SEEN)); then COMMIT_SOURCE_FOUND=0; _SRC_AMBIGUOUS=1; return 0; fi
                 _SRC_SEEN=1
