@@ -928,6 +928,13 @@ _both_see_each() {
         "env -S 'env -S \"git commit -m x\"'" "env -S 'FOO=1 git commit'"
 }
 
+@test "GAP11: env -S takes an empty value, and its value may follow a spaced redirect" {
+    # GNU env ignores an empty split string and runs the rest (#1174 review)
+    _both_see_each "env -S '' git commit -m x" "env -u X -S '' git commit -m x" \
+        "env -S > /dev/null 'git commit -m x'" "env -S 2> /dev/null 'git commit -m x'" \
+        "env -u X -S > /dev/null 'git commit -m x'"
+}
+
 @test "GAP11: a redirect glued to the word before it" {
     _both_see_each 'git>/dev/null commit -m x' 'env>/dev/null git commit -m x' 'env>f git commit -m x' \
         "git -C ''>/dev/null commit -m x" 'git commit>/dev/null -m x' 'git<f commit -m x' \
@@ -953,7 +960,9 @@ env --chdir /tmp/r git commit -m x|/tmp/r
 env --chdir=/tmp/r git commit -m x|/tmp/r
 env -C/tmp/r git commit -m x|/tmp/r
 sudo -D /tmp/r git commit -m x|/tmp/r
-sudo -R /tmp/r git commit -m x|/tmp/r
+sudo -R /tmp/r git commit -m x|
+sudo --chroot=/tmp/r git commit -m x|
+sudo -R /tmp/jail git -C /repo commit -m x|/repo
 sudo --chdir=/tmp/r git commit -m x|/tmp/r
 GIT_DIR=/tmp/r/.git git commit -m x|
 env GIT_DIR=/tmp/r/.git git commit -m x|
