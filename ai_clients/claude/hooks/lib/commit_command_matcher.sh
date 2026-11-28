@@ -82,13 +82,15 @@ _BOUNDARY=$'\x1f'
 # over-read, never under-read). The shell itself would reject such a command anyway.
 _tokenize_segment() {
     local segment="$1" split="${2:-}" char quote='' current='' started=0 i
-    local qpos=0 qcur='' qn=0 prefix_words=() gt=0 prev_gt soft_keep=() sidx
+    local qpos=0 qcur='' qn=0 prefix_words=() gt=0 prev_gt lt=0 prev_lt soft_keep=() sidx
+    local qlead=0 prefix_ql=()
     _SEGMENT_WORDS=()
     _SEGMENT_SOFT=()
+    _SEGMENT_QLEAD=()
 
     for ((i = 0; i < ${#segment}; i++)); do
         char="${segment:i:1}"
-        prev_gt=$gt gt=0   # gt: this char is an unquoted, unescaped `>` (set in the last branch)
+        prev_gt=$gt gt=0 prev_lt=$lt lt=0  # gt: this char is an unquoted, unescaped `>` (set in the last branch)
         if [[ "$quote" == A ]]; then
             # $'..': a backslash escapes the next char, only an unescaped ' closes
             if [[ "$char" == "\\" ]]; then i=$((i + 1)); current+="${segment:i:1}"
@@ -100,86 +102,134 @@ _tokenize_segment() {
                 i=$((i + 1)); current+="${segment:i:1}"   # POSIX: \ " $ ` are escapable in "..."
             else current+="$char"; fi
         elif [[ "$char" == "\\" ]]; then
+            ((started)) || qlead=1
             started=1
             i=$((i + 1))
             [[ "${segment:i:1}" == $'\n' ]] || current+="${segment:i:1}"
         elif [[ "$char" == "'" || "$char" == '"' ]]; then
             quote="$char"
             if [[ "$char" == "'" && "$current" == *'$' ]]; then quote=A; current="${current%?}"; fi
+            [[ -z "$current" ]] && qlead=1
             qpos=$i qcur="$current" qn=${#_SEGMENT_WORDS[@]}
             started=1
         elif [[ "$char" == '#' ]] && ((!started)); then
             while ((i + 1 < ${#segment})) && [[ "${segment:i+1:1}" != $'\n' ]]; do i=$((i + 1)); done
+        elif [[ -n "$split" && "$char" == '&' ]] \
+             && { ((prev_gt || prev_lt)) || [[ "${segment:i+1:1}" == '>' ]]; }; then
+            # `>&2`, `<&3` and `&>f` are redirections, not a background `&` (#1166): keep the word whole
+            current+="$char"
+            started=1
         elif [[ -n "$split" && ( "$char" == [\;\&\|] || "$char" == $'\n' ) ]]; then
-            ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
+            ((started)) && { _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$qlead"); current=''; started=0; qlead=0; }
             # A `|` right after an unquoted, unescaped `>` is the clobber redirect `>|`, not a pipe
             # (#1158). It still cuts here, as it always did; where it cut is kept out of band (word
             # index of the boundary) so _for_each_command can put the command back together. The
             # flag, not the word text: a quoted `'a>'|x` is a real pipe.
             [[ "$char" == '|' ]] && ((prev_gt)) && _SEGMENT_SOFT+=("${#_SEGMENT_WORDS[@]}")
             _SEGMENT_WORDS+=("$_BOUNDARY")
+            _SEGMENT_QLEAD+=(0)
         elif [[ "$char" == [[:space:]] ]]; then
-            ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
+            ((started)) && { _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$qlead"); current=''; started=0; qlead=0; }
         else
             current+="$char"
             started=1
             [[ "$char" == '>' ]] && gt=1
+            [[ "$char" == '<' ]] && lt=1
         fi
     done
 
     if [[ -n "$quote" ]]; then
         prefix_words=("${_SEGMENT_WORDS[@]:0:qn}")
+        prefix_ql=("${_SEGMENT_QLEAD[@]:0:qn}")
         for sidx in ${_SEGMENT_SOFT[@]+"${_SEGMENT_SOFT[@]}"}; do ((sidx < qn)) && soft_keep+=("$sidx"); done
         _tokenize_segment "$qcur${segment:qpos+1}" "$split"
         _SEGMENT_WORDS=("${prefix_words[@]}" "${_SEGMENT_WORDS[@]}")
+        _SEGMENT_QLEAD=("${prefix_ql[@]}" "${_SEGMENT_QLEAD[@]}")
         for sidx in ${_SEGMENT_SOFT[@]+"${_SEGMENT_SOFT[@]}"}; do soft_keep+=("$((sidx + qn))"); done
         _SEGMENT_SOFT=(${soft_keep[@]+"${soft_keep[@]}"})
         return 0
     fi
 
-    ((started)) && _SEGMENT_WORDS+=("$current")
+    ((started)) && { _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$qlead"); }
     return 0
 }
 
-# _skip_redirections
-# Sets `_CCM_REDIR_NEXT` to the index in `_CMD_WORDS` of the first word that is not a leading redirection
-# (#1158): `[n]>f`, `[n]>>f`, `<f`, `[n]>&m`, `&>f`, `<<tag`, `<<<word`, `<>f`, `{fd}>f`, each also in
-# the separated form (`> f`). A word that is an operator alone eats the next word as its target.
-# Over-reading only: a word that merely looks like a redirection is skipped. In split mode the
-# tokenizer cuts `>&2` at its `&` (and `2>&1`, `&>f`), so a bare fd word (`2`, `1-`, `-`) opening a
-# command is the tail of such a cut and is skipped too; the sed-split reading never cuts there,
-# where the same skip is a harmless extra over-read.
+# _redir_len I
+# Sets `_CCM_RLEN` to how many words the redirection at `_CMD_WORDS[I]` takes: 1 for `>f` / `2>&1`,
+# 2 for a bare operator that eats the next word as its target (`> f`); returns 1 (RLEN 0) when the
+# word is no redirection. Over-reading only: a word that merely looks like one counts.
 _CCM_REDIR_RE='^([0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\}|&)?(>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)(.*)$'
-_skip_redirections() {
-    local i=0 w
+_CCM_ASSIGN_RE='^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?='
+_redir_len() {
+    local w="${_CMD_WORDS[$1]:-}"
+    _CCM_RLEN=0
+    # a word whose first character was quoted or escaped (`-C '>d'`) is a value (#1172)
+    [[ "${_CMD_QLEAD[$1]:-0}" == 1 ]] && return 1
+    [[ -n "$w" && "$w" =~ $_CCM_REDIR_RE ]] || return 1
+    if [[ -n "${BASH_REMATCH[3]}" ]]; then _CCM_RLEN=1; else _CCM_RLEN=2; fi
+}
+
+# _skip_prefix I
+# Sets `_CCM_NEXT` to the index in `_CMD_WORDS`, from I on, of the command word that follows every
+# leading redirection (#1158), `NAME=value` assignment and wrapper word with its own options
+# (`env -u X`, `command`, `builtin`, `exec`, `time -p`, `nohup`, `sudo -u x`, `nice -n N`,
+# `ionice -c N`), in any order (#1166). `git` and `rtk` are never skipped, so this only adds hits.
+# A bare fd word (`2`, `1-`, `-`) is skipped too, the tail of a `2>&1` that was cut at its `&`
+# (the tokenizer no longer cuts there, an older reading might). Over-reading only.
+_skip_prefix() {
+    local i=$1 w vals wrap='' pending=0
+    _CCM_QUERY=0
     while w="${_CMD_WORDS[i]:-}"; [[ -n "$w" ]]; do
-        if [[ "$w" =~ $_CCM_REDIR_RE ]]; then
-            [[ -n "${BASH_REMATCH[3]}" ]] || i=$((i + 1))
-        elif [[ ! "$w" =~ ^([0-9]+-?|-)$ ]]; then
-            break
+        # A redirection never ends a wrapper's option list: `env > f -u X git commit` (#1172)
+        if _redir_len "$i"; then i=$((i + _CCM_RLEN)); continue; fi
+        if ((pending)); then pending=0; i=$((i + 1)); continue; fi
+        if [[ -n "$wrap" && "$w" == -* ]]; then
+            # `command -v` / `-V` only looks the name up, wherever it sits in the option list
+            [[ "$wrap" == command && "$w" != -- && "$w" == *[vV]* ]] && _CCM_QUERY=1
+            [[ "$vals" == *" $w "* ]] && pending=1
+            i=$((i + 1))
+            continue
         fi
+        wrap=''
+        if [[ "$w" =~ $_CCM_ASSIGN_RE || "$w" =~ ^([0-9]+-?|-)$ ]]; then i=$((i + 1)); continue; fi
+        case "${w##*/}" in
+            env) vals=' -u -C -S --unset --chdir --split-string ' ;;
+            sudo) vals=' -u -g -h -p -C -D -R -r -T -t -U ' ;;
+            nice) vals=' -n --adjustment ' ;;
+            ionice) vals=' -c -n -p -P -u --class --classdata --pid --pgid --uid ' ;;
+            time) vals=' -f -o --format --output ' ;;
+            exec) vals=' -a ' ;;
+            command | builtin | nohup) vals='' ;;
+            *) break ;;
+        esac
+        wrap="${w##*/}"
         i=$((i + 1))
     done
-    _CCM_REDIR_NEXT=$i
+    _CCM_NEXT=$i
 }
 
 # _words_invoke_commit
-# Return 0 if the global `_CMD_WORDS` (ONE simple command's words) is a `git commit` invocation: an
-# optional `rtk` / `rtk proxy` prefix, the git binary (bare or an absolute path), any run of global
-# flags, then the literal subcommand `commit`. On a match, sets COMMIT_COMMAND_GIT_DIR and
-# `_COMMIT_ARGS_FROM` (the index of the first word after `commit`).
+# Return 0 if the global `_CMD_WORDS` (ONE simple command's words) is a `git commit` invocation: any
+# leading redirections, assignments and wrapper words (_skip_prefix), an optional `rtk` / `rtk
+# proxy` prefix, the git binary (bare or an absolute path), any run of global flags, then the
+# literal subcommand `commit`, with redirections allowed between all of these (#1166). On a match,
+# sets COMMIT_COMMAND_GIT_DIR and `_COMMIT_ARGS_FROM` (the index of the first word after `commit`).
 _words_invoke_commit() {
     local -a words=("${_CMD_WORDS[@]:-}")
-    local i=0 dir=''
+    local i=0 dir='' flag
 
-    # Redirections may come BEFORE the command word (`>/dev/null git commit`, #1158).
-    _skip_redirections
-    i=$_CCM_REDIR_NEXT
+    _skip_prefix 0
+    ((_CCM_QUERY)) && return 1   # `command -v git commit` only looks git up
+    i=$_CCM_NEXT
 
     # `rtk` / `rtk proxy` prefix (RTK.md's proxy and its raw escape hatch).
     if [[ "${words[i]:-}" && "${words[i]##*/}" == "rtk" ]]; then
         i=$((i + 1))
-        [[ "${words[i]:-}" == "proxy" ]] && i=$((i + 1))
+        while _redir_len "$i"; do i=$((i + _CCM_RLEN)); done
+        if [[ "${words[i]:-}" == "proxy" ]]; then
+            i=$((i + 1))
+            while _redir_len "$i"; do i=$((i + _CCM_RLEN)); done
+        fi
     fi
 
     # The binary itself: `git` or any path ending in `/git`.
@@ -188,10 +238,17 @@ _words_invoke_commit() {
 
     # Global flags sit between the binary and the subcommand. `-C` is captured rather than merely
     # skipped, because it changes WHICH repository the commit lands in.
-    while [[ "${words[i]:-}" == -* ]]; do
-        [[ "${words[i]}" == "-C" ]] && dir="${words[i + 1]:-}"
-        [[ "$_GIT_VALUE_FLAGS" == *" ${words[i]} "* ]] && i=$((i + 1))
+    while :; do
+        while _redir_len "$i"; do i=$((i + _CCM_RLEN)); done
+        [[ "${words[i]:-}" == -* ]] || break
+        flag="${words[i]}"
         i=$((i + 1))
+        if [[ "$_GIT_VALUE_FLAGS" == *" $flag "* ]]; then
+            # a redirection may sit between the option and its value: `git -C > f /tmp commit`
+            while _redir_len "$i"; do i=$((i + _CCM_RLEN)); done
+            [[ "$flag" == "-C" ]] && dir="${words[i]:-}"
+            i=$((i + 1))
+        fi
     done
 
     [[ "${words[i]:-}" == "commit" ]] || return 1
@@ -207,6 +264,7 @@ _words_invoke_commit() {
 _segment_invokes_commit() {
     _tokenize_segment "$1"
     _CMD_WORDS=("${_SEGMENT_WORDS[@]:-}")
+    _CMD_QLEAD=("${_SEGMENT_QLEAD[@]:-}")
     _words_invoke_commit
 }
 
@@ -246,7 +304,7 @@ command_has_git_commit() {
     for reading in "${readings[@]}"; do
         while IFS= read -r segment; do
             _segment_invokes_commit "$segment" && return 0
-        done <<< "$(printf '%s' "$reading" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
+        done <<< "$(printf '%s' "$reading" | sed -E 's/(&&|\|\||\|&|;|\|)/\n/g')"
     done
 
     # Last reading, only for a command with `>|`: the quote-aware split reader, which knows a
@@ -276,8 +334,9 @@ _MSG_SEP=$'\x1f'
 # each simple command in turn. Quoted `;`/`&`/`|` never split, and nothing is evaluated.
 _for_each_command() {
     local w cb="$2" i soft=" "
-    local -a all piece_words=() piece_len=()
+    local -a all piece_words=() piece_len=() piece_ql=()
     _CMD_WORDS=()
+    _CMD_QLEAD=()
     _tokenize_segment "$1" split
     all=("${_SEGMENT_WORDS[@]:-}" "$_BOUNDARY")
     for i in ${_SEGMENT_SOFT[@]+"${_SEGMENT_SOFT[@]}"}; do soft+="$i "; done
@@ -285,16 +344,20 @@ _for_each_command() {
         w="${all[i]}"
         if [[ "$w" != "$_BOUNDARY" ]]; then
             _CMD_WORDS+=("$w")
+            _CMD_QLEAD+=("${_SEGMENT_QLEAD[i]:-0}")
             continue
         fi
         piece_words+=(${_CMD_WORDS[@]+"${_CMD_WORDS[@]}"})
+        piece_ql+=(${_CMD_QLEAD[@]+"${_CMD_QLEAD[@]}"})
         piece_len+=("${#_CMD_WORDS[@]}")
         _CMD_WORDS=()
+        _CMD_QLEAD=()
         # A cut at `>|` is no command boundary (#1158): keep gathering. The group fires, in source
         # order and once, at its first real boundary.
         [[ "$soft" == *" $i "* ]] && continue
         _fire_group "$cb"
         piece_words=()
+        piece_ql=()
         piece_len=()
     done
 }
@@ -307,18 +370,21 @@ _for_each_command() {
 # word indexes kept out of band, so no byte of the input can collide with them.
 _fire_group() {
     local cb="$1" k off=0 saved_dir="$COMMIT_COMMAND_GIT_DIR"
-    local -a joined=()
+    local -a joined=() joined_ql=()
     if ((${#piece_len[@]} > 1)); then
         for ((k = 0; k < ${#piece_len[@]}; k++)); do
             joined+=(${piece_words[@]+"${piece_words[@]:off:piece_len[k]}"})
+            joined_ql+=(${piece_ql[@]+"${piece_ql[@]:off:piece_len[k]}"})
             off=$((off + piece_len[k]))
             if ((k + 1 < ${#piece_len[@]} && piece_len[k] > 0)); then joined[${#joined[@]} - 1]+="|"; fi
         done
         _CMD_WORDS=(${joined[@]+"${joined[@]}"})
+        _CMD_QLEAD=(${joined_ql[@]+"${joined_ql[@]}"})
         if _words_invoke_commit; then
             COMMIT_COMMAND_GIT_DIR="$saved_dir"
             "$cb"
             _CMD_WORDS=()
+            _CMD_QLEAD=()
             return 0
         fi
         COMMIT_COMMAND_GIT_DIR="$saved_dir"
@@ -326,10 +392,12 @@ _fire_group() {
     off=0
     for ((k = 0; k < ${#piece_len[@]}; k++)); do
         _CMD_WORDS=(${piece_words[@]+"${piece_words[@]:off:piece_len[k]}"})
+        _CMD_QLEAD=(${piece_ql[@]+"${piece_ql[@]:off:piece_len[k]}"})
         off=$((off + piece_len[k]))
         "$cb"
     done
     _CMD_WORDS=()
+    _CMD_QLEAD=()
 }
 
 # command_has_cd COMMAND
