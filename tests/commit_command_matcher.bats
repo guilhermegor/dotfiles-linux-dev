@@ -998,6 +998,11 @@ env -C /tmp/target* git commit -m x|
 git -C /tmp/r? commit -m x|
 sudo -D /tmp/[ab] git commit -m x|
 git -C ~/r commit -m x|@HOME@/r
+env -C /tmp git -C ~/r commit -m x|@HOME@/r
+env -C /tmp env -C ~/x git commit -m x|@HOME@/x
+env -C ~ git -C sub commit -m x|@HOME@/sub
+env -C /tmp git -C ~u/r commit -m x|
+env -C "$X" git -C /abs commit -m x|/abs
 env -C ~ git commit -m x|@HOME@
 git -C '/tmp/a b' commit -m x|/tmp/a b
 CASES

@@ -208,6 +208,19 @@ _redir_len() {
 # Reserved words (and the `(` / `{` / `!` openers) that may stand in front of a command (#1173).
 _CCM_RESERVED=' ! if then do else elif while until { ( '
 
+# _ccm_dir_word WORD
+# Sets `_CCM_DIRW` to one directory word as bash would see it, BEFORE it is composed under another
+# (`env -C /tmp git -C ~/r` runs in $HOME/r, not /tmp/~/r): a leading `~` / `~/` is $HOME, and any
+# other leading `~` (`~user`) is prefixed with `$`, so the publish check drops it as unexpanded text.
+_ccm_dir_word() {
+    case "$1" in
+        \~) _CCM_DIRW="$HOME" ;;
+        \~/*) _CCM_DIRW="$HOME/${1#\~/}" ;;
+        \~*) _CCM_DIRW="\$$1" ;;
+        *) _CCM_DIRW="$1" ;;
+    esac
+}
+
 # _note_wrapper_value WRAPPER OPTION VALUE INDEX OPTION_INDEX
 # What a wrapper option's value means for the commit that follows: a directory it moves into
 # (`env -C`, `sudo -D`) or a command line it re-splits (`env -S`). `sudo -R` is a chroot root, not a
@@ -217,7 +230,9 @@ _CCM_RESERVED=' ! if then do else elif while until { ( '
 _note_wrapper_value() {
     case "$1:$2" in
         env:-C | env:--chdir | sudo:-D | sudo:--chdir)
-            if [[ "$3" != /* && -n "$_CCM_WDIR" ]]; then _CCM_WDIR="${_CCM_WDIR%/}/$3"; else _CCM_WDIR="$3"; fi ;;
+            _ccm_dir_word "$3"
+            if [[ "$_CCM_DIRW" != /* && -n "$_CCM_WDIR" ]]; then _CCM_WDIR="${_CCM_WDIR%/}/$_CCM_DIRW"
+            else _CCM_WDIR="$_CCM_DIRW"; fi ;;
         env:-S | env:--split-string) _CCM_SPLIT_IDX=$4 _CCM_SPLIT_VAL="$3" _CCM_SPLIT_OPT=$5 ;;
     esac
 }
@@ -404,15 +419,15 @@ _words_invoke_commit_once() {
 
     # The directory the commit lands in: `git -C` (under an `env -C` / `sudo -D` move when relative),
     # else that move itself (`GIT_DIR=` / `GIT_WORK_TREE=` publish nothing, see #1175).
+    [[ -n "$dir" ]] && { _ccm_dir_word "$dir"; dir="$_CCM_DIRW"; }
     if [[ -n "$dir" && "$dir" != /* && -n "$_CCM_WDIR" ]]; then dir="${_CCM_WDIR%/}/$dir"
     elif [[ -z "$dir" ]]; then dir="$_CCM_WDIR"; fi
     # The words are unexpanded: `-C "$PWD"` would reach the secret guard as `git -C '$PWD'`, fail,
-    # and skip the scan. Only `~` / `~/` is resolved; any other text the shell would expand
-    # (`$`, a backtick, a glob, `~user`) publishes no dir, so the guard scans the cwd.
+    # and skip the scan. Text the shell would expand (`$`, a backtick, a glob) publishes no dir,
+    # so the guard scans the cwd.
     # ponytail: the words carry no quote state, so `"$OTHER"` scans the cwd and a quoted '~/x'
     # resolves like an unquoted one; quote-aware resolution is #1175.
-    case "$dir" in \~) dir="$HOME" ;; \~/*) dir="$HOME/${dir#\~/}" ;; esac
-    [[ "$dir" == *[\$\`\*\?\[]* || "$dir" == \~* ]] && dir=''
+    [[ "$dir" == *[\$\`\*\?\[]* ]] && dir=''
     COMMIT_COMMAND_GIT_DIR="$dir"
     _COMMIT_ARGS_FROM=$((i + 1))
     return 0
