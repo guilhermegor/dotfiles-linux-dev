@@ -210,12 +210,13 @@ _CCM_RESERVED=' ! if then do else elif while until { ( '
 
 # _note_wrapper_value WRAPPER OPTION VALUE INDEX OPTION_INDEX
 # What a wrapper option's value means for the commit that follows: a directory it moves into
-# (`env -C`, `sudo -D` / `-R`) or a command line it re-splits (`env -S`).
+# (`env -C`, `sudo -D`) or a command line it re-splits (`env -S`). `sudo -R` is a chroot root, not a
+# directory to scan from the host, so it publishes nothing (as master did; composing it is #1175).
 # A relative directory resolves against the one an earlier wrapper set; an absolute one replaces it.
 # `-S` also records the index of its option word, so the re-split can replace both option and value.
 _note_wrapper_value() {
     case "$1:$2" in
-        env:-C | env:--chdir | sudo:-D | sudo:--chdir | sudo:-R | sudo:--chroot)
+        env:-C | env:--chdir | sudo:-D | sudo:--chdir)
             if [[ "$3" != /* && -n "$_CCM_WDIR" ]]; then _CCM_WDIR="${_CCM_WDIR%/}/$3"; else _CCM_WDIR="$3"; fi ;;
         env:-S | env:--split-string) _CCM_SPLIT_IDX=$4 _CCM_SPLIT_VAL="$3" _CCM_SPLIT_OPT=$5 ;;
     esac
@@ -258,22 +259,26 @@ _scan_wrapper_option() {
 # `_CCM_SPLIT_VAL` (an `env -S` value, else -1). `GIT_DIR=` / `GIT_WORK_TREE=` publish no directory:
 # a GIT_DIR value is no directory to `git -C` into (it fails in a git dir), see #1175.
 _skip_prefix() {
-    local i=$1 w vals wrap='' pending=0 popt='' npos=0 rest
+    local i=$1 w vals wrap='' pending=0 popt='' popt_i=-1 npos=0 rest
     _CCM_QUERY=0 _CCM_WDIR='' _CCM_SPLIT_IDX=-1 _CCM_SPLIT_VAL='' _CCM_SPLIT_OPT=-1
-    while w="${_CMD_WORDS[i]:-}"; [[ -n "$w" ]]; do
+    # Bounded by the array, not by an empty word: an option's value may be '' (`env -S ''`)
+    while ((i < ${#_CMD_WORDS[@]})); do
+        w="${_CMD_WORDS[i]}"
         # A redirection never ends a wrapper's option list: `env > f -u X git commit` (#1172)
         if _redir_len "$i"; then i=$((i + _CCM_RLEN)); continue; fi
         if ((pending)); then
+            # the option's own index, not i - 1: a redirect may sit between (`env -S > f 'git ...'`)
             pending=0
-            _note_wrapper_value "$wrap" "$popt" "$w" "$i" "$((i - 1))"
+            _note_wrapper_value "$wrap" "$popt" "$w" "$i" "$popt_i"
             i=$((i + 1))
             continue
         fi
+        [[ -n "$w" ]] || break   # an empty command name runs nothing
         if [[ -n "$wrap" && "$w" == -* ]]; then
             # `command -v` / `-V` only looks the name up, wherever it sits in the option list
             [[ "$wrap" == command && "$w" != -- && "$w" == *[vV]* ]] && _CCM_QUERY=1
             _scan_wrapper_option "$wrap" "$vals" "$w" "$i"
-            if ((_CCM_PENDING && !_CCM_LAZY)); then pending=1 popt="$_CCM_POPT"; fi
+            if ((_CCM_PENDING && !_CCM_LAZY)); then pending=1 popt="$_CCM_POPT" popt_i=$i; fi
             i=$((i + 1))
             continue
         fi
