@@ -399,10 +399,11 @@ _strip_heredoc_bodies() {
         # Delimiter word with bash quote removal (#1152): <<"E"OF and <<E"OF" both mean EOF. An
         # unterminated quote cannot be read confidently: dbad fails the whole input closed.
         function delim(s,   n, k, ch, t, e, m, cm, nx) {
-            n = length(s); k = 1; t = ""
+            n = length(s); k = 1; t = ""; dqf = 0   # dqf: any quoting seen, so the body joins nothing
             while (k <= n) {
                 ch = substr(s, k, 1)
                 if (ch ~ /[ \t<>|&;()]/) break
+                if (ch ~ /[\\\047"]/ || (ch == "$" && substr(s, k + 1, 1) ~ /[\047"]/)) dqf = 1
                 # A backslash that ends the line is a continuation: the delimiter goes on in the next
                 # line (#1158), so it cannot be read from this one. Fail the whole input closed.
                 if (ch == "\\" && k == n) { bad = 1; break }
@@ -436,8 +437,14 @@ _strip_heredoc_bodies() {
             return t
         }
         { raw[NR] = $0 }
+        # Body line of an UNQUOTED heredoc (#1168): bash joins `\<NL>` before comparing a line with
+        # the delimiter, so `EO\` + `F` is the delimiter EOF. Join exactly the way the matcher does
+        # for commands (an odd backslash run continues). A quoted delimiter joins nothing.
         pending {
-            t = $0; sub(/^\t+/, "", t)
+            buf = buf $0
+            if (!tq[ci] && buf ~ /(^|[^\\])(\\\\)*\\$/) { sub(/\\$/, "", buf); next }
+            t = buf; buf = ""
+            if (td[ci]) sub(/^\t+/, "", t)   # leading tabs go only for <<-, never for a plain <<
             if (t == tags[ci] && ++ci > nt) { pending = 0; nt = 0 }
             next
         }
@@ -487,7 +494,7 @@ _strip_heredoc_bodies() {
                 if (c == "<" && substr($0, i, 2) == "<<") {
                     rest = substr($0, i + 2); match(rest, /^-?[ \t]*/); plen = RLENGTH
                     tg = delim(substr(rest, plen + 1))
-                    if (tg != "") tags[++nt] = tg
+                    if (tg != "") { tags[++nt] = tg; tq[nt] = dqf; td[nt] = (substr(rest, 1, 1) == "-") }
                     i += 2 + plen + dlen   # several heredocs may share one line (#1152)
                     continue
                 }
