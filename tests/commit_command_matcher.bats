@@ -881,3 +881,107 @@ _inline_sets() {
         [[ "$output" != *SEEN* ]]
     done
 }
+
+# --- #1173: reserved words, more wrappers, glued redirects, dir through wrappers -----------------
+# Every shape below makes bash run `git commit` (or, for sudo/doas, would if the wrapper ran).
+
+_both_see_each() {
+    local c
+    for c in "$@"; do
+        echo "case: $c"
+        _matcher_has_commit "$c"
+        _split_run "$c"
+        [[ "$output" == *SEEN* ]]
+    done
+}
+
+@test "GAP11: reserved words in command position" {
+    _both_see_each '! git commit -m x' 'if git commit -m x; then :; fi' '{ git commit -m x; }' \
+        'while git commit -m x; do :; done' 'until git commit -m x; do :; done' \
+        'if :; then git commit -m x; fi' 'if :; then :; else git commit -m x; fi' \
+        'if :; then :; elif git commit -m x; then :; fi' 'for i in 1; do git commit -m x; done' \
+        '( git commit -m x )' '(git commit -m x)' '! rtk git commit -m x' 'if ! git commit -m x; then :; fi'
+}
+
+@test "GAP11: wrappers with their options and positionals" {
+    _both_see_each 'timeout 10 git commit -m x' 'timeout -s KILL 10 git commit -m x' \
+        'timeout --signal=KILL --foreground 10s git commit -m x' 'echo x | xargs git commit -m' \
+        'xargs -n 1 -I {} git commit -m {}' 'doas -u root git commit -m x' 'stdbuf -oL git commit -m x' \
+        'stdbuf -o L git commit -m x' 'setsid git commit -m x' 'setsid -w git commit -m x' \
+        'taskset 0x1 git commit -m x' 'taskset -c 0-3 git commit -m x' 'chrt -f 10 git commit -m x' \
+        'chrt --reset-on-fork -r 5 git commit -m x' 'flock /tmp/l git commit -m x' \
+        'flock -w 5 /tmp/l git commit -m x' 'strace -o /tmp/t git commit -m x' \
+        'timeout 10 sudo -u x nice -n 3 git commit -m x'
+}
+
+@test "GAP11: sudo long options, both spellings, and bundled short options" {
+    _both_see_each 'sudo --user root git commit -m x' 'sudo --user=root git commit -m x' \
+        'sudo -h git commit -m x' 'sudo -Eu root git commit -m x' 'sudo -uroot git commit -m x' \
+        'sudo --prompt p --group g git commit -m x' 'env -iu X git commit -m x' \
+        'env -i -u X git commit -m x' 'sudo -EH -u root -g g git commit -m x' 'nice -n5 git commit -m x'
+}
+
+@test "GAP11: env -S / --split-string re-split the value as a command" {
+    _both_see_each "env -S 'git commit -m x'" "env --split-string='git commit -m x'" \
+        "env --split-string 'git commit -m x'" "env -S'git commit -m x'" "env -iS 'git commit -m x'" \
+        "env FOO=1 -S 'git commit -m x'" "env -S 'env -S \"git commit -m x\"'" "env -S 'FOO=1 git commit'"
+}
+
+@test "GAP11: a redirect glued to the word before it" {
+    _both_see_each 'git>/dev/null commit -m x' 'env>/dev/null git commit -m x' 'env>f git commit -m x' \
+        "git -C ''>/dev/null commit -m x" 'git commit>/dev/null -m x' 'git<f commit -m x' \
+        'git 2>/dev/null commit -m x' 'git -C /tmp>/dev/null commit -m x' 'sudo>f git commit -m x'
+}
+
+@test "GAP11: a glued redirect does not become the -C directory, and fd prefixes stay whole" {
+    run bash -c 'source "$1"; command_has_git_commit "$2"; echo "dir=[$COMMIT_COMMAND_GIT_DIR]"' _ "$MATCHER" "git -C ''>/dev/null commit -m x"
+    [[ "$output" == *"dir=[]"* ]]
+    run bash -c 'source "$1"; _tokenize_segment "$2"; printf "<%s>" "${_SEGMENT_WORDS[@]}"' _ "$MATCHER" "git 2>f 10>g {fd}>h commit '2'>i a>j"
+    [ "$output" = "<git><2>f><10>g><{fd}>h><commit><2><>i><a><>j>" ]
+}
+
+@test "GAP11: -C directory is followed through env, sudo and GIT_DIR / GIT_WORK_TREE" {
+    local c want
+    while IFS='|' read -r c want; do
+        echo "case: $c"
+        run bash -c 'source "$1"; command_has_git_commit "$2" && echo "dir=[$COMMIT_COMMAND_GIT_DIR]"' _ "$MATCHER" "$c"
+        [[ "$output" == *"dir=[$want]"* ]]
+    done <<'CASES'
+env -C /tmp/r git commit -m x|/tmp/r
+env --chdir /tmp/r git commit -m x|/tmp/r
+env --chdir=/tmp/r git commit -m x|/tmp/r
+env -C/tmp/r git commit -m x|/tmp/r
+sudo -D /tmp/r git commit -m x|/tmp/r
+sudo -R /tmp/r git commit -m x|/tmp/r
+sudo --chdir=/tmp/r git commit -m x|/tmp/r
+GIT_DIR=/tmp/r/.git git commit -m x|/tmp/r/.git
+env GIT_DIR=/tmp/r/.git git commit -m x|/tmp/r/.git
+GIT_DIR=/tmp/a/.git GIT_WORK_TREE=/tmp/r git commit -m x|/tmp/r
+env -C /tmp/r git -C sub commit -m x|/tmp/r/sub
+env -C /tmp/r git -C /abs commit -m x|/abs
+git -C /abs commit -m x|/abs
+CASES
+}
+
+@test "GAP11: FOO=\$(a b) and backtick assignments before the command" {
+    _both_see_each 'FOO=$(a b) git commit -m x' 'FOO=$(a $(b c) d) git commit -m x' 'FOO=$((1 + 2)) git commit -m x' \
+        'FOO=`a b` git commit -m x' 'A=1 FOO=$(a "b c") git commit -m x'
+}
+
+@test "GAP11: an unbalanced \$( stays fail-closed, later commands remain visible" {
+    _both_see_each 'FOO=$(a b git commit -m x' 'FOO=$(a b; git commit -m x'
+}
+
+@test "GAP11: new prefixes are still misses when no git commit follows" {
+    local c
+    for c in '! git status' 'if git status; then :; fi' 'timeout 10 git status' 'echo x | xargs git status' \
+             'sudo --user root git status' 'env -S "git status"' 'git>/dev/null status' \
+             'env -C /tmp git status' 'flock /tmp/l git log' 'echo commit' 'if true; then echo git commit; fi' \
+             'FOO=$(a b) git status' 'chrt 10 echo git commit'; do
+        echo "case: $c"
+        run bash -c 'source "$1"; command_has_git_commit "$2"' _ "$MATCHER" "$c"
+        [ "$status" -ne 0 ]
+        _split_run "$c"
+        [[ "$output" != *SEEN* ]]
+    done
+}
