@@ -408,10 +408,11 @@ _words_invoke_commit_once() {
     elif [[ -z "$dir" ]]; then dir="$_CCM_WDIR"; fi
     # The words are unexpanded: `-C "$PWD"` would reach the secret guard as `git -C '$PWD'`, fail,
     # and skip the scan. Only `~` / `~/` is resolved; any other text the shell would expand
-    # publishes no dir, so the guard scans the cwd.
-    # ponytail: `git -C "$OTHER"` then scans the cwd, not $OTHER; resolving it is #1175.
+    # (`$`, a backtick, a glob, `~user`) publishes no dir, so the guard scans the cwd.
+    # ponytail: the words carry no quote state, so `"$OTHER"` scans the cwd and a quoted '~/x'
+    # resolves like an unquoted one; quote-aware resolution is #1175.
     case "$dir" in \~) dir="$HOME" ;; \~/*) dir="$HOME/${dir#\~/}" ;; esac
-    [[ "$dir" == *[\$\`]* || "$dir" == \~* ]] && dir=''
+    [[ "$dir" == *[\$\`\*\?\[]* || "$dir" == \~* ]] && dir=''
     COMMIT_COMMAND_GIT_DIR="$dir"
     _COMMIT_ARGS_FROM=$((i + 1))
     return 0
