@@ -955,9 +955,9 @@ env -C/tmp/r git commit -m x|/tmp/r
 sudo -D /tmp/r git commit -m x|/tmp/r
 sudo -R /tmp/r git commit -m x|/tmp/r
 sudo --chdir=/tmp/r git commit -m x|/tmp/r
-GIT_DIR=/tmp/r/.git git commit -m x|/tmp/r/.git
-env GIT_DIR=/tmp/r/.git git commit -m x|/tmp/r/.git
-GIT_DIR=/tmp/a/.git GIT_WORK_TREE=/tmp/w git commit -m x|/tmp/a/.git
+GIT_DIR=/tmp/r/.git git commit -m x|
+env GIT_DIR=/tmp/r/.git git commit -m x|
+GIT_DIR=/tmp/a/.git GIT_WORK_TREE=/tmp/w git commit -m x|
 GIT_WORK_TREE=/tmp/w git commit -m x|
 env -C /tmp/target -S 'git commit -m x'|/tmp/target
 env -C /tmp/p env -C child git commit -m x|/tmp/p/child
