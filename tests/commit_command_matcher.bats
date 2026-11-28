@@ -773,7 +773,8 @@ _inline_sets() {
     for c in 'git 2>/dev/null commit -m x' 'git -C d >f commit -m x' 'rtk >f git commit -m x' \
              'FOO=1 >f git commit -m x' '>f GIT_DIR=x git commit -m x' 'rtk proxy >f git commit -m x' \
              'git > f commit -m x' 'git -c k=v 2>f -C d commit -m x' 'env FOO=1 >f git commit -m x' \
-             'sudo >f git commit -m x' 'git --git-dir=d <f commit -m x'; do
+             'sudo >f git commit -m x' 'git --git-dir=d <f commit -m x' 'git >&2 commit -m x' \
+             'git -C d &>f commit -m x' 'rtk git 2>&1 commit -m x' 'FOO=1 git <&3 -c k=v commit -m x'; do
         echo "case: $c"
         _both_readers_see_commit "$c"
     done

@@ -82,13 +82,13 @@ _BOUNDARY=$'\x1f'
 # over-read, never under-read). The shell itself would reject such a command anyway.
 _tokenize_segment() {
     local segment="$1" split="${2:-}" char quote='' current='' started=0 i
-    local qpos=0 qcur='' qn=0 prefix_words=() gt=0 prev_gt soft_keep=() sidx
+    local qpos=0 qcur='' qn=0 prefix_words=() gt=0 prev_gt lt=0 prev_ltsoft_keep=() sidx
     _SEGMENT_WORDS=()
     _SEGMENT_SOFT=()
 
     for ((i = 0; i < ${#segment}; i++)); do
         char="${segment:i:1}"
-        prev_gt=$gt gt=0   # gt: this char is an unquoted, unescaped `>` (set in the last branch)
+        prev_gt=$gt gt=0 prev_lt=$lt lt=0  # gt: this char is an unquoted, unescaped `>` (set in the last branch)
         if [[ "$quote" == A ]]; then
             # $'..': a backslash escapes the next char, only an unescaped ' closes
             if [[ "$char" == "\\" ]]; then i=$((i + 1)); current+="${segment:i:1}"
@@ -110,6 +110,11 @@ _tokenize_segment() {
             started=1
         elif [[ "$char" == '#' ]] && ((!started)); then
             while ((i + 1 < ${#segment})) && [[ "${segment:i+1:1}" != $'\n' ]]; do i=$((i + 1)); done
+        elif [[ -n "$split" && "$char" == '&' ]] \
+             && { ((prev_gt || prev_lt)) || [[ "${segment:i+1:1}" == '>' ]]; }; then
+            # `>&2`, `<&3` and `&>f` are redirections, not a background `&` (#1166): keep the word whole
+            current+="$char"
+            started=1
         elif [[ -n "$split" && ( "$char" == [\;\&\|] || "$char" == $'\n' ) ]]; then
             ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
             # A `|` right after an unquoted, unescaped `>` is the clobber redirect `>|`, not a pipe
@@ -124,6 +129,7 @@ _tokenize_segment() {
             current+="$char"
             started=1
             [[ "$char" == '>' ]] && gt=1
+            [[ "$char" == '<' ]] && lt=1
         fi
     done
 
