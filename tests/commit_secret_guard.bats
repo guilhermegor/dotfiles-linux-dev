@@ -163,3 +163,42 @@ run_guard() {
     run run_guard 'git commit -m wip'
     [ "$status" -eq 0 ]
 }
+
+# --- #1175: a target the matcher cannot name fails closed, it is never scanned as the cwd -------
+
+@test "#1175: blocks, naming the problem, when the target dir is an expansion (cwd is no repo)" {
+    local elsewhere
+    elsewhere="$(mktemp -d)"
+    cd "$elsewhere"
+    run run_guard 'git -C "$TARGET" commit -m wip'
+    rm -rf "$elsewhere"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cannot tell which repository"* ]]
+    [[ "$output" == *'git -C "$TARGET" commit -m wip'* ]]
+}
+
+@test "#1175: blocks an absolute --git-dir (with -C) instead of scanning the cwd" {
+    local elsewhere
+    elsewhere="$(mktemp -d)"
+    cd "$elsewhere"
+    run run_guard "git --git-dir=$TEST_TMP/.git -C $TEST_TMP commit -m wip"
+    rm -rf "$elsewhere"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cannot tell which repository"* ]]
+}
+
+@test "#1175: a sudo chroot target blocks as unresolved" {
+    run run_guard 'sudo -R /tmp/jail git -C /repo commit -m wip'
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cannot tell which repository"* ]]
+}
+
+@test "#1175: a literal -C still scans that repo, not the cwd" {
+    local elsewhere
+    elsewhere="$(mktemp -d)"
+    cd "$elsewhere"
+    run run_guard "git -C $TEST_TMP commit -m wip"
+    rm -rf "$elsewhere"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"appear to contain a secret"* ]]
+}

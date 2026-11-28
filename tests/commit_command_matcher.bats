@@ -1155,14 +1155,29 @@ env -C "$X" git -C /abs commit -m x|/abs|0
 CASES
 }
 
-@test "#1175: a sudo chroot is composed with an absolute git -C, otherwise unresolved" {
-    # was pinned as `/repo`: inside the jail that is <root>/repo on the host
+@test "#1175: a sudo chroot never publishes a directory: the jail's paths are not the host's" {
+    # was pinned as `/repo`, then as <root>/repo: `..` and absolute symlinks inside the jail make any
+    # lexical join a guess, so the target is unresolved
     _dir_cases <<'CASES'
-sudo -R /tmp/jail git -C /repo commit -m x|/tmp/jail/repo|0
-sudo --chroot=/tmp/jail git -C /repo commit -m x|/tmp/jail/repo|0
+sudo -R /tmp/jail git -C /repo commit -m x||1
+sudo --chroot=/tmp/jail git -C /repo commit -m x||1
+sudo -R /tmp/jail git -C /../repo commit -m x||1
 sudo -R /tmp/jail git commit -m x||1
 sudo -R /tmp/jail git -C rel commit -m x||1
 sudo -R "$J" git -C /repo commit -m x||1
+CASES
+}
+
+@test "#1175: one env invocation keeps its LAST -C (relative to where env started); separate ones compose" {
+    # measured with real env and a git stub: `env -C /w -C t` and `env -C /w -S '-C t'` both chdir to
+    # `t` relative to the cwd, `env -C /w env -C t` ends in /w/t
+    _dir_cases <<'CASES'
+env -C /tmp/work -C target git commit -m x|target|0
+env -C /tmp/work -S '-C target' git commit -m x|target|0
+env -S '-C /tmp/work' -C target git commit -m x|target|0
+env -C /tmp/work env -C target git commit -m x|/tmp/work/target|0
+env -C /tmp/work -C /abs git commit -m x|/abs|0
+sudo -D /tmp/w -D t git commit -m x|t|0
 CASES
 }
 
