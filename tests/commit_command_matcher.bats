@@ -803,6 +803,28 @@ _inline_sets() {
     [[ "$output" != *leak* ]]
 }
 
+@test "GAP10: a quoted value that starts with > or < is a value, not a redirection" {
+    local c
+    for c in "git -C '>d' commit -m x" 'git -C ">d" commit -m x' "git -C '<d' commit -m x" \
+             "git -c '>k=v' commit -m x" "git --git-dir '>g' commit -m x" \
+             "env -u '>f' git commit -m x" "sudo -u '>x' git commit -m x" \
+             "nice -n '>5' git commit -m x" 'git -C \>d commit -m x'; do
+        echo "case: $c"
+        _both_readers_see_commit "$c"
+    done
+    run bash -c 'source "$1"; command_has_git_commit "$2"; echo "dir=$COMMIT_COMMAND_GIT_DIR"' _ "$MATCHER" "git -C '>d' commit -m x"
+    [[ "$output" == *"dir=>d"* ]]
+}
+
+@test "GAP10: a quoted redirection target is still a redirection" {
+    local c
+    for c in '>"f" git commit -m x' "> 'f' git commit -m x" "2>'f g' git commit -m x" \
+             'git >"f" commit -m x' "git -C '>d' >'f' commit -m x"; do
+        echo "case: $c"
+        _both_readers_see_commit "$c"
+    done
+}
+
 @test "GAP10: redirections between a wrapper and its options keep the option state" {
     local c
     for c in 'env > /dev/null -u X git commit -m x' 'env -u > f X git commit -m x' \
