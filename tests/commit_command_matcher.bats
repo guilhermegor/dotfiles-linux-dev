@@ -405,3 +405,236 @@ _sees_no_verify() {
     run _strip $'cat <<A <<B\na\nA\nb\nB\necho after'
     [ "$output" = $'cat <<A <<B\necho after' ]
 }
+
+# --- #1158: four more ways to hide a commit --------------------------------------------------
+# Each shape was run in real bash with `git` stubbed as a function that prints its argv: every one
+# of them commits. The $'..' and $".." delimiter shapes were checked against GNU bash 5.2.21.
+# _strip_sees_commit reads the stripped text the way the inline-message guards do.
+
+_strip_sees_commit() {
+    run bash -c 'source "$1"
+        seen() { _words_invoke_commit && echo SEEN; return 0; }
+        _for_each_command "$(printf "%s" "$2" | _strip_heredoc_bodies)" seen' _ "$MATCHER" "$1"
+    [[ "$output" == *SEEN* ]]
+}
+
+_matcher_has_commit() {
+    run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" "$1"
+    [ "$status" -eq 0 ]
+}
+
+@test "GAP5: ANSI-C heredoc delimiter <<\$'EOF' does not swallow the commit after its terminator" {
+    _strip_sees_commit $'cat <<$\'EOF\'\nbody\nEOF\ngit commit -m x\n$EOF'
+}
+
+@test "GAP5: locale-quoted heredoc delimiter <<\$\"EOF\" does not swallow the commit" {
+    _strip_sees_commit $'cat <<$"EOF"\nbody\nEOF\ngit commit -m x\n$EOF'
+}
+
+@test "GAP5: ANSI-C delimiter plain strip drops the body" {
+    run _strip $'cat <<$\'EOF\'\nbody\nEOF\necho after'
+    [ "$output" = $'cat <<$\'EOF\'\necho after' ]
+}
+
+@test "GAP5: an escape inside an ANSI-C delimiter cannot be read, so the input is left unstripped" {
+    run _strip $'cat <<$\'E\\x41\'\nbody\nEA\necho after'
+    [ "$output" = $'cat <<$\'E\\x41\'\nbody\nEA\necho after' ]
+}
+
+@test "GAP5: an escaped quote inside an ANSI-C delimiter fails closed, the commit stays visible" {
+    run _strip $'cat <<$\'a\\\'b\'\nbody\nab\ngit commit -m x'
+    [ "$output" = $'cat <<$\'a\\\'b\'\nbody\nab\ngit commit -m x' ]
+    _strip_sees_commit $'cat <<$\'a\\\'b\'\nbody\nab\ngit commit -m x'
+}
+
+@test "GAP6: a continuation after a heredoc opener (cat <<EOF \\<NL>&& git commit)" {
+    _strip_sees_commit $'cat <<EOF \\\n&& git commit -m x\nbody\nEOF'
+}
+
+@test "GAP6: a continuation after a heredoc opener leaves the input unstripped" {
+    run _strip $'cat <<EOF \\\n&& echo a\nbody\nEOF\necho after'
+    [ "$output" = $'cat <<EOF \\\n&& echo a\nbody\nEOF\necho after' ]
+}
+
+@test "GAP6: an even backslash run after an opener is no continuation, body still stripped" {
+    run _strip $'cat <<EOF \\\\\nbody\nEOF\necho after'
+    [ "$output" = $'cat <<EOF \\\\\necho after' ]
+}
+
+@test "GAP7: a continuation inside the delimiter word (<<EO\\<NL>F)" {
+    _strip_sees_commit $'cat <<EO\\\nF\nbody\nEOF\ngit commit -m x\nEO'
+}
+
+@test "GAP7: a continuation right after << leaves the input unstripped" {
+    run _strip $'cat <<\\\nEOF\nbody\nEOF\necho after'
+    [ "$output" = $'cat <<\\\nEOF\nbody\nEOF\necho after' ]
+}
+
+@test "GAP8: output redirection before the command word (>/dev/null git commit)" {
+    _matcher_has_commit '>/dev/null git commit -m x'
+}
+
+@test "GAP8: separated redirection before the command word (> /dev/null git commit)" {
+    _matcher_has_commit '> /dev/null git commit -m x'
+}
+
+@test "GAP8: fd, append, input, dup and herestring redirections before the command word" {
+    local c
+    for c in '2>/dev/null git commit -m x' '>>f git commit -m x' '<f git commit -m x' \
+             '2>&1 git commit -m x' '>&2 git commit -m x' '<<<word git commit -m x' \
+             '<<E git commit -m x' '&>f git commit -m x' '{fd}>f git commit -m x' \
+             '>f 2>&1 rtk git commit -m x' '2> f < g /usr/bin/git -C d commit -m x'; do
+        echo "case: $c"
+        _matcher_has_commit "$c"
+    done
+}
+
+@test "GAP8: redirections before the command word reach the split-mode readers too" {
+    local c
+    for c in '>&2 git commit -m x' '2>&1 git commit -m x' '&>f git commit -m x' '>f git commit -m x' \
+             '>|f git commit -m x' '2>| f git commit -m x'; do
+        echo "case: $c"
+        _strip_sees_commit "$c"
+    done
+}
+
+@test "GAP8: <<\$'E' <<\"E\" \\<NL>git commit, once the lines are joined" {
+    _matcher_has_commit $'<<$\'E\' <<"E" \\\ngit commit -m x\nbody\nE\nbody\nE'
+    _strip_sees_commit $'<<$\'E\' <<"E" \\\ngit commit -m x\nbody\nE\nbody\nE'
+}
+
+@test "GAP8: clobber redirection >| before the command word" {
+    _matcher_has_commit '>|f git commit -m x'
+    _matcher_has_commit '2>| f git commit -m x'
+}
+
+# The >| re-reading must never make a commit appear twice: callbacks that count commits would
+# read the second one as another commit (COMMIT_SOURCE_FOUND fell to 0, messages doubled).
+_source_found() {
+    run bash -c 'source "$1"; commit_source_dir "$2" "$3"; echo "found=$COMMIT_SOURCE_FOUND"' _ "$MATCHER" "$1" "$2"
+    [[ "$output" == *"found=1"* ]]
+}
+
+@test "GAP8: >| after a stdin commit does not double it (2>|)" {
+    _source_found $'git commit -F - 2>|/tmp/err <<\'EOF\'\nmsg\nEOF' stdin
+}
+
+@test "GAP8: >| after a stdin commit does not double it (>|)" {
+    _source_found $'git commit -F - >|/tmp/o <<\'EOF\'\nmsg\nEOF' stdin
+}
+
+@test "GAP8: >| inside a commit's own message does not double it" {
+    _source_found "git commit -F msg.txt -m 'a >| b'" file
+}
+
+@test "GAP8: >| inside a commit's message gives one message set, not two" {
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "sets=${#COMMIT_MESSAGE_SETS[@]}"' _ "$MATCHER" "git commit -m 'a >| b'"
+    [[ "$output" == *"sets=1"* ]]
+}
+
+@test "GAP8: >| inside a commit's message does not make a later cd read as a cd before it" {
+    run bash -c 'source "$1"; commit_cd_dir "$2"; echo "ok=$COMMIT_CD_OK"' _ "$MATCHER" "git commit -m 'a >| b'; cd /x"
+    [[ "$output" == *"ok=1"* ]]
+}
+
+@test "GAP8: a commit found only by the >| re-reading still counts for the source reader" {
+    _source_found $'>|f git commit -F - <<\'EOF\'\nmsg\nEOF' stdin
+}
+
+@test "GAP8: a leading redirection plus a later >| or 2>&1 is still one commit" {
+    local c
+    for c in '>o git commit -m x 2>|e' '2>&1 git commit -m x >|e' '>|f git commit -m x 2>|e'; do
+        echo "case: $c"
+        run bash -c 'source "$1"; commit_inline_messages "$2"; echo "sets=${#COMMIT_MESSAGE_SETS[@]}"' _ "$MATCHER" "$c"
+        [[ "$output" == *"sets=1"* ]]
+    done
+}
+
+@test "GAP8: a leading redirection plus a later >| gives COMMIT_SOURCE_FOUND=1" {
+    _source_found $'>o git commit -F - 2>|e <<\'EOF\'\nmsg\nEOF' stdin
+    _source_found $'2>&1 git commit -F - >|e <<\'EOF\'\nmsg\nEOF' stdin
+}
+
+# split-mode commit count: how many simple commands the inline-message readers would see
+_split_commits() {
+    run bash -c 'source "$1"
+        seen() { _words_invoke_commit && echo SEEN; return 0; }
+        _for_each_command "$(printf "%s" "$2" | _strip_heredoc_bodies)" seen' _ "$MATCHER" "$1"
+}
+
+@test "GAP8: a quoted > before a real pipe is no clobber redirect, both commits stay visible" {
+    _split_commits "git commit -m 'a>'|git commit --no-verify -m b"
+    [ "$output" = $'SEEN\nSEEN' ]
+}
+
+@test "GAP8: an escaped > before a real pipe is no clobber redirect" {
+    _split_commits 'git commit -m a\>|git commit --no-verify -m b'
+    [ "$output" = $'SEEN\nSEEN' ]
+}
+
+@test "GAP8: command_has_git_commit sees a >|f commit after a quoted, double-quoted or escaped > pipe" {
+    local c
+    for c in "echo 'a>'|>|f git commit --no-verify -m x" 'echo "a>"|>|f git commit --no-verify -m x' \
+             'echo a\>|>|f git commit --no-verify -m x'; do
+        echo "case: $c"
+        _matcher_has_commit "$c"
+    done
+}
+
+@test "GAP8: a >|f commit after a pipe that follows a quoted or escaped > is seen by the split reader" {
+    local c
+    for c in "echo 'a>'|>|f git commit --no-verify -m x" 'echo "a>"|>|f git commit --no-verify -m x' \
+             'echo a\>|>|f git commit --no-verify -m x'; do
+        echo "case: $c"
+        _split_commits "$c"
+        [ "$output" = SEEN ]
+    done
+}
+
+_cd_dir_of() {
+    run bash -c 'source "$1"; commit_cd_dir "$2"; echo "ok=$COMMIT_CD_OK dir=$COMMIT_CD_DIR"' _ "$MATCHER" "$1"
+}
+
+@test "GAP8: a cd after a >| commit does not change the directory the commit ran in" {
+    _cd_dir_of 'cd /b; >|f git commit -m x; cd /c'
+    [[ "$output" == *"ok=1 dir=/b"* ]]
+}
+
+@test "GAP8: a cd with >| before a commit never reports a wrong directory" {
+    # a cd carrying a redirection is not a lone `cd <path>`: unknown (ok=0) is the answer, exactly
+    # what master gives
+    _cd_dir_of 'cd /a 2>|e && git commit -m x'
+    [[ "$output" == *"ok=0 dir="* ]]
+}
+
+@test "GAP8: two >| in one command are still one commit" {
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "sets=${#COMMIT_MESSAGE_SETS[@]}"' _ "$MATCHER" '>|a git commit -m x >|git commit'
+    [[ "$output" == *"sets=1"* ]]
+}
+
+@test "GAP8: two >| in one -F - commit still give COMMIT_SOURCE_FOUND=1" {
+    _source_found $'>|a git commit -F - >|git commit <<\'EOF\'\nmsg\nEOF' stdin
+}
+
+@test "GAP8: a literal \\x1e byte in the input does not make a commit fire twice" {
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "sets=${#COMMIT_MESSAGE_SETS[@]}"' _ "$MATCHER" $'git -c $\'x=\x1e\' commit -m m; echo >|f'
+    [[ "$output" == *"sets=1"* ]]
+}
+
+@test "GAP8: a quoted word that looks like a redirection does not hide the real commit after it" {
+    _strip_sees_commit "'>f git' commit --no-verify -m x; >|f git commit --no-verify -m x"
+}
+
+@test "GAP8: a commit found by the >| re-reading keeps its message text as written" {
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "msg=${COMMIT_MESSAGE_SETS[0]}"' _ "$MATCHER" ">|f git commit -m 'x >| y'"
+    [[ "$output" == *"msg=x >| y"* ]]
+}
+
+@test "GAP8: a redirection before a non-git command word is still not a commit" {
+    local c
+    for c in '>/dev/null echo git commit' 'git status >/dev/null' '>f cat git commit' '2>&1 echo "git commit"'; do
+        echo "case: $c"
+        run bash -c 'source "$1" && command_has_git_commit "$2"' _ "$MATCHER" "$c"
+        [ "$status" -ne 0 ]
+    done
+}

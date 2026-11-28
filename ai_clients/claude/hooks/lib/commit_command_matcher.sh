@@ -82,11 +82,13 @@ _BOUNDARY=$'\x1f'
 # over-read, never under-read). The shell itself would reject such a command anyway.
 _tokenize_segment() {
     local segment="$1" split="${2:-}" char quote='' current='' started=0 i
-    local qpos=0 qcur='' qn=0 prefix_words=()
+    local qpos=0 qcur='' qn=0 prefix_words=() gt=0 prev_gt soft_keep=() sidx
     _SEGMENT_WORDS=()
+    _SEGMENT_SOFT=()
 
     for ((i = 0; i < ${#segment}; i++)); do
         char="${segment:i:1}"
+        prev_gt=$gt gt=0   # gt: this char is an unquoted, unescaped `>` (set in the last branch)
         if [[ "$quote" == A ]]; then
             # $'..': a backslash escapes the next char, only an unescaped ' closes
             if [[ "$char" == "\\" ]]; then i=$((i + 1)); current+="${segment:i:1}"
@@ -110,24 +112,55 @@ _tokenize_segment() {
             while ((i + 1 < ${#segment})) && [[ "${segment:i+1:1}" != $'\n' ]]; do i=$((i + 1)); done
         elif [[ -n "$split" && ( "$char" == [\;\&\|] || "$char" == $'\n' ) ]]; then
             ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
+            # A `|` right after an unquoted, unescaped `>` is the clobber redirect `>|`, not a pipe
+            # (#1158). It still cuts here, as it always did; where it cut is kept out of band (word
+            # index of the boundary) so _for_each_command can put the command back together. The
+            # flag, not the word text: a quoted `'a>'|x` is a real pipe.
+            [[ "$char" == '|' ]] && ((prev_gt)) && _SEGMENT_SOFT+=("${#_SEGMENT_WORDS[@]}")
             _SEGMENT_WORDS+=("$_BOUNDARY")
         elif [[ "$char" == [[:space:]] ]]; then
             ((started)) && { _SEGMENT_WORDS+=("$current"); current=''; started=0; }
         else
             current+="$char"
             started=1
+            [[ "$char" == '>' ]] && gt=1
         fi
     done
 
     if [[ -n "$quote" ]]; then
         prefix_words=("${_SEGMENT_WORDS[@]:0:qn}")
+        for sidx in ${_SEGMENT_SOFT[@]+"${_SEGMENT_SOFT[@]}"}; do ((sidx < qn)) && soft_keep+=("$sidx"); done
         _tokenize_segment "$qcur${segment:qpos+1}" "$split"
         _SEGMENT_WORDS=("${prefix_words[@]}" "${_SEGMENT_WORDS[@]}")
+        for sidx in ${_SEGMENT_SOFT[@]+"${_SEGMENT_SOFT[@]}"}; do soft_keep+=("$((sidx + qn))"); done
+        _SEGMENT_SOFT=(${soft_keep[@]+"${soft_keep[@]}"})
         return 0
     fi
 
     ((started)) && _SEGMENT_WORDS+=("$current")
     return 0
+}
+
+# _skip_redirections
+# Sets `_CCM_REDIR_NEXT` to the index in `_CMD_WORDS` of the first word that is not a leading redirection
+# (#1158): `[n]>f`, `[n]>>f`, `<f`, `[n]>&m`, `&>f`, `<<tag`, `<<<word`, `<>f`, `{fd}>f`, each also in
+# the separated form (`> f`). A word that is an operator alone eats the next word as its target.
+# Over-reading only: a word that merely looks like a redirection is skipped. In split mode the
+# tokenizer cuts `>&2` at its `&` (and `2>&1`, `&>f`), so a bare fd word (`2`, `1-`, `-`) opening a
+# command is the tail of such a cut and is skipped too; the sed-split reading never cuts there,
+# where the same skip is a harmless extra over-read.
+_CCM_REDIR_RE='^([0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\}|&)?(>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)(.*)$'
+_skip_redirections() {
+    local i=0 w
+    while w="${_CMD_WORDS[i]:-}"; [[ -n "$w" ]]; do
+        if [[ "$w" =~ $_CCM_REDIR_RE ]]; then
+            [[ -n "${BASH_REMATCH[3]}" ]] || i=$((i + 1))
+        elif [[ ! "$w" =~ ^([0-9]+-?|-)$ ]]; then
+            break
+        fi
+        i=$((i + 1))
+    done
+    _CCM_REDIR_NEXT=$i
 }
 
 # _words_invoke_commit
@@ -138,6 +171,10 @@ _tokenize_segment() {
 _words_invoke_commit() {
     local -a words=("${_CMD_WORDS[@]:-}")
     local i=0 dir=''
+
+    # Redirections may come BEFORE the command word (`>/dev/null git commit`, #1158).
+    _skip_redirections
+    i=$_CCM_REDIR_NEXT
 
     # `rtk` / `rtk proxy` prefix (RTK.md's proxy and its raw escape hatch).
     if [[ "${words[i]:-}" && "${words[i]##*/}" == "rtk" ]]; then
@@ -192,19 +229,38 @@ _join_continuations() {
 # Two readings, a hit on EITHER counts: the text as written, and the text with every `\<NL>`
 # joined. Over-reading is the safe direction for a guard (see _join_continuations).
 command_has_git_commit() {
-    local command="$1" segment reading
+    local command="$1" segment reading joined
+    joined="$(printf '%s' "$command" | _join_continuations)"
 
     # Cleared per call so a previous match's directory can never leak into a later one.
     # shellcheck disable=SC2034  # read by the hooks that source this file, invisible to shellcheck
     COMMIT_COMMAND_GIT_DIR=""
-    for reading in "$command" "$(printf '%s' "$command" | _join_continuations)"; do
+    # The last two readings turn the clobber redirect `>|` into `>` (#1158): the `|` of `>|f git
+    # commit` is no pipe, but the split below cannot tell. Added to the first two, never instead.
+    # readings 3 and 4 also rewrite `>|` inside quotes: fine for this yes/no answer, never reuse
+    # them for message extraction.
+    local -a readings=("$command" "$joined")
+    if [[ "$command" == *'>|'* || "$joined" == *'>|'* ]]; then
+        readings+=("${command//>|/>}" "${joined//>|/>}")
+    fi
+    for reading in "${readings[@]}"; do
         while IFS= read -r segment; do
             _segment_invokes_commit "$segment" && return 0
         done <<< "$(printf '%s' "$reading" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
     done
 
+    # Last reading, only for a command with `>|`: the quote-aware split reader, which knows a
+    # `>|` from a pipe by what the tokenizer saw (the rewrites above cannot tell `a\>|` from `>|`).
+    if [[ "$command" == *'>|'* ]]; then
+        _CCM_HIT=0
+        _for_each_command "$command" _note_commit_hit
+        ((_CCM_HIT)) && return 0
+    fi
+
     return 1
 }
+
+_note_commit_hit() { _words_invoke_commit && _CCM_HIT=1; return 0; }
 
 # --- inline `-m` messages and script bodies (dotfiles-linux-dev#961) -----------------------------
 #
@@ -219,19 +275,61 @@ _MSG_SEP=$'\x1f'
 # Tokenize COMMAND once with the quote-aware split mode and call CALLBACK with `_CMD_WORDS` set to
 # each simple command in turn. Quoted `;`/`&`/`|` never split, and nothing is evaluated.
 _for_each_command() {
-    local w cb="$2"
-    local -a all
+    local w cb="$2" i soft=" "
+    local -a all piece_words=() piece_len=()
     _CMD_WORDS=()
     _tokenize_segment "$1" split
-    all=("${_SEGMENT_WORDS[@]:-}")
-    for w in "${all[@]}" "$_BOUNDARY"; do
-        if [[ "$w" == "$_BOUNDARY" ]]; then
+    all=("${_SEGMENT_WORDS[@]:-}" "$_BOUNDARY")
+    for i in ${_SEGMENT_SOFT[@]+"${_SEGMENT_SOFT[@]}"}; do soft+="$i "; done
+    for i in "${!all[@]}"; do
+        w="${all[i]}"
+        if [[ "$w" != "$_BOUNDARY" ]]; then
+            _CMD_WORDS+=("$w")
+            continue
+        fi
+        piece_words+=(${_CMD_WORDS[@]+"${_CMD_WORDS[@]}"})
+        piece_len+=("${#_CMD_WORDS[@]}")
+        _CMD_WORDS=()
+        # A cut at `>|` is no command boundary (#1158): keep gathering. The group fires, in source
+        # order and once, at its first real boundary.
+        [[ "$soft" == *" $i "* ]] && continue
+        _fire_group "$cb"
+        piece_words=()
+        piece_len=()
+    done
+}
+
+# _fire_group CALLBACK
+# Fire CALLBACK for the commands held in the caller's `piece_words` / `piece_len` (the pieces one
+# command was cut into at `>|`). Put back together with their `|`, they are ONE command; when that
+# is a `git commit` it fires once and the pieces do not. Otherwise each piece fires as before, so
+# whatever the callbacks saw before the rejoining they still see (#1158). The cut positions are
+# word indexes kept out of band, so no byte of the input can collide with them.
+_fire_group() {
+    local cb="$1" k off=0 saved_dir="$COMMIT_COMMAND_GIT_DIR"
+    local -a joined=()
+    if ((${#piece_len[@]} > 1)); then
+        for ((k = 0; k < ${#piece_len[@]}; k++)); do
+            joined+=(${piece_words[@]+"${piece_words[@]:off:piece_len[k]}"})
+            off=$((off + piece_len[k]))
+            if ((k + 1 < ${#piece_len[@]} && piece_len[k] > 0)); then joined[${#joined[@]} - 1]+="|"; fi
+        done
+        _CMD_WORDS=(${joined[@]+"${joined[@]}"})
+        if _words_invoke_commit; then
+            COMMIT_COMMAND_GIT_DIR="$saved_dir"
             "$cb"
             _CMD_WORDS=()
-        else
-            _CMD_WORDS+=("$w")
+            return 0
         fi
+        COMMIT_COMMAND_GIT_DIR="$saved_dir"
+    fi
+    off=0
+    for ((k = 0; k < ${#piece_len[@]}; k++)); do
+        _CMD_WORDS=(${piece_words[@]+"${piece_words[@]:off:piece_len[k]}"})
+        off=$((off + piece_len[k]))
+        "$cb"
     done
+    _CMD_WORDS=()
 }
 
 # command_has_cd COMMAND
@@ -287,7 +385,8 @@ _strip_heredoc_bodies() {
     # is not an opener. Quote state carries across lines. $'..' is its own state ("A"): there a
     # backslash escapes the next char, so `\'` does not close it. Fail closed: a quote still open at
     # end of input means the scan cannot be trusted (a desync may have invented an opener), so the
-    # WHOLE input is printed unstripped and the guards read MORE text, never less.
+    # WHOLE input is printed unstripped and the guards read MORE text, never less. The accepted
+    # cost: a legitimate heredoc body read as commands can over-block (#1158's fail-closed cases).
     # $(..) (#1148 review): inside it quoting restarts at the top level, so `"$(cat <<EOF` still
     # opens a heredoc; push/pop save the enclosing quote state and the paren depth. `$((..))` is
     # arithmetic (ar): its `<<` is a shift, never an opener. An unbalanced `$(` fails closed too.
@@ -304,7 +403,18 @@ _strip_heredoc_bodies() {
             while (k <= n) {
                 ch = substr(s, k, 1)
                 if (ch ~ /[ \t<>|&;()]/) break
+                # A backslash that ends the line is a continuation: the delimiter goes on in the next
+                # line (#1158), so it cannot be read from this one. Fail the whole input closed.
+                if (ch == "\\" && k == n) { bad = 1; break }
                 if (ch == "\\") { t = t substr(s, k + 1, 1); k += 2; continue }
+                # $".." is a plain quoted word; $'..' is ANSI-C quoting (#1158). An escape in it
+                # (\x41, \n, \101) is decoded by bash, and decoding is not done here: fail closed.
+                if (ch == "$" && substr(s, k + 1, 1) == "\"") { k++; continue }
+                if (ch == "$" && substr(s, k + 1, 1) == "\047") {
+                    e = index(substr(s, k + 2), "\047")
+                    if (!e || index(substr(s, k + 2, e - 1), "\\")) { bad = 1; break }
+                    t = t substr(s, k + 2, e - 1); k += e + 2; continue
+                }
                 if (ch == "\047") {
                     e = index(substr(s, k + 1), ch)
                     if (!e) { bad = 1; break }
@@ -384,7 +494,9 @@ _strip_heredoc_bodies() {
                 i++
             }
         }
-        { out[++m] = $0; if (nt > 0) { pending = 1; ci = 1 } }
+        # An odd run of backslashes ends an opener line (#1158): bash joins the next line to it, so the
+        # body does not start where this scan thinks. Cannot be read here: fail the input closed.
+        { out[++m] = $0; if (nt > 0) { pending = 1; ci = 1; if ($0 ~ /(^|[^\\])(\\\\)*\\$/) bad = 1 } }
         END { if (q != "" || depth > 0 || bad || pending) for (k = 1; k <= NR; k++) print raw[k]; else for (k = 1; k <= m; k++) print out[k] }
     ' "${1:--}"
 }
