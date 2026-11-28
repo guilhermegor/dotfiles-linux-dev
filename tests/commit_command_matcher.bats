@@ -1097,9 +1097,12 @@ GIT_DIR=~/x git -C /tmp/b commit -m x||1
 GIT_DIR=$X/.git git -C /tmp/b commit -m x||1
 git --git-dir=/tmp/a/.git -C /tmp/b commit -m x||1
 git --git-dir /tmp/a/.git -C /tmp/b commit -m x||1
-GIT_DIR=rel/.git git -C /tmp/b commit -m x|/tmp/b|0
-GIT_DIR=/tmp/a/.git GIT_DIR=rel git -C /tmp/b commit -m x|/tmp/b|0
-git --git-dir=rel -C /tmp/b commit -m x|/tmp/b|0
+GIT_DIR=rel/.git git -C /tmp/b commit -m x||1
+GIT_DIR=rel/.git git commit -m x||1
+git --git-dir=rel/.git commit -m x||1
+GIT_DIR=/tmp/a/.git GIT_DIR=rel git -C /tmp/b commit -m x||1
+GIT_DIR= git -C /tmp/b commit -m x|/tmp/b|0
+git --git-dir=rel -C /tmp/b commit -m x||1
 CASES
 }
 
@@ -1184,4 +1187,33 @@ CASES
 @test "#1175: sudo -c / -a and doas -a take a value, so the command behind them is seen" {
     _both_see_each 'sudo -c class git commit -m x' 'sudo -a type git commit -m x' \
         'doas -a style git commit -m x' 'sudo -u root -c class git commit -m x'
+}
+
+@test "#1175: an unquoted expansion in the option prefix poisons a later absolute -C" {
+    # X="/tmp --git-dir=/other" splits into an injected option, so the -C that follows is not the target
+    _dir_cases <<'CASES'
+git -C $X -C /abs commit -m x||1
+git $X -C /abs commit -m x||1
+git -C /abs $X commit -m x||1
+env $X git -C /abs commit -m x||1
+env -C $X git -C /abs commit -m x||1
+env -C $X env -C /abs git commit -m x||1
+git -C "$X" -C /abs commit -m x|/abs|0
+git -C /abs commit -m "$X" $Y|/abs|0
+CASES
+}
+
+@test "#1175: the unresolved reason names the cause" {
+    local c want
+    while IFS='|' read -r c want; do
+        echo "case: $c"
+        run bash -c 'source "$1"; command_has_git_commit "$2" && echo "reason=[$COMMIT_COMMAND_GIT_DIR_REASON]"' _ "$MATCHER" "$c"
+        [[ "$output" == *"reason=[$want]"* ]]
+    done <<'CASES'
+git -C "$X" commit -m x|expansion
+GIT_DIR=rel git commit -m x|gitdir
+git --git-dir=/a -C "$X" commit -m x|gitdir
+sudo -R /j git -C /r commit -m x|chroot
+git -C /abs commit -m x|
+CASES
 }

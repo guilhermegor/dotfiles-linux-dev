@@ -202,3 +202,19 @@ run_guard() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"appear to contain a secret"* ]]
 }
+
+@test "#1175: the block message names the cause and a remedy that works for it" {
+    run run_guard 'git -C "$TARGET" commit -m wip'
+    [[ "$output" == *"expansion"* && "$output" == *"git -C /absolute/path"* ]]
+    run run_guard 'GIT_DIR=rel/.git git commit -m wip'
+    [[ "$output" == *"GIT_DIR"* && "$output" == *"leading '! '"* ]]
+    [[ "$output" != *"git -C /absolute/path"* ]]
+    run run_guard 'sudo -R /tmp/jail git -C /repo commit -m wip'
+    [[ "$output" == *"chroot"* && "$output" == *"leading '! '"* ]]
+}
+
+@test "#1175: a relative GIT_DIR is blocked, not scanned as the cwd" {
+    run run_guard 'GIT_DIR=rel/.git git commit -m wip'
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cannot tell which repository"* ]]
+}
