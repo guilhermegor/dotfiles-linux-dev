@@ -957,7 +957,12 @@ sudo -R /tmp/r git commit -m x|/tmp/r
 sudo --chdir=/tmp/r git commit -m x|/tmp/r
 GIT_DIR=/tmp/r/.git git commit -m x|/tmp/r/.git
 env GIT_DIR=/tmp/r/.git git commit -m x|/tmp/r/.git
-GIT_DIR=/tmp/a/.git GIT_WORK_TREE=/tmp/r git commit -m x|/tmp/r
+GIT_DIR=/tmp/a/.git GIT_WORK_TREE=/tmp/w git commit -m x|/tmp/a/.git
+GIT_WORK_TREE=/tmp/w git commit -m x|
+env -C /tmp/target -S 'git commit -m x'|/tmp/target
+env -C /tmp/p env -C child git commit -m x|/tmp/p/child
+env -C /tmp/p env -C /abs git commit -m x|/abs
+sudo -D /tmp/p env -C child git -C sub commit -m x|/tmp/p/child/sub
 env -C /tmp/r git -C sub commit -m x|/tmp/r/sub
 env -C /tmp/r git -C /abs commit -m x|/abs
 git -C /abs commit -m x|/abs
@@ -983,6 +988,37 @@ CASES
 @test "GAP11: a backslash at the end of a # comment line does not continue it" {
     _both_see_each $'echo x # note \\\ngit commit -m x' $'# note \\\ngit commit -m x' \
         $'true # c \\\n\\\ngit commit -m x'
+}
+
+@test "GAP11 review: env -S keeps the enclosing env words, so its options still apply" {
+    _both_see_each "env -S '-u HOME git commit -m x'" "env -u HOME -S 'git commit -m x'" \
+        "env -i -S 'git commit -m x' -- ignored"
+}
+
+@test "GAP11 review: an env -S before a later quoted-> command leaves that command readable" {
+    local c="env -S 'git status'; git -C '>d' commit -m x"
+    _split_run "$c"
+    [[ "$output" == *SEEN* ]]
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "n=${#COMMIT_MESSAGE_SETS[@]} m=${COMMIT_MESSAGE_SETS[0]} d=${COMMIT_MESSAGE_DIRS[0]}"' _ "$MATCHER" "$c"
+    [ "$output" = "n=1 m=x d=>d" ]
+}
+
+@test "GAP11 review: xargs options with an optional argument take no separate value" {
+    _both_see_each "printf 'x\\n' | env -u HOME xargs --replace git commit -m '{}'" \
+        'xargs --eof git commit -m x' 'xargs --max-lines git commit -m x' 'xargs -i git commit -m x' \
+        'xargs -e git commit -m x' 'xargs -l git commit -m x' 'xargs --replace=R git commit -m x' \
+        'xargs -I R git commit -m x' 'xargs -E EOF git commit -m x'
+}
+
+@test "GAP11 review: only an unquoted, unescaped & joins a glued >" {
+    local c m
+    for c in "git commit -m 'a&'>/dev/null" 'git commit -m a\&>/dev/null' 'git commit -m "a&">/dev/null'; do
+        run bash -c 'source "$1"; commit_inline_messages "$2"; echo "m=${COMMIT_MESSAGE_SETS[0]}"' _ "$MATCHER" "$c"
+        echo "case: $c -> $output"
+        [ "$output" = "m=a&" ]
+    done
+    run bash -c 'source "$1"; _tokenize_segment "$2"; printf "<%s>" "${_SEGMENT_WORDS[@]}"' _ "$MATCHER" 'git commit &>f -m x'
+    [ "$output" = "<git><commit><&>f><-m><x>" ]
 }
 
 @test "GAP11: new prefixes are still misses when no git commit follows" {
