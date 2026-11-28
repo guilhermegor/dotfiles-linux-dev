@@ -249,8 +249,18 @@ command_has_git_commit() {
         done <<< "$(printf '%s' "$reading" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
     done
 
+    # Last reading, only for a command with `>|`: the quote-aware split reader, which knows a
+    # `>|` from a pipe by what the tokenizer saw (the rewrites above cannot tell `a\>|` from `>|`).
+    if [[ "$command" == *'>|'* ]]; then
+        _CCM_HIT=0
+        _for_each_command "$command" _note_commit_hit
+        ((_CCM_HIT)) && return 0
+    fi
+
     return 1
 }
+
+_note_commit_hit() { _words_invoke_commit && _CCM_HIT=1; return 0; }
 
 # --- inline `-m` messages and script bodies (dotfiles-linux-dev#961) -----------------------------
 #

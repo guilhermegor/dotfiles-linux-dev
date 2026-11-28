@@ -572,6 +572,15 @@ _split_commits() {
     [ "$output" = $'SEEN\nSEEN' ]
 }
 
+@test "GAP8: command_has_git_commit sees a >|f commit after a quoted, double-quoted or escaped > pipe" {
+    local c
+    for c in "echo 'a>'|>|f git commit --no-verify -m x" 'echo "a>"|>|f git commit --no-verify -m x' \
+             'echo a\>|>|f git commit --no-verify -m x'; do
+        echo "case: $c"
+        _matcher_has_commit "$c"
+    done
+}
+
 @test "GAP8: a >|f commit after a pipe that follows a quoted or escaped > is seen by the split reader" {
     local c
     for c in "echo 'a>'|>|f git commit --no-verify -m x" 'echo "a>"|>|f git commit --no-verify -m x' \
