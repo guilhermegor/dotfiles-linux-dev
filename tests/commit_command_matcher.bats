@@ -994,6 +994,9 @@ git -C "${PWD}/sub" commit -m x|
 env -C /tmp/r git -C "$SUB" commit -m x|
 sudo -D `pwd` git commit -m x|
 git -C ~user/r commit -m x|
+env -C /tmp/target* git commit -m x|
+git -C /tmp/r? commit -m x|
+sudo -D /tmp/[ab] git commit -m x|
 git -C ~/r commit -m x|@HOME@/r
 env -C ~ git commit -m x|@HOME@
 git -C '/tmp/a b' commit -m x|/tmp/a b
