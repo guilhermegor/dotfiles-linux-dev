@@ -714,3 +714,27 @@ _split_run() {
 @test "GAP9: <\\<NL>EOF is a plain redirect from a file, the next line commits" {
     _both_readers_see_commit $'cat <\\\nEOF\ngit commit --no-verify -m x'
 }
+
+# --- #1168 review (CodeRabbit): leading tabs are stripped only for <<- ---------------------------
+# Plain <<EOF: a joined TAB+EOF is no delimiter, so the heredoc runs on and `cat <<:` is body text.
+# Measured in bash 5.2.21: the plain shape commits, the <<- shape (tab stripped, EOF closes early,
+# `cat <<:` opens a second heredoc that swallows the commit line) does not.
+
+_inline_sets() {
+    run bash -c 'source "$1"; commit_inline_messages "$2"; echo "sets=${#COMMIT_MESSAGE_SETS[@]}"' _ "$MATCHER" "$1"
+}
+
+@test "GAP9: plain << keeps a leading tab on a joined line, so TAB+EOF does not close the heredoc" {
+    local c=$'cat <<EOF\n\tEO\\\nF\ncat <<:\nEOF\ngit commit --no-verify -m x\n:'
+    _both_readers_see_commit "$c"
+    _inline_sets "$c"
+    [[ "$output" == *"sets=1"* ]]
+}
+
+@test "GAP9: <<- strips the tab off the joined line, bash runs no commit and none is read" {
+    local c=$'cat <<-EOF\n\tEO\\\nF\ncat <<:\nEOF\ngit commit --no-verify -m x\n:'
+    _split_run "$c"
+    [[ "$output" != *SEEN* ]]
+    _inline_sets "$c"
+    [[ "$output" == *"sets=0"* ]]
+}
