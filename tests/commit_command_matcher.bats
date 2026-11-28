@@ -963,7 +963,6 @@ env -C/tmp/r git commit -m x|/tmp/r
 sudo -D /tmp/r git commit -m x|/tmp/r
 sudo -R /tmp/r git commit -m x|
 sudo --chroot=/tmp/r git commit -m x|
-sudo -R /tmp/jail git -C /repo commit -m x|/repo
 sudo --chdir=/tmp/r git commit -m x|/tmp/r
 GIT_DIR=/tmp/r/.git git commit -m x|
 env GIT_DIR=/tmp/r/.git git commit -m x|
@@ -1072,4 +1071,196 @@ CASES
         _split_run "$c"
         [[ "$output" != *SEEN* ]]
     done
+}
+
+# --- #1175: which directory the commit lands in --------------------------------------------------
+# Oracle: bash with a git stub that records its cwd and GIT_DIR (shapes and output in the PR).
+# Each row is `command|published dir|unresolved flag`. An empty dir with flag 0 means "the cwd";
+# an empty dir with flag 1 means "somewhere the matcher cannot name", which a guard must not
+# answer by scanning the cwd as if it were known.
+
+_dir_cases() {
+    local c want unres
+    while IFS='|' read -r c want unres; do
+        echo "case: $c"
+        run env HOME=/home/t bash -c 'source "$1"; command_has_git_commit "$2" && echo "dir=[$COMMIT_COMMAND_GIT_DIR] unres=[$COMMIT_COMMAND_GIT_DIR_UNRESOLVED]"' _ "$MATCHER" "$c"
+        [[ "$output" == *"dir=[${want//@HOME@//home/t}] unres=[$unres]"* ]]
+    done
+}
+
+@test "#1175: an absolute GIT_DIR or --git-dir wins over -C and over a wrapper cwd" {
+    _dir_cases <<'CASES'
+GIT_DIR=/tmp/a/.git git -C /tmp/b commit -m x||1
+env -C /tmp/b GIT_DIR=/tmp/a/.git git commit -m x||1
+env GIT_DIR=/tmp/a/.git git -C /tmp/b commit -m x||1
+GIT_DIR=~/x git -C /tmp/b commit -m x||1
+GIT_DIR=$X/.git git -C /tmp/b commit -m x||1
+git --git-dir=/tmp/a/.git -C /tmp/b commit -m x||1
+git --git-dir /tmp/a/.git -C /tmp/b commit -m x||1
+GIT_DIR=rel/.git git -C /tmp/b commit -m x||1
+GIT_DIR=rel/.git git commit -m x||1
+git --git-dir=rel/.git commit -m x||1
+GIT_DIR=/tmp/a/.git GIT_DIR=rel git -C /tmp/b commit -m x||1
+GIT_DIR= git -C /tmp/b commit -m x|/tmp/b|0
+git --git-dir=rel -C /tmp/b commit -m x||1
+CASES
+}
+
+@test "#1175: repeated git -C compose like cd, and an absolute one replaces" {
+    _dir_cases <<'CASES'
+git -C /tmp/a -C b commit -m x|/tmp/a/b|0
+git -C /tmp/a -C /tmp/b commit -m x|/tmp/b|0
+git -C a -C b commit -m x|a/b|0
+env -C /tmp/p git -C a -C b commit -m x|/tmp/p/a/b|0
+git -C /tmp/a -C "$X" commit -m x||1
+CASES
+}
+
+@test "#1175: an env -S value is read as options, and its directory wins over the raw reading" {
+    _dir_cases <<'CASES'
+env -S '-C /tmp/target' git commit -m x|/tmp/target|0
+env -S '-C /tmp/p' git -C sub commit -m x|/tmp/p/sub|0
+env -S '-C ~/b' git commit -m x|~/b|0
+env -S x git commit -m x||0
+env -C /tmp/target -S 'git commit -m x'|/tmp/target|0
+CASES
+}
+
+@test "#1175: quote state decides what is literal: a quoted ~ stays, an unquoted ~ is HOME" {
+    _dir_cases <<'CASES'
+git -C ~/r commit -m x|@HOME@/r|0
+git -C ~ commit -m x|@HOME@|0
+git -C '~/r' commit -m x|~/r|0
+git -C "~/r" commit -m x|~/r|0
+git -C '~' commit -m x|~|0
+git -C ~"/r" commit -m x|~/r|0
+git -C ~/'r s' commit -m x|@HOME@/r s|0
+git -C ~user/r commit -m x||1
+env -C '~' git commit -m x|~|0
+env -C /tmp/p env -C '~/x' git commit -m x|/tmp/p/~/x|0
+env -C /tmp/p git -C ~/x commit -m x|@HOME@/x|0
+CASES
+}
+
+@test "#1175: a single-quoted \$ is literal, any other expansion is unresolved" {
+    _dir_cases <<'CASES'
+git -C '$OTHER' commit -m x|$OTHER|0
+git -C "$OTHER" commit -m x||1
+git -C $OTHER commit -m x||1
+git -C "${OTHER}/sub" commit -m x||1
+git -C `pwd` commit -m x||1
+git -C '/tmp/a?b' commit -m x|/tmp/a?b|0
+git -C /tmp/a?b commit -m x||1
+git -C "/tmp/a b" commit -m x|/tmp/a b|0
+git -C /tmp/'a*b' commit -m x|/tmp/a*b|0
+git -C /tmp/a\$b commit -m x|/tmp/a$b|0
+env -C "$X" git -C /abs commit -m x|/abs|0
+CASES
+}
+
+@test "#1175: a sudo chroot never publishes a directory: the jail's paths are not the host's" {
+    # was pinned as `/repo`, then as <root>/repo: `..` and absolute symlinks inside the jail make any
+    # lexical join a guess, so the target is unresolved
+    _dir_cases <<'CASES'
+sudo -R /tmp/jail git -C /repo commit -m x||1
+sudo --chroot=/tmp/jail git -C /repo commit -m x||1
+sudo -R /tmp/jail git -C /../repo commit -m x||1
+sudo -R /tmp/jail git commit -m x||1
+sudo -R /tmp/jail git -C rel commit -m x||1
+sudo -R "$J" git -C /repo commit -m x||1
+CASES
+}
+
+@test "#1175: one env invocation keeps its LAST -C (relative to where env started); separate ones compose" {
+    # measured with real env and a git stub: `env -C /w -C t` and `env -C /w -S '-C t'` both chdir to
+    # `t` relative to the cwd, `env -C /w env -C t` ends in /w/t
+    _dir_cases <<'CASES'
+env -C /tmp/work -C target git commit -m x|target|0
+env -C /tmp/work -S '-C target' git commit -m x|target|0
+env -S '-C /tmp/work' -C target git commit -m x|target|0
+env -C /tmp/work env -C target git commit -m x|/tmp/work/target|0
+env -C /tmp/work -C /abs git commit -m x|/abs|0
+sudo -D /tmp/w -D t git commit -m x|t|0
+CASES
+}
+
+@test "#1175: sudo -c / -a and doas -a take a value, so the command behind them is seen" {
+    _both_see_each 'sudo -c class git commit -m x' 'sudo -a type git commit -m x' \
+        'doas -a style git commit -m x' 'sudo -u root -c class git commit -m x'
+}
+
+@test "#1175: an unquoted expansion in the option prefix poisons a later absolute -C" {
+    # X="/tmp --git-dir=/other" splits into an injected option, so the -C that follows is not the target
+    _dir_cases <<'CASES'
+git -C $X -C /abs commit -m x||1
+git $X -C /abs commit -m x||1
+git -C /abs $X commit -m x||1
+env $X git -C /abs commit -m x||1
+env -C $X git -C /abs commit -m x||1
+env -C $X env -C /abs git commit -m x||1
+git -C "$X" -C /abs commit -m x|/abs|0
+git -C /abs commit -m "$X" $Y|/abs|0
+CASES
+}
+
+@test "#1175: the unresolved reason names the cause" {
+    local c want
+    while IFS='|' read -r c want; do
+        echo "case: $c"
+        run bash -c 'source "$1"; command_has_git_commit "$2" && echo "reason=[$COMMIT_COMMAND_GIT_DIR_REASON]"' _ "$MATCHER" "$c"
+        [[ "$output" == *"reason=[$want]"* ]]
+    done <<'CASES'
+git -C "$X" commit -m x|expansion
+GIT_DIR=rel git commit -m x|gitdir
+git --git-dir=/a -C "$X" commit -m x|gitdir
+sudo -R /j git -C /r commit -m x|chroot
+git -C /abs commit -m x|
+CASES
+}
+
+@test "#1175: an unquoted expansion in an env/sudo argument (option or NAME=value) is unresolved" {
+    # measured: `env FOO=$X git` and `env --chdir=$X git` both word-split ($X may carry GIT_DIR=..),
+    # while a shell prefix `FOO=$X git` does not
+    _dir_cases <<'CASES'
+env --chdir=$X git -C /safe commit -m x||1
+env FOO=$X git -C /safe commit -m x||1
+env A=1 B=$X git -C /safe commit -m x||1
+sudo FOO=$X git -C /safe commit -m x||1
+FOO=$X git -C /safe commit -m x|/safe|0
+FOO=$X env A=1 git -C /safe commit -m x|/safe|0
+env FOO="$X" git -C /safe commit -m x|/safe|0
+CASES
+}
+
+@test "#1175: an env -S value with escapes or \${VAR} the tokenizer does not model is unresolved" {
+    # GNU env turns \_ inside double quotes into a space, so the split value names another directory
+    _dir_cases <<'CASES'
+env -C '/tmp/repo name' -S '-C "/tmp/repo\_name"' git commit -m x||1
+env -S '-C /tmp/a\_b' git commit -m x||1
+env -S '-C ${D}' git commit -m x||1
+env -S '-C /tmp/target' git commit -m x|/tmp/target|0
+CASES
+}
+
+@test "#1175: the env -S retry keeps the raw reading's prefix-expansion state" {
+    _dir_cases <<'CASES'
+env -S -C$X git -C /safe commit -m x||1
+env -S '-C /tmp/t' $X git -C /safe commit -m x||1
+CASES
+}
+
+@test "#1175: an unresolved commit's relative -F is not found, absolute -F and resolved dirs are" {
+    local c want
+    while IFS='|' read -r c want; do
+        echo "case: $c"
+        run bash -c 'source "$1"; commit_source_dir "$2" file; echo "found=$COMMIT_SOURCE_FOUND dir=[$COMMIT_SOURCE_DIR]"' _ "$MATCHER" "$c"
+        [[ "$output" == *"$want"* ]]
+    done <<'CASES'
+git --git-dir=/t/.git -C /t commit -F msg|found=0
+git -C "$X" commit -F msg|found=0
+sudo -R /j git -C /r commit -F msg|found=0
+git --git-dir=/t/.git commit -F /abs/msg|found=1
+git -C /t commit -F msg|found=1 dir=[/t]
+git commit -F msg|found=1 dir=[]
+CASES
 }

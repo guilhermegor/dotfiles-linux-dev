@@ -57,6 +57,21 @@ _GIT_VALUE_FLAGS=' -C -c --git-dir --work-tree --namespace --exec-path --super-p
 # "effective directory" note in the header.
 # shellcheck disable=SC2034  # consumed by the hooks that source this file, invisible to shellcheck
 COMMIT_COMMAND_GIT_DIR=""
+# shellcheck disable=SC2034  # see COMMIT_COMMAND_GIT_DIR_UNRESOLVED in command_has_git_commit
+COMMIT_COMMAND_GIT_DIR_UNRESOLVED=0
+
+# _ccm_wflags
+# Sets `_CCM_WF`, the flag word kept per token in `_SEGMENT_QLEAD` (read from the tokenizer's locals):
+# bit 1 the first character was quoted or escaped, bit 2 the shell would expand something in it (an
+# unquoted `$` / backtick / glob / brace, or `$` / backtick inside double quotes), bit 4 it opens with
+# an UNQUOTED tilde prefix (no quote before its first `/`), so `~/x` is $HOME/x but `'~/x'` is not.
+_ccm_wflags() {
+    local pre="${current%%/*}" f=$qlead
+    ((wexp)) && f=$((f | 2))
+    ((wuq)) && f=$((f | 8))
+    if [[ "$current" == '~'* ]] && ((!qlead)) && { ((qfirst < 0)) || ((${#pre} < qfirst)); }; then f=$((f | 4)); fi
+    _CCM_WF=$f
+}
 
 # _tokenize_segment SEGMENT
 # Split SEGMENT into the global array `_SEGMENT_WORDS`, keeping quoted runs as single tokens so
@@ -83,7 +98,7 @@ _BOUNDARY=$'\x1f'
 _tokenize_segment() {
     local segment="$1" split="${2:-}" nosub="${3:-}" char quote='' current='' started=0 i
     local qpos=0 qcur='' qn=0 prefix_words=() gt=0 prev_gt lt=0 prev_lt soft_keep=() sidx
-    local qlead=0 prefix_ql=() curq=0 sd=0 sbt=0 spos=0 scur="" sn=0 rtext rn amp amq=0 prev_amq
+    local qlead=0 wexp=0 wuq=0 qfirst=-1 prefix_ql=() curq=0 sd=0 sbt=0 spos=0 scur="" sn=0 rtext rn amp amq=0 prev_amq
     _SEGMENT_WORDS=()
     _SEGMENT_SOFT=()
     _SEGMENT_QLEAD=()
@@ -100,16 +115,21 @@ _tokenize_segment() {
             if [[ "$char" == "$quote" ]]; then quote=''
             elif [[ "$char" == "\\" && "$quote" == '"' && "${segment:i+1:1}" == [\\\"\$\`] ]]; then
                 i=$((i + 1)); current+="${segment:i:1}"   # POSIX: \ " $ ` are escapable in "..."
-            else current+="$char"; fi
+            else
+                current+="$char"
+                [[ "$quote" == '"' && "$char" == [\$\`] ]] && wexp=1
+            fi
         elif [[ "$char" == "\\" ]]; then
             ((started)) || qlead=1
             started=1 curq=1
+            ((qfirst < 0)) && qfirst=${#current}
             i=$((i + 1))
             [[ "${segment:i:1}" == $'\n' ]] || current+="${segment:i:1}"
         elif [[ "$char" == "'" || "$char" == '"' ]]; then
             quote="$char"
             if [[ "$char" == "'" && "$current" == *'$' ]]; then quote=A; current="${current%?}"; fi
             [[ -z "$current" ]] && qlead=1
+            ((qfirst < 0)) && qfirst=${#current}
             qpos=$i qcur="$current" qn=${#_SEGMENT_WORDS[@]}
             started=1 curq=1
         elif [[ "$char" == '#' ]] && ((!started)); then
@@ -120,7 +140,7 @@ _tokenize_segment() {
             current+="$char"
             started=1 amq=1
         elif [[ -n "$split" && ( "$char" == [\;\&\|] || "$char" == $'\n' ) ]]; then
-            ((started)) && { _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$qlead"); current=''; started=0; qlead=0; curq=0; }
+            ((started)) && { _ccm_wflags; _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$_CCM_WF"); current=''; started=0; qlead=0; curq=0 wexp=0 wuq=0 qfirst=-1; }
             sd=0 sbt=0   # a boundary ends any `$(` tracking: what follows is a command again
             # A `|` right after an unquoted, unescaped `>` is the clobber redirect `>|`, not a pipe
             # (#1158). It still cuts here, as it always did; where it cut is kept out of band (word
@@ -137,16 +157,17 @@ _tokenize_segment() {
             amp=''
             if [[ "$char" == '>' ]] && ((prev_amq)); then current="${current%&}"; amp='&'; fi
             if [[ -n "$current" ]] || ((curq)) || [[ -z "$amp" ]]; then
-                _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$qlead")
+                _ccm_wflags; _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$_CCM_WF")
             fi
-            current="$amp$char"; qlead=0; curq=0
+            current="$amp$char"; qlead=0; curq=0 wexp=0 wuq=0 qfirst=-1
             [[ "$char" == '>' ]] && gt=1
             [[ "$char" == '<' ]] && lt=1
         elif [[ "$char" == [[:space:]] ]] && ((!sd && !sbt)); then
-            ((started)) && { _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$qlead"); current=''; started=0; qlead=0; curq=0; }
+            ((started)) && { _ccm_wflags; _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$_CCM_WF"); current=''; started=0; qlead=0; curq=0 wexp=0 wuq=0 qfirst=-1; }
         else
             current+="$char"
             started=1
+            [[ "$char" == [\$\`\*\?\[\{] ]] && wexp=1 wuq=1
             [[ "$char" == '>' ]] && gt=1
             [[ "$char" == '<' ]] && lt=1
             [[ "$char" == '&' ]] && amq=1
@@ -184,7 +205,7 @@ _tokenize_segment() {
         return 0
     fi
 
-    ((started)) && { _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$qlead"); }
+    ((started)) && { _ccm_wflags; _SEGMENT_WORDS+=("$current"); _SEGMENT_QLEAD+=("$_CCM_WF"); }
     return 0
 }
 
@@ -200,7 +221,7 @@ _redir_len() {
     local w="${_CMD_WORDS[$1]:-}"
     _CCM_RLEN=0
     # a word whose first character was quoted or escaped (`-C '>d'`) is a value (#1172)
-    [[ "${_CMD_QLEAD[$1]:-0}" == 1 ]] && return 1
+    (("${_CMD_QLEAD[$1]:-0}" & 1)) && return 1
     [[ -n "$w" && "$w" =~ $_CCM_REDIR_RE ]] || return 1
     if [[ -n "${BASH_REMATCH[3]}" ]]; then _CCM_RLEN=1; else _CCM_RLEN=2; fi
 }
@@ -213,26 +234,54 @@ _CCM_RESERVED=' ! if then do else elif while until { ( '
 # (`env -C /tmp git -C ~/r` runs in $HOME/r, not /tmp/~/r): a leading `~` / `~/` is $HOME, and any
 # other leading `~` (`~user`) is prefixed with `$`, so the publish check drops it as unexpanded text.
 _ccm_dir_word() {
-    case "$1" in
-        \~) _CCM_DIRW="$HOME" ;;
-        \~/*) _CCM_DIRW="$HOME/${1#\~/}" ;;
-        \~*) _CCM_DIRW="\$$1" ;;
-        *) _CCM_DIRW="$1" ;;
-    esac
+    local w="$1" fl="${_CMD_QLEAD[$2]:-0}" tilde=0
+    _CCM_DIRBAD=0 _CCM_DIRW="$w"
+    # the tilde is live only when this IS the whole word (`--chdir=~/x` is not tilde-expanded)
+    [[ "${_CMD_WORDS[$2]:-}" == "$w" ]] && ((fl & 4)) && tilde=1
+    if ((fl & 2)); then _CCM_DIRBAD=1; return 0; fi   # `"$X"`, `$(..)`, a glob: unknown until bash runs
+    ((tilde)) || return 0
+    if [[ -n "${HOME:-}" && "$w" == \~ ]]; then _CCM_DIRW="$HOME"
+    elif [[ -n "${HOME:-}" && "$w" == \~/* ]]; then _CCM_DIRW="$HOME/${w#\~/}"
+    else _CCM_DIRBAD=1; fi   # `~user`, `~+`: not resolvable without asking the system
+}
+
+# _ccm_step CUR CUR_BAD
+# Applies the directory word just read by _ccm_dir_word on top of CUR, as `cd` would: an absolute word
+# replaces it (and its unresolved state), a relative one is joined, an empty one changes nothing.
+# Sets `_CCM_STEP` / `_CCM_STEPBAD`.
+_ccm_step() {
+    if [[ "$_CCM_DIRW" == /* ]]; then _CCM_STEP="$_CCM_DIRW" _CCM_STEPBAD=$_CCM_DIRBAD
+    elif [[ -z "$_CCM_DIRW" ]]; then _CCM_STEP="$1" _CCM_STEPBAD=$2
+    elif [[ -n "$1" ]]; then _CCM_STEP="${1%/}/$_CCM_DIRW" _CCM_STEPBAD=$(($2 | _CCM_DIRBAD))
+    else _CCM_STEP="$_CCM_DIRW" _CCM_STEPBAD=$_CCM_DIRBAD; fi
+}
+
+# _ccm_note_gitdir VALUE INDEX
+# A `GIT_DIR=` / `--git-dir` value. Git resolves an absolute one (or one the shell expands) before any
+# `-C`, so while it holds the directory the commit lands in is the one it names, not the `-C` one.
+# A relative value is no better: git opens `rel/.git` from its own cwd, so any `-C` scan would read
+# another repository. Only an empty value (git ignores `GIT_DIR=`) leaves the directory known. The last
+# assignment wins, as in the shell.
+_ccm_note_gitdir() {
+    if [[ -n "$1" ]]; then _CCM_GITDIR_ABS=1
+    else _CCM_GITDIR_ABS=0; fi
 }
 
 # _note_wrapper_value WRAPPER OPTION VALUE INDEX OPTION_INDEX
 # What a wrapper option's value means for the commit that follows: a directory it moves into
-# (`env -C`, `sudo -D`) or a command line it re-splits (`env -S`). `sudo -R` is a chroot root, not a
-# directory to scan from the host, so it publishes nothing (as master did; composing it is #1175).
+# (`env -C`, `sudo -D`) or a command line it re-splits (`env -S`). `sudo -R` is a chroot: it only marks
+# the commit's directory as not nameable from the host (see _words_invoke_commit_once).
 # A relative directory resolves against the one an earlier wrapper set; an absolute one replaces it.
 # `-S` also records the index of its option word, so the re-split can replace both option and value.
 _note_wrapper_value() {
     case "$1:$2" in
         env:-C | env:--chdir | sudo:-D | sudo:--chdir)
-            _ccm_dir_word "$3"
-            if [[ "$_CCM_DIRW" != /* && -n "$_CCM_WDIR" ]]; then _CCM_WDIR="${_CCM_WDIR%/}/$_CCM_DIRW"
-            else _CCM_WDIR="$_CCM_DIRW"; fi ;;
+            _ccm_dir_word "$3" "$4"
+            # one invocation keeps its LAST value (GNU env, measured), so step from where THIS wrapper
+            # started, never from its own earlier -C; only a later wrapper composes
+            _ccm_step "$_CCM_WBASE" "$_CCM_WBASE_BAD"
+            _CCM_WDIR="$_CCM_STEP" _CCM_WDIR_BAD=$_CCM_STEPBAD ;;
+        sudo:-R | sudo:--chroot) _CCM_CHROOT=1 ;;
         env:-S | env:--split-string) _CCM_SPLIT_IDX=$4 _CCM_SPLIT_VAL="$3" _CCM_SPLIT_OPT=$5 ;;
     esac
 }
@@ -270,12 +319,14 @@ _scan_wrapper_option() {
 # skipped too, the tail of a `2>&1` that was cut at its `&`. Over-reading only.
 # With `_CCM_LAZY=1` a wrapper's option never takes the next word as its value: `sudo -h git commit`
 # (`-h` is also "help") reads both ways, see _words_invoke_commit.
-# Also sets `_CCM_WDIR` (the directory `env -C` / `sudo -D` moves into) and `_CCM_SPLIT_IDX` /
-# `_CCM_SPLIT_VAL` (an `env -S` value, else -1). `GIT_DIR=` / `GIT_WORK_TREE=` publish no directory:
-# a GIT_DIR value is no directory to `git -C` into (it fails in a git dir), see #1175.
+# Also sets `_CCM_WDIR` / `_CCM_WDIR_BAD` (the directory `env -C` / `sudo -D` moves into, and whether
+# it holds an expansion), `_CCM_CHROOT` (`sudo -R`), `_CCM_GITDIR_ABS` (an absolute or expanded
+# `GIT_DIR=` is set: it is no directory to `git -C` into, and it beats every `-C`, #1175) and
+# `_CCM_SPLIT_IDX` / `_CCM_SPLIT_VAL` (an `env -S` value, else -1). `GIT_WORK_TREE=` publishes nothing.
 _skip_prefix() {
-    local i=$1 w vals wrap='' pending=0 popt='' popt_i=-1 npos=0 rest
-    _CCM_QUERY=0 _CCM_WDIR='' _CCM_SPLIT_IDX=-1 _CCM_SPLIT_VAL='' _CCM_SPLIT_OPT=-1
+    local i=$1 w vals wrap='' wseen=0 pending=0 popt='' popt_i=-1 npos=0 rest
+    _CCM_QUERY=0 _CCM_WDIR='' _CCM_WDIR_BAD=0 _CCM_SPLIT_IDX=-1 _CCM_SPLIT_VAL='' _CCM_SPLIT_OPT=-1
+    _CCM_PFX_EXP=0 _CCM_GITDIR_ABS=0 _CCM_CHROOT=0 _CCM_WBASE='' _CCM_WBASE_BAD=0
     # Bounded by the array, not by an empty word: an option's value may be '' (`env -S ''`)
     while ((i < ${#_CMD_WORDS[@]})); do
         w="${_CMD_WORDS[i]}"
@@ -284,11 +335,20 @@ _skip_prefix() {
         if ((pending)); then
             # the option's own index, not i - 1: a redirect may sit between (`env -S > f 'git ...'`)
             pending=0
+            (("${_CMD_QLEAD[i]:-0}" & 8)) && _CCM_PFX_EXP=1
             _note_wrapper_value "$wrap" "$popt" "$w" "$i" "$popt_i"
             i=$((i + 1))
             continue
         fi
         [[ -n "$w" ]] || break   # an empty command name runs nothing
+        # Once a wrapper has started, every word up to the command is one of ITS arguments (options,
+        # `NAME=value` operands, operands), and an unquoted expansion in it word-splits: `env FOO=$X git`
+        # (measured) may inject `GIT_DIR=..`. A shell prefix `FOO=$X env ..` does not split, hence
+        # `wseen`. Such a word that is no option or assignment is also read as one and skipped.
+        if ((wseen)) && (("${_CMD_QLEAD[i]:-0}" & 8)); then
+            _CCM_PFX_EXP=1
+            if [[ -n "$wrap" && "$w" != -* && ! "$w" =~ $_CCM_ASSIGN_RE ]]; then i=$((i + 1)); continue; fi
+        fi
         if [[ -n "$wrap" && "$w" == -* ]]; then
             # `command -v` / `-V` only looks the name up, wherever it sits in the option list
             [[ "$wrap" == command && "$w" != -- && "$w" == *[vV]* ]] && _CCM_QUERY=1
@@ -300,6 +360,7 @@ _skip_prefix() {
         if ((npos > 0)); then npos=$((npos - 1)); i=$((i + 1)); continue; fi   # timeout's duration
         wrap=''
         if [[ "$w" =~ $_CCM_ASSIGN_RE || "$w" =~ ^([0-9]+-?|-)$ ]]; then
+            [[ "$w" == GIT_DIR=* ]] && _ccm_note_gitdir "${w#GIT_DIR=}" "$i"
             i=$((i + 1))
             continue
         fi
@@ -311,8 +372,8 @@ _skip_prefix() {
         fi
         case "${w##*/}" in
             env) vals=' -u -C -S -a --unset --chdir --split-string --argv0 ' ;;
-            sudo) vals=' -u -g -h -p -C -D -R -r -T -t -U --user --group --host --prompt --chdir --chroot --role --type --other-user --close-from --command-timeout --login-class ' ;;
-            doas) vals=' -u -C ' ;;
+            sudo) vals=' -u -g -h -p -a -c -C -D -R -r -T -t -U --user --group --host --prompt --chdir --chroot --role --type --other-user --close-from --command-timeout --login-class ' ;;
+            doas) vals=' -a -u -C ' ;;
             nice) vals=' -n --adjustment ' ;;
             ionice) vals=' -c -n -p -P -u --class --classdata --pid --pgid --uid ' ;;
             time) vals=' -f -o --format --output ' ;;
@@ -326,7 +387,8 @@ _skip_prefix() {
             setsid | command | builtin | nohup) vals='' ;;
             *) break ;;
         esac
-        wrap="${w##*/}"
+        wrap="${w##*/}" wseen=1
+        _CCM_WBASE="$_CCM_WDIR" _CCM_WBASE_BAD=$_CCM_WDIR_BAD
         i=$((i + 1))
     done
     _CCM_NEXT=$i
@@ -341,15 +403,38 @@ _skip_prefix() {
 # Read up to three ways, a hit on any one counts (#1173): as written, with no wrapper option taking a
 # value (`sudo -h git commit`: `-h` may be "help"), and with an `env -S` value re-split into words.
 _words_invoke_commit() {
-    local lazy split_idx=-1 split_val='' split_opt=-1 k
-    local -a saved_w saved_q head_w head_q tail_w tail_q new_w new_q seg_w seg_q seg_s
+    local lazy split_idx=-1 split_val='' split_opt=-1 split_pfx=0 raw_dir raw_unres raw_from
     for lazy in 0 1; do
         _CCM_LAZY=$lazy
-        if _words_invoke_commit_once; then _CCM_LAZY=0; return 0; fi
-        if ((!lazy)); then split_idx=$_CCM_SPLIT_IDX split_val="$_CCM_SPLIT_VAL" split_opt=$_CCM_SPLIT_OPT; fi
+        if _words_invoke_commit_once; then
+            _CCM_LAZY=0
+            # `env -S '-C /d' git commit`: env reads the value as ITS options, so when both readings
+            # hit, the expanded one knows the directory (#1175). The raw hit stays the fallback.
+            if ((!lazy && _CCM_SPLIT_IDX >= 0 && _CCM_SPLIT_OPT >= 0)); then
+                raw_dir="$COMMIT_COMMAND_GIT_DIR" raw_unres="$COMMIT_COMMAND_GIT_DIR_UNRESOLVED" raw_from=$_COMMIT_ARGS_FROM
+                _ccm_try_split "$_CCM_SPLIT_IDX" "$_CCM_SPLIT_VAL" "$_CCM_SPLIT_OPT" "$_CCM_PFX_EXP" && return 0
+                COMMIT_COMMAND_GIT_DIR="$raw_dir" COMMIT_COMMAND_GIT_DIR_UNRESOLVED="$raw_unres" _COMMIT_ARGS_FROM=$raw_from
+            fi
+            return 0
+        fi
+        if ((!lazy)); then split_idx=$_CCM_SPLIT_IDX split_val="$_CCM_SPLIT_VAL" split_opt=$_CCM_SPLIT_OPT split_pfx=$_CCM_PFX_EXP; fi
     done
     _CCM_LAZY=0
     ((split_idx >= 0 && split_opt >= 0)) || return 1
+    _ccm_try_split "$split_idx" "$split_val" "$split_opt" "$split_pfx"
+}
+
+# _ccm_try_split IDX VALUE OPT_IDX OUTER_PFX_EXP
+# The retry resets the prefix state, so OUTER_PFX_EXP (an unquoted expansion the raw reading saw in
+# its prefix) is carried over: the result stays unresolved. So does a VALUE holding a backslash or
+# `${`: GNU env -S gives `\_`, `\c`, `\$` and `${VAR}` meanings the tokenizer does not model.
+# Re-read `_CMD_WORDS` with the `env -S` option word (OPT_IDX) and its value (IDX) replaced by VALUE
+# split into words. Return 0 when that reading is a `git commit` (the words stay replaced, so the
+# callers read the message arguments from them); on a miss the words are restored and 1 is returned.
+# env splits but does not expand: `~` and globs in VALUE are text, so the tilde bit is dropped.
+_ccm_try_split() {
+    local split_idx=$1 split_val="$2" split_opt=$3 outer_pfx=${4:-0} k
+    local -a saved_w saved_q head_w head_q tail_w tail_q new_w new_q seg_w seg_q seg_s
     saved_w=(${_CMD_WORDS[@]+"${_CMD_WORDS[@]}"})
     saved_q=(${_CMD_QLEAD[@]+"${_CMD_QLEAD[@]}"})
     head_w=("${_CMD_WORDS[@]:0:split_opt}")
@@ -362,6 +447,7 @@ _words_invoke_commit() {
     seg_q=(${_SEGMENT_QLEAD[@]+"${_SEGMENT_QLEAD[@]}"})
     seg_s=(${_SEGMENT_SOFT[@]+"${_SEGMENT_SOFT[@]}"})
     _tokenize_segment "$split_val"
+    for k in "${!_SEGMENT_QLEAD[@]}"; do _SEGMENT_QLEAD[k]=$((_SEGMENT_QLEAD[k] & ~12)); done
     new_w=(${head_w[@]+"${head_w[@]}"} ${_SEGMENT_WORDS[@]+"${_SEGMENT_WORDS[@]}"} ${tail_w[@]+"${tail_w[@]}"})
     new_q=(${head_q[@]+"${head_q[@]}"} ${_SEGMENT_QLEAD[@]+"${_SEGMENT_QLEAD[@]}"} ${tail_q[@]+"${tail_q[@]}"})
     k=${#_SEGMENT_WORDS[@]}
@@ -370,7 +456,13 @@ _words_invoke_commit() {
     _SEGMENT_SOFT=(${seg_s[@]+"${seg_s[@]}"})
     _CMD_WORDS=(${new_w[@]+"${new_w[@]}"})
     _CMD_QLEAD=(${new_q[@]+"${new_q[@]}"})
-    ((k)) && _words_invoke_commit && return 0
+    if ((k)) && _words_invoke_commit; then
+        if ((!COMMIT_COMMAND_GIT_DIR_UNRESOLVED)) \
+            && { ((outer_pfx)) || [[ "$split_val" == *'\'* || "$split_val" == *'${'* ]]; }; then
+            COMMIT_COMMAND_GIT_DIR='' COMMIT_COMMAND_GIT_DIR_UNRESOLVED=1 COMMIT_COMMAND_GIT_DIR_REASON=expansion
+        fi
+        return 0
+    fi
     _CMD_WORDS=(${saved_w[@]+"${saved_w[@]}"})
     _CMD_QLEAD=(${saved_q[@]+"${saved_q[@]}"})
     return 1
@@ -378,7 +470,7 @@ _words_invoke_commit() {
 
 _words_invoke_commit_once() {
     local -a words
-    local i=0 dir='' flag
+    local i=0 dir='' dir_bad=0 flag unres=0 reason=''
 
     _skip_prefix 0
     ((_CCM_QUERY)) && return 1   # `command -v git commit` only looks git up
@@ -403,13 +495,23 @@ _words_invoke_commit_once() {
     # skipped, because it changes WHICH repository the commit lands in.
     while :; do
         while _redir_len "$i"; do i=$((i + _CCM_RLEN)); done
-        [[ "${words[i]:-}" == -* ]] || break
+        # an unquoted expansion may word-split into options (`git $X commit`): read it as one
+        if (("${_CMD_QLEAD[i]:-0}" & 8)); then _CCM_PFX_EXP=1
+        elif [[ "${words[i]:-}" != -* ]]; then break; fi
         flag="${words[i]}"
+        [[ "$flag" == --git-dir=* ]] && _ccm_note_gitdir "${flag#--git-dir=}" "$i"
         i=$((i + 1))
         if [[ "$_GIT_VALUE_FLAGS" == *" $flag "* ]]; then
             # a redirection may sit between the option and its value: `git -C > f /tmp commit`
             while _redir_len "$i"; do i=$((i + _CCM_RLEN)); done
-            [[ "$flag" == "-C" ]] && dir="${words[i]:-}"
+            # repeated -C compose like successive cds: `-C /a -C b` is /a/b
+            (("${_CMD_QLEAD[i]:-0}" & 8)) && _CCM_PFX_EXP=1
+            if [[ "$flag" == "-C" ]]; then
+                _ccm_dir_word "${words[i]:-}" "$i"
+                _ccm_step "$dir" "$dir_bad"
+                dir="$_CCM_STEP" dir_bad=$_CCM_STEPBAD
+            fi
+            [[ "$flag" == "--git-dir" ]] && _ccm_note_gitdir "${words[i]:-}" "$i"
             i=$((i + 1))
         fi
     done
@@ -418,17 +520,25 @@ _words_invoke_commit_once() {
     [[ "${words[i]:-}" == commit || "${words[i]:-}" =~ ^commit\)+$ ]] || return 1
 
     # The directory the commit lands in: `git -C` (under an `env -C` / `sudo -D` move when relative),
-    # else that move itself (`GIT_DIR=` / `GIT_WORK_TREE=` publish nothing, see #1175).
-    [[ -n "$dir" ]] && { _ccm_dir_word "$dir"; dir="$_CCM_DIRW"; }
-    if [[ -n "$dir" && "$dir" != /* && -n "$_CCM_WDIR" ]]; then dir="${_CCM_WDIR%/}/$dir"
-    elif [[ -z "$dir" ]]; then dir="$_CCM_WDIR"; fi
+    # else that move itself. Git's own order: an absolute GIT_DIR / --git-dir beats every `-C`.
+    _CCM_DIRW="$dir" _CCM_DIRBAD=$dir_bad
+    _ccm_step "$_CCM_WDIR" "$_CCM_WDIR_BAD"
+    dir="$_CCM_STEP" dir_bad=$_CCM_STEPBAD
+    # A sudo chroot: a path inside the jail is not a host path. `..` and absolute symlinks in it make
+    # any join of <root> and <dir> a guess, and its cwd is invisible from here: not nameable.
     # The words are unexpanded: `-C "$PWD"` would reach the secret guard as `git -C '$PWD'`, fail,
-    # and skip the scan. Text the shell would expand (`$`, a backtick, a glob) publishes no dir,
-    # so the guard scans the cwd.
-    # ponytail: the words carry no quote state, so `"$OTHER"` scans the cwd and a quoted '~/x'
-    # resolves like an unquoted one; quote-aware resolution is #1175.
-    [[ "$dir" == *[\$\`\*\?\[]* ]] && dir=''
+    # and skip the scan. A word the shell would expand publishes no dir, and says so through
+    # COMMIT_COMMAND_GIT_DIR_UNRESOLVED, so a guard can fail closed instead of scanning the cwd.
+    # An unquoted expansion anywhere in the option prefix (`git -C $X -C /abs`, X="/t --git-dir=/o") may
+    # inject options, so no later literal `-C` can be trusted either.
+    if ((dir_bad || _CCM_PFX_EXP)); then dir='' unres=1 reason=expansion; fi
+    ((_CCM_GITDIR_ABS)) && dir='' unres=1 reason=gitdir
+    ((_CCM_CHROOT)) && dir='' unres=1 reason=chroot
     COMMIT_COMMAND_GIT_DIR="$dir"
+    # shellcheck disable=SC2034  # read by the hooks that source this file
+    COMMIT_COMMAND_GIT_DIR_UNRESOLVED=$unres
+    # shellcheck disable=SC2034  # read by the hooks that source this file
+    COMMIT_COMMAND_GIT_DIR_REASON=$reason
     _COMMIT_ARGS_FROM=$((i + 1))
     return 0
 }
@@ -468,6 +578,14 @@ command_has_git_commit() {
     # Cleared per call so a previous match's directory can never leak into a later one.
     # shellcheck disable=SC2034  # read by the hooks that source this file, invisible to shellcheck
     COMMIT_COMMAND_GIT_DIR=""
+    # 1 when the matched commit runs somewhere the matcher cannot name (an expansion in a `-C` word, an
+    # absolute GIT_DIR, a sudo chroot): COMMIT_COMMAND_GIT_DIR is then empty but is NOT the cwd.
+    # shellcheck disable=SC2034  # read by the hooks that source this file
+    COMMIT_COMMAND_GIT_DIR_UNRESOLVED=0
+    # Why: `gitdir` (GIT_DIR / --git-dir), `chroot` (sudo -R), else `expansion` (the shell would expand a
+    # word of the target). When several apply: chroot, then gitdir, then expansion.
+    # shellcheck disable=SC2034  # read by the hooks that source this file
+    COMMIT_COMMAND_GIT_DIR_REASON=''
     # The last two readings turn the clobber redirect `>|` into `>` (#1158): the `|` of `>|f git
     # commit` is no pipe, but the split below cannot tell. Added to the first two, never instead.
     # readings 3 and 4 also rewrite `>|` inside quotes: fine for this yes/no answer, never reuse
@@ -809,6 +927,11 @@ commit_source_dir() {
                 *) continue ;;
             esac
             if [[ ( "$_SRC_MODE" == stdin && "$v" == "-" ) || ( "$_SRC_MODE" == file && "$v" != "-" ) ]]; then
+                # A relative -F of a commit whose directory is unknown (GIT_DIR, chroot, an expansion in
+                # -C) resolves somewhere we cannot name: not found, so no hook touches ./msg (#1175).
+                if [[ "$_SRC_MODE" == file && "$v" != /* && "$COMMIT_COMMAND_GIT_DIR_UNRESOLVED" == 1 ]]; then
+                    return 0
+                fi
                 # A second matching commit makes the association with the heredoc ambiguous: fail open.
                 if ((_SRC_SEEN)); then COMMIT_SOURCE_FOUND=0; _SRC_AMBIGUOUS=1; return 0; fi
                 _SRC_SEEN=1

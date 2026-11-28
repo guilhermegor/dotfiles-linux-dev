@@ -79,6 +79,13 @@ main() {
     # matcher; see its header for the four shapes the old inline regex missed.
     command_has_git_commit "$command" || exit 0
 
+    # The matcher could not name the repository this commit targets (an expansion in `-C`, an
+    # absolute GIT_DIR, a sudo chroot). Scanning the cwd would check some OTHER repository, or
+    # nothing when the cwd is no repo: fail closed instead (#1175).
+    if [[ "${COMMIT_COMMAND_GIT_DIR_UNRESOLVED:-0}" == 1 ]]; then
+        block_unresolved "$command"
+    fi
+
     scan_git rev-parse --show-toplevel >/dev/null 2>&1 || exit 0
 
     # `git commit -a`/`--all` also commits tracked-but-unstaged changes, which are not in
@@ -134,6 +141,32 @@ scan_added_lines() {
                 ;;
         esac
     done <<< "$1"
+}
+
+block_unresolved() {
+    local bypass="If the staged content is already checked, run the commit yourself outside this guard: type it in the prompt with a leading '! '."
+    {
+        echo "BLOCKED: cannot tell which repository this git commit targets, so its staged changes"
+        echo "cannot be scanned for secrets: $1"
+        echo
+        case "${COMMIT_COMMAND_GIT_DIR_REASON:-}" in
+            gitdir)
+                echo "Cause: GIT_DIR / --git-dir names the repository, and git resolves it before any -C,"
+                echo "so the scan cannot follow it from here (a relative value depends on git's own cwd)."
+                echo "A literal -C does not replace it. $bypass"
+                ;;
+            chroot)
+                echo "Cause: sudo -R / --chroot runs git inside a jail whose paths are not the host's,"
+                echo "so the repository cannot be located from here. $bypass"
+                ;;
+            *)
+                echo "Cause: an expansion (\$VAR, \$(...), a glob) in the target path cannot be resolved"
+                echo "without running the command. Write the repository path literally"
+                echo "(git -C /absolute/path commit ...) and re-run the SAME commit. $bypass"
+                ;;
+        esac
+    } >&2
+    exit 2
 }
 
 block() {
