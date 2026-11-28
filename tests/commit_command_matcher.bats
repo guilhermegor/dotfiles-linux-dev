@@ -980,6 +980,11 @@ CASES
     [ "$output" = "n=1 m=a  b *" ]
 }
 
+@test "GAP11: a backslash at the end of a # comment line does not continue it" {
+    _both_see_each $'echo x # note \\\ngit commit -m x' $'# note \\\ngit commit -m x' \
+        $'true # c \\\n\\\ngit commit -m x'
+}
+
 @test "GAP11: new prefixes are still misses when no git commit follows" {
     local c
     for c in '! git status' 'if git status; then :; fi' 'timeout 10 git status' 'echo x | xargs git status' \
